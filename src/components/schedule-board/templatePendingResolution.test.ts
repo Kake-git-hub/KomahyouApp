@@ -26,6 +26,8 @@ import {
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import {
   countTemplatePendingDesksOnBoard,
+  hasTemplatePendingLowerSeatContent,
+  resolveTemplatePendingBandSeat,
   resolveTemplatePendingDateBlockReason,
   resolveTemplatePendingLandingBlock,
   resolveTemplatePendingStudentMenuActions,
@@ -803,3 +805,25 @@ describe('席ごと: regression-reviewer 指摘（2026-09-30）の固定', () =>
 function isManagedLessonId(id: string | undefined) {
   return Boolean(id?.startsWith('managed_'))
 }
+
+// 席ごとの保留表示（オーナー指示 2026-10-02・確認リスト v1.5.573 tp-19 要改善「生徒 1 と生徒 2 の保留状態がリンクしている」）。
+describe('hasTemplatePendingLowerSeatContent / resolveTemplatePendingBandSeat（席ごとの保留表示）', () => {
+  const makeup: StudentEntry = { id: 'm1', name: '三浦', managedStudentId: 'sM', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30' }
+  const record = { id: 'st1', studentId: 'x', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中', dateKey: '2026-10-07', slotNumber: 5, recordedAt: '', status: 'moved', sourceLessonId: 'l' } as unknown as StudentStatusEntry
+
+  it('下段に生きている生徒・出欠記録・メモのある席だけ中身ありとする（空白だけのメモは中身なし）', () => {
+    expect(hasTemplatePendingLowerSeatContent({ lesson: { id: 'l', studentSlots: [null, makeup] } }, 0)).toBe(false)
+    expect(hasTemplatePendingLowerSeatContent({ lesson: { id: 'l', studentSlots: [null, makeup] } }, 1)).toBe(true)
+    expect(hasTemplatePendingLowerSeatContent({ statusSlots: [record, null] }, 0)).toBe(true)
+    expect(hasTemplatePendingLowerSeatContent({ memoSlots: ['持ち物', '  '] }, 0)).toBe(true)
+    expect(hasTemplatePendingLowerSeatContent({ memoSlots: ['持ち物', '  '] }, 1)).toBe(false)
+    expect(hasTemplatePendingLowerSeatContent({}, 0)).toBe(false)
+  })
+
+  it('帯「保留 n」は下段に中身のある最初の席に付ける（生徒 2 の席だけなら 1・両方または無しなら 0）', () => {
+    expect(resolveTemplatePendingBandSeat({ lesson: { id: 'l', studentSlots: [null, makeup] } })).toBe(1)
+    expect(resolveTemplatePendingBandSeat({ lesson: { id: 'l', studentSlots: [makeup, null] }, memoSlots: [null, '持ち物'] })).toBe(0)
+    expect(resolveTemplatePendingBandSeat({ memoSlots: [null, '持ち物'] })).toBe(1)
+    expect(resolveTemplatePendingBandSeat({})).toBe(0)
+  })
+})

@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveDeleteSubjectDelta, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, resolveMeasuredPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveDeleteSubjectDelta, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -46,6 +46,29 @@ describe('clampPopoverPosition', () => {
       left: 170,
       top: 130,
     })
+  })
+})
+
+// 確認リスト v1.5.573 その他欄「クリックメニューの下の方が画面から見切れてクリックできない」（2026-10-02）:
+// 保留の机メニュー・講師メニューは固定の推定高さでクランプしていたため、実測が推定より背が高いと下のボタンが画面外に出ていた。
+describe('resolveMeasuredPopoverPosition（保留の机メニュー・講師メニューの位置）', () => {
+  const viewport = { viewportWidth: 1280, viewportHeight: 700 }
+
+  it('実測サイズが推定より背が高いとき、実測の高さで下端を画面内に収める（推定 420px のままだと見切れる）', () => {
+    const measured = resolveMeasuredPopoverPosition({ ...viewport, anchorX: 400, anchorY: 300, measuredSize: { width: 344, height: 520 }, fallbackWidth: 320, fallbackHeight: 420 })
+    expect(measured.top + 520).toBeLessThanOrEqual(700 - 8)
+    expect(measured).toEqual({ left: 408, top: 172 })
+    const estimated = resolveMeasuredPopoverPosition({ ...viewport, anchorX: 400, anchorY: 300, measuredSize: null, fallbackWidth: 320, fallbackHeight: 420 })
+    expect(estimated.top + 520).toBeGreaterThan(700)
+  })
+
+  it('余裕があればクリック位置の右下に置き、実測が無ければ推定サイズでクランプする', () => {
+    expect(resolveMeasuredPopoverPosition({ ...viewport, anchorX: 100, anchorY: 100, measuredSize: { width: 344, height: 300 }, fallbackWidth: 320, fallbackHeight: 420 })).toEqual({ left: 108, top: 108 })
+    expect(resolveMeasuredPopoverPosition({ ...viewport, anchorX: 100, anchorY: 600, measuredSize: null, fallbackWidth: 320, fallbackHeight: 420 })).toEqual({ left: 108, top: 272 })
+  })
+
+  it('画面より背が高いメニューは上端 8px に寄せる（ポップアップ自身の max-height と overflow でスクロールできる）', () => {
+    expect(resolveMeasuredPopoverPosition({ ...viewport, anchorX: 1200, anchorY: 650, measuredSize: { width: 344, height: 900 }, fallbackWidth: 320, fallbackHeight: 420 })).toEqual({ left: 928, top: 8 })
   })
 })
 

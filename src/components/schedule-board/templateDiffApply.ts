@@ -609,10 +609,15 @@ export type TemplateDiffApplySummary = {
    * （オーナー指示 2026-09-30。保留にならなかった机）。
    */
   seatMerged: number
+  /**
+   * 丸ごと振替した日（日単位抑止のある日＝振替元・振替先）なので、テンプレの生徒を置かず振替を優先した生徒（Q35・オーナー指示 2026-10-02）。
+   * テンプレの生徒を変えなかったとき（抑止で元から居ない）と同じ扱いにするため、重複（Q21-11）とは別に数える。
+   */
+  wholeDayTransferSkippedStudents: number
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -631,7 +636,7 @@ export type ComputeTemplateDiffApplyResult = {
   nextWeeks: SlotCell[][]
   nextPendingDesks: TemplatePendingDeskMap
   summary: TemplateDiffApplySummary
-  /** Q21-11 で上段に置かなかった生徒の通常授業の抑止キー（保存時に抑止へ足す）。 */
+  /** Q21-11（重複）と Q35（丸ごと振替した日）で上段に置かなかった生徒の通常授業の抑止キー（保存時に抑止へ足す）。 */
   addedSuppressedRegularLessonOccurrences: string[]
 }
 
@@ -768,7 +773,7 @@ function studentsChanged(before: DeskLesson | undefined, after: DeskLesson | und
 }
 
 /**
- * テンプレ保存の差分反映（Q21・Q21-11・Q24-1・Q28-6・Q29）。保存本体と確認文の件数の両方がこれを呼ぶ（Q32-1）。
+ * テンプレ保存の差分反映（Q21・Q21-11・Q24-1・Q28-6・Q29・Q35）。保存本体と確認文の件数の両方がこれを呼ぶ（Q32-1）。
  * 反映日より前のセル・週は**参照ごと**そのまま返す（INV-10）。
  */
 export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams): ComputeTemplateDiffApplyResult {
@@ -879,7 +884,23 @@ function applyTemplateDiffToCell(context: {
     return plan && !plan.overflow ? plan.kept : []
   }
 
+  // ── 0. Q35（オーナー指示 2026-10-02・確認リスト v1.5.573 tp-22）: 丸ごと振替した日（日単位抑止 TEMPLATE_TEACHER__DAY__ のある日＝
+  //   振替元・振替先）は、テンプレの生徒を置かない。丸ごと振替は「その日の姿ごと別日へ移す」操作で、テンプレの生徒を変えなかったときは
+  //   row-scan の抑止で元からテンプレの生徒が居ない（= 既存の振替が 1 行のまま残る）。生徒を変えたとき（新しい生徒には抑止キーが無い）も
+  //   同じ扱いにし、振替を優先する（重複として 2 行にしない）。置かなかった生徒には Q21-11 と同じく抑止キーを積み、再マージの不動点を保つ
+  //   （INV-02 / INV-03）。机の形は Q21-11 で全員外した机と同じ（抑止 → 足場講師 strip の順・stripTemplateScaffoldTeacherDesk）。
   let templateDesks = appliedTemplateDesks
+  if (templateCell.scaffoldTeachersStripped) {
+    templateDesks = templateDesks.map((templateDesk) => {
+      const filtered = filterTemplateDeskStudents(templateDesk, liveStudents(templateDesk.lesson), { stripScaffoldTeacher: true })
+      for (const student of filtered.removed) {
+        summary.wholeDayTransferSkippedStudents += 1
+        const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
+        if (!context.existingSuppressed.has(key)) context.addedSuppressed.add(key)
+      }
+      return filtered.desk
+    })
+  }
   let decisions = cell.desks.map((desk, index) => classify(desk, index, templateDesks[index]))
   const skippedByDesk = cell.desks.map(() => [] as StudentEntry[])
   // ── 2. Q21-11：同じコマの別の 1 行の机に生きている生徒は上段に置かない（振り分けが安定するまで繰り返す）。
@@ -1137,6 +1158,7 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     `${summary.replaced}机を置き換え、${summary.pending}机が保留（緑）になります。`,
     `そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
     ...(summary.seatMerged > 0 ? [`テンプレの空いた席に既存の生徒を残して 1 行にする${summary.seatMerged}机。`] : []),
+    ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名。`] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
     '',
@@ -1154,6 +1176,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.qrTeacherKept > 0) parts.push(`QR 自動割振りの講師を残した机: ${summary.qrTeacherKept}机。`)
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
+  if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名。`)
   if (summary.tombstoneCleared > 0) parts.push(`講師の削除記録だけの空き机 ${summary.tombstoneCleared}机は記録を外しました。`)
   return parts.join('')
 }

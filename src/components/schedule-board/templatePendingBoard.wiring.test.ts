@@ -110,6 +110,66 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     expect(html).not.toContain('三浦')
     expect(html).toBe(renderGrid({}))
   })
+
+  // オーナー指示 2026-10-02（確認リスト v1.5.573 tp-19 要改善「生徒 1 のほうも 2 行の保留表示になっている。独立しているので…
+  // 生徒 1 と生徒 2 の保留状態がリンクしてしまっている」・その他欄「通常同士なのに 2 行で保留となっているのがまだある」）:
+  // 下段に中身の無い席は 2 行にせず、緑にもしない（テンプレがそのまま入った 1 行の席）。帯「保留 n」は下段のある席に付ける。
+  describe('席ごとの保留表示（2026-10-02）', () => {
+    const PENDING_SEAT2_ONLY: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(CELL_ID, `${CELL_ID}_desk_1`)]: {
+        lower: { lesson: { id: 'l1', studentSlots: [null, { id: 'm1', name: '三浦', managedStudentId: 'sM', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30' }] } },
+        effectiveStartDate: '2026-10-07',
+        createdAt: '2026-09-29T10:00:00.000Z',
+      },
+    }
+
+    it('下段が生徒 2 の席だけなら、生徒 1 の席は緑にならず下段も描かない（1 行のまま）。帯「保留 1」は生徒 2 の席に付く', () => {
+      const html = renderGrid(PENDING_SEAT2_ONLY)
+      const container = document.createElement('div')
+      container.innerHTML = html
+      const seat1 = container.querySelector(`[data-testid="student-cell-${CELL_ID}-0-0"]`)!
+      const seat2 = container.querySelector(`[data-testid="student-cell-${CELL_ID}-0-1"]`)!
+      expect(seat1.classList.contains('sa-pending')).toBe(false)
+      expect(seat1.querySelector('.sa-pending-lower')).toBeNull()
+      expect(seat2.classList.contains('sa-pending')).toBe(true)
+      expect(seat2.querySelector('.sa-pending-lower')).not.toBeNull()
+      expect(seat2.querySelector('.sa-pending-lower-band')?.textContent).toBe('保留 1')
+      expect(container.querySelectorAll('.sa-pending-lower-band')).toHaveLength(1)
+      // 机の番号・講師欄は机単位の印（講師は保留中は変更不可）のまま緑
+      expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
+      expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
+      // 保留の机の席には（下段の無い席も）上詰めの印 sa-pending-desk が付き、上段の高さが揃う
+      expect(seat1.classList.contains('sa-pending-desk')).toBe(true)
+      expect(seat2.classList.contains('sa-pending-desk')).toBe(true)
+      // 保留でない机の席には付かない
+      expect(container.querySelector(`[data-testid="student-cell-${CELL_ID}-1-0"]`)!.classList.contains('sa-pending-desk')).toBe(false)
+    })
+
+    it('下段は上段と同じ構造・同じクラス（名前行＋学年科目行・振)・学年・科目・振替元の日付）で描く', () => {
+      const html = renderGrid(PENDING)
+      const container = document.createElement('div')
+      container.innerHTML = html
+      const lower = container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!
+      const inner = lower.querySelector('.sa-pending-lower-inner')!
+      expect(inner.querySelector('.sa-student-name-row > .sa-student-name')?.textContent).toBe('三浦')
+      expect(inner.querySelector('.sa-student-name-row > .sa-student-origin-date')?.textContent).toBe('9/30')
+      expect(inner.querySelector('.sa-student-detail .sa-student-detail-prefix')?.textContent).toBe('振)')
+      expect(inner.querySelector('.sa-student-detail .sa-student-detail-grade')?.textContent).toBe('中2')
+      expect(inner.querySelector('.sa-student-detail .sa-student-detail-subject')?.textContent).toBe('数')
+      // メモの下段は上段のメモと同じクラス
+      const memoLower = container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-1"] .sa-pending-lower-inner .sa-student-name-note`)
+      expect(memoLower?.textContent).toBe('持ち物')
+      // 旧表示（10px の 1 行ラベル）は使わない
+      expect(html).not.toContain('sa-pending-lower-detail')
+    })
+
+    it('盤面の文字サイズ合わせは、上段（.sa-student-inner）と同じ席の下段（.sa-pending-lower-inner）を揃える', () => {
+      const GRID_TSX = readFileSync(fileURLToPath(new NodeURL('./BoardGrid.tsx', import.meta.url)), 'utf8')
+      const fit = sliceBody(GRID_TSX, 'function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {', 'function fitMemoTextForBoard(')
+      expect(fit).toContain("':scope > .sa-pending-lower .sa-pending-lower-inner'")
+      expect(fit).toContain('Math.min(upperSize, lowerSize)')
+    })
+  })
 })
 
 describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分）', () => {
@@ -120,6 +180,7 @@ describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分�
     stripTemplatePendingLowerForPdf(container)
     expect(container.querySelector('.sa-pending-lower')).toBeNull()
     expect(container.querySelector('.sa-pending')).toBeNull()
+    expect(container.querySelector('.sa-pending-desk')).toBeNull()
     expect(container.textContent).not.toContain('三浦')
     expect(container.textContent).not.toContain('持ち物')
     expect(container.textContent).toContain('千葉')

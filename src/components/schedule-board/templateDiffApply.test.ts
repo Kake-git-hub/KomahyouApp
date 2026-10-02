@@ -753,7 +753,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   })
 
   it('条件 25：確認文は 4 件数を出し、「すべてのデータが消去され」を出さない', () => {
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0 })
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0 })
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
@@ -1046,8 +1046,9 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     expect(settleFn).not.toContain('mergeManagedWeek(')
   })
 
-  // 入口の再マージ当て（上の配線）が無くても、差分反映の本体（純関数）だけで丸ごと振替の日の Q21-11 が再マージと同じ形になること（二重の守り）。
-  it('純関数: 丸ごと振替の日に Q21-11 で生徒を全員外した机は、差分反映の本体だけで足場講師も外れる（抑止 → strip の順・L-7 兄弟 1）', () => {
+  // 入口の再マージ当て（上の配線）が無くても、差分反映の本体（純関数）だけで丸ごと振替の日の机が再マージと同じ形になること（二重の守り）。
+  // Q35（2026-10-02）: 丸ごと振替の日はテンプレの生徒を置かないので、B は Q21-11（重複）ではなく Q35 で外れる。机の形（抑止 → strip）は同じ。
+  it('純関数: 丸ごと振替の日に生徒を全員外した机は、差分反映の本体だけで足場講師も外れる（抑止 → strip の順・L-7 兄弟 1・Q35）', () => {
     const suppressed = [buildTemplateTeacherSuppressionKey(DATE)]
     const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sB', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] } }))
     const templateCells = buildTemplateDiffTemplateCells({
@@ -1055,7 +1056,8 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     })
     expect(templateCells.find((entry) => entry.applied.id === CELL_ID)?.scaffoldTeachersStripped).toBe(true)
     const result = computeTemplateDiffApply({ weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed, pendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z' })
-    expect(result.summary.skippedDuplicateStudents).toBe(1)
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(2)
     expect(deskOf(result.nextWeeks, 1)).toMatchObject({ teacher: '', manualTeacher: false })
     expect(deskOf(result.nextWeeks, 1).lesson).toBeUndefined()
     expect(deskOf(result.nextWeeks, 1).teacherAssignmentTeacherId).toBeUndefined()
@@ -1081,5 +1083,106 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     }
     expect(buildFullySuppressedManagedDesk(desk)).toEqual({ id: 'd1', teacher: '鈴木', manualTeacher: false, memoSlots: ['連絡あり', null] })
     expect(desk.teacherAssignmentTeacherId).toBe('t2')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q35：丸ごと振替した日はテンプレの生徒を置かず振替を優先（オーナー指示 2026-10-02・確認リスト v1.5.573 tp-22 要改善
+// 「生徒を変えたときも丸ごと振替した日は重複とせず、振替を優先として。テンプレの生徒を変えなかったときとテンプレの生徒を変えたときが
+//   丸ごと振替先では同じ扱いがいい」）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテンプレの生徒を置かない', () => {
+  const SOURCE_DATE = '2026-10-05'
+  // 丸ごと振替（computeWholeDayTransfer）の後の振替先の姿: 旧テンプレの A・B は row-scan の抑止キーで消え、日単位抑止があり、
+  // 移送された机ブロック（講師は manual 固定・生徒は振替）が机 0 に居る。机 0 の生徒 2 には別の机のテンプレの生徒 B の振替を手で置く（tp-21/22 の形）。
+  const wholeDaySuppressed = [
+    buildManagedOccurrenceKey(entry('sA'), DATE, SLOT),
+    buildManagedOccurrenceKey(entry('sB'), DATE, SLOT),
+    buildTemplateTeacherSuppressionKey(DATE),
+  ]
+  function transferredWeek() {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({
+      id: desk.id,
+      teacher: '田中',
+      manualTeacher: true,
+      teacherAssignmentSource: 'manual',
+      lesson: { id: `${desk.id}_moved`, studentSlots: [entry('sA', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), entry('sB', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE })] },
+    }))
+    week = mutateDesk(week, 1, (desk) => ({ id: desk.id, teacher: '' }))
+    week = mutateDesk(week, 2, (desk) => ({ id: desk.id, teacher: '' }))
+    return week
+  }
+  // 新テンプレ: 机 0 の生徒を A → D（新しい生徒＝抑止キーが無い）に替える。講師は変えない。
+  const CHANGED_ROWS = [row('r0', 't1', 'sD', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+
+  it('テンプレの生徒を変えても（D）、丸ごと振替した日には D を置かず、振替の机は 1 行のまま（保留にならない）。D の抑止キーを積み、保存 → 再マージの不動点', () => {
+    const week = transferredWeek()
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    expect(result.summary.pending).toBe(0)
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(Object.keys(result.nextPendingDesks)).toEqual([])
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sB'])
+    expect(deskOf(result.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.lessonType)).toEqual(['makeup', 'makeup'])
+    expect(deskOf(result.nextWeeks, 0).teacher).toBe('田中')
+    expect(countLiveInCell(result.nextWeeks, 'sD')).toBe(0)
+    // 生徒のいない机に講師が出ない（丸ごと振替の日の足場講師 strip・tp-22）
+    expect(deskOf(result.nextWeeks, 1).teacher).toBe('')
+    expect(deskOf(result.nextWeeks, 2).teacher).toBe('')
+    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sD'), DATE, SLOT)])
+    const suppressedAfter = [...wholeDaySuppressed, ...result.addedSuppressedRegularLessonOccurrences]
+    const once = remerge(result.nextWeeks, CHANGED_ROWS, suppressedAfter)
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+    expect(countLiveInCell(once, 'sD')).toBe(0)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日はテンプレの生徒を置かず振替を優先1名')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: 1名')
+  })
+
+  it('テンプレの生徒を変えなかったとき（A・B は抑止で元から居ない）と、変えたとき（D）で、丸ごと振替した日の机の形は同じ', () => {
+    const week = transferredWeek()
+    const unchanged = applyDiff({ week, newRows: OLD_ROWS, suppressed: wholeDaySuppressed })
+    const changed = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    expect(unchanged.summary.wholeDayTransferSkippedStudents).toBe(0)
+    expect(unchanged.summary.pending).toBe(0)
+    expect(cellOf(changed.nextWeeks)).toEqual(cellOf(unchanged.nextWeeks))
+    expect(changed.nextPendingDesks).toEqual(unchanged.nextPendingDesks)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, unchanged.summary)).not.toContain('丸ごと振替した日')
+  })
+
+  it('講師だけを替えた保存（tp-22 の操作）: 丸ごと振替した日の振替の机は 1 行のまま・置かなかった生徒は 0 名・生徒のいない机に講師が出ない', () => {
+    const week = transferredWeek()
+    const teacherChanged = [row('r0', 't2', 'sA', '数'), row('r1', 't3', 'sB', '数'), row('r2', 't1')]
+    const result = applyDiff({ week, newRows: teacherChanged, suppressed: wholeDaySuppressed })
+    expect(result.summary.pending).toBe(0)
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(0)
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sB'])
+    expect(deskOf(result.nextWeeks, 0).teacher).toBe('田中')
+    expect(deskOf(result.nextWeeks, 1).teacher).toBe('')
+    expect(deskOf(result.nextWeeks, 2).teacher).toBe('')
+    const once = remerge(result.nextWeeks, teacherChanged, [...wholeDaySuppressed, ...result.addedSuppressedRegularLessonOccurrences])
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+  })
+
+  it('丸ごと振替していない日（日単位抑止なし）は従来どおり: 変えた生徒 D はテンプレの席に置かれ、ぶつかった振替は保留の下段へ（Q35 は丸ごと振替の日だけ）', () => {
+    const week = transferredWeek()
+    const normalDaySuppressed = [buildManagedOccurrenceKey(entry('sA'), DATE, SLOT), buildManagedOccurrenceKey(entry('sB'), DATE, SLOT)]
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: normalDaySuppressed })
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(0)
+    expect(result.summary.pending).toBe(1)
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sD', 'sB'])
+    const pendingKey = buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 0).id)
+    expect(result.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', null])
+  })
+
+  it('丸ごと振替した日の置き換え（印なし・空の机）にも D を置かない（振替元の日＝空のまま残す）', () => {
+    const week = mutateDesk(mutateDesk(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ id: desk.id, teacher: '' })), 1, (desk) => ({ id: desk.id, teacher: '' })), 2, (desk) => ({ id: desk.id, teacher: '' }))
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(result.summary.replaced).toBe(0)
+    expect(cellOf(result.nextWeeks).desks.every((desk) => !desk.lesson && desk.teacher === '')).toBe(true)
+    const once = remerge(result.nextWeeks, CHANGED_ROWS, [...wholeDaySuppressed, ...result.addedSuppressedRegularLessonOccurrences])
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
   })
 })

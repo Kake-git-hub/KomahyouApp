@@ -2624,32 +2624,46 @@ tr.sa-group-row td {
   cursor: not-allowed;
 }
 
-.sa-student.sa-pending {
+/* 保留の机の席（下段の無い席を含む・席ごと表示 2026-10-02）: 上段を上詰めにし、1 行の席と 2 行の席で上段の高さを揃える。
+   緑（sa-pending）は下段のある席だけ。盤面 PDF は stripTemplatePendingLowerForPdf が両方の印を外す。 */
+.sa-student.sa-pending-desk {
   height: auto;
   min-height: 56px;
   vertical-align: top;
+}
+
+.sa-student.sa-pending-desk > .sa-student-inner {
+  min-height: 38px;
 }
 
 .sa-student.sa-pending:hover:not(.sa-inactive) {
   background: #d4eed9;
 }
 
+/* 下段（既存）。中身は上段（.sa-student-inner）と同じ構造・同じクラス（名前行＋学年科目行）で描き、文字サイズ合わせも上段と揃える
+   （オーナー指示 2026-10-02「保留の 2 行目も文字サイズや表示方法はテンプレと同じテキストスタイル、サイズにして」）。
+   緑の点線と背景だけで下段とわかるようにし、文字の色・太さは上段と同じにする。 */
 .sa-pending-lower {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  min-height: 16px;
+  width: 100%;
   margin-top: 2px;
-  padding: 1px 2px;
+  padding: 2px 0 1px;
   border-top: 1px dashed #2e7d32;
   background: #c8e6cf;
-  color: #1b5e20;
-  font-size: 10px;
-  line-height: 1.2;
-  white-space: nowrap;
   overflow: hidden;
   cursor: pointer;
+}
+
+.sa-pending-lower-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  gap: 1px;
 }
 
 .sa-pending-lower-band {
@@ -2658,11 +2672,14 @@ tr.sa-group-row td {
   border-radius: 999px;
   background: #2e7d32;
   color: #fff;
+  font-size: 10px;
+  line-height: 1.4;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
-  .sa-pending-lower-detail {
+  .sa-pending-lower-inner {
     display: none;
   }
 

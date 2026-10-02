@@ -4095,6 +4095,53 @@ export function clampPopoverPosition({
   }
 }
 
+// 保留の机メニュー・講師メニューの位置（確認リスト v1.5.573 その他欄「クリックメニューの下の方が画面から見切れてクリックできない」・2026-10-02）。
+// 固定の推定高さ（保留の机メニュー 420px・講師メニュー 250px）で下端をクランプしていたため、中身がそれより背が高い（下段 2 件＋ボタン・
+// 講師の出席記号つき候補など）か画面が低い端末では下のボタンが画面外に出ていた。実測サイズ（usePopoverMeasuredSize）があればそれで、
+// 無ければ推定でクランプする（生徒メニューの resolveStudentMenuPosition と同じ流儀）。
+export function resolveMeasuredPopoverPosition(params: {
+  anchorX: number
+  anchorY: number
+  viewportWidth: number
+  viewportHeight: number
+  measuredSize: { width: number; height: number } | null
+  fallbackWidth: number
+  fallbackHeight: number
+}) {
+  return clampPopoverPosition({
+    anchorX: params.anchorX,
+    anchorY: params.anchorY,
+    viewportWidth: params.viewportWidth,
+    viewportHeight: params.viewportHeight,
+    popoverWidth: params.measuredSize?.width ?? params.fallbackWidth,
+    popoverHeight: params.measuredSize?.height ?? params.fallbackHeight,
+    offsetX: 8,
+    offsetY: 8,
+    minLeft: 8,
+    minTop: 8,
+    rightMargin: 8,
+    bottomMargin: 8,
+  })
+}
+
+// ポップアップの実測サイズ（幅・高さ）。activeKey が真の間だけ ResizeObserver で測る（observe した直後の初回通知と、中身が変わって
+// サイズが変わるたびに更新）。閉じている間は null。最初の 1 描画は推定（または前回の実測）で置かれ、実測が入り次第クランプし直す。
+// effect の中で直接 setState しない（react-hooks/set-state-in-effect）。ResizeObserver の無い環境では推定サイズのまま。
+function usePopoverMeasuredSize(ref: { readonly current: HTMLDivElement | null }, activeKey: unknown) {
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+  useLayoutEffect(() => {
+    const element = activeKey ? ref.current : null
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const next = { width: element.offsetWidth, height: element.offsetHeight }
+      setSize((current) => (current?.width === next.width && current.height === next.height ? current : next))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [activeKey, ref])
+  return activeKey ? size : null
+}
+
 export function resolveStudentMenuPosition({
   menu,
   viewportWidth,
@@ -6786,6 +6833,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null
   // 保留の机のメニュー（下段の中身・採用ボタン）。deskId で持つ（机の並べ替えで index がずれても同じ机を指す）。
   const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; x: number; y: number } | null>(null)
+  const templatePendingDeskMenuRef = useRef<HTMLDivElement | null>(null)
+  const templatePendingDeskMenuSize = usePopoverMeasuredSize(templatePendingDeskMenuRef, templatePendingDeskMenu)
   // 下段の生徒の「移動」で移動先を待っている状態（次の生徒セルのクリックが移動先）。
   const [templatePendingLowerMove, setTemplatePendingLowerMove] = useState<{ cellId: string; deskId: string; lowerIndex: number; label: string } | null>(null)
   // commitWeeks の中で 1 行へ戻せなかった机の知らせ（ハンドラが出す完了メッセージの後ろへ足す）。
@@ -9594,16 +9643,38 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return { cell: targetCell, desk: targetDesk }
   }, [cells, isTemplateMode, teacherMenu, templateCells])
 
+  const teacherMenuRef = useRef<HTMLDivElement | null>(null)
+  const teacherMenuSize = usePopoverMeasuredSize(teacherMenuRef, teacherMenu)
   const teacherMenuPosition = useMemo(() => {
     if (!teacherMenu || typeof window === 'undefined') {
       return { left: 24, top: 108 }
     }
+    // 実測サイズでクランプ（固定 260px の見積もりでは候補の多い講師メニューの下が画面外に出ていた・2026-10-02）。
+    return resolveMeasuredPopoverPosition({
+      anchorX: teacherMenu.x,
+      anchorY: teacherMenu.y,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      measuredSize: teacherMenuSize,
+      fallbackWidth: 320,
+      fallbackHeight: 250,
+    })
+  }, [teacherMenu, teacherMenuSize])
 
-    return {
-      left: Math.max(12, Math.min(teacherMenu.x + 10, window.innerWidth - 336)),
-      top: Math.max(24, Math.min(teacherMenu.y + 10, window.innerHeight - 260)),
+  const templatePendingDeskMenuPosition = useMemo(() => {
+    if (!templatePendingDeskMenu || typeof window === 'undefined') {
+      return { left: 24, top: 108 }
     }
-  }, [teacherMenu])
+    return resolveMeasuredPopoverPosition({
+      anchorX: templatePendingDeskMenu.x,
+      anchorY: templatePendingDeskMenu.y,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      measuredSize: templatePendingDeskMenuSize,
+      fallbackWidth: 320,
+      fallbackHeight: 420,
+    })
+  }, [templatePendingDeskMenu, templatePendingDeskMenuSize])
 
   const teacherOptions = useMemo(() => {
     if (!teacherMenuContext || !teacherMenu) return []
@@ -14364,11 +14435,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             // spec-template-behavior Q26-1・Q26-3・Q30（第 1 段 (B)）: 保留（2 行・緑）の机のメニュー。下段の中身と
             // 「テンプレを採用」「既存を採用」。狭い画面では盤面の下段が帯「保留 n」になり、帯のタップでここを開く。
             <div
+              ref={templatePendingDeskMenuRef}
               className="student-menu-popover template-pending-desk-menu"
-              style={{
-                left: Math.max(8, Math.min(templatePendingDeskMenu.x + 8, (typeof window === 'undefined' ? 1280 : window.innerWidth) - 340)),
-                top: Math.max(8, Math.min(templatePendingDeskMenu.y + 8, (typeof window === 'undefined' ? 800 : window.innerHeight) - 420)),
-              }}
+              style={templatePendingDeskMenuPosition}
               data-testid="template-pending-desk-menu"
             >
               <div className="student-menu-head">
@@ -14610,6 +14679,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           ) : null}
           {teacherMenu && teacherMenuContext ? (
             <div
+              ref={teacherMenuRef}
               className="student-menu-popover teacher-menu-popover"
               style={teacherMenuPosition}
               data-testid="teacher-action-menu"

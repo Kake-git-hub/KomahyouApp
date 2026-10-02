@@ -193,6 +193,21 @@ export function countTemplatePendingLowerItems(lower: TemplatePendingLower) {
     + (lower.memoSlots ?? []).filter((memo) => hasMemoText(memo)).length
 }
 
+/**
+ * 席ごとの保留表示（オーナー指示 2026-10-02・確認リスト v1.5.573 tp-19「生徒 1 と生徒 2 の保留状態がリンクしている」）:
+ * その席の下段に中身（生きている生徒・出欠記録・メモ）があるか。無い席は 2 行にせず 1 行のまま描く（緑にもしない）。
+ */
+export function hasTemplatePendingLowerSeatContent(lower: TemplatePendingLower, seatIndex: number) {
+  return Boolean(lower.lesson?.studentSlots[seatIndex])
+    || Boolean(lower.statusSlots?.[seatIndex])
+    || hasMemoText(lower.memoSlots?.[seatIndex])
+}
+
+/** 帯「保留 n」（狭い画面）を付ける席＝下段に中身のある最初の席。どの席にも無ければ 0（呼び出し側は描かない）。 */
+export function resolveTemplatePendingBandSeat(lower: TemplatePendingLower) {
+  return hasTemplatePendingLowerSeatContent(lower, 0) || !hasTemplatePendingLowerSeatContent(lower, 1) ? 0 : 1
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Q28：1 行に戻す（盤面への適用）
 // ─────────────────────────────────────────────────────────────────────────────

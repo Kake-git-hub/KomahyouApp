@@ -388,20 +388,39 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] as Slots } }
     : desk))
 
-  it('不動点（L-7 兄弟 1）: 丸ごと振替の日（足場講師を置かない日）に Q21-11 で講師だけになった机も、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+  // Q35（オーナー指示 2026-10-02・tp-22）: 丸ごと振替の日はテンプレの生徒を置かない（重複の Q21-11 より前に全員外す）。机の形は同じ（抑止 → strip）。
+  it('不動点（L-7 兄弟 1・Q35）: 丸ごと振替の日（足場講師を置かない日）にテンプレの生徒を外して講師だけになった机も、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     const { saved, remerged } = saveThenRemerge(board(makeupBAt0), { suppressed: [buildTemplateTeacherSuppressionKey(DATE)] })
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(2)
     expect(cellOf(saved.nextWeeks).desks[1].lesson).toBeUndefined()
+    expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
-  it('不動点（L-7 兄弟 1）: 兄弟＝丸ごと振替の日 × 残す（keep）の経路。メモの印がある机 1 のテンプレの B を Q21-11 で外しても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+  it('不動点（L-7 兄弟 1・Q35）: 兄弟＝丸ごと振替の日 × 残す（keep）の経路。メモの印がある机 1 のテンプレの B を外しても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     const week = board((desks) => makeupBAt0(desks).map((desk, index) => (index === 1 ? { ...desk, memoSlots: ['連絡あり', null] as [string | null, string | null] } : desk)))
     const { saved, remerged } = saveThenRemerge(week, { suppressed: [buildTemplateTeacherSuppressionKey(DATE)] })
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(saved.summary.kept).toBe(1)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(2)
+    expect(saved.summary.kept).toBe(2)
     expect(cellOf(saved.nextWeeks).desks[1].memoSlots).toEqual(['連絡あり', null])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  it('不動点（Q35・tp-22）: 丸ごと振替の日にテンプレの生徒を A → D に変えても、D は置かず A の振替が 1 行のまま（保留 0）。保存 → 再マージ 1 回でセルは丸ごと変わらず D は 0 か所', () => {
+    const rows = [row('r0', 't1', 'sD'), row('r1', 't2', 'sB'), row('r2', 't3')]
+    const week = board((desks) => desks.map((desk, index) => (index === 0
+      ? { ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' as const, lesson: { id: `${desk.id}_moved`, studentSlots: [mkStudent('a-moved', '青木', { managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-10-05' }), null] as Slots } }
+      : { id: desk.id, teacher: '' })))
+    const suppressed = [buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5), buildManagedOccurrenceKey(mkStudent('b', '馬場', { managedStudentId: 'sB' }), DATE, 5), buildTemplateTeacherSuppressionKey(DATE)]
+    const { saved, remerged } = saveThenRemerge(week, { rows, suppressed })
+    expect(saved.summary.pending).toBe(0)
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveCount(saved.nextWeeks, 'sD')).toBe(0)
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+    expect(liveCount(remerged, 'sD')).toBe(0)
   })
 
   // 再マージ（mergeManagedWeek）は講師だけの管理机を、同じコマに同じ講師名が居れば足さず（alreadyPresent）、残りを「先頭から最初の空き机」へ
