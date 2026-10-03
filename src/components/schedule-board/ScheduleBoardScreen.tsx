@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -2525,56 +2525,91 @@ export function computeTemplateDiffApplyForBoard(params: {
   createdAt: string
 }) {
   // Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写し（同日移動・元の日付へ戻した）が、新テンプレの同じ生徒×科目と
-  // 重複する／テンプレに無い／席で新テンプレの別の生徒とぶつかるときは、写しを外して**その写しを作った移動の抑止キーも外し**、
+  // 重複する／テンプレに無い／席で新テンプレの別の生徒とぶつかるときは、写しを外して**その日のその生徒×科目の抑止キーも外し**、
   // テンプレの授業が元の位置へ戻った形でもう一度突き合わせる（外したキーで抑止前の管理セルが変わるので、管理セルを作り直して反復する。
   // 写しは反復ごとに減るだけなので必ず収束する）。写しを外すだけでキーを残すと、その日の通常授業がどこにも無くなる（無言の消失）。
   // 旧方式（上書き）では反映日以降が全消去されていたので写しは元から残らなかった＝通常授業の決め手はテンプレ、という従来の体感に揃える。
+  // ★事後条件（regression-reviewer H-2・2026-10-03）: 外した写し（テンプレから消えた stale を除く）は、最終結果でその日に同じ生徒×科目の
+  //   通常授業が生きていなければならない。満たさない写し（例: 移動先のコマに同じ生徒の振替が居て Q21-11 がテンプレの生徒を置かない）は
+  //   「外さない写し」に加えて最初から計算し直す（＝従来どおり 1 行で残るか保留の下段に残る。黙って消さない）。
+  const protectedCopies = new Set<string>()
+  const outerLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
+  for (let attempt = 0; attempt < outerLimit; attempt += 1) {
+    const run = runTemplateDiffApplyWithCopyReverts(params, protectedCopies)
+    const settledSuppressed = [...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]
+    // 保存結果を再マージの不動点にする（regression-reviewer L-7 兄弟 2・INV-02 / INV-03）。差分反映はテンプレを机の位置どおりに置くが、
+    // 再マージ（mergeManagedWeek）は講師だけの管理机を「同じコマに同じ講師名が居れば足さない → 先頭の空き机へ置き直す」ので、講師名が重なる
+    // 講師だけの机（講師のいない行＝「講師未割当」が 2 本・同じ講師が 2 机）が空くと、保存直後の再マージで講師の机がずれていた。
+    // その置き直しを差分反映に書き写さず（机をまたぐ計算なので写すと必ずずれる）、保存と同じ抑止（保存前－Q36 で外した分＋Q21-11 で足した分）で
+    // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
+    const nextWeeks = run.diff.nextWeeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed }))
+    const vanished = run.stripped.filter((revert) => revert.reason !== 'stale' && !hasLiveRegularOnDate(nextWeeks, revert.dateKey, studentSubjectKey(revert.student)))
+    if (vanished.length === 0 || attempt === outerLimit - 1) {
+      return {
+        ...run.diff,
+        summary: { ...run.diff.summary, sameDayMoveCopiesReverted: run.stripped.length },
+        nextWeeks,
+        /** Q36 で外した通常授業の抑止キー（保存が抑止から取り除く）。 */
+        removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed],
+      }
+    }
+    for (const revert of vanished) protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))
+  }
+  throw new Error('computeTemplateDiffApplyForBoard: unreachable')
+}
+
+// Q36 の反復本体: 写しを検出 → 盤面・保留から外す → その日のその生徒×科目の抑止キーを外す → 管理セルを作り直して再計算、を写しが無くなるまで。
+function runTemplateDiffApplyWithCopyReverts(params: {
+  weeks: SlotCell[][]
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  effectiveStartDate: string
+  suppressedRegularLessonOccurrences: string[]
+  templatePendingDesks: TemplatePendingDeskMap
+  createdAt: string
+}, protectedCopies: ReadonlySet<string>) {
   let weeks = params.weeks
   let pendingDesks = params.templatePendingDesks
   let suppressed = params.suppressedRegularLessonOccurrences
   const removedSuppressed = new Set<string>()
-  let revertedCount = 0
-  let diff = computeTemplateDiffApply({
+  const stripped: SameDayMoveCopyRevert[] = []
+  const compute = () => computeTemplateDiffApply({
     weeks,
     templateCells: buildTemplateDiffTemplateCells({ ...params, weeks, suppressedRegularLessonOccurrences: suppressed }),
     effectiveStartDate: params.effectiveStartDate,
     suppressedRegularLessonOccurrences: suppressed,
     pendingDesks,
     createdAt: params.createdAt,
+    protectedSameDayMoveCopies: protectedCopies,
   })
+  let diff = compute()
   const iterationLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
   for (let iteration = 0; iteration < iterationLimit && diff.sameDayMoveCopyReverts.length > 0; iteration += 1) {
-    const reverts = diff.sameDayMoveCopyReverts
-    const stripped = stripSameDayMoveCopies(weeks, pendingDesks, reverts)
+    const result = stripSameDayMoveCopies(weeks, pendingDesks, diff.sameDayMoveCopyReverts)
     // 何も外せなかった（所在が合わない写し）なら、同じ結果を繰り返さずにここで止める（写しは下段に残る＝旧来の保留）。
-    if (stripped.strippedCount === 0) break
-    weeks = stripped.weeks
-    pendingDesks = stripped.pendingDesks
-    revertedCount += stripped.strippedCount
-    for (const revert of reverts) for (const key of resolveSameDayMoveCopyKeysToRemove(revert, suppressed)) removedSuppressed.add(key)
+    if (result.stripped.length === 0) break
+    weeks = result.weeks
+    pendingDesks = result.pendingDesks
+    stripped.push(...result.stripped)
+    // 抑止キーを外すのは**実際に外した写し**の分だけ（regression-reviewer M-1）。
+    for (const revert of result.stripped) for (const key of resolveSameDayMoveCopyKeysToRemove(revert, suppressed)) removedSuppressed.add(key)
     suppressed = suppressed.filter((key) => !removedSuppressed.has(key))
-    diff = computeTemplateDiffApply({
-      weeks,
-      templateCells: buildTemplateDiffTemplateCells({ ...params, weeks, suppressedRegularLessonOccurrences: suppressed }),
-      effectiveStartDate: params.effectiveStartDate,
-      suppressedRegularLessonOccurrences: suppressed,
-      pendingDesks,
-      createdAt: params.createdAt,
-    })
+    diff = compute()
   }
-  // 保存結果を再マージの不動点にする（regression-reviewer L-7 兄弟 2・INV-02 / INV-03）。差分反映はテンプレを机の位置どおりに置くが、
-  // 再マージ（mergeManagedWeek）は講師だけの管理机を「同じコマに同じ講師名が居れば足さない → 先頭の空き机へ置き直す」ので、講師名が重なる
-  // 講師だけの机（講師のいない行＝「講師未割当」が 2 本・同じ講師が 2 机）が空くと、保存直後の再マージで講師の机がずれていた。
-  // その置き直しを差分反映に書き写さず（机をまたぐ計算なので写すと必ずずれる）、保存と同じ抑止（保存前－Q36 で外した分＋Q21-11 で足した分）で
-  // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
-  const settledSuppressed = [...suppressed, ...diff.addedSuppressedRegularLessonOccurrences]
-  return {
-    ...diff,
-    summary: { ...diff.summary, sameDayMoveCopiesReverted: revertedCount },
-    nextWeeks: diff.nextWeeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed })),
-    /** Q36 で外した通常授業の抑止キー（保存が抑止から取り除く）。 */
-    removedSuppressedRegularLessonOccurrences: [...removedSuppressed],
+  return { diff, suppressed, removedSuppressed, stripped }
+}
+
+// その日に同じ生徒×科目の通常授業（lessonType='regular'）が生きているか（Q36 の事後条件）。
+function hasLiveRegularOnDate(weeks: SlotCell[][], dateKey: string, key: string) {
+  for (const week of weeks) for (const cell of week) {
+    if (cell.dateKey !== dateKey) continue
+    for (const desk of cell.desks) for (const student of desk.lesson?.studentSlots ?? []) {
+      if (student && student.lessonType === 'regular' && studentSubjectKey(student) === key) return true
+    }
   }
+  return false
 }
 
 // Q36 の反復回数の上限（写しは反復ごとに減るだけなので、写しの総数＋1 回で必ず止まる）。
@@ -6118,6 +6153,9 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
   }
   const first = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
   if (first.collapse.ok || first.collapse.reason === 'duplicate-student') return first
+  // 席ごと（Q26-10・regression-reviewer M-2）: もう一方の席に下段が残るときは、上段のテンプレ生徒を全部取り下げるフォールバックを使わない
+  // （使うと押していない席のテンプレ生徒が取り下げられ、その席の下段が机へ戻る＝「生徒 1 の操作で生徒 2 が動く」）。戻せなければ止める。
+  if (restLower) return first
   const allSeats = resolveAdoptExistingWithdrawSeats(desk, entry.lower, { all: true })
   const firstSeats = resolveAdoptExistingWithdrawSeats(desk, entry.lower)
   if (allSeats.length === firstSeats.length) return first

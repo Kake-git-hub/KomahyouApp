@@ -1245,6 +1245,27 @@ describe('INV-06 拡張: テンプレ差分反映の保存前後で未消化振�
     expect(stock(result.nextWeeks, settings, rows, manual, result.nextPendingDesks)).toBe(before)
   })
 
+  // regression-reviewer M-3（2026-10-03）: 旧形式（v1.5.572〜577 の保存が作った、下段に欠席記録を持つ保留）は再保存まで残る。
+  // 手で組んで「下段を走査しないと残 0 に消える」のロックを保つ（Q37 以降の保存は作らないが、既存データの会計を守る）。
+  it('旧形式: 下段に入った欠席記録（移動しただけの振替コマの欠席・記録から算出する origin）は下段でも残1のまま（走査しないと残0に消える）', () => {
+    const settings = diffSettings()
+    const rows = [templateRow('regular-1', 'student-2', 'student-3')]
+    const week = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START_KEY, endDate: WEEK_END_KEY, periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START_KEY,
+      fallbackEndDate: WEEK_END_KEY,
+      classroomSettings: settings,
+      teachers: [teacher],
+      students: allStudents,
+      regularLessons: rows,
+      boardWeeks: [],
+    })
+    const key = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+    const legacyPending: TemplatePendingDeskMap = { [key]: { lower: { statusSlots: [boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '7/29(水) 5限' }), null] }, effectiveStartDate: BOARD_DATE, createdAt: 'legacy' } }
+    expect(stock([week], settings, rows, {}, legacyPending)).toBe(1)
+    expect(stock([week], settings, rows)).toBe(0)
+  })
+
   it('席不足でも欠席記録は机に残る（Q37・2026-10-03）: 移動しただけの振替コマの欠席（記録から算出する origin）は上段 2 人の下に残り、残1のまま', () => {
     // 旧（〜v1.5.577・Q21-10）: 上段 2 人＋会計記録 1 件 > 2 席 → 記録だけ下段へ退避。Q37 で休み・振無休の記録は席を確保せず元の席に残る
     // （盤面の通常操作で「休みにした席へ生徒を置く」と同じ形）。在庫は机の記録から数えるので下段の走査に依らない。

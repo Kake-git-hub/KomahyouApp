@@ -560,3 +560,36 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
 describe('INV-13 × 再マージ: 保留の机の講師（既知の穴）', () => {
   it.todo('上段が空のまま残った保留の机も、同じコマに同名の講師が居る保存 → 再マージで講師を保つ（Q31 の固定を再マージにも）')
 })
+
+// regression-reviewer M-3（2026-10-03）: Q37 で「席不足で下段へ入った欠席記録」は新しい保存では生まれないが、v1.5.572〜v1.5.577 の保存が作った保留には
+// 下段に欠席記録を持つものが再保存まで残る。旧形式を手で組んで、保留中は出ない・解決後（上段が空いて 1 行へ）は出る、を INV-13 の消費者で固定する。
+describe('INV-13 旧形式（v1.5.572〜577）: 下段に欠席記録を持つ保留', () => {
+  const absentD = status('sD', 'absent', { lessonType: 'makeup', makeupSourceDate: '2026-09-16', makeupSourceLabel: '9/16(水) 5限', teacherName: '田中' })
+  const week = buildWeek(NEW_ROWS_TWO_IN_DESK1)
+  const desk1 = week.find((cell) => cell.id === CELL_ID)!.desks[1]
+  const key = buildTemplatePendingDeskKey(CELL_ID, desk1.id)
+  const legacyPending: TemplatePendingDeskMap = { [key]: { lower: { statusSlots: [absentD, null] }, effectiveStartDate: EFFECTIVE, createdAt: 'legacy' } }
+  const pendingState: BoardState = { weeks: [week], pending: legacyPending }
+
+  it('保留中: 下段の欠席記録は生徒日程表・保護者向け表示・盤面共有に出ない（上段の生徒は出る）', () => {
+    expect(studentSheet(pendingState, 'sD').cards).toEqual([])
+    expect(studentSheet(pendingState, 'sD').absenceNotes).toEqual([])
+    expect(parentLessonsOn(pendingState, 'sD')).toEqual([])
+    expect(boardShareCellJson(pendingState)).not.toContain('土屋')
+    expect(studentSheet(pendingState, 'sB').cards.length).toBeGreaterThan(0)
+  })
+
+  it('解決後（上段の生徒 2 を外して 1 行へ）: 欠席記録が机へ戻り、生徒日程表の「休」と保護者向け表示に出る', () => {
+    const removedUpper = [week.map((cell) => (cell.id !== CELL_ID ? cell : {
+      ...cell,
+      desks: cell.desks.map((desk) => (desk.id !== desk1.id || !desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: [desk.lesson.studentSlots[0], null] as [StudentEntry | null, StudentEntry | null] } })),
+    }))]
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: [week], previousTemplatePendingDesks: legacyPending, weeks: removedUpper, templatePendingDesks: legacyPending })
+    expect(settled.collapsedKeys).toEqual([key])
+    const after: BoardState = { weeks: settled.nextWeeks, pending: settled.nextTemplatePendingDesks }
+    const restoredDesk = settled.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[1]
+    expect(restoredDesk.statusSlots?.filter(Boolean).map((item) => [item!.managedStudentId, item!.status])).toEqual([['sD', 'absent']])
+    expect(studentSheet(after, 'sD').cards.map((card) => card.main).join(' ')).toContain('休')
+    expect(parentLessonsOn(after, 'sD').length).toBeGreaterThan(0)
+  })
+})

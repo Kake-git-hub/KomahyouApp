@@ -1044,3 +1044,31 @@ describe('席ごとの採用（Q26-10・2026-10-03）: 押した席の下段だ�
     expect(lower.lesson.studentSlots[0]?.managedStudentId).toBe('sM')
   })
 })
+
+// regression-reviewer M-2（2026-10-03）: 席ごとの「手入力データを採用」で、席ごとに戻せない（下段が別日移動の通常授業で管理授業に同居できない）とき、
+// 旧来の「上段のテンプレ生徒を全部取り下げる」フォールバックを使うと、押していない席のテンプレ生徒まで取り下がり、その席の下段が机へ戻る。
+// もう一方の席に下段が残るなら止める（押した席の分だけで戻せないときは「既存を採用できません」）。
+describe('席ごとの採用（Q26-10）: もう一方の席に下段が残るときは全席のフォールバックを使わない（M-2）', () => {
+  it('上段 [A, C]・下段 [別日移動の通常 M, 振替 D] で生徒 1 の手入力データを採用 → 止まる（C は取り下がらず D も戻らない・盤面と保留は不変）', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [entry('sM', { makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' }), entry('sD', { lessonType: 'makeup', makeupSourceDate: '2026-09-23', makeupSourceLabel: '9/23(水) 5限' })] } }))
+    const newRows = [row('r0', 't2', 'sA', '数', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
+    const diff = applyDiff(week, newRows)
+    const deskId = deskOf(diff.nextWeeks, 0).id
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
+    expect(liveIds(deskOf(diff.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', 'sD'])
+    const cell = cellOf(diff.nextWeeks)
+    const plan = planTemplatePendingAdoptExisting({ cell, desk: cell.desks[0], entry: diff.nextPendingDesks[key], seatIndex: 0 })
+    expect(plan.collapse.ok).toBe(false)
+    expect(plan.withdrawnStudents.map((student) => student.managedStudentId)).toEqual(['sA'])
+    const result = resolve('adopt-existing', { diff, deskId, key, newRows }, { lowerIndex: 0 })
+    expect(result.status).toBe('blocked')
+    if (result.status !== 'blocked') return
+    expect(result.message).toContain('既存を採用できません')
+    // 机ごと（lowerIndex 無し）なら旧来どおり全部取り下げて [M, D]
+    const whole = resolve('adopt-existing', { diff, deskId, key, newRows })
+    if (whole.status !== 'applied') throw new Error(whole.message)
+    expect(deskOf(whole.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', 'sD'])
+  })
+})

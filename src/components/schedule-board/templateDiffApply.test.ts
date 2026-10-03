@@ -40,7 +40,6 @@ import {
   resolveAdoptExistingCountAdjustments,
   resolveDeskManualInputMark,
   resolveSameDayMoveCopyKeysToRemove,
-  resolveSameDayMovedCopySourceKey,
   resolveTemplateDeskTeacher,
   shouldSeatSurviveRemerge,
   stripSameDayMoveCopies,
@@ -1077,9 +1076,12 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     }
     const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 6000)
     // Q36（2026-10-03）: 保存と同じ抑止＝保存前の抑止から写しの分を外し（suppressed）、Q21-11 / Q35 で足した分を加える
-    expect(entryFn).toContain('[...suppressed, ...diff.addedSuppressedRegularLessonOccurrences]')
+    expect(entryFn).toContain('[...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]')
     expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed })')
-    expect(entryFn).toContain('removedSuppressedRegularLessonOccurrences: [...removedSuppressed]')
+    expect(entryFn).toContain('removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed]')
+    // Q36 事後条件（H-2）: 外した写しの通常授業が最終結果で生きていなければ、その写しを「外さない」側に加えて計算し直す。
+    expect(entryFn).toContain('hasLiveRegularOnDate(nextWeeks, revert.dateKey, studentSubjectKey(revert.student))')
+    expect(entryFn).toContain('protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))')
     const settleFn = sliceOf('function settleTemplateDiffWeekWithRemerge(', 1400)
     expect(settleFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })')
     expect(settleFn).toContain('overlayPreparedManagedCells(managedCells, [postFreezeBoard])')
@@ -1480,20 +1482,17 @@ describe('Q36: 同日移動の写しはテンプレに合わせる（オーナ�
     expect(Object.keys(single.nextPendingDesks)).toHaveLength(1)
   })
 
-  it('判定と抑止キー: 写し＝手動追加でない通常授業で同日移動／元の日付へ戻したもの。キーは移動元ラベルの時限から（読めなければその日のその生徒×科目を全部）', () => {
+  it('判定と抑止キー: 写し＝手動追加でない通常授業で同日移動／元の日付へ戻したもの。外すキーはその日のその生徒×科目を全部（多段移動の履歴ごと・H-2(a)）', () => {
     expect(isSameDayMovedTemplateCopy(copyOfA(), DATE)).toBe(true)
     expect(isSameDayMovedTemplateCopy(entry('sA', { makeupSourceDate: DATE }), DATE)).toBe(true)
     expect(isSameDayMovedTemplateCopy(entry('sA', { sameDayMoveSourceDate: '2026-10-08' }), DATE)).toBe(false)
     expect(isSameDayMovedTemplateCopy(entry('sA', { sameDayMoveSourceDate: DATE, manualAdded: true }), DATE)).toBe(false)
     expect(isSameDayMovedTemplateCopy(entry('sA', { lessonType: 'makeup', makeupSourceDate: DATE }), DATE)).toBe(false)
     expect(isSameDayMovedTemplateCopy(entry('sA'), DATE)).toBe(false)
-    expect(resolveSameDayMovedCopySourceKey(copyOfA('2026/10/7(水) 4限'), DATE)).toBe(buildManagedOccurrenceKey(entry('sA'), DATE, 4))
-    expect(resolveSameDayMovedCopySourceKey(entry('sA', { makeupSourceDate: DATE, makeupSourceLabel: '2026/10/7(水) 3限' }), DATE)).toBe(buildManagedOccurrenceKey(entry('sA'), DATE, 3))
-    expect(resolveSameDayMovedCopySourceKey(copyOfA('2026/10/7'), DATE)).toBeNull()
-    const keys = [KEY_A_SLOT5, buildManagedOccurrenceKey(entry('sA'), DATE, 4), buildManagedOccurrenceKey(entry('sB'), DATE, 5), buildManagedOccurrenceKey(entry('sA'), '2026-10-14', 5)]
-    expect(resolveSameDayMoveCopyKeysToRemove({ student: copyOfA('2026/10/7(水) 4限'), dateKey: DATE }, keys)).toEqual([buildManagedOccurrenceKey(entry('sA'), DATE, 4)])
-    expect(resolveSameDayMoveCopyKeysToRemove({ student: copyOfA('2026/10/7(水) 2限'), dateKey: DATE }, keys)).toEqual([])
+    const keys = [KEY_A_SLOT5, buildManagedOccurrenceKey(entry('sA'), DATE, 4), buildManagedOccurrenceKey(entry('sB'), DATE, 5), buildManagedOccurrenceKey(entry('sA'), '2026-10-14', 5), buildTemplateTeacherSuppressionKey(DATE)]
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copyOfA('2026/10/7(水) 4限'), dateKey: DATE }, keys)).toEqual([KEY_A_SLOT5, buildManagedOccurrenceKey(entry('sA'), DATE, 4)])
     expect(resolveSameDayMoveCopyKeysToRemove({ student: copyOfA('2026/10/7'), dateKey: DATE }, keys)).toEqual([KEY_A_SLOT5, buildManagedOccurrenceKey(entry('sA'), DATE, 4)])
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copyOfA(), dateKey: '2026-10-21' }, keys)).toEqual([])
   })
 
   it('stripSameDayMoveCopies: 上段の写しは机から、下段の写しは保留から外す。空になった授業は外し、入力は変えない', () => {
@@ -1509,13 +1508,13 @@ describe('Q36: 同日移動の写しはテンプレに合わせる（オーナ�
     expect(stripped.pendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0Id)].lower).toEqual({ memoSlots: ['連絡', null] })
     expect(liveNames(deskOf([week], 2))).toEqual(['sA', 'sM'])
     expect(pending[buildTemplatePendingDeskKey(CELL_ID, desk0Id)].lower.lesson?.studentSlots[1]?.managedStudentId).toBe('sA')
-    expect(stripped.strippedCount).toBe(2)
+    expect(stripped.stripped).toHaveLength(2)
     const emptied = stripSameDayMoveCopies([week], {}, [{ cellId: CELL_ID, deskId: desk2Id, row: 'upper', seat: 0, student: copyOfA(), dateKey: DATE, reason: 'stale' }, { cellId: CELL_ID, deskId: desk2Id, row: 'upper', seat: 1, student: entry('sM', { lessonType: 'makeup' }), dateKey: DATE, reason: 'stale' }])
     expect(deskOf(emptied.weeks, 2).lesson).toBeUndefined()
-    expect(emptied.strippedCount).toBe(2)
+    expect(emptied.stripped).toHaveLength(2)
     // 席の生徒が指定の写し（id）と違えば外さない（別の生徒を巻き込まない）
     const mismatched = stripSameDayMoveCopies([week], pending, [{ cellId: CELL_ID, deskId: desk2Id, row: 'upper', seat: 1, student: copyOfA(), dateKey: DATE, reason: 'stale' }])
-    expect(mismatched.strippedCount).toBe(0)
+    expect(mismatched.stripped).toEqual([])
     expect(liveNames(deskOf(mismatched.weeks, 2))).toEqual(['sA', 'sM'])
     const untouched = [week]
     expect(stripSameDayMoveCopies(untouched, pending, []).weeks).toBe(untouched)
@@ -1581,4 +1580,123 @@ describe('Q37: 休み・振無休の記録だけの席は空席と同じ（記�
   function MAKEUP_M() {
     return entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' })
   }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q36 の INV 監査（regression-reviewer 2026-10-03・commit df3db9a）で見つかった回帰の固定
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Q36 監査（2026-10-03）: 写しの誤判定・消失・取りこぼしを固定', () => {
+  const KEY_A_SLOT5 = buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)
+  const KEY_A_SLOT4 = buildManagedOccurrenceKey(entry('sA'), DATE, 4)
+  const copyOfA = (label = '2026/10/7(水) 5限') => entry('sA', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: label })
+  const liveOnDate = (weeks: SlotCell[][], studentId: string) => weeks.flat().filter((cell) => cell.dateKey === DATE)
+    .flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((student) => student?.managedStudentId === studentId).map((student) => `${cell.slotNumber}:${student!.lessonType}`)))
+    .sort()
+  const remergeAll = (result: ReturnType<typeof applyDiff>, rows: RegularLessonRow[], suppressedBefore: string[]) => {
+    const removed = new Set(result.removedSuppressedRegularLessonOccurrences)
+    const suppressedAfter = [...suppressedBefore.filter((key) => !removed.has(key)), ...result.addedSuppressedRegularLessonOccurrences]
+    const once = remerge(result.nextWeeks, rows, suppressedAfter)
+    expect(byCellId(once)).toEqual(byCellId(result.nextWeeks))
+    return { once, suppressedAfter }
+  }
+  const TODAY = new Date('2026-10-01T00:00:00')
+  const balances = (weeks: SlotCell[][], rows: RegularLessonRow[], templatePendingDesks?: TemplatePendingDeskMap) => Object.fromEntries(buildMakeupStockEntries({
+    students, teachers, regularLessons: rows, classroomSettings: newSettings(), weeks, manualAdjustments: { 'sA__数': [{ dateKey: DATE }] },
+    resolveStudentKey: (student) => student.managedStudentId ?? student.name, today: TODAY, templatePendingDesks,
+  }).map((item) => [item.key, item.balance]))
+
+  // H-1: 在庫から振替を元の日付に置いたコマ（normalizeLessonPlacement で regular＋makeupSourceDate＝その日）は写しではない。
+  // 同じ日に休みの記録（在庫の発生）が残っているので区別できる。
+  it('H-1: A を 5 限で休み → 同じ日の 3 限に在庫から振替（regular＋makeupSourceDate＝その日）→ テンプレで A を 4 限へ移しても、振替は外れず在庫も変わらない', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sA', 'absent'), null] }))
+    const placedFromStock = entry('sA', { makeupSourceDate: DATE, makeupSourceLabel: '2026/10/7(水) 5限' })
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'stock_placed', studentSlots: [placedFromStock, null] } }), `${DATE}_3`)
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    const before = balances([week], newRows)
+    const result = applyDiff({ week, newRows, suppressed: [KEY_A_SLOT5] })
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(0)
+    expect(result.removedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(liveNames(deskOf(result.nextWeeks, 0, `${DATE}_3`))).toEqual(['sA'])
+    // 5 限の机 0 は田中の机が 4 限へ移ったので鈴木（B）のテンプレ机になる。A の休みの記録は机に残り、B が座った席 0 を避けて空いた席 1 へ（Q37・記録は消えない）。
+    expect(deskOf(result.nextWeeks, 0).teacher).toBe('鈴木')
+    expect(deskOf(result.nextWeeks, 0).statusSlots?.map((item) => (item ? `${item.managedStudentId}:${item.status}` : null))).toEqual([null, 'sA:absent'])
+    expect(balances(result.nextWeeks, newRows, result.nextPendingDesks)).toEqual(before)
+    remergeAll(result, newRows, [KEY_A_SLOT5])
+  })
+
+  it('H-1: 同じ形で新テンプレの C が 3 限の振替の席を埋めても（collided に見える）、休みのキーは外れず、休んだ 5 限に A の通常授業が湧かない', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sA', 'absent'), null] }))
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'stock_placed', studentSlots: [entry('sA', { makeupSourceDate: DATE, makeupSourceLabel: '2026/10/7(水) 5限' }), null] } }), `${DATE}_3`)
+    const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3'), row('r3', 't3', 'sC', '数', '', '', 3, 3)]
+    const result = applyDiff({ week, newRows, suppressed: [KEY_A_SLOT5] })
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(0)
+    expect(result.removedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual([])
+    const { once } = remergeAll(result, newRows, [KEY_A_SLOT5])
+    expect(liveOnDate(once, 'sA').filter((item) => item.startsWith('5:'))).toEqual([])
+    // 振替は保留の下段に残る（従来どおり手入力データ）
+    const desk3 = deskOf(result.nextWeeks, 0, `${DATE}_3`)
+    expect(result.nextPendingDesks[buildTemplatePendingDeskKey(`${DATE}_3`, desk3.id)]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+  })
+
+  // H-2(a): 5→4→3 限と動かした写しは 5 限と 4 限の 2 つのキーを積む。外すときはその日のその生徒×科目のキーを全部外す。
+  it('H-2(a): 多段に動かした写し（キーが 5 限と 4 限）の席を C が埋めても、A はテンプレの 4 限に戻る（4 限のキーも外れる）', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: undefined }))
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_hop', studentSlots: [copyOfA(), null] } }), `${DATE}_3`)
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3'), row('r3', 't3', 'sC', '数', '', '', 3, 3)]
+    const suppressed = [KEY_A_SLOT5, KEY_A_SLOT4]
+    const result = applyDiff({ week, newRows, suppressed })
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect([...result.removedSuppressedRegularLessonOccurrences].sort()).toEqual([KEY_A_SLOT5, KEY_A_SLOT4].sort())
+    expect(liveOnDate(result.nextWeeks, 'sA')).toEqual(['4:regular'])
+    expect(result.nextPendingDesks).toEqual({})
+    const { once } = remergeAll(result, newRows, suppressed)
+    expect(liveOnDate(once, 'sA')).toEqual(['4:regular'])
+  })
+
+  // H-2(b): 写しは superseded に見えても、移動先のコマでは Q21-11（同じ生徒の振替が居る）がテンプレの生徒を置かない → 写しを外すと通常授業が消える。
+  // 事後条件で守り、従来どおり写しを残す。
+  it('H-2(b): テンプレの移動先（4 限）に A の振替が既に居て Q21-11 がテンプレの A を置かないなら、3 限の写しは外さず残る（通常授業が消えない）', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: undefined }))
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_x', studentSlots: [copyOfA(), null] } }), `${DATE}_3`)
+    week = mutateDesk(week, 1, (desk) => ({ ...desk, lesson: { id: 'mk_sA', studentSlots: [entry('sA', { lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' }), null] } }), `${DATE}_4`)
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3'), row('r4b', 't3', '', '', '', '', 3, 4)]
+    const suppressed = [KEY_A_SLOT5]
+    const result = applyDiff({ week, newRows, suppressed })
+    expect(liveOnDate(result.nextWeeks, 'sA')).toEqual(['3:regular', '4:makeup'])
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(0)
+    expect(result.removedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(result.summary.skippedDuplicateStudents).toBe(1)
+    const { once } = remergeAll(result, newRows, suppressed)
+    expect(liveOnDate(once, 'sA')).toEqual(['3:regular', '4:makeup'])
+  })
+
+  // M-1: 同じ反復で一部の写しだけ外れたとき、外れなかった写しのキーは残す（stripSameDayMoveCopies が実際に外した分だけ）。
+  it('M-1: 抑止キーを外すのは実際に外した写しの分だけ（所在が合わない写しのキーは残す）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'moved_sA_z', studentSlots: [copyOfA(), null] } }))
+    const desk2Id = cellOf([week]).desks[2].id
+    const wrongSeat = { cellId: CELL_ID, deskId: desk2Id, row: 'upper' as const, seat: 1, student: copyOfA(), dateKey: DATE, reason: 'collided' as const }
+    const stripped = stripSameDayMoveCopies([week], {}, [wrongSeat])
+    expect(stripped.stripped).toEqual([])
+    expect(liveNames(deskOf(stripped.weeks, 2))).toEqual(['sA'])
+    // 入口はこの結果（外せた写し 0）で反復を止め、キーも外さない
+    const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sC', '数')]
+    const result = applyDiff({ week, newRows, suppressed: [KEY_A_SLOT5] })
+    expect(result.removedSuppressedRegularLessonOccurrences.length).toBe(result.summary.sameDayMoveCopiesReverted === 0 ? 0 : 1)
+  })
+
+  it('L-1: 記録 [休み A, 出席 B] の机にテンプレの C が生徒 1 に入ると、出席 B が生徒 2 の席を取り、休み A は C の下に残る（保留にならない・出席は日程表に残る）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sA', 'absent'), status('sB', 'attended')] }))
+    const newRows = [row('r0', 't1', 'sC', '数'), row('r1', 't2'), row('r2', 't3')]
+    const result = applyDiff({ week, newRows, suppressed: [KEY_A_SLOT5, buildManagedOccurrenceKey(entry('sB'), DATE, SLOT)] })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(liveNames(desk0)).toEqual(['sC'])
+    expect(desk0.statusSlots?.map((item) => (item ? [item.managedStudentId, item.status] : null))).toEqual([['sA', 'absent'], ['sB', 'attended']])
+    expect(result.nextPendingDesks).toEqual({})
+  })
 })
