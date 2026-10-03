@@ -1529,7 +1529,9 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       weeks: [week], classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows,
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z',
     })
-    const suppressed = [...(options.suppressed ?? []), ...saved.addedSuppressedRegularLessonOccurrences]
+    // 保存（handleSaveRegularLessonTemplateByDiff）と同じ抑止: 保存前の抑止から Q36 で外した分を除き、Q21-11 / Q35 で足した分を加える。
+    const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
+    const suppressed = [...(options.suppressed ?? []).filter((key) => !removed.has(key)), ...saved.addedSuppressedRegularLessonOccurrences]
     const remerge = (weeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(weeks, {
       classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29',
     })
@@ -1558,7 +1560,8 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     ['種別 体験（trial）', { lessonType: 'trial' }],
     ['種別 増コマ（extra）', { lessonType: 'extra' }],
     ['手動追加（manualAdded）', { manualAdded: true }],
-    ['同日移動（sameDayMoveSourceDate）', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '10/7(水) 4限' }],
+    // 同日移動（sameDayMoveSourceDate）は 2026-10-03（オーナー指示・Q36）で「テンプレに合わせる写し」になったので、この表から外して
+    // 下の describe（INV-02 × 同日移動の写し）で新しい保証を固定する。別日移動（元の日付でない makeupSourceDate）は印のまま。
     ['別日移動（makeupSourceDate）', { makeupSourceDate: '2026-09-30' }],
   ]
 
@@ -1610,6 +1613,89 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       const { desk0, lower } = saveAndRemerge(board(markedSeat2), bothSeats)
       expect(liveIds(desk0.lesson)).toEqual(['sA', 'sC'])
       expect(lower?.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sM'])
+    })
+  })
+
+  // INV-02 × 同日移動の写し（Q36・オーナー指示 2026-10-03「テンプレですでに入っていた生徒を一つ早い時限に移動して、反映したら移動元のコマにも
+  // 移動先のコマにも両方表示された」「まだ通常同士なのに保留扱いになっています」）:
+  // 旧テンプレの通常授業を同じ日の中で動かした写し（手動追加でない regular で sameDayMoveSourceDate／makeupSourceDate がその日）は手入力データではなく
+  // 「その日のテンプレの授業そのもの」。テンプレがその日にその生徒×科目を持ち、写しの抑止で置かれていない間だけ写しが残る（手で動かした先が勝つ）。
+  // 新テンプレが同じ日の別のコマに置く／テンプレに無い／写しの席を新テンプレの別の生徒が埋める → 写しを外し、写しの抑止キーも外してテンプレの位置へ。
+  describe('同日移動の写し（Q36）: テンプレの決め手に従う。残るのは「テンプレが持ち・抑止で置かれず・席がぶつからない」ときだけ', () => {
+    const KEY_M_SLOT5 = buildManagedOccurrenceKey(entry('sM'), DATE, 5)
+    const copyOfM = () => entry('sM', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' })
+    // 旧テンプレ: 机 0=田中(A)・机 1=鈴木(B)・机 2=佐藤(M)。M は机 2 から机 0 の生徒 2 の席へ机替え（写し・抑止キー M × 5 限）。
+    const OLD_ROWS_WITH_M = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', 'sM')]
+    const boardWithCopy = (classroom = diffSettings()) => {
+      const week = buildManagedScheduleCellsForRange({
+        range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+        fallbackStartDate: WEEK_START,
+        fallbackEndDate: WEEK_END,
+        classroomSettings: classroom,
+        teachers: teacherRows,
+        students: studentRows,
+        regularLessons: OLD_ROWS_WITH_M,
+        boardWeeks: [],
+      })
+      return week.map((cell) => (cell.id !== CELL ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk, index) => {
+          if (index === 0) return { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], copyOfM()] as [StudentEntry | null, StudentEntry | null] } }
+          if (index === 2) return { ...desk, lesson: undefined }
+          return desk
+        }),
+      }))
+    }
+    const liveIdsAt = (weeks: SlotCell[][], deskIndex: number) => liveIds(weeks.flat().find((cell) => cell.id === CELL)!.desks[deskIndex].lesson)
+    const liveOnDay = (weeks: SlotCell[][], id: string) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => liveIds(desk.lesson))).filter((item) => item === id).length
+
+    it('残る: テンプレが M をその日に持ち（机 2）、写しの抑止で置かれず、写しの席（机 0 の生徒 2）がテンプレで空 → 写しは 1 行で残り、机 2 に M は湧かない（従来どおり）', () => {
+      const { saved, desk0, lower } = saveAndRemerge(boardWithCopy(), OLD_ROWS_WITH_M, { suppressed: [KEY_M_SLOT5] })
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
+      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
+      expect(lower).toBeUndefined()
+      expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
+    })
+
+    it('collided（通常同士なのに保留 → 保留にしない）: 新テンプレが机 0 の生徒 2 に C を入れる → 写しを外し抑止キーも外して M はテンプレの机 2 へ。保留なし・再マージ 2 回でも不動点', () => {
+      const rows = [{ ...row('r0', 't1', 'sA'), student2Id: 'sC', subject2: '数' }, row('r1', 't2', 'sB'), row('r2', 't3', 'sM')]
+      const { saved, desk0, lower } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sC'])
+      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sM'])
+      expect(lower).toBeUndefined()
+      expect(saved.summary.pending).toBe(0)
+      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([KEY_M_SLOT5])
+    })
+
+    it('superseded（移動元にも移動先にも出る二重配置の原因）: 新テンプレが M を同じ日の 4 限へ移す → 5 限の写しを外し、M は 4 限だけ', () => {
+      const rows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), { ...row('r2', 't3', 'sM'), slotNumber: 4 }]
+      const { saved } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
+      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(1)
+      expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([KEY_M_SLOT5])
+    })
+
+    it('stale（テンプレから外した授業の残骸）: 新テンプレにその曜日の M が無い → 写しも外れる（Q21-8 の同胞）', () => {
+      const rows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]
+      const { saved, desk0 } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
+      expect(liveIds(desk0.lesson)).toEqual(['sA'])
+      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(0)
+      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+    })
+
+    it('手動追加の通常授業（手入力データ）は写しでない: 同じ形でも従来どおり残り、テンプレの M は Q21-11 で置かない', () => {
+      const week = boardWithCopy().map((cell) => (cell.id !== CELL ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', { manualAdded: true })] as [StudentEntry | null, StudentEntry | null] } } : desk)),
+      }))
+      const { saved, desk0 } = saveAndRemerge(week, OLD_ROWS_WITH_M)
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
+      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
+      expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
+      expect(saved.summary.skippedDuplicateStudents).toBe(1)
     })
   })
 

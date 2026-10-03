@@ -330,6 +330,12 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     expect(menu).toContain('const index = templatePendingDeskMenu.lowerIndex')
     expect(menu).toContain("handleResolveTemplatePendingDesk('delete-lower-student', index)")
     expect(menu).toContain('handleStartTemplatePendingLowerMove(index)')
+    // 席ごと（オーナー指示 2026-10-03・Q26-10）: 採用の 2 つも押した席の下段だけが対象（生徒 1 の操作で生徒 2 の下段が動かない）
+    expect(menu).toContain("handleResolveTemplatePendingDesk('adopt-template', index)")
+    expect(menu).toContain("handleResolveTemplatePendingDesk('adopt-existing', index)")
+    const confirmFn = sliceBody(BOARD_TSX, 'const buildTemplatePendingResolutionConfirm = (', 'const handleResolveTemplatePendingDesk = (')
+    expect(confirmFn).toContain('splitTemplatePendingLowerSeat(context.entry.lower, lowerIndex).seatLower')
+    expect(confirmFn).toContain('planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })')
     // 下段を押した席がメニューの対象（帯・下段のクリックは lowerIndex を渡す）
     const lowerClick = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerClick = (', 'const buildTemplatePendingLedgers = ')
     expect(lowerClick).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)')

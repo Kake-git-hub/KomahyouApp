@@ -10,7 +10,7 @@
  *   行（消費者） = 生徒日程表 / 講師日程表 / 盤面 PDF / 保護者向け表示（本体と functions 複製の parity）/ 盤面共有 /
  *                  回数表（実績・予定）/ 給与・交通費（出席の集計）
  *   列（下段の中身） = 通常（手動追加）/ 振替 / 講習 / 表示専用の記録（移動元 moved）/ メモ /
- *                  席不足で下段へ入った会計記録（欠席・出席＝spec-template-behavior Q21-10）
+ *                  席不足で下段へ入った会計記録（出席＝spec-template-behavior Q21-10。欠席・振無休は Q37〔2026-10-03〕で机に残るので列から外した）
  *   確認点 = 保留中（下段が一切出ない・上段と机に残した会計記録は出る）/ 解決後（既存を採用・上段が空いて 1 行へ戻る）
  *
  * 各セル = 実際の保存経路（computeTemplateDiffApplyForBoard）で作った保留の盤面を、各消費者の実関数に通す。
@@ -183,11 +183,8 @@ const COLUMNS: LowerColumn[] = [
     desks: { 0: (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [MAKEUP_M, null] }, memoSlots: [null, '下段の持ち物メモ'] }) },
     newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦', '下段の持ち物メモ'], upperStudentId: 'sC', lowerLessonType: 'makeup',
   },
-  {
-    label: '席不足で下段へ入った会計記録（欠席）',
-    desks: { 1: (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'absent', { lessonType: 'makeup', makeupSourceDate: '2026-09-16', makeupSourceLabel: '9/16(水) 5限', teacherName: '田中' }), null] }) },
-    newRows: NEW_ROWS_TWO_IN_DESK1, pendingDeskIndex: 1, hiddenStudentIds: ['sD'], hiddenTexts: ['土屋'], upperStudentId: 'sB',
-  },
+  // 「席不足で下段へ入った会計記録（欠席）」の列は Q37（オーナー指示 2026-10-03「休みと振無休みは空白と同じような扱い」）で消えた:
+  // 休み・振無休の記録は席を確保せず、席が足りなくても机（上段の生徒の下）に残る＝保留中も日程表・在庫に出る（下の describe で固定）。
   {
     label: '席不足で下段へ入った会計記録（出席）',
     desks: { 1: (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'attended', { teacherName: '田中' }), null] }) },
@@ -497,7 +494,8 @@ describe.each(COLUMNS)('INV-13 マトリクス: 下段＝$label', (column) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保留中も通常どおり出る（保存の前後で日程表・回数表が同じ）', () => {
-  // 机0: 旧テンプレの青木が欠席（机に残る会計記録）＋手で置いた振替 三浦（下段になる）。新テンプレは机0 に千葉。
+  // 机0: 旧テンプレの青木が欠席（机に残る会計記録）＋手で置いた振替 三浦（下段になる）。新テンプレは机0 に千葉と馬場（2 席とも埋めるので三浦の席がぶつかる）。
+  // Q37（2026-10-03）: 欠席の記録は席を確保せず、三浦の席がテンプレで空いていれば 1 行にまとまるので、保留を作るには 2 席とも埋める。
   let week = buildWeek(OLD_ROWS)
   week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [null, MAKEUP_M] }, statusSlots: [status('sA', 'absent', { teacherName: '田中' }), null] }))
   const beforeState: BoardState = { weeks: [week], pending: {} }
@@ -506,7 +504,7 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
     classroomSettings: settings(),
     teachers,
     students,
-    regularLessons: NEW_ROWS,
+    regularLessons: [row('r0', 't2', 'sC', '数', 'sB', '数'), row('r1', 't1'), row('r2', 't3')],
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [],
     templatePendingDesks: {},
@@ -534,6 +532,25 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
   it('保護者向け表示（本体と functions 複製が一致）でも欠席は保存の前後で同じく出る', () => {
     expect(parentLessonsOn(afterState, 'sA')).toEqual(parentLessonsOn(beforeState, 'sA'))
     expect(parentLessonsOn(afterState, 'sA').length).toBeGreaterThan(0)
+  })
+
+  // Q37（オーナー指示 2026-10-03）: 席が足りなくても休みの記録は机に残る（上段 2 人の下）。旧 Q21-10 の「記録だけ下段へ退避」はしない。
+  it('Q37: 新テンプレが 2 席とも埋めて席が足りなくても、欠席記録は机に残り（下段へ入らず）、生徒日程表の「休」と保護者向け表示は保存の前後で同じ', () => {
+    let crowded = buildWeek(OLD_ROWS)
+    crowded = mutateDesk(crowded, 1, (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'absent', { lessonType: 'makeup', makeupSourceDate: '2026-09-16', makeupSourceLabel: '9/16(水) 5限', teacherName: '田中' }), null] }))
+    const before: BoardState = { weeks: [crowded], pending: {} }
+    const saved = computeTemplateDiffApplyForBoard({
+      weeks: [crowded], classroomSettings: settings(), teachers, students, regularLessons: NEW_ROWS_TWO_IN_DESK1,
+      effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z',
+    })
+    const after: BoardState = { weeks: saved.nextWeeks, pending: saved.nextPendingDesks }
+    const desk1 = saved.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[1]
+    expect(desk1.lesson?.studentSlots.filter(Boolean)).toHaveLength(2)
+    expect(desk1.statusSlots?.map((item) => item?.status ?? null)).toEqual(['absent', null])
+    expect(saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk1.id)]).toBeUndefined()
+    expect(studentSheet(after, 'sD').cards).toEqual(studentSheet(before, 'sD').cards)
+    expect(studentSheet(after, 'sD').cards.map((card) => card.main).join(' ')).toContain('休')
+    expect(parentLessonsOn(after, 'sD')).toEqual(parentLessonsOn(before, 'sD'))
   })
 })
 

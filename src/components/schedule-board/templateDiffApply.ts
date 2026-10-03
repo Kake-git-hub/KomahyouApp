@@ -54,6 +54,21 @@ export function isAccountingStatus(status: StudentStatusKind) {
   return status === 'absent' || status === 'absent-no-makeup' || status === 'attended'
 }
 
+/**
+ * 休み・振無休の記録（オーナー指示 2026-10-03「休みと振無休みは空白と同じような扱い（ただし実績データは保持）」・Q37）。
+ * 席の突き合わせ・1 行への合流では、この記録だけの席を**空席と同じ**に扱う＝生徒はその席に座れ、記録は同じ席番号に残る
+ * （盤面の通常操作で「休みにした席へ振替を置く」と同じ形。表示は生徒が前に出て、日程表・在庫には記録が残る）。
+ * 出席（attended）は従来どおり席を確保する（上段の生徒の下に隠さない）。表示専用（moved / holiday）は元から席を確保しない。
+ */
+export function isAbsenceRecordStatus(status: StudentStatusKind) {
+  return status === 'absent' || status === 'absent-no-makeup'
+}
+
+/** 席を確保する（生徒の下に隠せない）会計記録＝出席だけ（Q37）。 */
+export function isSeatReservingStatus(status: StudentStatusKind) {
+  return isAccountingStatus(status) && !isAbsenceRecordStatus(status)
+}
+
 // 講師の削除記録（tombstone: teacher='' かつ teacherAssignmentSource='deleted'。講習 ID つきも同じ）。Q21-9 例外 2・Q22。
 // ★意味の区別（regression-reviewer N-4）: これは「**講師欄の**削除記録」＝机に生徒が居ても講師欄を削除のまま保ち、印に数える判定。
 //   ScheduleBoardScreen の isDeletedTeacherTombstone（授業なし∧manualTeacher∧deleted）は「**空き机としての** tombstone」＝
@@ -280,6 +295,19 @@ function occupancyOf(desk: Pick<DeskCell, 'lesson' | 'statusSlots' | 'memoSlots'
   )) as SeatOccupancy
 }
 
+// 生徒を座らせるときの席の埋まり具合（Q37）: 休み・振無休の記録だけの席は空席と同じ（生徒がその上に座り、記録は残る）。
+// 出席・表示専用の記録・メモ・生徒のいる席は埋まっている。記録・メモを置くときは occupancyOf を使う（記録同士は重ねない）。
+function occupancyForStudents(desk: Pick<DeskCell, 'lesson' | 'statusSlots' | 'memoSlots'>): SeatOccupancy {
+  return [0, 1].map((index) => {
+    const record = desk.statusSlots?.[index]
+    return Boolean(
+      desk.lesson?.studentSlots[index]
+      || (record && !isAbsenceRecordStatus(record.status))
+      || hasMemoText(desk.memoSlots?.[index]),
+    )
+  }) as SeatOccupancy
+}
+
 // 元の席が空いていればそこ、空いていなければもう一方の空いた席。どちらも埋まっていれば -1。
 function pickSeat(occupancy: SeatOccupancy, preferredIndex: number) {
   if (!occupancy[preferredIndex]) return preferredIndex
@@ -321,6 +349,114 @@ export function detachTemplateLessonWithoutTemplateStudents(lesson: DeskLesson |
 /** 生徒の印（Q22 生徒単位）があるか。「既存を採用」で取り下げるテンプレの生徒（印なし）を見分けるのに使う。 */
 export function isTemplateDiffMarkedStudent(student: StudentEntry) {
   return studentHasManualMark(student)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q36：同日移動の通常授業（旧テンプレの授業を日の中で動かした写し）とテンプレ（オーナー指示 2026-10-03）
+// 「テンプレですでに入っていた生徒を一つ早い時限に移動して、反映したら移動元のコマにも移動先のコマにも両方表示された」
+// 「まだ通常同士なのに保留扱いになっています」
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 旧テンプレの通常授業を**同じ日の中で**動かした写しか（手動追加でない `lessonType='regular'` で、`sameDayMoveSourceDate` または
+ * `makeupSourceDate`〔別の日へ動かして元の日付へ戻した〕がその日）。同一コマ内の机替えにも付く（Q22）。
+ * 写しは「その日のテンプレの授業そのもの」なので、新テンプレが同じ日にその生徒×科目を置くなら写しは古い位置の重複、
+ * テンプレがその日にその生徒×科目を持たなければ消えた授業の残骸。どちらも通常授業の決め手はテンプレ（Q21-8 の同胞）。
+ * 振替・講習・手動追加の通常授業は手入力データなので対象外（従来どおり印として残る）。
+ */
+export function isSameDayMovedTemplateCopy(student: StudentEntry, dateKey: string) {
+  if (student.lessonType !== 'regular' || student.manualAdded) return false
+  return student.sameDayMoveSourceDate === dateKey || student.makeupSourceDate === dateKey
+}
+
+/**
+ * 写しを作った移動が積んだ通常授業の抑止キー（生徒×科目×日×元の時限。元の時限は移動元ラベル「…N限」から読む）。
+ * ラベルから時限が読めない旧データは null（呼び出し側はその日のその生徒×科目の抑止キーをすべて外す）。
+ */
+export function resolveSameDayMovedCopySourceKey(student: StudentEntry, dateKey: string): string | null {
+  const label = student.sameDayMoveSourceDate === dateKey ? student.sameDayMoveSourceLabel : student.makeupSourceLabel
+  const matched = String(label ?? '').match(/(\d+)限/)
+  if (!matched) return null
+  return buildTemplateOccurrenceKey(student, dateKey, Number(matched[1]))
+}
+
+/** テンプレに合わせて外す写し 1 件（場所つき）。reason は件数表示・テストのため。 */
+export type SameDayMoveCopyRevert = {
+  cellId: string
+  deskId: string
+  row: 'upper' | 'lower'
+  seat: number
+  student: StudentEntry
+  dateKey: string
+  /**
+   * superseded＝新テンプレが同じ日の別のコマにその生徒×科目を置く／stale＝テンプレ（抑止前）がその日にその生徒×科目を持たない／
+   * collided＝テンプレがその日にその生徒×科目を持ち（抑止で置かれていない）、写しの席を新テンプレの別の生徒が埋める。
+   */
+  reason: 'superseded' | 'stale' | 'collided'
+}
+
+function studentSubjectKey(student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject'>) {
+  return `${student.managedStudentId ?? student.name}__${student.subject}`
+}
+
+/** 写しの抑止キーの外し方（Q36-3）: 元の時限が読めればそのキー、読めなければその日のその生徒×科目のキーをすべて。 */
+export function resolveSameDayMoveCopyKeysToRemove(revert: Pick<SameDayMoveCopyRevert, 'student' | 'dateKey'>, suppressed: readonly string[]): string[] {
+  const exact = resolveSameDayMovedCopySourceKey(revert.student, revert.dateKey)
+  if (exact) return suppressed.includes(exact) ? [exact] : []
+  const prefix = `${studentSubjectKey(revert.student)}__${revert.dateKey}__`
+  return suppressed.filter((key) => key.startsWith(prefix))
+}
+
+/**
+ * 写しを盤面（上段）と保留の下段から外す（Q36・純関数。入力は変えない）。外して空になった授業は机から外し、
+ * 下段に生きている生徒がいなくなれば下段の授業を外す（記録・メモは残す）。
+ */
+export function stripSameDayMoveCopies(weeks: SlotCell[][], pendingDesks: TemplatePendingDeskMap, reverts: readonly SameDayMoveCopyRevert[]): { weeks: SlotCell[][]; pendingDesks: TemplatePendingDeskMap; strippedCount: number } {
+  if (reverts.length === 0) return { weeks, pendingDesks, strippedCount: 0 }
+  let strippedCount = 0
+  const upperByCell = new Map<string, SameDayMoveCopyRevert[]>()
+  const nextPending: TemplatePendingDeskMap = { ...pendingDesks }
+  for (const revert of reverts) {
+    if (revert.row === 'lower') {
+      const key = buildTemplatePendingDeskKey(revert.cellId, revert.deskId)
+      const entry = nextPending[key]
+      // 席の生徒が指定の写し（id 一致）のときだけ外す（別の生徒を巻き込まない）。
+      if (!entry?.lower.lesson || entry.lower.lesson.studentSlots[revert.seat]?.id !== revert.student.id) continue
+      const lower = cloneTemplatePendingLower(entry.lower)
+      const slots = [...lower.lesson!.studentSlots] as StudentPair
+      slots[revert.seat] = null
+      strippedCount += 1
+      if (slots[0] || slots[1]) lower.lesson = { ...lower.lesson!, studentSlots: slots }
+      else delete lower.lesson
+      nextPending[key] = { ...entry, lower }
+      continue
+    }
+    const list = upperByCell.get(revert.cellId) ?? []
+    list.push(revert)
+    upperByCell.set(revert.cellId, list)
+  }
+  const nextWeeks = upperByCell.size === 0 ? weeks : weeks.map((week) => {
+    if (!week.some((cell) => upperByCell.has(cell.id))) return week
+    return week.map((cell) => {
+      const list = upperByCell.get(cell.id)
+      if (!list) return cell
+      return {
+        ...cell,
+        desks: cell.desks.map((desk) => {
+          const targets = list.filter((revert) => revert.deskId === desk.id && desk.lesson?.studentSlots[revert.seat]?.id === revert.student.id)
+          if (targets.length === 0 || !desk.lesson) return desk
+          const slots = [desk.lesson.studentSlots[0] ? { ...desk.lesson.studentSlots[0] } : null, desk.lesson.studentSlots[1] ? { ...desk.lesson.studentSlots[1] } : null] as StudentPair
+          for (const revert of targets) slots[revert.seat] = null
+          strippedCount += targets.length
+          const next: DeskCell = { ...desk }
+          if (slots[0] || slots[1]) next.lesson = { ...desk.lesson, studentSlots: slots }
+          else delete next.lesson
+          return next
+        }),
+      }
+    })
+  })
+  return { weeks: nextWeeks, pendingDesks: nextPending, strippedCount }
 }
 
 export type TemplateDeskSeatCandidate = { student: StudentEntry; seat: number }
@@ -420,7 +556,8 @@ function mergeLowerStudentsIntoFreeSeats(
     if (upperIsManaged && !shouldSeatSurviveRemerge(student, options.dateKey)) return null
   }
   const slots: StudentPair = [desk.lesson.studentSlots[0] ? { ...desk.lesson.studentSlots[0] } : null, desk.lesson.studentSlots[1] ? { ...desk.lesson.studentSlots[1] } : null]
-  const occupancy = occupancyOf(desk)
+  // Q37: 上段の生徒を休み・振無休にして席に記録だけが残った席は空席と同じ（下段の生徒がその席へ戻り、記録は残る）。
+  const occupancy = occupancyForStudents(desk)
   // 席ごと: 下段の生徒は元の席（生徒 1 は生徒 1・生徒 2 は生徒 2）が空いたときだけ戻す（もう一方の席へはずらさない）。
   for (const candidate of lowerCandidates) {
     if (occupancy[candidate.seat]) return null
@@ -502,7 +639,11 @@ export function computePendingDeskCollapse(desk: DeskCell, pending: Pick<Templat
     const entry = lowerStatus[index]
     if (!entry || !isAccountingStatus(entry.status)) continue
     const seat = pickSeat(occupancy, index)
-    if (seat < 0) return { ok: false, reason: 'status-overflow' }
+    if (seat < 0) {
+      // Q37: 休み・振無休の記録は空いた席が無ければ元の席（生徒の下）に残す。記録の枠も埋まっていれば合流しない。
+      if (isAbsenceRecordStatus(entry.status) && placeIntoPair(nextStatus, index, cloneStatusEntry(entry))) continue
+      return { ok: false, reason: 'status-overflow' }
+    }
     nextStatus[seat] = cloneStatusEntry(entry)
     occupancy[seat] = true
   }
@@ -616,10 +757,16 @@ export type TemplateDiffApplySummary = {
   wholeDayTransferSkippedStudents: number
   /** そのうち希望回数を −1 する生徒（同じ日の実配置に同じ生徒×科目が残らない・Q35-8・オーナー決定 2026-10-02「盤面の回数と同じ思想」）。 */
   wholeDayTransferCountAdjusted: number
+  /**
+   * 同じ日の中で手で動かした通常授業（同日移動・元の日付へ戻した）の写しのうち、テンプレに合わせて外した生徒の数
+   * （Q36・オーナー指示 2026-10-03。新テンプレが同じ日の別のコマに置く／テンプレがその日に持たない／席で新テンプレの別の生徒とぶつかる）。
+   * `computeTemplateDiffApplyForBoard` が外して数える（`computeTemplateDiffApply` 単体は候補を返すだけで 0 のまま）。
+   */
+  sameDayMoveCopiesReverted: number
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -646,6 +793,11 @@ export type ComputeTemplateDiffApplyResult = {
    * resolveDeletedStudentCountAccounting（単発削除と同じ）で積む。この関数は台帳を触らない。
    */
   wholeDayTransferCountAdjustments: Array<{ student: StudentEntry; dateKey: string }>
+  /**
+   * Q36: テンプレに合わせて外すべき同日移動の写し（この関数は検出するだけで盤面は変えない）。
+   * `computeTemplateDiffApplyForBoard` がこれを盤面・保留から外し、写しの抑止キーを外して、テンプレの授業が元の位置へ戻るまで反復する。
+   */
+  sameDayMoveCopyReverts: SameDayMoveCopyRevert[]
 }
 
 type DeskDecision =
@@ -738,7 +890,12 @@ function seatUpperWithDeskRecords(params: {
   const overflowMemo: Array<{ index: number; memo: string }> = []
   for (const item of params.keptStatus) {
     const seat = pickSeat(occupancy, item.index)
-    if (seat < 0) { overflowStatus.push(item); continue }
+    if (seat < 0) {
+      // Q37: 休み・振無休の記録は空いた席が無ければ元の席（上段の生徒の下）に残す（下段へ退避しない・1 行を妨げない）。
+      if (isAbsenceRecordStatus(item.entry.status) && placeIntoPair(statusSlots, item.index, cloneStatusEntry(item.entry))) continue
+      overflowStatus.push(item)
+      continue
+    }
     statusSlots[seat] = cloneStatusEntry(item.entry)
     occupancy[seat] = true
   }
@@ -790,8 +947,30 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   const addedSuppressed = new Set<string>()
   const existingSuppressed = new Set(params.suppressedRegularLessonOccurrences)
   const wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string }> = []
+  const sameDayMoveCopyReverts: SameDayMoveCopyRevert[] = []
   const templateById = new Map(params.templateCells.map((entry) => [entry.applied.id, entry]))
   const templateByDateSlot = new Map(params.templateCells.map((entry) => [buildDateSlotKey(entry.applied), entry]))
+  // Q36: 日ごとの「新テンプレが置く生徒×科目 → コマ ID」（抑止後・丸ごと振替の日は置かないので除く・休日のコマは空）と、
+  // 「テンプレ（抑止前）がその日に持つ生徒×科目」。写しが重複か残骸かの判定に使う。
+  const templatePlacedByDate = new Map<string, Map<string, Set<string>>>()
+  const templateRawByDate = new Map<string, Set<string>>()
+  for (const entry of params.templateCells) {
+    if (!entry.applied.isOpenDay) continue
+    const rawKeys = templateRawByDate.get(entry.raw.dateKey) ?? new Set<string>()
+    for (const desk of entry.raw.desks) for (const student of liveStudents(desk.lesson)) rawKeys.add(studentSubjectKey(student))
+    templateRawByDate.set(entry.raw.dateKey, rawKeys)
+    if (entry.scaffoldTeachersStripped) continue
+    const placed = templatePlacedByDate.get(entry.applied.dateKey) ?? new Map<string, Set<string>>()
+    for (const desk of entry.applied.desks) {
+      for (const student of liveStudents(desk.lesson)) {
+        const key = studentSubjectKey(student)
+        const cells = placed.get(key) ?? new Set<string>()
+        cells.add(entry.applied.id)
+        placed.set(key, cells)
+      }
+    }
+    templatePlacedByDate.set(entry.applied.dateKey, placed)
+  }
 
   const nextWeeks = params.weeks.map((week) => {
     const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
@@ -813,6 +992,9 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
         summary,
         addedSuppressed,
         wholeDayTransferSkipped,
+        sameDayMoveCopyReverts,
+        templatePlacedOnDate: templatePlacedByDate.get(cell.dateKey),
+        templateRawOnDate: templateRawByDate.get(cell.dateKey),
       })
     })
   })
@@ -838,6 +1020,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
     summary,
     addedSuppressedRegularLessonOccurrences: [...addedSuppressed],
     wholeDayTransferCountAdjustments,
+    sameDayMoveCopyReverts,
   }
 }
 
@@ -853,12 +1036,58 @@ function applyTemplateDiffToCell(context: {
   summary: TemplateDiffApplySummary
   addedSuppressed: Set<string>
   wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string }>
+  sameDayMoveCopyReverts: SameDayMoveCopyRevert[]
+  /** Q36: その日に新テンプレが置く生徒×科目 → 置くコマ ID（抑止後）。 */
+  templatePlacedOnDate: ReadonlyMap<string, ReadonlySet<string>> | undefined
+  /** Q36: その日にテンプレ（抑止前）が持つ生徒×科目。 */
+  templateRawOnDate: ReadonlySet<string> | undefined
 }): SlotCell {
   const { cell, templateCell, summary } = context
   // Q21-6：休日のコマはテンプレ机を「空」とみなす。
   const isClosed = !templateCell.applied.isOpenDay
   const rawTemplateDesks = cell.desks.map((_, index) => (isClosed ? EMPTY_TEMPLATE_DESK : (templateCell.raw.desks[index] ?? EMPTY_TEMPLATE_DESK)))
   const appliedTemplateDesks = cell.desks.map((_, index) => (isClosed ? EMPTY_TEMPLATE_DESK : (templateCell.applied.desks[index] ?? EMPTY_TEMPLATE_DESK)))
+
+  // ── Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写しは、テンプレに合わせる（検出だけ。外すのは呼び出し側）。
+  //   superseded＝新テンプレが同じ日の**別のコマ**に同じ生徒×科目を置く（移動元・移動先の両方に出る二重配置の原因）
+  //   stale＝テンプレ（抑止前）がその日にその生徒×科目を持たない（テンプレから消した／別の曜日へ移した授業の残骸）
+  //   collided＝テンプレがその日に持つが写しの抑止で置かれておらず、写しの席を新テンプレの別の生徒が埋める（「通常同士なのに保留」）→ 下の席ごとの突き合わせで検出
+  //   同じコマの別の机に 1 行で残る写し（席が空いている）は従来どおり残す（Q21-11: その机の手置きが勝ち、テンプレの生徒はそのコマに置かない）。
+  const pushRevert = (desk: DeskCell, row: 'upper' | 'lower', seat: number, student: StudentEntry, reason: SameDayMoveCopyRevert['reason']) => {
+    if (context.sameDayMoveCopyReverts.some((item) => item.cellId === cell.id && item.deskId === desk.id && item.row === row && item.seat === seat)) return
+    context.sameDayMoveCopyReverts.push({ cellId: cell.id, deskId: desk.id, row, seat, student, dateKey: cell.dateKey, reason })
+  }
+  const resolveCopyReason = (student: StudentEntry): SameDayMoveCopyRevert['reason'] | null => {
+    if (isClosed || !isSameDayMovedTemplateCopy(student, cell.dateKey)) return null
+    const key = studentSubjectKey(student)
+    const placedCells = context.templatePlacedOnDate?.get(key)
+    if (placedCells && [...placedCells].some((cellId) => cellId !== cell.id)) return 'superseded'
+    if (!context.templateRawOnDate?.has(key)) return 'stale'
+    return null
+  }
+  cell.desks.forEach((desk) => {
+    ;(desk.lesson?.studentSlots ?? []).forEach((student, seat) => {
+      const reason = student ? resolveCopyReason(student) : null
+      if (student && reason) pushRevert(desk, 'upper', seat, student, reason)
+    })
+    const pending = context.pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]
+    ;(pending?.lower.lesson?.studentSlots ?? []).forEach((student, seat) => {
+      const reason = student ? resolveCopyReason(student) : null
+      if (student && reason) pushRevert(desk, 'lower', seat, student, reason)
+    })
+  })
+  // collided: 席ごとの突き合わせで下段へ入る写し（新テンプレの別の生徒が席を埋めた）。写しは上段（机）か下段（保留中の再保存）から来る。
+  const collectCollidedCopies = (desk: DeskCell, pending: TemplatePendingDesk | undefined, plan: TemplateDeskSeatPlan) => {
+    if (isClosed) return
+    for (const student of plan.lowerSlots) {
+      if (!student || !isSameDayMovedTemplateCopy(student, cell.dateKey)) continue
+      // 写しの所在は id で引く（planTemplateDeskSeats は下段の席が埋まっていればもう一方の席へ置くので、plan 上の席番号は元の席と限らない）。
+      const upperSeat = (desk.lesson?.studentSlots ?? []).findIndex((item) => item?.id === student.id)
+      if (upperSeat >= 0) { pushRevert(desk, 'upper', upperSeat, student, 'collided'); continue }
+      const lowerSeat = (pending?.lower.lesson?.studentSlots ?? []).findIndex((item) => item?.id === student.id)
+      if (lowerSeat >= 0) pushRevert(desk, 'lower', lowerSeat, student, 'collided')
+    }
+  }
 
   // ── 1. 机ごとの振り分け（Q21-3・Q29）。Q21-11 の重複は 2. で除いてから振り分け直す。
   const classify = (desk: DeskCell, index: number, templateDesk: DeskCell): DeskDecision => {
@@ -883,7 +1112,8 @@ function applyTemplateDiffToCell(context: {
   //  - 'pending'（印あり＋中身が違う）… 机の印のある生きている生徒を候補にする（印のない通常生徒＝旧テンプレ由来は置き換える・Q21-8）。
   //    印のある生きている生徒がいなければ null（記録・メモだけの机＝従来どおり保留を作ってその場で 1 行へ・Q28-6）。
   //  - 'pending-rebase'（保留中の再保存・Q29）… 上段に残した既存の生徒（印あり）と下段の印のある生徒を候補にする。
-  const accountingCount = (slots: StatusPair | undefined) => (slots ?? []).filter((entry) => entry && isAccountingStatus(entry.status)).length
+  // 席を確保する記録＝出席だけ（Q37: 休み・振無休の記録は空席と同じ扱い。その席に残した生徒の下に記録が残る）。
+  const accountingCount = (slots: StatusPair | undefined) => (slots ?? []).filter((entry) => entry && isSeatReservingStatus(entry.status)).length
   const planSeatsFor = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell): TemplateDeskSeatPlan | null => {
     if (decision.kind === 'pending') {
       const candidates = seatCandidatesOf(desk.lesson, studentHasManualMark)
@@ -1021,6 +1251,7 @@ function applyTemplateDiffToCell(context: {
       // 席ごと（2026-09-30）: テンプレの空いた席に入る既存の生徒は 1 行のまま残し、テンプレと同じ生徒×科目×種別は採用する。
       // 下段（保留）へ入るのは、席が埋まっていてぶつかった生徒だけ。ぶつかる生徒がいなければ 2 行にしない。
       const plan = planSeatsFor(desk, decision, templateDesk)
+      if (plan) collectCollidedCopies(desk, undefined, plan)
       const filledDeletedTeacherDeskBySeat = teacher.reason === 'kept-deleted' && Boolean(upperLesson)
       if (plan && !plan.overflow && isEmptyPair(plan.lowerSlots) && upperLesson) {
         const mergedLesson: DeskLesson = { ...upperLesson, studentSlots: plan.upperSlots }
@@ -1100,6 +1331,7 @@ function applyTemplateDiffToCell(context: {
     //   （同じ生徒×科目×種別は採用・空いた席に入れば 1 行・ぶつかった生徒だけ下段）。印のない通常生徒は新しいテンプレで置き換える。
     const pending = decision.pending
     const plan = planSeatsFor(desk, decision, templateDesk)!
+    collectCollidedCopies(desk, pending, plan)
     if (plan.overflow) {
       // 下段の席が足りない（整合の取れたデータでは起きない）→ 机の中身と保留を変えずに残す（黙って捨てない）。
       summary.pending += 1
@@ -1205,6 +1437,7 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     `そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
     ...(summary.seatMerged > 0 ? [`テンプレの空いた席に既存の生徒を残して 1 行にする${summary.seatMerged}机。`] : []),
     ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`] : []),
+    ...(summary.sameDayMoveCopiesReverted > 0 ? [`同じ日の中で手で動かしていた通常授業${summary.sameDayMoveCopiesReverted}名はテンプレの位置に合わせます。`] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
     '',
@@ -1223,6 +1456,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
   if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`)
+  if (summary.sameDayMoveCopiesReverted > 0) parts.push(`同じ日の中で手で動かしていた通常授業をテンプレの位置に合わせた生徒: ${summary.sameDayMoveCopiesReverted}名。`)
   if (summary.tombstoneCleared > 0) parts.push(`講師の削除記録だけの空き机 ${summary.tombstoneCleared}机は記録を外しました。`)
   return parts.join('')
 }

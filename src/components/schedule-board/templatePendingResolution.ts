@@ -10,7 +10,7 @@
 //
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
-import type { DeskCell, SlotCell, StudentEntry } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult } from './templateDiffApply'
 import {
   buildTemplatePendingDeskKey,
@@ -187,6 +187,64 @@ export function removeTemplatePendingLowerMemo(entry: TemplatePendingDesk, memoI
   memo[memoIndex] = null
   lower.memoSlots = memo
   return { ...entry, lower: normalizeLower(lower) }
+}
+
+/**
+ * 席ごとの採用（オーナー指示 2026-10-03・確認リスト v1.5.577 その他欄「生徒 1 の手入力データを採用したのに生徒 2 の既存データが
+ * 生徒 2 のテンプレを上書きしている」「生徒 1 と生徒 2 がデータリンクしちゃっている気がします。完全に独立させて」・Q26-10）:
+ * 下段をその席の分（seatLower）と残り（restLower）に分ける。入力は変えない。
+ */
+export function splitTemplatePendingLowerSeat(lower: TemplatePendingLower, seatIndex: number): { seatLower: TemplatePendingLower; restLower: TemplatePendingLower } {
+  const other = seatIndex === 0 ? 1 : 0
+  const pick = (keep: number): TemplatePendingLower => {
+    const next: TemplatePendingLower = {}
+    const student = lower.lesson?.studentSlots[keep] ?? null
+    if (lower.lesson && student) {
+      const slots: StudentPair = [null, null]
+      slots[keep] = { ...student }
+      next.lesson = { ...lower.lesson, studentSlots: slots }
+    }
+    const record = lower.statusSlots?.[keep] ?? null
+    if (record) {
+      const slots: [StudentStatusEntry | null, StudentStatusEntry | null] = [null, null]
+      slots[keep] = { ...record }
+      next.statusSlots = slots
+    }
+    const memo = lower.memoSlots?.[keep] ?? null
+    if (memo != null) {
+      const slots: [string | null, string | null] = [null, null]
+      slots[keep] = memo
+      next.memoSlots = slots
+    }
+    return normalizeLower(next)
+  }
+  return { seatLower: pick(seatIndex), restLower: pick(other) }
+}
+
+/** 下段に中身（生きている生徒・出欠記録・メモ）が 1 つでもあるか。 */
+export function hasTemplatePendingLowerContent(lower: TemplatePendingLower) {
+  return hasTemplatePendingLowerSeatContent(lower, 0) || hasTemplatePendingLowerSeatContent(lower, 1)
+}
+
+/**
+ * 「テンプレ授業を採用」を席ごとに（Q26-10）: 押した席の下段の生徒・メモ・表示専用の記録を捨てる。会計を持つ記録（席不足で下段へ入った出席）は
+ * 捨てずに下段へ残す（INV-06。1 行へ戻るとき Q28 で机へ戻る）。外した生徒を返す（在庫の会計は呼び出し側）。
+ */
+export function clearTemplatePendingLowerSeatForAdopt(entry: TemplatePendingDesk, seatIndex: number): { nextEntry: TemplatePendingDesk; removed: StudentEntry[] } {
+  const { nextEntry, removed } = removeTemplatePendingLowerStudents(entry, [seatIndex])
+  const lower = cloneTemplatePendingLower(nextEntry.lower)
+  if (lower.memoSlots) {
+    const memo = [...lower.memoSlots] as [string | null, string | null]
+    memo[seatIndex] = null
+    lower.memoSlots = memo
+  }
+  const record = lower.statusSlots?.[seatIndex]
+  if (lower.statusSlots && record && (record.status === 'moved' || record.status === 'holiday')) {
+    const slots = [...lower.statusSlots] as [StudentStatusEntry | null, StudentStatusEntry | null]
+    slots[seatIndex] = null
+    lower.statusSlots = slots
+  }
+  return { nextEntry: { ...nextEntry, lower: normalizeLower(lower) }, removed }
 }
 
 /** 下段の中身の数（帯「保留 n」の n）＝生きている生徒＋出欠記録＋メモ。 */

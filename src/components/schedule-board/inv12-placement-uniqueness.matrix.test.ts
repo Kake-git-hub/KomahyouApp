@@ -292,7 +292,9 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
       templatePendingDesks: options.pendingDesks ?? {},
       createdAt: '2026-09-29T10:00:00.000Z',
     })
-    const nextSuppressed = [...suppressed, ...saved.addedSuppressedRegularLessonOccurrences]
+    // 保存と同じ抑止: 保存前の抑止から Q36 で外した分を除き、Q21-11 / Q35 で足した分を加える。
+    const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
+    const nextSuppressed = [...suppressed.filter((key) => !removed.has(key)), ...saved.addedSuppressedRegularLessonOccurrences]
     const remerged = remergeBoardWeeksWithManagedData(saved.nextWeeks, {
       classroomSettings: savedSettings,
       teachers: teacherRows,
@@ -440,6 +442,34 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(cellOf(saved.nextWeeks).desks[0].teacher).toBe('田中')
     expect(liveCount(saved.nextWeeks, 'sD')).toBe(0)
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  // Q36（オーナー指示 2026-10-03・開発用教室の実データ）: 同じ日の中で手で動かした通常授業の写し（`moved_…`・同日移動）が残ったまま、
+  // テンプレでその生徒を別の時限へ移すと、移動元（写し）と移動先（テンプレ）の両方に同じ生徒が出た（INV-12 の日単位の二重配置）。
+  // 写しはその日のテンプレの授業そのものなので、テンプレが同じ日の別のコマに置くなら写しを外し、写しの抑止キーも外す。
+  it('Q36: 5 限の机に A の写し（同日移動）が残ったままテンプレで A を 4 限へ移しても、保存 → 再マージ 1 回の後も A はその日に 1 か所（4 限）だけ', () => {
+    const rowsMovedTo4 = [{ ...row('r0', 't1', 'sA'), slotNumber: 4 }, row('r1', 't2', 'sB'), row('r2', 't3')]
+    const copyOfA = mkStudent('a-copy', '青木', { managedStudentId: 'sA', sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' })
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: mkLesson('moved_sA_x', [copyOfA, null]) } : desk)))
+    const keyA5 = buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5)
+    const savedSettings = settings({ templateFreezeBeforeDate: DATE })
+    const saved = computeTemplateDiffApplyForBoard({
+      weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z',
+    })
+    const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
+    expect(liveOnDay(saved.nextWeeks).map(() => 1)).toHaveLength(1)
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(0)
+    expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([keyA5])
+    const remerged = remergeBoardWeeksWithManagedData(saved.nextWeeks, {
+      classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
+      suppressedRegularLessonOccurrences: [...saved.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
+    })
+    expect(liveOnDay(remerged)).toHaveLength(1)
+    expect(liveCount(remerged, 'sA')).toBe(0)
+    // 回帰防止: 写しの抑止キーを外さないと（旧の抑止のまま再マージ）、A は 4 限と 5 限で 1 か所になるが写しが消えた机では戻れない。キーを外して不動点。
+    expect(remerged.flat().find((cell) => cell.id === CELL)).toEqual(cellOf(saved.nextWeeks))
   })
 
   // 再マージ（mergeManagedWeek）は講師だけの管理机を、同じコマに同じ講師名が居れば足さず（alreadyPresent）、残りを「先頭から最初の空き机」へ

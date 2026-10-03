@@ -3849,9 +3849,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended' || isRestRecordStatus(entry.status)) {
           // moved(移動元)/holiday(休日記録)は生徒から見れば「その日は休み」なので休みと同じ「休」表示。
           var statusLabel = entry.status === 'attended' ? '出席' : entry.status === 'absent-no-makeup' ? '振無休' : '休';
-          var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';
+          // 休みのカードに振替先の日付は出さない(オーナー指示 2026-10-03「日程表の休みに振替先日付は表示しなくていい。下の振替欄に
+          // 日付データは入っているので」)。振替欄が元コマ起点で「科目 元 → 先」を出す機能フラグ transferSourceRestDisplay が ON の
+          // 教室だけ(OFF の教室は従来どおり日付を併記する。ON でないと振替欄に元起点の行が無い)。
+          var linkedDestinationLabel = DATA.transferSourceRestDisplayEnabled ? '' : (entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '');
           // 移動元マーカーはリンク解決が効かないとき(移動先が表示範囲外など)に自分が持つ移動先を使う。
-          if (!linkedDestinationLabel && entry.status === 'moved' && entry.moveDestinationDateKey) {
+          if (!DATA.transferSourceRestDisplayEnabled && !linkedDestinationLabel && entry.status === 'moved' && entry.moveDestinationDateKey) {
             linkedDestinationLabel = formatMonthDay(entry.moveDestinationDateKey);
           }
           return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([subjectWithMinutes, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';

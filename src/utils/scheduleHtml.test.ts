@@ -2550,7 +2550,10 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const statusEntry = payload.cells[0]?.desks?.[0]?.statuses?.[0]
     expect(statusEntry?.linkedDestinationDateKey).toBe('2026-04-08')
     expect(statusEntry?.linkedDestinationSlotNumber).toBe(2)
-    expect(html).toContain("var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';")
+    // 休みのカードの振替先日付は、振替欄が元コマ起点の行を持つ機能フラグ transferSourceRestDisplay が ON の教室では出さない
+    // (オーナー指示 2026-10-03「日程表の休みに振替先日付は表示しなくていい。下の振替欄に日付データは入っているので」)。OFF では従来どおり。
+    expect(html).toContain("var linkedDestinationLabel = DATA.transferSourceRestDisplayEnabled ? '' : (entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '');")
+    expect(html).toContain("if (!DATA.transferSourceRestDisplayEnabled && !linkedDestinationLabel && entry.status === 'moved' && entry.moveDestinationDateKey) {")
     expect(html).toContain("base += ' → ' + formatCompactDateSlot(arguments[6], arguments[7]);")
     vi.unstubAllGlobals()
   })
