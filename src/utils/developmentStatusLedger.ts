@@ -91,15 +91,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-09-25',
   },
   {
-    id: 'holiday-return-manual-added',
-    title: '休日設定で手で追加したコマも未消化へ返す(Issue #73・日大前校の質問)',
-    stage: 'awaiting-owner',
-    summary: '実装・本番反映済み(v1.5.579・2026-10-07・INV-06)。休日設定だけ、手動追加の通常・増コマ・振替を未消化振替へ、手動追加の講習を未消化講習へ返す(「休み」と同じ扱い。フラグ無しで全教室)。確認 hm-1〜hm-4 は OK(2026-10-07・受付 20261007-114407125-114ac7b6)。既知の限界 3 件は Issue #74。',
-    nextAction: '室長(日大前校)へ開発者画面「質問への回答」から回答する(計画書 §6 の文案・§G-4 準拠)→ Issue #73 をクローズ。済んだらこの行を消す。',
-    references: ['docs/plan-2026-10-07-holiday-return-manual-added.md §6/§7', 'docs/spec-makeup-stock.md §B-2-2b/§B-3/§B-4', 'Issue #73', 'Issue #74', 'CHANGELOG v1.5.579'],
-    updatedOn: '2026-10-07',
-  },
-  {
     id: 'lesson-history',
     title: '講習履歴(生徒日程表タブの「講習履歴」ボタン)',
     stage: 'awaiting-owner',
