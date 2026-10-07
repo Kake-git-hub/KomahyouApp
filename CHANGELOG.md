@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- docs: 休日設定で手動追加のコマも未消化振替へ返す仕様変更の計画書を追加（#73 日大前校の質問の調査結果・現行仕様の非対称(§B-3 休みは返す／休日設定は返さない)・変更案・判断3点・実装/テスト手順。`docs/plan-2026-10-07-holiday-return-manual-added.md`・未実装）
+
 ## v1.5.578 (2026-10-03)
 
 - fix: **テンプレで生徒を別の時限へ移すと移動元・移動先の両方に出る**（オーナー報告 2026-10-03・重大バグ・**開発用教室のみ**＝フラグ `templateDiffApply`・INV-12 / INV-02・spec-template-behavior §H Q36）。原因: 盤面で同じ日の中で手で動かした通常授業の写し（`moved_…` 授業＝`sameDayMoveSourceDate` がその日。同一コマ内の机替えにも付く）が Q22 の「手入力の印」として残り、新テンプレが同じ生徒×科目を別の時限に置いても外れなかった（旧方式〔上書き〕では反映日以降が全消去されるので写しは残らなかった＝本番 3 教室では起きない。本番 3 教室の実データも読み取りで照合し、この形の二重配置は無し）。修正: 写し（手動追加でない regular で同日移動／元の日付へ戻したもの）は、新テンプレが同じ日の別のコマに置く（superseded）／テンプレがその日にその生徒×科目を持たない（stale）／写しの席を新テンプレの別の生徒が埋める（collided＝その他欄「まだ通常同士なのに保留扱い」）のどれかなら**テンプレに合わせて外し、写しを作った移動の抑止キーも外して**テンプレの授業を元の位置へ戻す（`computeTemplateDiffApplyForBoard` が管理セルを作り直して反復・`stripSameDayMoveCopies` / `resolveSameDayMoveCopyKeysToRemove`）。テンプレがその日に持つが抑止で置かれておらず席もぶつからない写しは従来どおり残す（手で動かした先が勝つ）。確認文・保存後に「同じ日の中で手で動かしていた通常授業 n名はテンプレの位置に合わせます」。保存は `removedSuppressedRegularLessonOccurrences` を抑止から取り除く。旧版（〜v1.5.577）が作った保留の下段の写しも同じテンプレの再保存で片づく (templateDiffApply.ts / ScheduleBoardScreen.tsx `computeTemplateDiffApplyForBoard` `handleSaveRegularLessonTemplateByDiff` / templateDiffApply.test.ts / inv02・inv12 マトリクス)
