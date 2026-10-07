@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.581 (2026-10-07)
+
+- docs: 進行中テーマ台帳から `holiday-return-manual-added` を削除（完了: v1.5.579 で全教室へ反映・確認 hm-1〜hm-4 OK・室長への回答は開発者画面で解決済み〔`resolvedAt` 2026-10-07 11:44Z〕・Issue #73 をオーナー指示でクローズ）。既知の限界 3 件は Issue #74 で継続 (developmentStatusLedger.ts / docs/plan-2026-10-07-holiday-return-manual-added.md)
+
 ## v1.5.580 (2026-10-07)
 
 - docs: 確認リスト第 40 版（v1.5.580）: 第 39 版の結果（受付 20261007-114407125-114ac7b6）で hm-1〜hm-4（休日設定×手動追加・Issue #73）がすべて OK → 外す。進行中テーマ台帳の `holiday-return-manual-added` を「オーナー判断待ち（室長への回答・#73 クローズ）」へ。計画書 §7 に確認結果を追記 (verificationChecklist.ts / developmentStatusLedger.ts / docs/plan-2026-10-07-holiday-return-manual-added.md)
