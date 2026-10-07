@@ -1029,11 +1029,12 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     const before = emptyLedgers()
     const weeks = [[cellOn(RELEASE_DATE, 1, [manualRegularDesk()]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
     const set = runHolidaySet({ weeks, ledgers: before, includeManualAddedLessons: true })
-    expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: RELEASE_DATE }] }) // 未消化振替 +1(当日 origin)
+    // 手動追加は時限つき(日付#限)で積む(regression-reviewer M-1・同じ日のテンプレ授業の自動 origin と畳まれないため)。
+    expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: RELEASE_DATE, slotNumber: 1 }] }) // 未消化振替 +1(当日 origin)
     expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]).toMatchObject({
       status: 'holiday',
       manualAdded: true,
-      holidayStockReturn: { kind: 'makeup', originDateKey: RELEASE_DATE, fallbackAdded: false },
+      holidayStockReturn: { kind: 'makeup', originDateKey: RELEASE_DATE, originSlotNumber: 1, fallbackAdded: false },
     })
 
     const released = runHolidayRelease(set.weeks, set.ledgers)
@@ -1120,6 +1121,67 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'special', specialStockSource: 'manual', manualAdded: true })
     expect(released.ledgers.manualLectureStockCounts[lectureStockKey]).toBeUndefined() // 台帳は触らない
     expect(released.ledgers.manualLectureStockOrigins).toEqual({})
+  })
+
+  it('★(s) 出席にした「別日へ動かした手動追加の振替」: 休日設定で振替元日＋時限の origin を積み(控え makeup)、解除で往復一致・席へ振替のまま戻る', () => {
+    // regression-reviewer M-2: 出欠記録の振替は materialize 経路へ回り、手動追加は対象外(none)だったので、記録が holiday になって実績 −1 だけが残り 1 コマ消えていた。
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [{
+      id: 'desk-1',
+      teacher: '田中講師',
+      statusSlots: [statusEntry({
+        id: 'status-attended-manual-makeup', status: 'attended', lessonType: 'makeup', manualAdded: true, dateKey: RELEASE_DATE, slotNumber: 1,
+        makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限',
+      }), null],
+    }])]]
+    const set = runHolidaySet({ weeks, ledgers: before, includeManualAddedLessons: true })
+    expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: '2026-09-30', slotNumber: 1 }] })
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'makeup', originDateKey: '2026-09-30', originSlotNumber: 1, fallbackAdded: false })
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', manualAdded: true, makeupSourceDate: '2026-09-30' })
+    expect(released.ledgers).toEqual(before)
+    // 振無休も同じ。対照: 休日設定以外(フラグ省略)では従来どおり 'none'(在庫を触らない)。
+    const noMakeup = structuredClone(weeks)
+    noMakeup[0][0].desks[0].statusSlots![0]!.status = 'absent-no-makeup'
+    expect(runHolidaySet({ weeks: noMakeup, ledgers: before, includeManualAddedLessons: true }).ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: '2026-09-30', slotNumber: 1 }] })
+    const legacy = runHolidaySet({ weeks, ledgers: before, includeManualAddedLessons: false })
+    expect(legacy.ledgers).toEqual(before)
+    expect(findDesk(legacy.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'none' })
+  })
+
+  it('★(t) 解除で「別日に組んだコマ」を探すとき、手動追加のコマは候補にしない(在庫を消費した配置ではない＝消してはいけない)', () => {
+    // regression-reviewer L-3: 2026-10-07 以降は手動追加の振替にも 'makeup' の控えが付くので、同じ振替元日・同じ在庫キーの別日の手動追加コマを取り違えうる。
+    const before = emptyLedgers()
+    const movedManual = regularStudent({ lessonType: 'makeup', manualAdded: true, makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限' })
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([movedManual, null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before, includeManualAddedLessons: true })
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'makeup', originDateKey: '2026-09-30', originSlotNumber: 1, fallbackAdded: false })
+    // 別日に、同じ振替元日・同じ在庫キーを持つ**手動追加**の振替コマがある(在庫から置いたものではない)。
+    findDesk(set.weeks, ALT_DATE).lesson = {
+      id: 'alt-lesson',
+      studentSlots: [makeupOnAltDate({ manualAdded: true, makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限' }), null],
+    }
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson?.studentSlots[0]).toMatchObject({ manualAdded: true, lessonType: 'makeup' }) // 別日の手動追加は無傷
+    expect(released.removedMakeups).toEqual([])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ manualAdded: true, lessonType: 'makeup' })
+    expect(released.ledgers).toEqual(before) // 設定で積んだ origin を外して往復一致
+  })
+
+  it('★(u) 機能フラグ OFF(本番 3 教室の現状): 手動追加も在庫へ返るが holiday 記録は作られないので、解除は従来どおり何も戻さず origin は残る', () => {
+    // regression-reviewer L-4: 解除の巻き戻しは transferSourceRestDisplay ON の教室だけ。OFF ではテンプレ授業と同じく返した分が未消化に残る。
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [manualRegularDesk()])]]
+    const set = runHolidaySet({ weeks, ledgers: before, enabled: false, includeManualAddedLessons: true })
+    expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: RELEASE_DATE, slotNumber: 1 }] }) // 在庫会計はフラグに依らない
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots).toBeUndefined()
+    expect(findDesk(set.weeks, RELEASE_DATE).lesson).toBeUndefined()
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(released.restoredStudentNames).toEqual([])
+    expect(released.ledgers).toEqual(set.ledgers) // 返した分は未消化振替に残る(テンプレ授業と同じ従来の挙動)
   })
 
   it('★(l) 同じ日付に時限つき/時限なしの origin が併存する往復: 休日設定で積んだ形のものだけを外す(残数が狂わない)', () => {

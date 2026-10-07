@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { DeskCell, StudentEntry, StudentStatusEntry, SubjectLabel } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry, SubjectLabel } from './types'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import {
   reconcileHolidayDeskStockReturns,
   resolveLectureStockStudentKey,
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
-import { buildMakeupStockKey, computeAutomaticShortageOrigins } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, computeAutomaticShortageOrigins, createBoardStudentStockIdResolver } from './makeupStock'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 
@@ -314,27 +314,29 @@ describe('INV-06 休日化 × 手動追加（休日設定では返す／全コ�
   function runHoliday(
     deskCell: DeskCell,
     ledgers = emptyLedgers(),
-    options: { includeManualAddedLessons?: boolean; includeRegularLessons?: boolean } = { includeManualAddedLessons: true },
+    options: { includeManualAddedLessons?: boolean; includeRegularLessons?: boolean; cellSlotNumber?: number; resolveStockId?: (student: StudentEntry) => string } = { includeManualAddedLessons: true },
   ) {
+    const { cellSlotNumber = 5, resolveStockId: resolveStockIdOverride, ...flags } = options
     return reconcileHolidayDeskStockReturns({
       desk: deskCell,
       cellDateKey: DATE,
-      cellSlotNumber: 5,
+      cellSlotNumber,
       ledgers,
       managedStudentByAnyName: roster,
       resolveDisplayName,
-      resolveStockId: (student) => resolveStockId(student, roster),
+      resolveStockId: resolveStockIdOverride ?? ((student) => resolveStockId(student, roster)),
       ledgerOriginDatesByKey: {},
-      ...options,
+      ...flags,
     })
   }
 
   it('★T-1 配置の手動追加 通常(regular): 休日設定では当日 origin を 1 件積み、返した id と控え kind:makeup を返す', () => {
     const entry = manualLesson()
     const result = runHoliday(desk({ lesson: [entry, null] }))
-    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE }])
+    // ★手動追加は時限つき(日付#限)で積む(regression-reviewer M-1): 時限なしだと同じ日のテンプレ授業の自動 origin や同じ日の 2 件と畳まれて 1 件になる。
+    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE, slotNumber: 5 }])
     expect(result.returnedEntryIds).toEqual([entry.id])
-    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, fallbackAdded: false })
+    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, originSlotNumber: 5, fallbackAdded: false })
     expect(result.movedStudentCount).toBe(1)
   })
 
@@ -342,9 +344,9 @@ describe('INV-06 休日化 × 手動追加（休日設定では返す／全コ�
     for (const status of ['attended', 'absent-no-makeup'] as const) {
       const record = manualStatus(status)
       const result = runHoliday(desk({ statusSlots: [record, null] }))
-      expect(result.ledgers.manualMakeupAdjustments[makeupKey], status).toEqual([{ dateKey: DATE }])
+      expect(result.ledgers.manualMakeupAdjustments[makeupKey], status).toEqual([{ dateKey: DATE, slotNumber: 5 }])
       expect(result.returnedEntryIds, status).toEqual([record.id])
-      expect(result.stockReturnStamps.statusStamps[0], status).toEqual({ kind: 'makeup', originDateKey: DATE, fallbackAdded: false })
+      expect(result.stockReturnStamps.statusStamps[0], status).toEqual({ kind: 'makeup', originDateKey: DATE, originSlotNumber: 5, fallbackAdded: false })
     }
     for (const status of ['absent', 'moved'] as const) {
       const result = runHoliday(desk({ statusSlots: [manualStatus(status), null] }))
@@ -357,12 +359,12 @@ describe('INV-06 休日化 × 手動追加（休日設定では返す／全コ�
 
   it('★T-3 手動追加の振替(makeupSourceDate 無し)・増コマは当日 origin。体験(trial)は休日設定でも返さない(kind:none)', () => {
     const makeupResult = runHoliday(desk({ lesson: [manualLesson({ id: 'manual_makeup', lessonType: 'makeup' }), null] }))
-    expect(makeupResult.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE }])
+    expect(makeupResult.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE, slotNumber: 5 }])
     expect(makeupResult.returnedEntryIds).toEqual(['manual_makeup'])
-    expect(makeupResult.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, fallbackAdded: false })
+    expect(makeupResult.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, originSlotNumber: 5, fallbackAdded: false })
 
     const extraResult = runHoliday(desk({ lesson: [manualLesson({ id: 'manual_extra', lessonType: 'extra' }), null] }))
-    expect(extraResult.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE }])
+    expect(extraResult.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE, slotNumber: 5 }])
     expect(extraResult.returnedEntryIds).toEqual(['manual_extra'])
 
     // 体験は manualAdded:true で作られるが、振替の概念が無い(休みボタンも無い)。フラグを広げても巻き込まない。
@@ -376,20 +378,82 @@ describe('INV-06 休日化 × 手動追加（休日設定では返す／全コ�
   it('T-3b 手動追加の通常を別日へ動かした振替(makeupSourceDate あり)は振替元日で積む(配置の通常授業と同じ規則・当日ではない)', () => {
     const moved = manualLesson({ id: 'manual_moved', lessonType: 'makeup', makeupSourceDate: '2026-07-25', makeupSourceLabel: '2026/7/25(土) 5限' })
     const result = runHoliday(desk({ lesson: [moved, null] }))
-    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: '2026-07-25' }])
-    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: '2026-07-25', fallbackAdded: false })
+    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: '2026-07-25', slotNumber: 5 }])
+    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: '2026-07-25', originSlotNumber: 5, fallbackAdded: false })
   })
 
-  it('★T-4 同じ生徒×科目でテンプレの通常授業と手動追加が同じ机に並ぶ: origin は 2 件(dedupe しない＝2 コマ消えるので 2 件が正しい)', () => {
+  it('★T-4 同じ生徒×科目でテンプレの通常授業(1限)と手動追加(3限)が同じ日に並ぶ: origin は 2 件(テンプレ=時限なし・手動追加=時限つき)', () => {
     const template = { ...sessionLesson({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: undefined }), id: 'template_entry', lessonType: 'regular', specialStockSource: undefined } as StudentEntry
-    const result = runHoliday(desk({ lesson: [template, manualLesson({ id: 'manual_entry' })] }))
-    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE }, { dateKey: DATE }])
-    expect(result.returnedEntryIds).toEqual(['template_entry', 'manual_entry'])
-    expect(result.stockReturnStamps.placementStamps).toEqual([
-      { kind: 'makeup', originDateKey: DATE, fallbackAdded: false },
-      { kind: 'makeup', originDateKey: DATE, fallbackAdded: false },
-    ])
-    expect(result.movedStudentCount).toBe(2)
+    const first = runHoliday(desk({ lesson: [template, null] }), emptyLedgers(), { includeManualAddedLessons: true, cellSlotNumber: 1 })
+    const second = runHoliday(desk({ lesson: [manualLesson({ id: 'manual_entry' }), null] }), first.ledgers as ReturnType<typeof emptyLedgers>, { includeManualAddedLessons: true, cellSlotNumber: 3 })
+    expect(second.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: DATE }, { dateKey: DATE, slotNumber: 3 }])
+    expect([...first.returnedEntryIds, ...second.returnedEntryIds]).toEqual(['template_entry', 'manual_entry'])
+    expect(first.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, fallbackAdded: false })
+    expect(second.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, originSlotNumber: 3, fallbackAdded: false })
+  })
+
+  // ★T-4b(regression-reviewer M-1): 台帳の件数ではなく**実際の残数**(buildMakeupStockEntries)で 2 件になることを固定する。
+  //   時限なしの origin は resolveEffectiveMakeupOriginDates で同じ日付の時限つき origin(テンプレ授業の自動 origin `D#1`)に畳まれ、
+  //   同じ日の時限なし 2 件も Set で 1 件になる。手動追加を時限なしで積むと、どちらの構成でも残 1 になり #73 と同じ「入らない」が再発する。
+  describe('★T-4b 実際の残数(buildMakeupStockEntries)', () => {
+    const HOLIDAY = '2025-04-07' // 月曜
+    const students = [{ id: 's028', name: '犬飼 凜', displayName: '犬飼', email: '', entryDate: '2025-04-01', withdrawDate: '', birthDate: '2012-05-01' }] as unknown as StudentRow[]
+    const templateRow: RegularLessonRow = {
+      id: 'regular-1', schoolYear: 2025, teacherId: 't1', student1Id: 's028', subject1: '数', startDate: '', endDate: '',
+      student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '',
+      dayOfWeek: 1, slotNumber: 1,
+    }
+    const settings: ClassroomSettings = { closedWeekdays: [], holidayDates: [HOLIDAY], forceOpenDates: [], deskCount: 1 }
+    const holidayRoster = makeRoster([['犬飼 凜', 's028']])
+    const resolveHolidayStockId = (student: StudentEntry) => resolveStockId(student, holidayRoster)
+    const stockKey = buildMakeupStockKey('s028', '数')
+
+    function holidayCell(slotNumber: number, lesson: StudentEntry | null): SlotCell {
+      return {
+        id: `${HOLIDAY}_${slotNumber}`, dateKey: HOLIDAY, dayLabel: '月', dateLabel: '4/7', slotLabel: `${slotNumber}限`, slotNumber, timeLabel: '', isOpenDay: true,
+        desks: [{ id: `desk_${slotNumber}`, teacher: '講師', ...(lesson ? { lesson: { id: `lesson_${slotNumber}`, studentSlots: [lesson, null] as [StudentEntry | null, StudentEntry | null] } } : {}) }],
+      }
+    }
+    // 休日設定ハンドラと同じ順序で 1 日分を休日にする(在庫戻し → 机の中身を破棄)。
+    function setHoliday(cells: SlotCell[]) {
+      let ledgers = emptyLedgers() as Parameters<typeof reconcileHolidayDeskStockReturns>[0]['ledgers']
+      for (const cell of cells) {
+        for (const d of cell.desks) {
+          const result = reconcileHolidayDeskStockReturns({
+            desk: d, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber, ledgers,
+            managedStudentByAnyName: holidayRoster, resolveDisplayName, resolveStockId: resolveHolidayStockId,
+            ledgerOriginDatesByKey: {}, includeManualAddedLessons: true,
+          })
+          ledgers = result.ledgers
+          d.lesson = undefined
+        }
+      }
+      return ledgers
+    }
+    function remaining(cells: SlotCell[], regularLessons: RegularLessonRow[]) {
+      const ledgers = setHoliday(cells)
+      const entries = buildMakeupStockEntries({
+        students, teachers: [], regularLessons, classroomSettings: settings, weeks: [cells],
+        manualAdjustments: ledgers.manualMakeupAdjustments, fallbackStudents: ledgers.fallbackMakeupStudents,
+        resolveStudentKey: resolveHolidayStockId, today: new Date('2025-04-10T00:00:00'),
+      })
+      const entry = entries.find((candidate) => candidate.key === stockKey)
+      // remainingOriginDates は日付だけ・remainingOriginSlots が時限(残数の根拠を両方で読む)。
+      return { count: entry?.remainingOriginDates.length ?? 0, slots: entry?.remainingOriginSlots ?? [] }
+    }
+    const templateRegular = { ...sessionLesson({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: undefined }), id: 'template_entry', lessonType: 'regular', specialStockSource: undefined } as StudentEntry
+
+    it('休日のテンプレ授業(数 1限・自動 origin あり)＋同じ日の手動追加(数 3限) → 残 2(手動追加分が畳まれない)', () => {
+      expect(remaining([holidayCell(1, templateRegular), holidayCell(3, manualLesson({ id: 'manual_3' }))], [templateRow])).toEqual({ count: 2, slots: [1, 3] })
+    })
+
+    it('同じ日に同じ科目を 2 コマ手動追加(数 3限・4限) → 残 2(時限なしだと Set で 1 件に畳まれる)', () => {
+      expect(remaining([holidayCell(3, manualLesson({ id: 'manual_3' })), holidayCell(4, manualLesson({ id: 'manual_4' }))], [])).toEqual({ count: 2, slots: [3, 4] })
+    })
+
+    it('対照: テンプレ授業だけ(手動追加なし) → 残 1(時限なしの返却は自動 origin `D#1` に畳まれる＝従来どおり)', () => {
+      expect(remaining([holidayCell(1, templateRegular)], [templateRow])).toEqual({ count: 1, slots: [1] })
+    })
   })
 
   it('★T-5 非回帰: includeManualAddedLessons 省略(全コマ削除・丸ごと振替・テンプレ保留の採用)では手動追加を返さない(kind:none・returnedEntryIds に入らない)', () => {
@@ -438,11 +502,17 @@ describe('INV-06 休日化 × 手動追加（休日設定では返す／全コ�
     expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'none' })
   })
 
-  it('T-6c 未管理の手動追加(名簿に無い生徒)は name: キーで積み、表示名フォールバックを足す(控え fallbackAdded:true＝解除で消す)', () => {
-    const result = runHoliday(desk({ lesson: [manualLesson({ id: 'unmanaged', name: '未管理 花子', managedStudentId: undefined }), null] }))
-    const key = buildMakeupStockKey('name:未管理 花子', '数')
-    expect(result.ledgers.manualMakeupAdjustments[key]).toEqual([{ dateKey: DATE }])
+  it('T-6c 未管理の手動追加(名簿に無い生徒)は本番のキー解決(createBoardStudentStockIdResolver)どおり manual:name: キーで積み、表示名フォールバックを足す(控え fallbackAdded:true＝解除で消す)', () => {
+    const productionResolver = createBoardStudentStockIdResolver([{ id: 's028', name: '犬飼 凜', displayName: '犬飼', email: '', entryDate: '2025-04-01', withdrawDate: '', birthDate: '2012-05-01' } as unknown as StudentRow])
+    const result = runHoliday(desk({ lesson: [manualLesson({ id: 'unmanaged', name: '未管理 花子', managedStudentId: undefined }), null] }), emptyLedgers(), { includeManualAddedLessons: true, resolveStockId: productionResolver })
+    const key = buildMakeupStockKey('manual:name:未管理 花子', '数')
+    expect(result.ledgers.manualMakeupAdjustments[key]).toEqual([{ dateKey: DATE, slotNumber: 5 }])
     expect(result.ledgers.fallbackMakeupStudents[key]).toEqual({ studentName: '未管理 花子', displayName: '未管理 花子', subject: '数' })
-    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, fallbackAdded: true })
+    expect(result.stockReturnStamps.placementStamps[0]).toEqual({ kind: 'makeup', originDateKey: DATE, originSlotNumber: 5, fallbackAdded: true })
   })
+
+  // 既知の限界(regression-reviewer M-3・2026-10-07・§B-3 の「休み」でも同じ): 名簿外の手動追加を返した在庫は `manual:name:` キーに積まれるが、
+  // 未消化から置いた振替コマは manualAdded を持たないので `name:` キーで消化され、キーが合わず残が減らない(解除でも別日のコマが見つからない)。
+  // 「生徒を追加」は管理生徒しか選べないので実運用では旧データ(名前だけのコマ)に限られる。キーの統一は別 Issue で扱う。
+  it.todo('M-3 名簿外の手動追加: 休日設定で返した manual:name: キーの在庫が、在庫から置いた振替(name: キー)で消化されて残 0 になる')
 })

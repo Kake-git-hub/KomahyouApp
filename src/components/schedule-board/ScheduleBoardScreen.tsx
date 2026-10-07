@@ -1689,12 +1689,14 @@ export function reconcileHolidayDeskStockReturns(params: {
   const returnEntryToStock = (
     entry: Pick<StudentEntry, 'id' | 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded'>,
     makeupOriginDateKey: string,
+    /** 手動追加を返すときだけ使う origin の時限（テンプレ由来の通常授業は従来どおり時限なしで積む・下記 M-1）。 */
+    makeupOriginSlotNumber: number | null,
   ): HolidayStockReturnStamp => {
     movedStudentCount += 1
     if (entry.lessonType === 'special') {
-      // 手動追加の講習は §B-4（休み）と同じく「講習期間（specialSessionId）を持つ」ことだけを条件に同じ返却経路へ通す
-      // （期間が無い旧データは戻し先の行が決まらないので対象外＝shouldReturnLectureStockOnAbsence と同じ保険）。
-      if (entry.specialStockSource === 'session' || (includeManualAddedLessons && Boolean(entry.specialSessionId))) {
+      // 手動追加の講習は §B-4（休み）と同じ権威関数 shouldReturnLectureStockOnAbsence（講習期間の有無だけで判定・specialStockSource を
+      // 見ない）で同じ返却経路へ通す（期間が無い旧データは戻し先の行が決まらないので対象外）。判定を書き直して分散させない（regression-reviewer L-1）。
+      if (entry.specialStockSource === 'session' || (includeManualAddedLessons && shouldReturnLectureStockOnAbsence(entry))) {
         returnedEntryIds.push(entry.id) // 実際に在庫へ返したものだけ記録する（手動追加の講習は休日設定のときだけ返る）
         const lectureStockKey = buildLectureStockKey(
           resolveLectureStockStudentKey(entry, managedStudentByAnyName, resolveDisplayName),
@@ -1731,7 +1733,13 @@ export function reconcileHolidayDeskStockReturns(params: {
     if (!entry.manualAdded || includeManualAddedLessons) {
       returnedEntryIds.push(entry.id) // 手動追加は在庫を消費していないので休日設定以外では返さない＝ここに入れない
       const stockKey = buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
-      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, makeupOriginDateKey)
+      // ★手動追加は**時限つき**で積む（2026-10-07 regression-reviewer M-1・origin の同一性は日付＋時限＝2026-07-31 オーナー確定）。
+      //   時限なしの origin は resolveEffectiveMakeupOriginDates で (1) Set により同じ日の 2 件が 1 件に畳まれ、(2) 同じ日付に時限つき origin
+      //   （テンプレ授業の自動 origin `D#限`）があると「同一コマの重複表現」として落とされる。手動追加には自動 origin が無いので、時限なしで
+      //   積むと、同じ日に同じ科目のテンプレ授業がある生徒や同じ日に 2 コマ手動追加した生徒で返りが 1 件に減る（#73 と同じ「入らない」の再発）。
+      //   テンプレ由来の通常授業は従来どおり時限なし（自動 origin と畳まれるのが仕様・§B-2-2b 表の 1 行目）。ここは変えない。
+      const manualOriginSlotNumber = entry.manualAdded ? makeupOriginSlotNumber : null
+      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, makeupOriginDateKey, manualOriginSlotNumber)
       const makeupFallbackAdded = !managedStudentByAnyName.get(entry.name) && !params.ledgers.fallbackMakeupStudents[stockKey]
       if (!managedStudentByAnyName.get(entry.name)) {
         fallbackMakeupStudents = {
@@ -1739,7 +1747,9 @@ export function reconcileHolidayDeskStockReturns(params: {
           [stockKey]: { studentName: entry.name, displayName: resolveDisplayName(entry.name), subject: entry.subject },
         }
       }
-      return { kind: 'makeup', originDateKey: makeupOriginDateKey, fallbackAdded: makeupFallbackAdded }
+      return manualOriginSlotNumber != null
+        ? { kind: 'makeup', originDateKey: makeupOriginDateKey, originSlotNumber: manualOriginSlotNumber, fallbackAdded: makeupFallbackAdded }
+        : { kind: 'makeup', originDateKey: makeupOriginDateKey, fallbackAdded: makeupFallbackAdded }
     }
     return { kind: 'none' } // 手動追加(体験・手置き)は在庫を経由していない（休日設定では手置きも上の経路で返る・体験は常にここ）
   }
@@ -1751,7 +1761,7 @@ export function reconcileHolidayDeskStockReturns(params: {
     // 在庫から出したコマ（振替・ストック由来の講習）は常に返す。通常・体験・増コマは呼び出し側の方針に従う。
     const isStockBackedLesson = student.lessonType === 'makeup' || student.lessonType === 'special'
     if (!includeRegularLessons && !isStockBackedLesson) continue
-    placementStamps[studentIndex] = returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey))
+    placementStamps[studentIndex] = returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey), resolveOriginalRegularSlotNumber(student, cellSlotNumber))
   }
 
   const statusSlots = desk.statusSlots ?? []
@@ -1777,7 +1787,14 @@ export function reconcileHolidayDeskStockReturns(params: {
       manualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       fallbackMakeupStudents = materializedResult.fallbackMakeupStudents
       if (!materializedResult.materialized) {
-        // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休／確定済み。
+        // ★手動追加の振替（手動追加の通常を別日へ動かした形など）の出席・振無休は materialize 対象外（在庫を経由していない）だが、
+        //   休日設定（includeManualAddedLessons）では配置の手動追加と同じく §B-3 と同根拠で返す（regression-reviewer M-2・2026-10-07）。
+        //   振替元日＋時限で積む（配置の規則と同じ）。absent は mark-absent が算出 origin で返し済み／moved は移動先が会計を持つので対象外。
+        if (includeManualAddedLessons && statusEntry.manualAdded && HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) {
+          statusStamps[studentIndex] = returnEntryToStock(statusEntry, statusEntry.makeupSourceDate, parseOriginSlotNumber(statusEntry.makeupSourceLabel))
+          continue
+        }
+        // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休（休日設定以外）／確定済み。
         // ★在庫由来は「配置が消える＝台帳 origin が自動で再浮上」で返却が済むので、控えは 'none'
         //   （解除で席へ戻せば自動で再消化される＝台帳を触ってはいけない）。
         statusStamps[studentIndex] = { kind: 'none' }
@@ -1795,7 +1812,7 @@ export function reconcileHolidayDeskStockReturns(params: {
     }
     if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
     if (!includeRegularLessons && statusEntry.lessonType !== 'special') continue // 全コマ削除では通常・体験・増コマを返さない
-    statusStamps[studentIndex] = returnEntryToStock(statusEntry, cellDateKey)
+    statusStamps[studentIndex] = returnEntryToStock(statusEntry, cellDateKey, cellSlotNumber)
   }
 
   return {
@@ -1924,8 +1941,11 @@ function findHolidayReleaseMakeupConsumption(params: {
     ? buildLectureStockKey(resolveLectureStockStudentKey(record, managedStudentByAnyName, resolveDisplayName), record.subject, record.specialSessionId)
     : buildMakeupStockKey(resolveStockId(record as unknown as StudentEntry), record.subject)
 
-  const matches = (entry: Pick<StudentEntry, 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'specialSessionId'>) => {
+  const matches = (entry: Pick<StudentEntry, 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'specialSessionId' | 'manualAdded'>) => {
     if (entry.lessonType !== expectedLessonType) return false
+    // ★手動追加（manualAdded）のコマは在庫を消費した配置ではないので「別日に組んだコマ」の候補にしない（regression-reviewer L-3・2026-10-07）。
+    //   2026-10-07 以降は手動追加の振替にも 'makeup' の控えが付くため、同じ振替元日・同じ在庫キーの別日の手動追加コマを取り違えて消しうる。
+    if (entry.manualAdded) return false
     if (entry.makeupSourceDate !== originDateKey) return false
     const stockKey = stamp.kind === 'lecture'
       ? buildLectureStockKey(resolveLectureStockStudentKey(entry, managedStudentByAnyName, resolveDisplayName), entry.subject, entry.specialSessionId)

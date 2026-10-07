@@ -1062,9 +1062,10 @@ export function ledgerOriginsIncludeDate(ledgerOriginDates: string[], dateKey: s
 // - 通常授業 / 講習 / 振替元日を持たないコマ … null（mark 時に在庫会計済み・講習は講習在庫へ返す）。
 // - 移動マーカー(moved) … null（会計は移動先のコマが持つ）。
 // - 休日記録(holiday) … null（休日設定の時点で在庫へ返却済みの**表示専用**記録。ここで積むと二重計上）。
-// - 手動追加(manualAdded) … 在庫を消費していないので返す先が無く null。ただし **「休み」だけは例外的に返す**
+// - 手動追加(manualAdded) … 在庫を消費していないので返す先が無く null。ただし **「休み」は例外的に返す**
 //   （日程表の実績カウントが manualAdded を除外せず、休みにすると実績だけ −1 になって1コマ宙に浮くため。
-//   spec-makeup-stock §B-3・2026-07-31 オーナー確定）。
+//   spec-makeup-stock §B-3・2026-07-31 オーナー確定）。休日設定（2026-10-07・§B-2-2b・Issue #73）も同根拠で返すが、そちらは
+//   この関数ではなく reconcileHolidayDeskStockReturns の includeManualAddedLessons 経路が振替元日＋時限で積む（ここは null のまま）。
 export function resolveMakeupStatusOriginToMaterialize(params: {
   statusEntry: {
     status: string
