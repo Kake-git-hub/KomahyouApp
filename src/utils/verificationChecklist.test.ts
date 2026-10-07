@@ -60,9 +60,9 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第38版(v1.5.578): 第37版で OK の tp-26〜tp-29 を外し、同日移動の写し tp-31/tp-32・休みの席の自動採用 tp-33・日程表の休みの日付 tp-34・採用の席ごと化 tp-35 を足した', () => {
+  it('第39版(v1.5.579・項目追加のみ): 第38版の結果待ち項目を残したまま、休日設定×手動追加(Issue #73)の hm-1〜hm-4 を足した', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-31', 'tp-32', 'tp-33', 'tp-34', 'tp-35', 'tp-30'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-31', 'tp-32', 'tp-33', 'tp-34', 'tp-35', 'tp-30', 'hm-1', 'hm-2', 'hm-3', 'hm-4'])
     // 第37版の結果(2026-10-03・受付 20261003-141217458-0166a9a2)で OK。
     for (const okId of ['tp-26', 'tp-27', 'tp-28', 'tp-29']) expect(ids, okId).not.toContain(okId)
     // 第36版の結果(2026-10-02・受付 20261002-045333221-35108a3e)で OK。
@@ -75,8 +75,23 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
     // 第38版(2026-10-03): 次にデプロイされる版 v1.5.578 へ上げた(OK 済みを外したので上げる)。
+    // 第39版(2026-10-07): hm-1〜hm-4 を足しただけなので版は据え置き(第38版の結果はまだ無い。上げると書きかけの下書きが消える＝第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.578')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    // 第39版: 日大前校の質問(Issue #73)→ オーナー確定「休日設定では手で追加したコマも未消化へ返す(講習も)」(spec-makeup-stock §B-2-2b/§B-3/§B-4・INV-06)。
+    for (const id of ['hm-1', 'hm-2', 'hm-3', 'hm-4']) {
+      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.579')
+      expect(byId.get(id)!.area, id).toBe('盤面(休日設定)')
+    }
+    expect(byId.get('hm-1')!.check!.join(' / ')).toContain('残数が控えより 1 増える')
+    expect(byId.get('hm-2')!.check!.join(' / ')).toContain('1人を元の席へ戻します')
+    expect(byId.get('hm-2')!.check!.join(' / ')).toContain('控えた値に戻る')
+    // ★全コマ削除は従来どおり返さない(通常授業すら返さない操作)。この対照項目を必ず持つ。
+    expect(byId.get('hm-3')!.title).toContain('従来どおり')
+    expect(byId.get('hm-3')!.check!.join(' / ')).toContain('残数が控えから変わらない')
+    // ★判断 B(手動追加の講習も返す)は必須項目。
+    expect(byId.get('hm-4')!.title).toContain('講習')
+    expect(byId.get('hm-4')!.check!.join(' / ')).toContain('未消化講習')
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
     expect(byId.get('tp-15')!.area).toBe(byId.get('q-6')!.area)

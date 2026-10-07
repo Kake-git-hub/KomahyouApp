@@ -67,3 +67,41 @@ describe('休日解除の配線(席の復元・在庫巻き戻し)', () => {
     expect(BOARD_TSX).toContain('stockReturns: result.stockReturnStamps')
   })
 })
+
+// 休日設定 × 手動追加(2026-10-07 オーナー確定・Issue #73・INV-06・spec-makeup-stock §B-2-2b)の**配線**ガード。
+// 会計そのものは inv06-holiday-stock-reconciliation.matrix.test.ts(T-1〜T-6)で固定している。ここで守るのは
+// 「手動追加を返すのは休日設定の呼び出しだけ」という配線(全コマ削除・丸ごと振替・テンプレ保留の採用へ漏らさない)。
+describe('休日設定の配線(手動追加も未消化へ返す・Issue #73)', () => {
+  function holidaySetBranch() {
+    const handlerIndex = BOARD_TSX.indexOf('const handleToggleHolidayDate = (dateKey: string) => {')
+    expect(handlerIndex).toBeGreaterThan(0)
+    const endIndex = BOARD_TSX.indexOf('const handleDayHeaderClick = ', handlerIndex)
+    expect(endIndex).toBeGreaterThan(handlerIndex)
+    return BOARD_TSX.slice(handlerIndex, endIndex)
+  }
+
+  it('休日設定ハンドラの reconcile 呼び出しだけが includeManualAddedLessons:true を渡す(盤面全体で 1 か所)', () => {
+    expect(holidaySetBranch()).toContain('includeManualAddedLessons: true,')
+    expect(BOARD_TSX.match(/includeManualAddedLessons: true/g)).toHaveLength(1)
+  })
+
+  it('★全コマ削除・丸ごと振替・テンプレ保留の採用(includeRegularLessons:false の呼び出し)にはフラグを渡さない(既定 false＝従来どおり返さない)', () => {
+    // 純関数側の既定は false(真にすると全コマ削除経路の希望回数 −1 と二重になる)。
+    expect(BOARD_TSX).toContain('includeManualAddedLessons = false')
+    const callSites = BOARD_TSX.split('reconcileHolidayDeskStockReturns({').slice(1)
+    expect(callSites.length).toBeGreaterThanOrEqual(3) // 休日設定・全コマ削除(disposeDayDeskEntries)・テンプレ保留の採用
+    const clearDayCalls = callSites.filter((site) => site.slice(0, 800).includes('includeRegularLessons: false'))
+    expect(clearDayCalls.length).toBeGreaterThanOrEqual(2)
+    for (const site of clearDayCalls) {
+      expect(site.slice(0, 800)).not.toContain('includeManualAddedLessons')
+    }
+  })
+
+  it('解除側: 席へ戻す手動追加の通常授業は抑止キーを返さない(兄弟監査・テンプレ授業の削除の抑止を外さない)', () => {
+    const fnIndex = BOARD_TSX.indexOf('export function computeHolidayReleaseRestoration(')
+    expect(fnIndex).toBeGreaterThan(0)
+    const body = BOARD_TSX.slice(fnIndex, BOARD_TSX.indexOf('const HOLIDAY_RELEASE_SKIP_LABELS', fnIndex))
+    expect(body).toContain('const occurrenceKey = restoredStudent.manualAdded')
+    expect(body).toContain('? null')
+  })
+})
