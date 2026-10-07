@@ -7,8 +7,9 @@
 > 室長の希望: **今回（10/12）はそのままでよい。次回以降の休日設定では手動追加の生徒分も未消化に入れてほしい。**
 > オーナー指示（2026-10-07）: 仕様変更として計画を作る。
 >
-> ⚠️ 利用者報告 Issue 由来なので、**実装着手はオーナーの許可が前提**（CLAUDE.md 標準フロー）。この計画をオーナーが読んで
-> 「進めてよい」と言った時点で着手する。実装セッションは着手前に §4 の判断 3 点を `AskUserQuestion` で確定すること。
+> ✅ **オーナー確定（2026-10-07）**: 判断 3 点は確定済み（§4）。**A 全教室展開（フラグ無し）／ B 手動追加の講習も未消化講習へ返す／
+> C §2 の案を spec-curator がそのまま正本へ反映してよい**。利用者報告 Issue 由来の着手許可もこの確定で得ている。
+> 実装セッションは `AskUserQuestion` で聞き直さず、そのまま §5 を実行する。
 
 ---
 
@@ -66,7 +67,7 @@
 4. **「その日の生徒を全コマ削除」は変えない**（通常授業すら返さない操作なので、手動追加も返さない。希望回数 −1 も従来どおり）。
 5. **個別メニューの「ストックへ戻す」が手動追加で無効なのは変えない**（別要望。今回の範囲外）。
 6. **体験（`trial`）は返さない**（休みボタンも無い）。
-7. **手動追加の講習**（`special` / `specialStockSource:'manual'`）: §4 の判断 B による。推奨は**未消化講習へ返す**（§B-4「手動追加した講習も
+7. **手動追加の講習**（`special` / `specialStockSource:'manual'`）: **未消化講習へ返す（判断 B 確定）**（§B-4「手動追加した講習も
    未消化講習へ戻す・例外を作らない」と揃える）。返す場合は `appendLectureStockCount`＋`appendManualLectureStockOrigin` を
    session 由来と同じに通し、控えは `{ kind:'lecture', originDateKey, originSlotNumber }`。解除側の 'lecture' 経路で対称に戻る。
    `specialSessionId` が無い旧データだけ対象外（§B-4 と同じ保険）。
@@ -82,19 +83,21 @@
 | # | 懸案 | 妥協案 / 判断 |
 |---|---|---|
 | 1 | **在庫の純増**: 手動追加はもともと在庫を消費していないので、休日で返すと「足したコマの分だけ未消化が増える」。§B-3「手動追加して休みにすると在庫が純増する」と同じ性質 | §B-3 で**オーナーが許容済み（2026-07-31）**の挙動と同型。休日設定だけ例外にしている方が不整合。→ 揃える |
-| 2 | **全教室に即時適用**か、**フラグで開発用教室→staging→全教室**か | 会計ルールの変更で UI は変わらない。確認リスト＋staging 実機で担保できる規模。推奨: **フラグ無し**（§4-A） |
-| 3 | 手動追加の**講習**も揃えるか | 推奨: 揃える（§B-4 と同じ根拠）。範囲を小さくしたいなら振替だけ先行（§4-B） |
+| 2 | **全教室に即時適用**か、**フラグで開発用教室→staging→全教室**か | 会計ルールの変更で UI は変わらない。確認リスト＋staging 実機で担保できる規模。**フラグ無しで全教室（確定・§4-A）** |
+| 3 | 手動追加の**講習**も揃えるか | **揃える（確定・§4-B）**。§B-4 と同じ根拠 |
 | 4 | 曜日変更を手動追加で代用する運用そのものは残る（テンプレ側の曜日を変えれば本来は不要） | 回答文で「テンプレの曜日変更をおすすめ」を添える（対応済み・本計画とは別） |
 | 5 | 同じ生徒×科目でテンプレ通常授業と手動追加が**同日**に並ぶ場合、origin が 2 件になる | 2 コマ消えるので 2 件が正しい。ただし `resolveMakeupStatusOriginToMaterialize` の「同じ日付の origin があれば積まない」は**出欠記録の振替**専用で、配置の通常授業には掛からないことをテストで固定する（§5 T-4） |
 
 ---
 
-## 4. 着手前にオーナーへ確認する判断（実装セッションが `AskUserQuestion` で確定）
+## 4. オーナー判断（2026-10-07 確定済み・聞き直さない）
 
-- **A. 適用範囲**: (推奨) フラグ無しで全教室 ／ `featureRollout` に新フラグを切って開発用教室→昇格
-- **B. 手動追加の講習**: (推奨) 振替と同時に未消化講習へ返す ／ 今回は振替だけ
-- **C. 仕様文言**: §2 の案を spec-curator がそのまま正本へ反映してよいか（§B-2-2c 表の最終行を分割・§3「手動追加した生徒は振替ストックに
-  カウントしない」の注記に「休日設定・休みで返した分は出る」を追記）
+- **A. 適用範囲 → 全教室展開（フラグ無し）**。`featureRollout` に新フラグは切らない。`developmentStatusLedger` の行も
+  フラグ無しの作業中テーマとして置き、main マージで消す。
+- **B. 手動追加の講習 → 振替と同時に未消化講習へ返す**。§2-7 と §5-2 手順 1 の講習分岐・§5-3 T-6・§5-4 h-4 は**必須**。
+- **C. 仕様文言 → §2 の案をそのまま正本へ反映してよい**（§B-2-2c 表の最終行を分割・§B-3 に休日設定も同じ扱いの 1 行・
+  §3「手動追加した生徒は振替ストックにカウントしない」の注記に「休日設定・休みで返した分は出る」を追記・INV-06 行に経路追記）。
+  spec-curator は追加の承認を待たずに反映し、同一 push に含める。
 
 ---
 
@@ -116,7 +119,7 @@
 1. `reconcileHolidayDeskStockReturns` の params に `includeManualAddedLessons?: boolean`（既定 `false`）を足す。
    - `returnEntryToStock` の `if (!entry.manualAdded)` を `if (!entry.manualAdded || includeManualAddedLessons)` に。
      `returnedEntryIds.push` も同じ条件（全コマ削除は false のままなので希望回数 −1 の挙動は不変）。
-   - 判断 B が「返す」なら `special` 分岐も `specialStockSource === 'session' || (includeManualAddedLessons && entry.specialSessionId)` で
+   - `special` 分岐（判断 B＝返す・確定）も `specialStockSource === 'session' || (includeManualAddedLessons && entry.specialSessionId)` で
      同じ返却経路へ。`specialSessionId` 無しは `{ kind:'none' }` のまま。
    - コメントに「§B-3 と同根拠（実績カウントは manualAdded を含む）・2026-10-xx オーナー確定・INV-06」を残す（回帰防止アンカー）。
 2. 休日設定の呼び出し（`handleToggleHolidayDate` 内・約 10893〜10920 行）で `includeManualAddedLessons: true` を渡す。
@@ -132,7 +135,7 @@
 - T-3 手動追加 `makeup`（`makeupSourceDate` 無し）→ 当日 origin。手動追加 `extra` → 当日 origin。`trial` → `kind:'none'`。
 - T-4 同じ生徒×科目でテンプレ通常＋手動追加が同日に並ぶ → origin 2 件（dedupe されない）。
 - T-5 `includeManualAddedLessons` 省略（＝全コマ削除経路）→ 手動追加は従来どおり `kind:'none'`・`returnedEntryIds` に入らない（非回帰）。
-- T-6（判断 B＝返す）手動追加の講習 → `manualLectureStockCounts +1`・控え `kind:'lecture'`。`specialSessionId` 無し → 'none'。
+- T-6 手動追加の講習（判断 B 確定） → `manualLectureStockCounts +1`・控え `kind:'lecture'`。`specialSessionId` 無し → 'none'。
 
 `src/components/schedule-board/inv06-holiday-record-retention.matrix.test.ts` に追加:
 - T-7 往復: 手動追加 regular を休日設定 → 解除で台帳が設定前と完全一致・席へ戻る・`manualAdded:true` が保たれる。
@@ -147,7 +150,7 @@
   - h-1 開発用教室で営業日の空席に管理生徒を「生徒を追加」（通常）→ その日を休日設定 → 未消化振替にその生徒×科目が +1、盤面に「休)」が残る。
   - h-2 その日を休日解除 → 未消化が −1 で元に戻り、席にその生徒が戻る（手動追加のまま）。
   - h-3 同じ日を「その日の生徒を全コマ削除」→ 手動追加分は未消化に**入らない**（従来どおり）。
-  - （判断 B）h-4 手動追加の講習で h-1/h-2 を繰り返し、未消化講習が +1/−1。
+  - h-4（必須・判断 B 確定）手動追加の講習で h-1/h-2 を繰り返し、未消化講習が +1/−1。
 - `src/utils/developmentStatusLedger.ts`: 作業中は行 `holiday-return-manual-added`（stage に応じて）を置き、main マージ後に消す。
 - `CHANGELOG.md` `## 未リリース` に `feat: 休日設定で手動追加の通常/振替(/講習)も未消化へ返す（§B-3 と同根拠・#73・INV-06）`。
 - コミットメッセージに `INV-06` と `#73` を記載。
