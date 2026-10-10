@@ -14,14 +14,14 @@
 // GITHUB_STEP_SUMMARY / GITHUB_OUTPUT(report) に書く。
 
 import { appendFileSync } from 'node:fs'
+import { listMonitoredSites, loadCompanySites } from './company-sites.mjs'
 import { isInvokedDirectly } from './invoked-directly.mjs'
 
-const TARGETS = [
-  { name: 'prod', base: 'https://komahyouapp-prod.web.app' },
-]
+// 監視対象は tools/company-sites.json(会社ごとの Hosting サイト一覧・P-3・2026-10-10)から組み立てる。
+// 本番は monitor:true の会社すべて(main = https://komahyouapp-prod.web.app は従来どおり)。
 // staging も監視したい場合は MONITOR_STAGING=1 を渡す。
-if ((process.env.MONITOR_STAGING || '').trim() === '1') {
-  TARGETS.push({ name: 'staging', base: 'https://komahyouapp-staging.web.app' })
+export function buildTargets({ monitorStaging = false } = {}, sites = loadCompanySites()) {
+  return listMonitoredSites(sites, { includeStaging: monitorStaging }).map(({ name, base }) => ({ name, base }))
 }
 
 const TIMEOUT_MS = 15000
@@ -111,7 +111,8 @@ export function buildReport(results) {
 }
 
 async function main() {
-  const results = await Promise.all(TARGETS.map((t) => checkTarget(t)))
+  const targets = buildTargets({ monitorStaging: (process.env.MONITOR_STAGING || '').trim() === '1' })
+  const results = await Promise.all(targets.map((t) => checkTarget(t)))
   const { lines, report, allOk } = buildReport(results)
   console.log(report)
 

@@ -589,12 +589,48 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 
 ---
 
+## 12. Phase 2 追補：会社ごとの Hosting サイトと配信（2026-10-10 実装・§7-6/§7-7 の詳細化・計画 plan-2026-09-18 P-3/P-4）
+
+### 12-1. 会社サイト一覧と Hosting target（P-3・T2-1）
+
+- **正本は `tools/company-sites.json`** 1 ファイル（会社キー → プロジェクトごとの `siteId`・`url`・`monitor`）。
+  `.firebaserc` の **hosting target 名 = 会社キー**（`targets.<projectId>.hosting.<会社キー> = [siteId]`）、`firebase.json` の
+  `hosting` は**会社ごとに 1 要素の配列**（`target` 以外の中身は `main` と同一）。整合は `tools/company-sites.test.mjs` が
+  CI で検査する（JSON に足したのに target が無い／hosting 要素の中身が会社ごとにズレた、を止める）。
+- 既存運営会社 `main` は `komahyouapp-prod.web.app`／`komahyouapp-staging.web.app` のまま（配布済み QR・共有リンク・
+  保護者ページの URL は不変）。旧 target 名 `default` は廃止。
+- **`--only hosting` だけで配信しない**（配列化により全会社のサイトへ同じ dist が出る）。既存の自動デプロイ
+  `deploy-firebase-hosting.yml`・staging の `deploy-staging.yml`・`tools/deploy-firebase.mjs` は `hosting:main` を明示する
+  （計画 §3 の「既存ワークフロー無改変」はこの 1 語だけ例外。理由は上）。
+- ライブ検証 `tools/verify-firebase-hosting.mjs` は `--company <会社キー>`（既定 `main`）で一覧からサイト URL を引く
+  （`--site` が最優先・未登録の会社は例外）。外形監視 `tools/uptime-check.mjs` は `monitor: true` の会社の本番サイトを
+  すべて監視し、`MONITOR_STAGING=1` で staging も足す（`buildTargets`）。
+- 会社を足す手順（runbook `docs/runbooks/company-onboarding.md`）: Firebase コンソールで Hosting サイト
+  `komahyou-<会社キー>` を作る → JSON に 1 行 → `.firebaserc` の両プロジェクトに target → `firebase.json` の hosting に
+  `main` の要素を複製して `target` だけ変える → CI 緑。
+
+### 12-2. 会社ごとの配信 CI（P-4・T2-2 の単一リポ版）
+
+- `.github/workflows/deploy-company-hosting.yml`（**手動 `workflow_dispatch` のみ**・入力 = 会社キー・配信先プロジェクト）。
+  **bump なし・functions/rules なし**・`--only hosting:<会社キー>`。版番号はコア版のまま（`version.json` は `package.json`
+  の値。会社版 `companyVersion` は空 = `formatAppVersionLabel` はコア版だけを返す）。
+- Secret は会社キー付き: `FIREBASE_WEB_ENV_<会社キー>`（本番）／`STAGING_FIREBASE_WEB_ENV_<会社キー>`（staging）。
+  中身は `.env` 形式で **`VITE_FIREBASE_WORKSPACE_KEY=<会社キー>` と `VITE_COMPANY_KEY=<会社キー>`** を含める。
+- **fail-closed の前提検査 `tools/company-deploy-guard.mjs`**（`company-deploy-guard.test.mjs`）: 会社キーの命名規則・
+  `main` の拒否（既存運営会社は自動デプロイ側）・`src/company/profiles/<会社キー>.ts` と登録簿・会社サイト一覧・
+  `.firebaserc` target・`firebase.json` 要素・secret の env（workspace／会社キー／projectId の一致・`local` でない）。
+  どれか 1 つでも欠けたらビルド前に止まる。その後 `vite.config.ts` の会社ガード（§11-1）→ 配信 → `verify --company`。
+- 既存運営会社（`main`）の配信経路（`deploy-firebase-hosting.yml`・自動 bump・functions/rules は別ワークフロー）は不変。
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-10-10 | §12 Phase 2 追補（P-3 会社サイト一覧 `tools/company-sites.json`・hosting target = 会社キー・`hosting:main` 明示・verify/uptime の複数サイト対応／P-4 会社ごとの配信 CI `deploy-company-hosting.yml` と前提検査 `company-deploy-guard.mjs`）。 |
 | 2026-10-10 | §11-1 を P-1/P-2（計画 plan-2026-09-18 §3）に合わせて改定: 会社ごとの値は `src/company/profiles/<会社キー>.ts`、env `VITE_COMPANY_KEY` で選択（未登録は fail-closed・ビルド時も検査）、`displayName`=会社名「株式会社アーチ」と `brandName`=「スクールIE」を分離（D-6）、タブ名を `<アプリ名>_<場面>` に確定（D-7）し Phase 2 の宿題を閉じた。 |
 | 2026-09-18 | §11 Phase 1 追補（会社レイヤ T1-1〜T1-5 の詳細化: プロファイル・機能スイッチ 2 段解決とコア台帳・役割名辞書の対象一覧・帳票フック 6 項目・画面フック）。§7 の確定値は不変。既定値で出力不変。 |
 | 2026-09-18 | regression-reviewer 監査の反映: §11-1 に companyKey と env の一致検査・`index.html` の宿題、§11-2 に会社既定 'on' と段階公開の制約、§11-3 の対象外を追記、§11-4 にヘッダ差替の副作用と対象外、§9 の台帳件数を 12 件に訂正。INV 候補 C1 の採否は Phase 2 着手前にオーナー確定が必要（§10-4）。 |

@@ -1,5 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { loadCompanySites, resolveCompanySite } from './company-sites.mjs'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 function parseArgs(argv) {
   const result = {}
@@ -137,10 +139,20 @@ async function verifyOnce({ siteUrl, distDir }) {
   }
 }
 
+// 検証するサイト URL の決め方(P-3・2026-10-10・会社ごとの Hosting サイト):
+//   --site <url> が最優先 → --company <会社キー>(既定 main)を tools/company-sites.json でプロジェクトごとに引く。
+//   会社が未登録なら例外(別会社の URL を黙って検証しない)。main は従来どおり https://<projectId>.web.app。
+export function resolveSiteUrl({ site, project, company }, sites = loadCompanySites()) {
+  const explicit = typeof site === 'string' ? site.trim() : ''
+  if (explicit) return explicit
+  const projectId = (typeof project === 'string' && project.trim()) || readDefaultProjectId() || 'komahyouapp-prod'
+  const companyKey = (typeof company === 'string' && company.trim()) || 'main'
+  return resolveCompanySite(sites, companyKey, projectId).url
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
-  const projectId = args.project?.trim() || readDefaultProjectId() || 'komahyouapp-prod'
-  const siteUrl = args.site?.trim() || `https://${projectId}.web.app`
+  const siteUrl = resolveSiteUrl({ site: args.site, project: args.project, company: args.company })
   const distDir = args.dist?.trim() || 'dist'
   const retries = Math.max(0, Number(args.retries ?? '20'))
   const retryDelayMs = Math.max(250, Number(args.retryDelayMs ?? '3000'))
@@ -163,7 +175,9 @@ async function main() {
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exitCode = 1
-})
+if (isInvokedDirectly(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+  })
+}
