@@ -41,6 +41,14 @@ describe('確認リストパネルの配線(App.tsx)', () => {
 })
 
 describe('確認リストパネル本体', () => {
+  it('生徒名は App が開いている教室の生徒データから差し込む(ソースに実名を置かない・2026-10-10)', () => {
+    expect(APP_TSX).toContain('resolveStudentName={resolveVerificationChecklistStudentName}')
+    expect(APP_TSX).toContain('const student = students.find((row) => row.id === studentId)')
+    expect(PANEL_TSX).toContain('resolveVerificationChecklistText')
+    expect(PANEL_TSX).toContain('resolveStudentName')
+    for (const field of ['item.title', 'item.prep', 'step', 'line']) expect(PANEL_TSX).toContain(`{text(${field})}`)
+  })
+
   it('下書きは localStorage、送信は props 経由(独自の保存先・直送を作らない)', () => {
     expect(PANEL_TSX).toContain('window.localStorage')
     expect(PANEL_TSX).not.toMatch(/\bfetch\(/u)

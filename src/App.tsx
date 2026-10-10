@@ -1916,6 +1916,12 @@ function AuthenticatedApp() {
     if (!submit) return { ok: false as const, error: '送信の準備ができていません。' }
     return submit({ source: 'board', category: 'request', note })
   }, [])
+  // 確認リストの文面の `{{student:<生徒ID>}}` を、開いている教室(開発用教室)の生徒データの名前にする
+  // (2026-10-10 オーナー指示「開発用教室は名前を見ていいので、確認リストに生徒名を表示して」)。ソースに実名は置かない。
+  const resolveVerificationChecklistStudentName = useCallback((studentId: string) => {
+    const student = students.find((row) => row.id === studentId)
+    return student ? (student.displayName || student.name) : null
+  }, [students])
   const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
     // A1: 版数衝突(別端末が先に更新)で停止中は、全画面共通の警告バナーで再読み込みを促す。
     const staleConflictBanner = hasRemoteStaleConflict ? (
@@ -1947,6 +1953,7 @@ function AuthenticatedApp() {
         classroomId={actingClassroomId}
         classroomName={actingClassroom?.name}
         onSubmitNote={submitVerificationChecklistNote}
+        resolveStudentName={resolveVerificationChecklistStudentName}
       />
     ) : null
 
@@ -2019,7 +2026,7 @@ function AuthenticatedApp() {
         ) : null}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, resolveVerificationChecklistStudentName, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
