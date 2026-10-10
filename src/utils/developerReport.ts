@@ -65,30 +65,35 @@ export const DEVELOPER_REPORT_UI_TEXT = {
   /** ボタン名・モーダル題名（オーナー確定 2026-09-04: 「開発者へ報告」→「要望・報告」／2026-09-14: →「質問・要望」） */
   title: '質問・要望',
   /** ボタンのツールチップ（盤面ツールバーと日程表タブで共用） */
-  buttonTooltip: '使い方の質問も、追加してほしい要望も、「おかしいな」と思ったことも、そのまま開発者へ送れます',
-  description: (classroomName: string) =>
-    `使い方の質問も、「こうしてほしい」という要望も、「おかしいな」と思ったことも、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
+  buttonTooltip: '質問も要望も、気になったこともそのまま送れます',
+  /** 2026-10-10 文言見直し(オーナー確定 #459): 短縮し教室名の差し込みをやめた。引数は呼び出し側との互換のため残す。 */
+  description: (_classroomName: string) =>
+    '質問も「こうしてほしい」も「おかしいな」も、そのまま送ってください。直近の操作と画面のデータが一緒に届きます。',
   categoryLabel: '種類',
-  /** 並びは 質問 → 要望 → 不具合（オーナー指示 2026-09-14）。モーダルを開いたときは先頭(質問)が選ばれている。 */
+  /**
+   * 並びは 質問 → 要望 → 不具合（オーナー指示 2026-09-14）。モーダルを開いたときは先頭(質問)が選ばれている。
+   * label は**表示だけ**(2026-10-10 文言見直し #461/#462 で短縮)。保存・送信・Issue/メールの種別は value(bug/request/question)で、
+   * 開発者向けメール件名・Issue 本文の種別名(functions/src/developerReport.ts・tools/developer-report-notify.mjs の CATEGORY_LABELS)は別管理。
+   */
   categoryOptions: [
     { value: 'question', label: '使い方の質問' },
-    { value: 'request', label: '追加してほしい・要望' },
-    { value: 'bug', label: '不具合・おかしい' },
+    { value: 'request', label: '要望' },
+    { value: 'bug', label: '不具合' },
   ] as ReadonlyArray<{ value: DeveloperReportCategory; label: string }>,
   noteLabel: '内容（必須）',
-  placeholder: '例: 9/3(水) 3限、田中先生の机で、青木さんの振替(数学)を移動したら未消化に戻らなかった ／ 講師日程表にも電話番号の欄がほしい ／ 休みにした生徒の振替先を後から変えるには？',
+  placeholder: '例: 体験生徒を追加する方法は？',
   /** 入力のヒント(オーナー指示 2026-09-04): 詳細を書いてもらうほど開発者の確認精度が上がることを伝える。 */
-  inputHint: '生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか(期待した結果との違い)を具体的に書いていただくと、確認の精度が上がります。',
+  inputHint: '生徒名・日付・何限・どうしたら何が起きたかを書いていただくと、調べやすくなります。',
   /** 質問(question)を選んだときだけ出す注意文（spec §G-2・2026-09-13）: 即答の期待を作らない。自動返信はしない。 */
   questionNotice: '回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。',
   /** AI 即時回答が有効な教室(開発用教室のみ・spec §G-7)で、質問を選んだときに出す注意文。 */
-  questionNoticeAi: '【試験中】送信すると、AI がマニュアルをもとにその場で回答します（誤りがあり得ます）。質問は開発者にも届きます。',
-  requiredError: '内容を入力してください。何がおかしいか・何をしてほしいかが分からないと、開発者が調べられません。',
+  questionNoticeAi: '【試験中】送信すると、その場で自動の回答が出ます（誤りがあることがあります）。内容は開発者にも届きます。',
+  requiredError: '内容を入力してください。何が起きたか・何をしてほしいかを書いてください。',
   cancel: 'キャンセル',
   submit: '送信する',
   sending: '送信中…',
   /** AI 即時回答を待っている間の送信ボタン文言 */
-  sendingAi: '送信中…（AI が回答を作成しています）',
+  sendingAi: '送信中…（回答を作成しています）',
   close: '閉じる',
 } as const
 
@@ -204,16 +209,21 @@ export type DeveloperReportSubmitResult =
   | { ok: true; reportId: string; isTest?: boolean; aiAnswer?: string; aiAnswerError?: string }
   | { ok: false; error: string }
 
-export const DEVELOPER_REPORT_AI_ANSWER_HEADING = '――― AI の自動回答（試験中・誤りがあり得ます）―――'
+export const DEVELOPER_REPORT_AI_ANSWER_HEADING = '― 自動回答（試験中・誤りがあることがあります）―'
+
+/** AI 即時回答が作れなかったときに室長へ出す一文。理由は含めない(開発者向けの理由は報告文書 aiAnswerError に残る)。 */
+export const DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE = '（自動回答を作れませんでした。開発者が確認してから回答します）'
 
 /** 送信結果を利用者向けの1文にする（盤面モーダル・日程表タブのモーダルで共用）。 */
 export function formatDeveloperReportResultMessage(result: DeveloperReportSubmitResult): string {
   if (result.ok) {
     const head = result.isTest
-      ? `テストとして受け付けました（受付番号 ${result.reportId}）。開発者への課題登録は行いません。`
+      ? `テストとして受け付けました（受付番号 ${result.reportId}）。`
       : `開発者へ送りました（受付番号 ${result.reportId}）。ありがとうございます。`
-    if (result.aiAnswer) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_HEADING}\n${result.aiAnswer}\n\n解決しない場合は、開発者が確認してから改めて回答します。`
-    if (result.aiAnswerError) return `${head}\n\n（AI の自動回答は作れませんでした: ${result.aiAnswerError}。開発者が確認してから回答します）`
+    if (result.aiAnswer) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_HEADING}\n${result.aiAnswer}\n\nこれで解決しない場合は、開発者が確認して改めて回答します。`
+    // 失敗理由(aiAnswerError)は室長へ出さない(2026-10-10 文言見直し #473)。理由は開発者向けに報告文書の aiAnswerError・
+    // 関数ログ・操作痕跡(App.tsx の recordOperationTrace)へ残り、開発ダッシュボードで読める。
+    if (result.aiAnswerError) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE}`
     return head
   }
   return `送れませんでした: ${result.error}\n時間をおいて再度お試しください。`

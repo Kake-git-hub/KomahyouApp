@@ -62,7 +62,7 @@ export type BoardSharePayloadInput = Omit<BoardSharePayload, 'cells'> & {
 const BOARD_SHARE_GZIP_ENCODING = 'gzip-base64'
 
 // Firestore の 1 ドキュメント上限は約 1MiB。週を多く蓄積した盤面では cells がこれを
-// 超えて setDoc がサイレント失敗し「配布用盤面が見つかりません」になる。盤面セルは
+// 超えて setDoc がサイレント失敗し「コマ表が見つかりません」になる。盤面セルは
 // 反復構造が多く gzip で 1 割以下に圧縮できるため、cells を圧縮して保存する。
 type StoredBoardShareDoc = {
   schemaVersion: 1
@@ -119,7 +119,7 @@ async function gzipTextToBase64(text: string) {
 async function gunzipBase64ToText(value: string) {
   const DecompressionStreamClass = getDecompressionStreamConstructor()
   if (!DecompressionStreamClass) {
-    throw new Error('このブラウザは配布用盤面の圧縮データ読込に未対応です。最新の Chrome / Edge / Safari でお試しください。')
+    throw new Error('このブラウザでは表示できません。Chrome か Edge の最新版で開いてください。')
   }
   const stream = new Blob([base64ToBytes(value)]).stream().pipeThrough(new DecompressionStreamClass('gzip'))
   const buffer = await new Response(stream).arrayBuffer()

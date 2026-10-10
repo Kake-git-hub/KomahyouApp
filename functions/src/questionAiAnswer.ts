@@ -9,7 +9,7 @@
 //  - モデルは Claude Sonnet 最新(オーナー確定 2026-09-14)。**Claude on Google Cloud(Vertex AI)経由**で呼ぶ
 //    (オーナー指示 2026-09-14「請求先を増やしたくない」＝GCP の請求にまとめる)。API キーは使わない:
 //    Cloud Functions の実行サービスアカウント(ADC)で認証し、プロジェクトは実行中の GCP プロジェクト。
-//    Vertex AI API 未有効・モデル未有効化・権限不足のときは、その旨を短く返す(報告本体は成功のまま)。
+//    Vertex AI API 未有効・モデル未有効化・権限不足のときは、その旨を短く返す(報告本体は成功のまま。理由は開発者向けの記録だけで、室長の画面には出さない)。
 //  - 回答文の制約は §G-4 の基準に合わせる(個別教室の中身・約束・料金・不可逆操作の指示・個人情報を書かない)。
 //
 // この 1 ファイルは SDK 呼び出し以外を純関数に保ち、テストで固定する。
@@ -111,7 +111,12 @@ export type QuestionAiAnswerResult =
   | { ok: true; answer: string; model: string; inputTokens: number; outputTokens: number }
   | { ok: false; error: string }
 
-/** 利用者へ見せてよい失敗理由に丸める(内部のスタックや鍵の断片を出さない)。 */
+/**
+ * 失敗理由を**開発者向けの短文**に丸める(内部のスタックや鍵の断片を出さない)。
+ * 2026-10-10 文言見直し(#473〜#479): この理由は室長の画面には出さない(結果画面は「自動回答を作れませんでした」だけ・
+ * src/utils/developerReport.ts formatDeveloperReportResultMessage)。報告文書の aiAnswerError・関数ログ・開発ダッシュボードで
+ * 原因(権限・モデル未有効化・割り当て上限など)を追えるよう、設定の手がかりになる文面のまま残す。
+ */
 export function describeQuestionAiError(error: unknown): string {
   if (error instanceof Anthropic.AuthenticationError) return 'AI(Vertex AI)の認証に失敗しました'
   if (error instanceof Anthropic.PermissionDeniedError) return 'Vertex AI の権限がありません(API の有効化・実行サービスアカウントの権限を確認してください)'

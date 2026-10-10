@@ -265,8 +265,8 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <div className="basic-data-header">
             <div>
               <p className="panel-kicker">バックアップ/復元/初期設定</p>
-              <h2>データ保全と運用開始準備</h2>
-              <p className="page-summary">バックアップと復元に加えて、初期設定フローと運用中の Excel 管理ツールを分けて配置しています。開始準備と日々の更新を混同しないための画面です。</p>
+              <h2>バックアップと初期設定</h2>
+              <p className="page-summary">バックアップ／復元、初期設定、Excel 管理をまとめています。</p>
             </div>
           </div>
 
@@ -274,7 +274,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <section className="basic-data-section-card">
               <div className="basic-data-card-head">
                 <h3>手動バックアップ</h3>
-                <p>現在の画面状態と各種データを JSON で書き出します。</p>
+                <p>いまのデータをファイルに書き出します。</p>
               </div>
               <div className="basic-data-form-grid">
                 <div className="toolbar-status">最終自動保存: {formatSavedAt(lastSavedAt)}</div>
@@ -284,7 +284,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <section className="basic-data-section-card">
               <div className="basic-data-card-head">
                 <h3>復元</h3>
-                <p>書き出した JSON を読み込み、現在の状態へ復元します。</p>
+                <p>書き出したファイルを読み込んで元に戻します。</p>
               </div>
               <div className="basic-data-form-grid">
                 <button className="secondary-button slim" type="button" onClick={() => backupImportRef.current?.click()} data-testid="backup-restore-import-button">バックアップを読み込む</button>
@@ -294,7 +294,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               <section className="basic-data-section-card" data-testid="backup-restore-self-restore-panel">
                 <div className="basic-data-card-head">
                   <h3>サーバーバックアップから復元(直近{MANAGER_SELF_RESTORE_WINDOW_DAYS}日)</h3>
-                  <p>サーバーが自動で取っているバックアップ(直近24時間は15分毎、それ以前は間引き)から時点を選び、いま開いているこの教室だけを戻します。実行前に確認画面が出ます。読み込み後に盤面で確認し、「保存」で確定します。{MANAGER_SELF_RESTORE_WINDOW_DAYS}日より前へ戻したいときは開発者へ依頼してください。</p>
+                  <p>自動で取っているバックアップから時点を選び、いま開いている教室を戻します（直近{MANAGER_SELF_RESTORE_WINDOW_DAYS}日分）。実行前に確認画面が出ます。読み込み後に盤面で確認し、「保存」で確定します。{MANAGER_SELF_RESTORE_WINDOW_DAYS}日より前へ戻したいときは開発者へ依頼してください。</p>
                 </div>
                 <div className="basic-data-form-grid">
                   <button
@@ -503,7 +503,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="ongoing-excel-tools-panel" style={{ display: 'none' }}>
             <div className="basic-data-card-head">
               <h3>運用中の Excel 管理と追加ツール</h3>
-              <p>初期設定後の更新で使う管理データ差分取り込みと、関連 Excel ツールをここにまとめています。</p>
+              <p>運用開始後に使う差分取り込みと Excel ツールです。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
@@ -521,7 +521,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <section className="basic-data-editor-block basic-data-inline-stack">
               <div className="basic-data-card-head">
                 <h3>追加ツール</h3>
-                <p>特別講習データと自動割振ルールの Excel 管理もこの画面へ集約しています。</p>
               </div>
               <div className="backup-restore-grid">
                 <section className="basic-data-inline-stack">

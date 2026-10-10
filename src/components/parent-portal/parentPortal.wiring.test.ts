@@ -264,5 +264,8 @@ describe('保護者向け固定QRの配線(main.tsx)', () => {
     const parentBranchBody = MAIN_TSX.slice(parentBranch, boardShareBranch)
     expect(parentBranchBody).not.toContain('applySubmissionViewport()')
     expect(parentBranchBody).toContain('<ParentPortalPage token={parentPortalToken} />')
+    // 読み込み中の三点リーダは全角(2026-10-10 文言整理・ページ本体の PARENT_PORTAL_LOADING_MESSAGE と同じ)。
+    expect(parentBranchBody).toContain('読み込み中…</div>')
+    expect(parentBranchBody).not.toContain('読み込み中...')
   })
 })

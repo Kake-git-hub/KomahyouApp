@@ -297,7 +297,11 @@ type FirebaseAppSnapshotPayload = Omit<AppSnapshotPayload, 'boardState'> & {
 
 function requireFirestore() {
   const firestore = getFirebaseFirestoreInstance()
-  if (!firestore) throw new Error('Firebase 設定が不足しています。 .env に接続情報を設定してください。')
+  if (!firestore) {
+    // 開発者向けの原因(画面には出さない): Firebase の接続情報(.env の VITE_FIREBASE_*)が未設定。
+    console.error('[workspaceStore] Firestore を初期化できません。.env の Firebase 接続情報を確認してください。')
+    throw new Error('接続設定がされていません。開発者へご連絡ください。')
+  }
   return firestore
 }
 
@@ -386,7 +390,7 @@ function getDecompressionStreamConstructor() {
 async function gunzipBase64ToText(value: string) {
   const DecompressionStreamClass = getDecompressionStreamConstructor()
   if (!DecompressionStreamClass) {
-    throw new Error('このブラウザは Firebase 圧縮スナップショット読込に未対応です。Chrome / Edge の最新版で再度お試しください。')
+    throw new Error('このブラウザでは開けません。Chrome か Edge の最新版でお使いください。')
   }
 
   const stream = new Blob([fromBase64(value)]).stream().pipeThrough(new DecompressionStreamClass('gzip'))
@@ -604,7 +608,9 @@ async function loadWorkspaceMembership(firestore: Firestore, authenticatedUserId
   const membershipRef = doc(getMembersCollection(firestore), authenticatedUserId)
   const membershipSnapshot = await getDoc(membershipRef)
   if (!membershipSnapshot.exists()) {
-    throw new Error('このユーザーは対象ワークスペースに紐付いていません。Firestore の members コレクションを確認してください。')
+    // 開発者向けの原因(画面には出さない): workspaces/{key}/members/{uid} が無い。
+    console.error(`[workspaceStore] members ドキュメントがありません: workspaceKey=${getFirebaseBackendConfig().workspaceKey} uid=${authenticatedUserId}`)
+    throw new Error('このアカウントはこの教室に登録されていません。開発者へご連絡ください。')
   }
 
   return membershipSnapshot.data() as FirebaseWorkspaceMemberDoc
@@ -618,7 +624,9 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
   const workspaceRef = getWorkspaceRef(firestore)
   const workspaceSnapshot = await getDoc(workspaceRef)
   if (!workspaceSnapshot.exists()) {
-    throw new Error('対象 workspace が Firestore に見つかりません。docs/firebase-backend.md の初期セットアップを確認してください。')
+    // 開発者向けの原因(画面には出さない): workspaces/{key} が無い。docs/firebase-backend.md の初期セットアップを確認する。
+    console.error(`[workspaceStore] workspace ドキュメントがありません: workspaceKey=${getFirebaseBackendConfig().workspaceKey}`)
+    throw new Error('教室データが見つかりません。開発者へご連絡ください。')
   }
 
   const membership = await loadWorkspaceMembership(firestore, params.authenticatedUserId)

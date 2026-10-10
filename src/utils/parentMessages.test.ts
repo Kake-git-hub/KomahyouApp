@@ -169,7 +169,10 @@ describe('formatParentAbsenceLessonLabel / 四択の定義', () => {
   })
   it('再通知の注意文は盤面を変える 3 種だけ(何もしない・未選択は空)。「保存されなかった」と断定しない', () => {
     expect(buildParentAbsenceUnsavedNote('absent')).toContain('「休み」')
-    expect(buildParentAbsenceUnsavedNote('makeup-now')).toContain('保存された盤面で確認が取れなかった')
+    expect(buildParentAbsenceUnsavedNote('makeup-now')).toContain('保存された盤面で確認できなかったため、もう一度表示しています。')
+    // 文言整理(オーナー確定 2026-10): 「確認が取れなかった」「盤面を確認して選び直してください」は出さない。
+    expect(buildParentAbsenceUnsavedNote('makeup-now')).not.toContain('確認が取れなかった')
+    expect(buildParentAbsenceUnsavedNote('makeup-now')).not.toContain('選び直してください')
     // 保存はできていても確認が取れない経路(ログアウト直前の保存・盤面の「元に戻す」)があるので断定しない(レビュー指摘 2026-09-19)。
     expect(buildParentAbsenceUnsavedNote('makeup-now')).not.toContain('保存されなかった')
     expect(buildParentAbsenceUnsavedNote('manual')).toBe('')

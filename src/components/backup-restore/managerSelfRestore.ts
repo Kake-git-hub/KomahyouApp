@@ -60,7 +60,7 @@ export type ManagerSelfRestoreGuardResult = { ok: true } | { ok: false; message:
 // (サーバー側 downloadClassroomFromServerAutoBackup も開発者を許可している)。
 export function resolveManagerSelfRestoreGuard(input: ManagerSelfRestoreGuardInput): ManagerSelfRestoreGuardResult {
   if (!input.featureEnabled) return { ok: false, message: 'この教室ではサーバーバックアップからの復元はまだ使えません。' }
-  if (!input.isRemoteBackendEnabled) return { ok: false, message: 'Firebase が無効のため、サーバーバックアップから復元できません。' }
+  if (!input.isRemoteBackendEnabled) return { ok: false, message: '接続できないため、バックアップから復元できません。' }
   const acting = (input.actingClassroomId ?? '').trim()
   const target = (input.targetClassroomId ?? '').trim()
   if (!acting || !target) return { ok: false, message: '復元する教室を確認できませんでした。盤面を開き直してからもう一度お試しください。' }

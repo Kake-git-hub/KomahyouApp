@@ -171,17 +171,13 @@ export default function SubmissionPage({ token, debug = false }: { token: string
 
   const isIOS = useMemo(() => detectIOS(), [])
   const isAndroid = useMemo(() => detectAndroid(), [])
-  // 検出プラットフォームの確定補正値(本番で実際に使う値)。iOS / Android / その他(無補正)。
+  // 検出プラットフォームの確定補正値(本番で実際に使う値)。iOS / Android / その他(補正なし)。
   const platformViewportWidth = isIOS ? IOS_VIEWPORT_WIDTH : isAndroid ? ANDROID_VIEWPORT_WIDTH : null
   const platformZoom = isIOS ? IOS_ZOOM : isAndroid ? ANDROID_ZOOM : 1
 
-  // デバッグ時はパネルでライブ調整する初期値(検出プラットフォームの確定値から開始)。
-  const [debugViewportWidth, setDebugViewportWidth] = useState<number | null>(platformViewportWidth)
-  const [debugZoom, setDebugZoom] = useState<number>(platformZoom)
-
-  // 実際に適用する補正値: デバッグ時はパネル値、本番は検出プラットフォームの確定値。
-  const viewportWidthOverride = debug ? debugViewportWidth : platformViewportWidth
-  const zoomOverride = debug ? debugZoom : platformZoom
+  // 実際に適用する補正値: 検出プラットフォームの確定値(実機調整パネルは 2026-10 に廃止)。
+  const viewportWidthOverride = platformViewportWidth
+  const zoomOverride = platformZoom
   const containerStyle = zoomOverride !== 1 ? ({ zoom: zoomOverride } as CSSProperties) : undefined
   // iOS/Android 共通: コンテナ全体を zoom 0.7 で縮めつつ、出席不可コマの表だけは逆ズーム(1/zoom)で
   // 打ち消して画面全幅に戻す(オーナー要望 2026-07-19: iOS も Android と同じく表を全幅にする。
@@ -193,7 +189,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
 
   // Lock viewport scale for mobile.
   // 本番(iOS)の初回幅は main.tsx が初回ペイント前に同期適用済み。この effect は
-  // デバッグ画面でのライブ調整と、念のための再適用を担う。
+  // 念のための再適用を担う。
   useEffect(() => {
     const meta = document.querySelector('meta[name="viewport"]')
     if (!meta) return
@@ -235,9 +231,9 @@ export default function SubmissionPage({ token, debug = false }: { token: string
         const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`)
         if (!response.ok) {
           if (response.status === 404) {
-            setError('このリンクは無効です。管理者にお問い合わせください。')
+            setError('このQRは無効です。教室へお問い合わせください。')
           } else {
-            setError('データの読み込みに失敗しました。')
+            setError('読み込めませんでした。少し待ってから開き直してください。')
           }
           return
         }
@@ -399,57 +395,6 @@ export default function SubmissionPage({ token, debug = false }: { token: string
 
   if (!data) return null
 
-  // 実機デバッグ用パネル(#/submit-debug のときだけ表示)。
-  // 拡縮中の補正値を画面外(zoom 非適用)に固定表示し、値をコピーできるようにする。
-  // ここで求めた値を上部の IOS_VIEWPORT_WIDTH / IOS_ZOOM に反映すると本番 iOS に適用される。
-  // 検出プラットフォームに応じて、調整値をどの定数へ反映すべきかを示す(iosViewport.ts)。
-  const debugPlatform = isIOS ? 'iOS' : isAndroid ? 'Android' : 'その他'
-  const widthConstName = isAndroid ? 'ANDROID_VIEWPORT_WIDTH' : 'IOS_VIEWPORT_WIDTH'
-  const zoomConstName = isAndroid ? 'ANDROID_ZOOM' : 'IOS_ZOOM'
-  const readout = `${widthConstName} = ${debugViewportWidth === null ? 'null' : Math.round(debugViewportWidth)} / ${zoomConstName} = ${debugZoom.toFixed(2)}`
-  const debugPanel = debug ? (
-    <div className="sub-dbg">
-      <div className="sub-dbg-head">表示調整（デバッグ・{debugPlatform}）</div>
-      <div className="sub-dbg-readout">{readout}</div>
-      <div className="sub-dbg-info">
-        innerWidth={typeof window !== 'undefined' ? window.innerWidth : '-'} / dpr={typeof window !== 'undefined' ? window.devicePixelRatio : '-'} / screen={typeof window !== 'undefined' ? window.screen?.width : '-'}
-      </div>
-
-      <div className="sub-dbg-row">
-        <span className="sub-dbg-label">幅(width)</span>
-        <input
-          type="range" min={300} max={520} step={1}
-          value={debugViewportWidth ?? 393}
-          onChange={(e) => setDebugViewportWidth(parseInt(e.target.value, 10))}
-        />
-        <span className="sub-dbg-val">{debugViewportWidth === null ? '無補正' : Math.round(debugViewportWidth)}</span>
-      </div>
-      <div className="sub-dbg-presets">
-        <button type="button" onClick={() => setDebugViewportWidth(null)}>無補正</button>
-        <button type="button" onClick={() => setDebugViewportWidth(360)}>360</button>
-        <button type="button" onClick={() => setDebugViewportWidth(393)}>393</button>
-        <button type="button" onClick={() => setDebugViewportWidth(412)}>412</button>
-      </div>
-
-      <div className="sub-dbg-row">
-        <span className="sub-dbg-label">zoom</span>
-        <input
-          type="range" min={0.7} max={1.3} step={0.01}
-          value={debugZoom}
-          onChange={(e) => setDebugZoom(parseFloat(e.target.value))}
-        />
-        <span className="sub-dbg-val">{debugZoom.toFixed(2)}</span>
-      </div>
-      <div className="sub-dbg-presets">
-        <button type="button" onClick={() => setDebugZoom(1)}>zoom=1</button>
-        <button
-          type="button"
-          onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(readout).catch(() => {}) }}
-        >値をコピー</button>
-      </div>
-    </div>
-  ) : null
-
   // spec-group-lesson §E: 1限の左に集団授業(集理/集社)の2列を出す。中3かつ盤面に集団コマがある場合のみ。
   // 出欠選択の対象ではなく、生徒日程表と同じく盤面の集団コマを案内表示する読み取り専用列。
   const groupClassSlots = data.groupClassSlots ?? {}
@@ -497,7 +442,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           <span className="sub-submitted-check">✓</span>
           <div className="sub-submitted-text">
             <div className="sub-submitted-title">{loadedAsSubmitted ? 'すでに提出済みです' : '提出が完了しました'}</div>
-            <div className="sub-submitted-sub">以下の内容で提出されています（閲覧のみ・編集はできません）</div>
+            <div className="sub-submitted-sub">以下の内容で提出済みです（変更はできません）</div>
           </div>
         </div>
 
@@ -562,7 +507,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           </div>
           {viewReopenedSlots.size > 0 && (
             <div className="sub-reopened-note" data-testid="sub-reopened-note">
-              <span className="sub-reopened-swatch" />黄色のコマは、提出後に教室で「出席可能」に変更されたコマです
+              <span className="sub-reopened-swatch" />黄色は出席可能に変更したコマです。
             </div>
           )}
         </section>
@@ -639,7 +584,6 @@ export default function SubmissionPage({ token, debug = false }: { token: string
 
         <style>{baseStyles}</style>
       </div>
-      {debugPanel}
       </>
     )
   }
@@ -681,7 +625,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           <span className="sub-muted">不可: <strong>{totalUnavailable}</strong>コマ</span>
         </div>
         <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 26, lineHeight: 1.45 }}>
-          出席できないコマをタップしてください。日付をタップすると終日不可になります。
+          出席できないコマをタップしてください。
         </p>
 
         <div className="sub-table-wrap" style={tableWrapStyle}>
@@ -815,7 +759,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           <div className="sub-section-head">
             <span className="sub-section-title">集団授業（中3）</span>
           </div>
-          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>参加する科目に<strong>チェック</strong>を入れてください（未チェックは不参加）。</p>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>参加する科目に<strong>チェック</strong>を入れてください。</p>
           <div className="sub-subject-list">
             {data.availableGroupClassSubjects!.map((subject) => {
               const participate = groupClassParticipation[subject] === true
@@ -841,7 +785,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           <div className="sub-section-head">
             <span className="sub-section-title">オプション</span>
           </div>
-          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>希望する項目に<strong>チェック</strong>を入れてください（未チェックはなし）。</p>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>希望する項目に<strong>チェック</strong>を入れてください。</p>
           <div className="sub-subject-list">
             {optionItems.map((item) => {
               const checked = optionChecks[String(item.index)] === true
@@ -881,7 +825,6 @@ export default function SubmissionPage({ token, debug = false }: { token: string
 
       <style>{baseStyles}</style>
     </div>
-    {debugPanel}
     </>
   )
 }
@@ -1001,20 +944,4 @@ const baseStyles = `
      コマ数(主)は科目と同一の 40px、分(従=単位注記)はやや小さめの 30px で階層を残す。 */
   .sub-subject-readonly-value { font-size: 40px; font-weight: 700; color: #222; }
   .sub-readonly-minutes { font-size: 30px; font-weight: 600; color: #777; margin-left: 6px; }
-
-  /* 実機デバッグパネル(#/submit-debug のみ)。zoom 非適用にするため .sub-container の外側に置く。 */
-  .sub-dbg { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 99999;
-    background: rgba(17,17,17,.92); color: #fff; border-radius: 10px; padding: 10px 12px;
-    font-size: 13px; line-height: 1.3; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
-  .sub-dbg-head { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #9fd; }
-  .sub-dbg-readout { font-family: monospace; font-size: 13px; background: #000; color: #6f6;
-    padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; word-break: break-all; }
-  .sub-dbg-info { font-size: 11px; color: #bbb; margin-bottom: 8px; }
-  .sub-dbg-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-  .sub-dbg-label { flex: none; width: 64px; font-size: 12px; }
-  .sub-dbg-row input[type=range] { flex: 1; min-width: 0; }
-  .sub-dbg-val { flex: none; width: 56px; text-align: right; font-family: monospace; font-size: 13px; }
-  .sub-dbg-presets { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 2px; }
-  .sub-dbg-presets button { background: #333; color: #fff; border: 1px solid #555;
-    border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 `

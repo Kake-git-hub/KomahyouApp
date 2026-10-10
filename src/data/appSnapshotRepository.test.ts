@@ -87,6 +87,11 @@ describe('手動バックアップ(AppSnapshot)の書き出し⇄読み込み', 
     expect(() => parseAppSnapshot('{ not valid }')).toThrow()
     expect(() => parseAppSnapshot(JSON.stringify({ schemaVersion: 1 }))).toThrow()
   })
+
+  it('形式違いの文言は平易に(文言一覧 #510/#511・開発用語を出さない)', () => {
+    expect(() => parseAppSnapshot(JSON.stringify({ schemaVersion: 1 }))).toThrow('バックアップの形式が違います。')
+    expect(() => parseWorkspaceSnapshot(JSON.stringify({ schemaVersion: 1 }))).toThrow('バックアップの形式が違います。')
+  })
 })
 
 describe('AppSnapshot形式とWorkspace形式の判別(importBackupのフォールバック前提)', () => {

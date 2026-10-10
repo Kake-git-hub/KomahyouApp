@@ -6,10 +6,10 @@ type IssuesPanelProps = {
 
 export function IssuesPanel({ issues }: IssuesPanelProps) {
   return (
-    <section className="issues-panel" aria-label="通常残一覧画面の最小版">
+    <section className="issues-panel" aria-label="通常残 / 未解決一覧">
       <div className="issues-panel-head">
         <div>
-          <p className="panel-kicker">通常残一覧画面</p>
+          <p className="panel-kicker">通常残 / 未解決一覧</p>
           <h2>通常残 / 未解決一覧</h2>
         </div>
         <button className="secondary-button" type="button">

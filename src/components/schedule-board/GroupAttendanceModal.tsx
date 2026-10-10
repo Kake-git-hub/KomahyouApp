@@ -118,7 +118,7 @@ export function GroupAttendanceModal({
         <div className="auto-assign-modal-title">出席者一覧</div>
         <div className="student-menu-meta">{`${dateLabel} / 集団 ${bandTimeLabel}`}</div>
         <div className="student-menu-meta">{`${subject}${teacherName ? ` / ${teacherName}` : ''}`}</div>
-        <div className="student-menu-help-text">デフォルトは全員出席です。欠席者だけクリックして欠席にしてください。</div>
+        <div className="student-menu-help-text">はじめは全員出席です。欠席者だけクリックしてください。</div>
 
         <div className="group-attendance-list" data-testid="group-attendance-list">
           {attendees.length === 0 ? (

@@ -591,7 +591,7 @@ describe('下段の移動（Q26-3・Q26-5・INV-12）', () => {
     const weeks = [mutateDesk(setup.diff.nextWeeks[0], 1, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', { id: 'm-live' })] } }))]
     const duplicate = move(setup, { deskIndex: 2, studentIndex: 0 }, weeks)
     expect(duplicate.status).toBe('blocked')
-    if (duplicate.status === 'blocked') expect(duplicate.message).toContain('移動不可')
+    if (duplicate.status === 'blocked') expect(duplicate.message).toContain('移動できません')
   })
 })
 

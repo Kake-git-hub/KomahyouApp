@@ -160,7 +160,7 @@ function normalizeGoogleDriveBackupDiagnostic(value: unknown): GoogleDriveBackup
 function requireFunctions() {
   const functions = getFirebaseFunctionsInstance()
   if (!functions) {
-    throw new Error('Firebase Functions を利用できません。接続設定を確認してください。')
+    throw new Error('サーバーに接続できません。通信状態を確認してください。')
   }
 
   return functions
@@ -169,7 +169,7 @@ function requireFunctions() {
 function requireFirestore() {
   const firestore = getFirebaseFirestoreInstance()
   if (!firestore) {
-    throw new Error('Firebase Firestore を利用できません。接続設定を確認してください。')
+    throw new Error('サーバーに接続できません。通信状態を確認してください。')
   }
 
   return firestore
@@ -555,10 +555,10 @@ async function gunzipBase64ToString(base64: string): Promise<string> {
   }
   if (typeof DecompressionStream === 'function') {
     const decompressedStream = new Response(new Blob([bytes])).body?.pipeThrough(new DecompressionStream('gzip'))
-    if (!decompressedStream) throw new Error('サーバーバックアップの展開に失敗しました。')
+    if (!decompressedStream) throw new Error('バックアップを開けませんでした。')
     return await new Response(decompressedStream).text()
   }
-  throw new Error('このブラウザは圧縮バックアップの展開に対応していません。最新のブラウザでお試しください。')
+  throw new Error('このブラウザでは復元できません。Chrome か Edge の最新版でお使いください。')
 }
 
 export async function downloadFirebaseServerAutoBackup(backupDateKey: string): Promise<string> {

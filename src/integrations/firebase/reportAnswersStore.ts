@@ -13,7 +13,7 @@ import { getFirebaseBackendConfig } from './config'
 function requireFunctions() {
   const functions = getFirebaseFunctionsInstance()
   if (!functions) {
-    throw new Error('Firebase Functions を利用できません。接続設定を確認してください。')
+    throw new Error('サーバーに接続できません。通信状態を確認してください。')
   }
   return functions
 }

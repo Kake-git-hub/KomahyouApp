@@ -55,7 +55,7 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
     const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'a', cellId: 'C2', deskIndex: 1, studentIndex: 0 })
     expect(r.status).toBe('blocked')
     if (r.status !== 'blocked') return
-    expect(r.message).toContain('移動不可')
+    expect(r.message).toContain('移動できません')
     expect(r.message).toContain('太郎')
   })
 
@@ -223,7 +223,7 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
       resolveBoardStudentDisplayName: (n: string) => n,
     })
     expect(r.status).toBe('blocked')
-    if (r.status === 'blocked') expect(r.message).toContain('移動不可')
+    if (r.status === 'blocked') expect(r.message).toContain('移動できません')
   })
 })
 

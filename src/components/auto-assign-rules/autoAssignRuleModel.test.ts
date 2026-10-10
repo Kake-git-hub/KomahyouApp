@@ -133,4 +133,16 @@ describe('AutoAssignRuleScreen 画面説明文（回帰: 制約事項ハード�
   it('ハードフィルタ挙動（守れない候補は未消化に残す）を説明している', () => {
     expect(screenSource).toContain('制約事項を満たす候補が無いコマは無理に割り振らず、未消化（ストック）に残します')
   })
+
+  it('文言整理(オーナー確定 2026-10): 絶対事項の説明・通常講師のみ説明・ペア削除確認・Excel説明シートの言い回し', () => {
+    expect(screenSource).toContain('自動割振は既存コマに触れず、空きコマだけで行います。')
+    expect(screenSource).not.toContain('空いているところへの追加割り振りだけ')
+    expect(screenSource).toContain('自動割振りを通常授業で担当している講師だけに制限します。')
+    expect(screenSource).toContain('このペア制約を削除します。よろしいですか？')
+    expect(screenSource).not.toContain('このペア制約を削除します。よろしいですか。')
+    expect(screenSource).toContain('current 出力のキー列をそのまま使ってください。未知のキーは取り込みません。')
+    expect(screenSource).not.toContain('current 出力のルールキーをそのまま')
+    const modelSource = readFileSync(fileURLToPath(new URL('./autoAssignRuleModel.ts', import.meta.url)), 'utf8')
+    expect(modelSource).toContain('自動割振りを通常授業で担当している講師だけに制限します。')
+  })
 })

@@ -174,7 +174,7 @@ function pickInitialDate(cells: BoardShareCell[]) {
 export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const initialSelection = useMemo(() => readStoredSelection(token), [token])
   const [payload, setPayload] = useState<BoardSharePayload | null>(null)
-  const [message, setMessage] = useState('配布用盤面を読み込んでいます。')
+  const [message, setMessage] = useState('コマ表を読み込んでいます。')
   const [selectedDateKey, setSelectedDateKey] = useState(initialSelection?.dateKey ?? '')
   const [selectedSlotNumber, setSelectedSlotNumber] = useState(initialSelection?.slotNumber ?? 1)
   // iOS Safari は 100dvh → flex → grid(repeat,minmax(0,1fr)) のネストで初回レイアウトを誤り、
@@ -202,7 +202,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   useEffect(() => {
     let cancelled = false
     const slowTimer = window.setTimeout(() => {
-      if (!cancelled) setMessage('配布用盤面の読み込みに時間がかかっています。通信状態を確認してください。')
+      if (!cancelled) setMessage('コマ表の読み込みに時間がかかっています。通信状態を確認してください。')
     }, 10000)
 
     loadBoardShare(token).then((nextPayload) => {
@@ -219,7 +219,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
         if (cancelled) return
         window.clearTimeout(slowTimer)
         if (!nextPayload) {
-          setMessage('配布用盤面が見つかりませんでした。URLを確認してください。')
+          setMessage('コマ表が見つかりませんでした。URLを確認してください。')
           return
         }
         applyPayload(nextPayload)
@@ -227,7 +227,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
       (error) => {
         if (cancelled) return
         window.clearTimeout(slowTimer)
-        setMessage(error instanceof Error ? error.message : '配布用盤面の読み込みに失敗しました。')
+        setMessage(error instanceof Error ? error.message : 'コマ表の読み込みに失敗しました。')
       },
     )
     return () => {
@@ -301,7 +301,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
 
   return (
     <div className="board-share-shell">
-      <main className="board-share-main" aria-label="配布用盤面">
+      <main className="board-share-main" aria-label="コマ表">
         {groupEntriesForDate.length > 0 ? (
           <div className="board-share-group-list" aria-label="集団授業">
             {groupEntriesForDate.map((entry) => (
@@ -352,7 +352,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
             })}
           </div>
         ) : (
-          <div className="board-share-message">この日の盤面は配布データに含まれていません。</div>
+          <div className="board-share-message">この日のコマ表はありません。</div>
         )}
       </main>
 

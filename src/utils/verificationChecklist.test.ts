@@ -62,7 +62,7 @@ describe('確認リストの項目定義', () => {
 
   it('第42版(v1.5.587): 第41版で OK だった項目を外し、要改善の tp-32・tp-33 を開発用教室の実データで指す手順に書き換えた', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33', 'wt-1', 'wt-2', 'wt-3', 'wt-4'])
     // 第41版の結果(2026-10-10・受付 20261010-144912762-45a17afb)で OK → 外す(タブ名 mc-1・請求画面 bl-1〜bl-4・テンプレ保留 tp-31/tp-34/tp-35・講習の重複 tp-30)。
     for (const okId of ['tp-31', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3', 'bl-4']) expect(ids, okId).not.toContain(okId)
     // 第39版の結果(2026-10-07・受付 20261007-114407125-114ac7b6)で hm-1〜hm-4 がすべて OK。
@@ -83,6 +83,7 @@ describe('確認リストの項目定義', () => {
     // 第40版(2026-10-07): hm-1〜hm-4 が OK → 外したので v1.5.580 へ上げる。
     // 第41版(2026-10-10): 2 社目準備 P-2(タブ名)の mc-1 を足したので v1.5.582 へ上げる。
     // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ上げる(tp-32・tp-33 は同じ id で書き換え＝introducedIn は据え置き)。
+    // 第42版への追加(2026-10-10): 画面文言の見直し wt-1〜wt-4 を足しただけなので版は据え置き(v1.5.587)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.587')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
@@ -116,6 +117,12 @@ describe('確認リストの項目定義', () => {
     for (const item of [tp32, tp33]) {
       for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) expect(line, item.id).not.toMatch(/[一-龠ぁ-んァ-ヶ]+\u3000[一-龠ぁ-んァ-ヶ]+/u)
     }
+    // 画面文言の見直し(2026-10-10・文言一覧 169 行)。新しい文言を画面で確かめる手順を持つ。
+    for (const id of ['wt-1', 'wt-2', 'wt-3', 'wt-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.588')
+    expect(byId.get('wt-1')!.check!.join(' / ')).toContain('クラウドに保存しました。')
+    expect(byId.get('wt-2')!.check!.join(' / ')).toContain('よろしいですか？')
+    expect(byId.get('wt-3')!.check!.join(' / ')).toContain('例: 体験生徒を追加する方法は？')
+    expect(byId.get('wt-4')!.area).toBe('保護者QR(休み連絡)')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。

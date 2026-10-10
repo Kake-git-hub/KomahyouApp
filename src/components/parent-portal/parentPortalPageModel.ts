@@ -22,7 +22,7 @@ export type ParentScheduleLesson = {
   // 振替コマ(振替・振替を出席済み/振無休にしたもの)の振替元。slotNumber=null は元コマ不明(日付だけ出す)。
   // 旧 functions の応答には無いので省略可。
   makeupOrigin?: { dateKey: string; slotNumber: number | null }
-  // テンプレ補完由来(=「予定(変更の可能性あり)」・§D-6)。
+  // テンプレ補完由来(行末に短い「予定」印を出す・§D-6)。
   isTentative: boolean
 }
 
@@ -58,30 +58,38 @@ export type ParentPortalScheduleResponse = {
 export type ParentScheduleRange = { from: string; to: string }
 export type ParentScheduleBounds = { minFrom: string; maxTo: string }
 
-// 常時表示する注記 3 種(spec §C)。③は 2026-09-18 に「下部のフォーム」から「授業行をタップ」へ変えた。
+// 常時表示する注記(spec §C / §0-6)。2026-10-10 の文言整理(オーナー確認済み)で 3 行 → 1 行にまとめた。
+// 「教室で保存された時点の予定です」と「授業の行をタップ…」は廃止(タップの案内は連絡できる行があるときだけ
+// 一覧の上に PARENT_ABSENCE_LIST_HINT で出る)。
 export const PARENT_PORTAL_NOTES: readonly string[] = [
-  '教室で保存された時点の予定です。',
   '予定は変更になることがあります。',
-  'お休みのご連絡は、該当する授業の行をタップしてください（お電話でも受け付けます）。',
 ]
+
+// 見出し(「◯◯ さん 授業予定」・2026-10-10 文言整理)。
+export function formatParentPortalTitle(studentName: string): string {
+  return `${studentName} さん 授業予定`
+}
+export const PARENT_PORTAL_LOADING_MESSAGE = '読み込み中…'
+export const PARENT_PORTAL_FOOTER_NOTE = 'このページは配布先のご家庭専用です。ほかの方に共有しないでください。'
 
 // 利用者向け文言(サーバーの error JSON が無いときのフォールバック。理由を出し分けない・§F)。
 export const PARENT_PORTAL_UNAVAILABLE_MESSAGE = 'このリンクは現在ご利用いただけません。教室へお問い合わせください。'
-export const PARENT_PORTAL_DISABLED_MESSAGE = '現在ご利用いただけません。'
+// 機能が教室で無効(403)も、失効(410)と同じ案内にする(2026-10-10 文言整理・サーバー PARENT_PORTAL_ERROR_DISABLED と同文)。
+export const PARENT_PORTAL_DISABLED_MESSAGE = PARENT_PORTAL_UNAVAILABLE_MESSAGE
 export const PARENT_PORTAL_INVALID_LINK_MESSAGE = 'このリンクは無効です。教室へお問い合わせください。'
-export const PARENT_PORTAL_LOAD_FAILED_MESSAGE = 'データの読み込みに失敗しました。'
+export const PARENT_PORTAL_LOAD_FAILED_MESSAGE = '読み込めませんでした。少し待ってから開き直してください。'
 export const PARENT_PORTAL_NETWORK_ERROR_MESSAGE = '通信エラーが発生しました。インターネット接続を確認してください。'
 export const PARENT_MESSAGE_RATE_LIMIT_MESSAGE = '本日の送信上限に達しました。お急ぎの場合は教室へお電話ください。'
 export const PARENT_MESSAGE_SEND_FAILED_MESSAGE = '送信に失敗しました。時間をおいて再度お試しください。'
 export const PARENT_MESSAGE_NETWORK_ERROR_MESSAGE = '通信エラーが発生しました。再度お試しください。'
-export const PARENT_SCHEDULE_TENTATIVE_LABEL = '予定（変更の可能性あり）'
 // 1 コマ 1 行の一覧では行ごとに短い「予定」印を付け、意味は一覧の上に 1 回だけ出す。
-export const PARENT_SCHEDULE_TENTATIVE_LEGEND = '「予定」印の授業は、変更になる可能性があります。'
+// (長い読み上げ用ラベル「予定（変更の可能性あり）」は 2026-10-10 の文言整理で廃止。印は見えている「予定」だけ。)
+export const PARENT_SCHEDULE_TENTATIVE_LEGEND = '「予定」印は変更になることがあります。'
 export const PARENT_SCHEDULE_NO_LESSON_MESSAGE = '授業の予定はありません'
 export const PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE = 'この月の授業の予定はありません。'
 // 講習だけの月(通常授業の日が無く、講習コマはあった)に出す注記(確認リスト k-4・オーナー回答 2026-09-14)。
-export const PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE = 'この月は通常授業がありません（講習の日程はこのページには表示されません）。'
-export const PARENT_SCHEDULE_CLOSED_MESSAGE = '教室休み'
+export const PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE = 'この月は通常授業がありません。'
+export const PARENT_SCHEDULE_CLOSED_MESSAGE = '教室お休み'
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
 
@@ -166,13 +174,6 @@ export function formatJstDateTimeLabel(iso: string | null | undefined): string |
   return `${jst.getUTCMonth() + 1}月${jst.getUTCDate()}日 ${jst.getUTCHours()}:${pad2(jst.getUTCMinutes())}`
 }
 
-// ページ上部の「◯月◯日 ◯時◯分 時点」(spec §D-6)。
-export function formatParentSnapshotSavedAtLabel(iso: string | null | undefined): string {
-  const label = formatJstDateTimeLabel(iso)
-  if (!label) return '保存時刻は不明です'
-  return `${label} 時点`
-}
-
 // 表示期間の移動(前の月／次の月・spec §0 P-1)。表示中の月の 1 日〜末日を delta か月ずらす。
 // 上限(bounds=今月の前後 1 か月)の外へ出るなら null(=移動しない)。権威はサーバーの丸め。
 export function shiftParentScheduleMonth(range: ParentScheduleRange, deltaMonths: number, bounds: ParentScheduleBounds): ParentScheduleRange | null {
@@ -209,7 +210,8 @@ export function formatParentScheduleLinkedSlot(link: { dateKey: string; slotNumb
 
 // 授業 1 行の表示(spec §D-3 の表)。講師名・机番号は受け取っても出さない(型に無い)。
 // 振替元に振替先、振替先に振替元を「月日コマ」で出す(確認リスト その他 2026-09-14)。
-// 補足は 1 行に収まる短い言い回しにする(k-11): 休み「9/30 5限に振替」／振替「9/23 5限の振替」／振無休「9/19 2限分 振替なし」。
+// 補足は 1 行に収まる短い言い回しにする(k-11): 休み「9/30 5限に振替」／振替「9/23 5限の振替」。
+// 振無休は「お休み」だけ(「振替なし」「◯分 振替なし」の補足は 2026-10-10 の文言整理で廃止)。
 export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { main: string; sub?: string } {
   const subject = String(lesson.subject ?? '').trim() || '授業'
   const originSlot = lesson.makeupOrigin ? formatParentScheduleLinkedSlot(lesson.makeupOrigin) : ''
@@ -224,7 +226,7 @@ export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { ma
     case 'attended':
       return { main: subject, sub: originText ? `出席（${originText}）` : '出席済み' }
     case 'absent-no-makeup':
-      return { main: 'お休み', sub: originSlot ? `${originSlot}分 振替なし` : '振替なし' }
+      return { main: 'お休み' }
     case 'absent': {
       const destination = lesson.makeupDestination
       if (destination) {
@@ -363,16 +365,18 @@ export function buildParentScheduleRows(
 export const PARENT_ABSENCE_BADGE_REPORTED = '休み連絡済'
 export const PARENT_ABSENCE_BADGE_ACKNOWLEDGED = '教室確認済'
 /** タップできる行が 1 つでもあるときだけ一覧の上に出す説明。 */
-export const PARENT_ABSENCE_LIST_HINT = '授業の行をタップすると、お休みの連絡ができます。'
-export const PARENT_ABSENCE_CONFIRM_QUESTION = 'このコマをお休みします。よろしいですか?'
+export const PARENT_ABSENCE_LIST_HINT = '授業をタップすると、お休みの連絡ができます。'
+export const PARENT_ABSENCE_CONFIRM_QUESTION = 'この授業をお休みしますか？'
 export const PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL = 'お休みを連絡する'
+export const PARENT_ABSENCE_SENDING_LABEL = '送信中…'
 export const PARENT_ABSENCE_CONFIRM_CANCEL_LABEL = 'やめる'
-export const PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE = `教室が確認すると、このページに「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」と表示されます。`
+export const PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE = `教室が確認すると「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」と表示されます。`
 export const PARENT_ABSENCE_CONFIRM_NOTE_CANCEL = '取り消し・変更はお電話でご連絡ください。'
 /** 当日のコマだけ足す注意(授業までに確認が間に合わない可能性がある)。 */
-export const PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY = `当日のご連絡です。授業までに「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」にならない場合は、お電話でもご連絡ください。`
+export const PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY = `当日のご連絡です。「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」にならない場合はお電話ください。`
 export const PARENT_ABSENCE_SENT_MESSAGE = 'お休みの連絡を送りました。'
-export const PARENT_ABSENCE_CONFLICT_MESSAGE = 'このコマはお休みの連絡ができません。ページを読み込み直して最新の予定をご確認ください。'
+// サーバー PARENT_ABSENCE_ERROR_NOT_REPORTABLE と同文(サーバーの { error } が無いときのフォールバック)。
+export const PARENT_ABSENCE_CONFLICT_MESSAGE = 'この授業はお休みの連絡ができません。ページを開き直してご確認ください。'
 
 /** バッジの文言(none のときは出さない)。 */
 export function describeParentAbsenceBadge(status: ParentAbsenceStatus): string | null {
@@ -427,7 +431,7 @@ export function describeParentAbsenceConfirm(target: ParentAbsenceTarget, today:
   return { target: formatParentAbsenceTargetLabel(target), question: PARENT_ABSENCE_CONFIRM_QUESTION, notes }
 }
 
-// その日に「予定(変更の可能性あり)」バッジを出すか。
+// その日にテンプレ由来(「予定」印)の授業があるか。
 export function isParentScheduleDayTentative(day: ParentScheduleDay): boolean {
   return day.lessons.some((lesson) => lesson.isTentative)
 }

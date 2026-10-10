@@ -81,7 +81,7 @@ export async function ensureFirebaseAuthenticatedUser() {
   const auth = getFirebaseAuthInstance()
   const currentUser = auth?.currentUser ?? null
   if (!currentUser) {
-    throw new Error('Firebase のログイン状態が確認できません。再ログイン後にもう一度実行してください。')
+    throw new Error('ログイン状態を確認できません。再ログインしてからもう一度お試しください。')
   }
 
   await currentUser.getIdToken(true)
@@ -119,7 +119,7 @@ export async function reauthenticateFirebaseUser(password: string) {
   const auth = getFirebaseAuthInstance()
   const currentUser = auth?.currentUser
   if (!currentUser || !currentUser.email) {
-    throw new Error('Firebase のログイン状態が確認できません。再ログイン後にもう一度実行してください。')
+    throw new Error('ログイン状態を確認できません。再ログインしてからもう一度お試しください。')
   }
   const credential = EmailAuthProvider.credential(currentUser.email, password)
   await reauthenticateWithCredential(currentUser, credential)

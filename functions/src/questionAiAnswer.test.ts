@@ -111,7 +111,7 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(describeQuestionAiError(new Anthropic.NotFoundError(404, undefined, 'not found', headers))).toContain('Model Garden')
   })
 
-  it('拒否・空応答・例外は利用者向けの短い理由に丸める(内部情報やスタックを出さない)', async () => {
+  it('拒否・空応答・例外は開発者向けの短い理由に丸める(内部情報やスタックを出さない・室長の画面には出さない 2026-10-10)', async () => {
     expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ stop_reason: 'refusal' }) })).toEqual({ ok: false, error: 'AI がこの質問への回答を控えました' })
     expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
     expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })

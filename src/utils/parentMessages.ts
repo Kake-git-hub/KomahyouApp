@@ -175,7 +175,7 @@ export const PARENT_ABSENCE_RESOLUTION_LABELS: Record<ParentAbsenceResolution, s
 // 記録の確認が取れなかった場合もここへ来る(レビュー指摘 2026-09-19)。
 export function buildParentAbsenceUnsavedNote(previousResolution: ParentAbsenceResolution | null): string {
   if (!previousResolution || previousResolution === 'manual') return ''
-  return `前回「${PARENT_ABSENCE_RESOLUTION_LABELS[previousResolution]}」を選びましたが、保存された盤面で確認が取れなかったため、もう一度表示しています。盤面を確認して選び直してください。`
+  return `前回「${PARENT_ABSENCE_RESOLUTION_LABELS[previousResolution]}」を選びましたが、保存された盤面で確認できなかったため、もう一度表示しています。`
 }
 
 /**

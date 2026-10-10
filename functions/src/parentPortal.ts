@@ -140,11 +140,12 @@ export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroo
 // 旧 doc は Firestore に残るが、新しいクライアントは kind!=='absence' を表示しない。
 // ───────────────────────────────────────────────────────────────────────────
 
-export const PARENT_MESSAGE_ERROR_INVALID_INPUT = '入力の形式が正しくありません。'
+// 保護者に出る文言(2026-10-10 文言整理: 技術的な言い回しをやめ、どうすればよいかを書く)。
+export const PARENT_MESSAGE_ERROR_INVALID_INPUT = '送信できませんでした。ページを開き直してお試しください。'
 /** 409。対象コマが無い・過去・表示範囲外・すでに休み/出席済みなど(保護者へは理由を出し分けない)。 */
-export const PARENT_ABSENCE_ERROR_NOT_REPORTABLE = 'このコマはお休みの連絡ができません。ページを読み込み直して最新の予定をご確認ください。'
+export const PARENT_ABSENCE_ERROR_NOT_REPORTABLE = 'この授業はお休みの連絡ができません。ページを開き直してご確認ください。'
 /** 409。同じコマの二重連絡(決定的 messageId の create が衝突したときも同じ文言)。 */
-export const PARENT_ABSENCE_ERROR_ALREADY_REPORTED = 'このコマはすでにお休みの連絡を受け付けています。'
+export const PARENT_ABSENCE_ERROR_ALREADY_REPORTED = 'この授業はすでにお休みの連絡を受け付けています。'
 
 const ABSENCE_DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
@@ -593,10 +594,12 @@ export function resolveParentPortalStudentName(student: { name: string; displayN
 export const PARENT_PORTAL_ERROR_INVALID_TOKEN = 'リンクの形式が正しくありません。'
 /** 410。失効・退塾・卒業・生徒不在の理由を出し分けない(§F)。 */
 export const PARENT_PORTAL_ERROR_GONE = 'このリンクは現在ご利用いただけません。教室へお問い合わせください。'
-/** 403。機能フラグ OFF(§H)。トークンは失効させない(P-11)。 */
-export const PARENT_PORTAL_ERROR_DISABLED = '現在ご利用いただけません。'
-export const PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED = '許可されていないメソッドです。'
-export const PARENT_PORTAL_ERROR_INTERNAL = 'サーバーでエラーが発生しました。時間をおいて再度お試しください。'
+/** 403。機能フラグ OFF(§H)。トークンは失効させない(P-11)。文言は 410 と同じ案内(2026-10-10 文言整理)。 */
+export const PARENT_PORTAL_ERROR_DISABLED = PARENT_PORTAL_ERROR_GONE
+/** 405。保護者の画面からは出ない想定だが、技術用語を見せない(2026-10-10 文言整理)。 */
+export const PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED = 'ご利用いただけません。'
+/** 500。原因は logger.error('[parentPortalApi] unexpected error', …) に残る(画面には出さない)。 */
+export const PARENT_PORTAL_ERROR_INTERNAL = 'エラーが発生しました。時間をおいてお試しください。'
 /** 429(GET のスロットル)。連絡の上限(PARENT_MESSAGE_RATE_LIMIT_ERROR)とは別の文言。 */
 export const PARENT_PORTAL_ERROR_TOO_MANY_REQUESTS = 'アクセスが集中しています。少し待ってから開き直してください。'
 
