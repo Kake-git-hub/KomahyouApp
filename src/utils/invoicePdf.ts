@@ -1,6 +1,8 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import { formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, type BillingInvoiceRow } from './billing'
+import type { CompanyInvoice } from './companyBilling'
+import { buildCompanyInvoiceHtml } from './companyInvoiceHtml'
 import { getJstTodayDateKey } from './jstDate'
 
 export type InvoiceIssuerInfo = {
@@ -97,13 +99,22 @@ export function buildInvoiceHtml(row: BillingInvoiceRow, issuerInfo: Partial<Inv
 }
 
 export async function createInvoicePdfBlob(row: BillingInvoiceRow, issuerInfo?: Partial<InvoiceIssuerInfo>) {
+  return renderInvoiceHtmlToPdfBlob(buildInvoiceHtml(row, issuerInfo))
+}
+
+/** 会社宛合算請求書(P-11 ②)。HTML は companyInvoiceHtml.ts(純関数)・PDF 化は教室宛と同じ経路。 */
+export async function createCompanyInvoicePdfBlob(invoice: CompanyInvoice, issuerInfo?: Partial<InvoiceIssuerInfo>) {
+  return renderInvoiceHtmlToPdfBlob(buildCompanyInvoiceHtml(invoice, issuerInfo))
+}
+
+async function renderInvoiceHtmlToPdfBlob(html: string) {
   const container = document.createElement('div')
   container.style.position = 'fixed'
   container.style.left = '-100000px'
   container.style.top = '0'
   container.style.background = '#ffffff'
   container.style.zIndex = '-1'
-  container.innerHTML = buildInvoiceHtml(row, issuerInfo)
+  container.innerHTML = html
   document.body.appendChild(container)
 
   try {

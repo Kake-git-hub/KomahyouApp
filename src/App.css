@@ -1038,6 +1038,15 @@
   justify-content: flex-end;
 }
 
+/* 請求画面のタブ(この会社 / 全社・P-11 ③)。 */
+.billing-tab-row {
+  gap: 8px;
+}
+
+.billing-company-summary strong {
+  font-weight: 700;
+}
+
 .developer-classroom-card,
 .developer-classroom-grid {
   display: grid;

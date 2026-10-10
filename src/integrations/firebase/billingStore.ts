@@ -1,6 +1,8 @@
-import { collection, doc, getDocs, setDoc, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, setDoc, writeBatch } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
 import { type BillingInvoiceRow } from '../../utils/billing'
-import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance } from './client'
+import { parseCompanyBillingProfile, type CompanyBillingProfile } from '../../utils/companyBilling'
+import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 
@@ -30,10 +32,55 @@ function requireFirestore() {
   return firestore
 }
 
-function getBillingMonthRef(monthKey: string) {
+// 読み書き先の workspace。既定は接続先(env)。「全社」タブ(P-11 ③)だけが別の workspace を指定して**読む**
+// (書けるのは rules の isBillingDeveloper = その workspace の developer 会員で請求許可がある人だけ)。
+function resolveWorkspaceKey(workspaceKey?: string) {
+  const key = workspaceKey?.trim() || getFirebaseBackendConfig().workspaceKey
+  if (!key) throw new Error('workspace が未設定です。')
+  return key
+}
+
+function getBillingMonthRef(monthKey: string, workspaceKey?: string) {
   const firestore = requireFirestore()
-  const config = getFirebaseBackendConfig()
-  return doc(firestore, 'workspaces', config.workspaceKey, 'billingMonths', monthKey)
+  return doc(firestore, 'workspaces', resolveWorkspaceKey(workspaceKey), 'billingMonths', monthKey)
+}
+
+/** 棟の文書 workspaces/{workspaceKey} から会社の請求プロファイル(会社名・請求先・標準単価・P-11 ①)を読む。 */
+export async function loadFirebaseCompanyBillingProfile(workspaceKey?: string): Promise<CompanyBillingProfile> {
+  await ensureFirebaseAuthenticatedUser()
+  const key = resolveWorkspaceKey(workspaceKey)
+  const snapshot = await getDoc(doc(requireFirestore(), 'workspaces', key))
+  return parseCompanyBillingProfile(key, snapshot.exists() ? snapshot.data() : undefined)
+}
+
+export type BillingWorkspaceListEntry = {
+  workspaceKey: string
+  companyName: string
+  brandName: string
+  recipientName: string
+  recipientEmail: string
+  standardUnitPrice: number | null
+  classroomCount: number
+  billingAllowed: boolean
+}
+
+/** 「全社」一覧(P-11 ③): 自分が developer として所属する workspace だけをサーバーの窓口 callable 1 本で列挙する。 */
+export async function listFirebaseBillingWorkspaces(): Promise<BillingWorkspaceListEntry[]> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = getFirebaseFunctionsInstance()
+  if (!functions) throw new Error('Firebase Functions を利用できません。接続設定を確認してください。')
+  const callable = httpsCallable<Record<string, never>, { workspaces?: BillingWorkspaceListEntry[] }>(functions, 'listBillingWorkspaces', { timeout: 60_000 })
+  const result = await callable({})
+  return (result.data?.workspaces ?? []).map((entry) => ({
+    workspaceKey: String(entry.workspaceKey ?? ''),
+    companyName: String(entry.companyName ?? ''),
+    brandName: String(entry.brandName ?? ''),
+    recipientName: String(entry.recipientName ?? ''),
+    recipientEmail: String(entry.recipientEmail ?? ''),
+    standardUnitPrice: typeof entry.standardUnitPrice === 'number' ? entry.standardUnitPrice : null,
+    classroomCount: Number(entry.classroomCount ?? 0),
+    billingAllowed: entry.billingAllowed === true,
+  })).filter((entry) => entry.workspaceKey)
 }
 
 function toBillingClassroomRecord(row: BillingInvoiceRow, updatedAt: string, updatedBy: string): BillingClassroomRecord {
@@ -56,9 +103,9 @@ function toBillingClassroomRecord(row: BillingInvoiceRow, updatedAt: string, upd
   }
 }
 
-export async function loadFirebaseBillingMonth(monthKey: string) {
+export async function loadFirebaseBillingMonth(monthKey: string, workspaceKey?: string) {
   await ensureFirebaseAuthenticatedUser()
-  const classroomCollection = collection(getBillingMonthRef(monthKey), 'classrooms')
+  const classroomCollection = collection(getBillingMonthRef(monthKey, workspaceKey), 'classrooms')
   const snapshots = await getDocs(classroomCollection)
   return snapshots.docs.map((entry) => entry.data() as BillingClassroomRecord)
 }

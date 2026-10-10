@@ -145,6 +145,8 @@ export type WorkspaceUser = {
   email: string
   role: WorkspaceUserRole
   assignedClassroomId: string | null
+  /** 請求画面の許可フラグ(members/{uid}.billingAllowed・P-11 ④ 第 1 段)。undefined = 文書に無い(従来はメール固定で判定)。 */
+  billingAllowed?: boolean
 }
 
 export type ClassroomContractStatus = 'active' | 'suspended'

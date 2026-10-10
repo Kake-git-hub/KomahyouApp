@@ -624,12 +624,54 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 
 ---
 
+## 13. Phase 3 追補：会社宛の請求（2026-10-10 実装・§7-10〜§7-13 の詳細化・計画 plan-2026-09-18 P-11）
+
+### 13-1. 棟の文書の会社項目（P-11 ①・§7-13）
+
+- `workspaces/{workspaceKey}` に `companyName`・`brandName`・`billing.recipientName`・`billing.recipientEmail`・
+  `billing.standardUnitPrice` を持つ（`docs/firebase-backend.md`）。書くのは `tools/provision-workspace.mjs`（新設時）。既存運営会社
+  `main` は項目が無くてもよく、その場合は従来どおり（会社名の代わりに `main`、標準単価なし）。
+- 読み方は **クライアント `src/utils/companyBilling.ts` `parseCompanyBillingProfile`** と **サーバー
+  `functions/src/billingWorkspaces.ts` `summarizeBillingWorkspace`** の鏡像 2 か所。ズレは
+  `functions/src/billingWorkspaces.parity.test.ts` が検出する。
+- **単価の優先順**: 保存済みの請求行 > 教室の `studentUnitPrice` > 会社の標準単価 > 既定 300 円（`resolveBillingUnitPrice`）。
+  `main` は標準単価が無いので出力不変（テストで固定）。
+
+### 13-2. 会社宛合算請求書（P-11 ②・§7-10）
+
+- 請求画面「この会社」タブの **「会社宛合算請求書PDF」** が、表示中の教室行を 1 通にまとめる（`buildCompanyInvoice` →
+  `companyInvoiceHtml.ts` → `createCompanyInvoicePdfBlob`）。宛名は `billing.recipientName`（無ければ会社名、無ければ workspaceKey）
+  御中。請求書番号は `INV-YYYYMM-<会社キー>-ALL`（教室宛 `INV-YYYYMM-<教室>` と区別）。
+- **消費税は合算の税抜額に 1 回**（教室ごとの税の合計と 1 円ずれ得る。合算請求書の税額はこちらが正）。
+- 教室宛の請求書・メール作成・保存状態（`billingMonths`）は**無改変**（会社ごとに教室宛／会社宛を選べる）。請求先メールがあれば
+  Gmail 作成画面を開く（CC は従来どおり運営控え）。
+
+### 13-3. 全社タブと窓口 callable（P-11 ③・§7-12）
+
+- callable **`listBillingWorkspaces`** 1 本（引数なし・読み取りのみ）。**呼び出した人が developer として所属する workspace だけ**を
+  返す（他社の棟は存在すら返さない・§1-2）。各行は棟の文書の会社項目＋教室数＋本人の `billingAllowed`。並びは `main` 先頭。
+- 請求画面「全社」タブは、列挙された各社の **保存済み請求行**（`billingMonths/{月}/classrooms`）と恒久記録の有無を
+  その workspace を指定して読み（rules は各社の developer 会員で請求許可がある人だけ通す）、会社宛合算を一覧する。
+  他社の名簿（生徒）は読まない。開いている会社の最新の行を反映するには先に「この会社」タブで保存する（画面に明記）。
+
+### 13-4. 請求の許可者（P-11 ④ 第 1 段・§7-11）
+
+- 判定は **developer かつ（`members/{uid}.billingAllowed == true` または 従来のメール固定）** の 2 経路。
+  rules `isBillingDeveloper` と `src/utils/companyBilling.ts` `isBillingAllowedUser` を同時に変える（片方だけ変えない）。
+  rules の検証は `firebase/rules/firestore.rules.test.ts`（フラグ経路・フラグ無し拒否・メール固定の維持）。
+- **第 2 段（メール固定の撤去）は別 push**。前提: オーナーが各 workspace（`main` と 2 社目）の自分の会員文書に
+  `billingAllowed: true` を立て（Firebase コンソール or 新設時は `provision-workspace.mjs` が付与）、請求画面が開けることを確認
+  してから、rules と `BILLING_ALLOWED_EMAILS` を同じ push で消す（§2-A 影響 3 承認済み・runbook `company-onboarding.md`）。
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-10-10 | §13 Phase 3 追補（P-11 会社宛の請求: 棟の文書の会社項目と単価の優先順・会社宛合算請求書・全社タブと `listBillingWorkspaces`・請求許可者のフラグ化 第 1 段）。 |
 | 2026-10-10 | §12 Phase 2 追補（P-3 会社サイト一覧 `tools/company-sites.json`・hosting target = 会社キー・`hosting:main` 明示・verify/uptime の複数サイト対応／P-4 会社ごとの配信 CI `deploy-company-hosting.yml` と前提検査 `company-deploy-guard.mjs`）。 |
 | 2026-10-10 | §11-1 を P-1/P-2（計画 plan-2026-09-18 §3）に合わせて改定: 会社ごとの値は `src/company/profiles/<会社キー>.ts`、env `VITE_COMPANY_KEY` で選択（未登録は fail-closed・ビルド時も検査）、`displayName`=会社名「株式会社アーチ」と `brandName`=「スクールIE」を分離（D-6）、タブ名を `<アプリ名>_<場面>` に確定（D-7）し Phase 2 の宿題を閉じた。 |
 | 2026-09-18 | §11 Phase 1 追補（会社レイヤ T1-1〜T1-5 の詳細化: プロファイル・機能スイッチ 2 段解決とコア台帳・役割名辞書の対象一覧・帳票フック 6 項目・画面フック）。§7 の確定値は不変。既定値で出力不変。 |

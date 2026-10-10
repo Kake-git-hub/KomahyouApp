@@ -16,6 +16,8 @@ type FirebaseWorkspaceMemberDoc = {
   email: string
   role: WorkspaceUserRole
   assignedClassroomId: string | null
+  /** 請求画面の許可フラグ(P-11 ④ 第 1 段)。tools/provision-workspace.mjs が developer 会員に true を書く。 */
+  billingAllowed?: boolean
 }
 
 type FirebaseClassroomDoc = {
@@ -339,6 +341,8 @@ function toWorkspaceUser(userId: string, data: FirebaseWorkspaceMemberDoc): Work
     email: data.email?.trim() || '',
     role: data.role,
     assignedClassroomId: data.assignedClassroomId ?? null,
+    // true のときだけ載せる(undefined キーを作らない: 既存のスナップショット比較・保存 payload を汚さない)。
+    ...(data.billingAllowed === true ? { billingAllowed: true } : {}),
   }
 }
 

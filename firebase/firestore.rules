@@ -26,10 +26,15 @@ service cloud.firestore {
       return hasWorkspaceMembership(workspaceKey) && workspaceRole(workspaceKey) == 'developer';
     }
 
+    // 請求の許可者(P-11 ④ 第 1 段・2026-10-10・docs/spec-multi-tenant.md §7-11): developer かつ
+    // (会員文書の billingAllowed フラグ **または** 従来のメール固定)。第 2 段(メール固定の撤去)は、オーナーが
+    // 各 workspace の自分の会員文書に billingAllowed:true を立ててから(片方だけの状態を作らない)。
+    // クライアント側の同じ判定は src/utils/companyBilling.ts isBillingAllowedUser(片方だけ変えない)。
     function isBillingDeveloper(workspaceKey) {
       return isDeveloper(workspaceKey)
         && (
-          get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
+          get(memberDoc(workspaceKey)).data.get('billingAllowed', false) == true
+          || get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
           || get(memberDoc(workspaceKey)).data.email == 'bkkdmzn@gmail.com'
           || get(memberDoc(workspaceKey)).data.email == 'd.ishikawa@agc-akasaka.com'
           || request.auth.token.email == 'dai.in.the.mood@gmail.com'

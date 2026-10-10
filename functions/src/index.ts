@@ -58,6 +58,7 @@ import {
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
+import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
@@ -2679,6 +2680,35 @@ export const triggerMonthlyStudentCountRecord = onCall({ invoker: 'public', time
   }
   const snapshotDate = requestedDate || todayJstDateKey
   return recordStudentCountLedgerEntry(workspaceKey, snapshotDate, 'manual', request.auth?.uid ?? '')
+})
+
+// 「全社」一覧の窓口(P-11 ③・2026-10-10・docs/spec-multi-tenant.md §7-12 / §13)。
+// 呼び出した人が developer として所属する workspace だけを返す(会社の壁 §1-2・他社の棟は存在すら返さない)。
+// 読み取りのみ(何も書かない)。各 workspace の会社名・請求先・標準単価(棟の文書)と教室数、本人の請求許可フラグを返す。
+export const listBillingWorkspaces = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  const authUid = request.auth?.uid
+  if (!authUid) {
+    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+  }
+  try {
+    const workspaceSnapshots = await firestore.collection('workspaces').get()
+    const entries: BillingWorkspaceSummary[] = []
+    for (const workspaceDoc of workspaceSnapshots.docs) {
+      const memberSnapshot = await workspaceDoc.ref.collection('members').doc(authUid).get()
+      if (!memberSnapshot.exists || !isDeveloperMember(memberSnapshot.data())) continue
+      const classroomCount = await countClassrooms(workspaceDoc.id)
+      entries.push(summarizeBillingWorkspace({
+        workspaceKey: workspaceDoc.id,
+        workspaceData: workspaceDoc.data(),
+        memberData: memberSnapshot.data(),
+        classroomCount,
+      }))
+    }
+    return { workspaces: sortBillingWorkspaces(entries) }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    throw new HttpsError('internal', `全社一覧の取得に失敗しました: ${error instanceof Error ? error.message : String(error)}`)
+  }
 })
 
 export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
