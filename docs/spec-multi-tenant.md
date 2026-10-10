@@ -646,6 +646,19 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 - 教室宛の請求書・メール作成・保存状態（`billingMonths`）は**無改変**（会社ごとに教室宛／会社宛を選べる）。請求先メールがあれば
   Gmail 作成画面を開く（CC は従来どおり運営控え）。
 
+### 13-2b. 合算に含める教室・合算請求先名（2026-10-10 オーナー要望）
+
+- 請求画面「この会社」タブの表に **「合算」列（教室ごとのチェック）**。外した教室は会社宛合算請求書・「会社宛合算（税込）」・
+  「全社」タブの合算から外れる。**教室宛の請求書・保存（`billingMonths`）・教室ごとの金額には影響しない**。
+- 保存先は棟の文書 **`billing.excludedClassroomIds`**（合算に含めない教室 ID の配列・ソート済み）。**未保存（項目なし）の会社は
+  登録済みの検証用教室（`developmentClassroomRegistry`＝開発用教室・テスト教室）を既定で除外**し、チェックを 1 回でも触ると配列で保存
+  されて以後はその一覧どおり（空配列＝全教室を含める）。判定は `resolveCompanyInvoiceExcludedIds`（`src/utils/companyBilling.ts`）。
+  サーバー `listBillingWorkspaces` は生の配列（未保存は null）を返し、既定の解決はクライアントだけで行う。
+- **合算請求先名**は同タブの入力欄（blur / Enter で保存）→ `billing.recipientName`。請求書の宛名は「<請求先名> 御中」。
+  空にすると会社名（未設定なら workspace キー）に戻る。
+- 書き込みは `saveFirebaseCompanyBillingSettings`（棟の文書へ `billing` だけ merge）。rules `workspaceBillingUnchanged()` で
+  **`billing` を変えられるのは請求許可者だけ**（教室追加時の `name`/`updatedAt` の merge など `billing` に触れない書き込みは従来どおり）。
+
 ### 13-3. 全社タブと窓口 callable（P-11 ③・§7-12）
 
 - callable **`listBillingWorkspaces`** 1 本（引数なし・読み取りのみ）。**呼び出した人が developer として所属する workspace だけ**を
@@ -675,6 +688,7 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-10-10 | §13-2b 追加（オーナー要望: 教室ごとの「合算」チェック `billing.excludedClassroomIds`・未保存なら検証用教室を既定除外・合算請求先名の編集・`billing` の書き込みは請求許可者のみ）。 |
 | 2026-10-10 | §13 Phase 3 追補（P-11 会社宛の請求: 棟の文書の会社項目と単価の優先順・会社宛合算請求書・全社タブと `listBillingWorkspaces`・請求許可者のフラグ化 第 1 段）。 |
 | 2026-10-10 | §12 Phase 2 追補（P-3 会社サイト一覧 `tools/company-sites.json`・hosting target = 会社キー・`hosting:main` 明示・verify/uptime の複数サイト対応／P-4 会社ごとの配信 CI `deploy-company-hosting.yml` と前提検査 `company-deploy-guard.mjs`）。 |
 | 2026-10-10 | §11-1 を P-1/P-2（計画 plan-2026-09-18 §3）に合わせて改定: 会社ごとの値は `src/company/profiles/<会社キー>.ts`、env `VITE_COMPANY_KEY` で選択（未登録は fail-closed・ビルド時も検査）、`displayName`=会社名「株式会社アーチ」と `brandName`=「スクールIE」を分離（D-6）、タブ名を `<アプリ名>_<場面>` に確定（D-7）し Phase 2 の宿題を閉じた。 |

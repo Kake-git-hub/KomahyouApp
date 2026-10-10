@@ -16,13 +16,13 @@ describe('listBillingWorkspaces の純粋ロジック(P-11 ③)', () => {
       memberData: { role: 'developer', billingAllowed: true },
       classroomCount: 3,
     })).toEqual({
-      workspaceKey: 'demo', companyName: '株式会社デモ', brandName: 'デモ塾', recipientName: '経理部', recipientEmail: 'k@demo.example.com', standardUnitPrice: 350, classroomCount: 3, billingAllowed: true,
+      workspaceKey: 'demo', companyName: '株式会社デモ', brandName: 'デモ塾', recipientName: '経理部', recipientEmail: 'k@demo.example.com', standardUnitPrice: 350, excludedClassroomIds: null, classroomCount: 3, billingAllowed: true,
     })
   })
 
   it('既存運営会社(main)のように会社の項目が無い棟でも落ちない・フラグ無し = false', () => {
     expect(summarizeBillingWorkspace({ workspaceKey: 'main', workspaceData: { name: 'main', schemaVersion: 1 }, memberData: { role: 'developer', email: 'x@example.com' }, classroomCount: 2 })).toEqual({
-      workspaceKey: 'main', companyName: '', brandName: '', recipientName: '', recipientEmail: '', standardUnitPrice: null, classroomCount: 2, billingAllowed: false,
+      workspaceKey: 'main', companyName: '', brandName: '', recipientName: '', recipientEmail: '', standardUnitPrice: null, excludedClassroomIds: null, classroomCount: 2, billingAllowed: false,
     })
   })
 

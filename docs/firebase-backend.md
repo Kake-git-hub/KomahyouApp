@@ -30,6 +30,7 @@ Hosting は `firebase.json` で `dist` をそのまま配信し、SPA なので�
   - `brandName`: ブランド名
   - `billing.recipientName` / `billing.recipientEmail`: 会社宛合算請求書の宛名・送付先
   - `billing.standardUnitPrice`: 会社の標準単価(円)。教室の `studentUnitPrice` が優先し、どちらも無ければ 300 円
+  - `billing.excludedClassroomIds`: 会社宛合算に含めない教室 ID の配列(請求画面の「合算」チェック)。無ければ登録済みの検証用教室を既定で除外
   - 既存運営会社 `main` は会社の項目が無くてもよい(無ければ従来どおり。読み方は `src/utils/companyBilling.ts`)
 
 ### `workspaces/{workspaceKey}/members/{uid}`

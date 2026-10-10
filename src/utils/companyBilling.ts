@@ -8,6 +8,7 @@
 //  ④ 請求の許可者 = developer かつ(member の billingAllowed フラグ **または** 従来のメール固定)。第 1 段ではフラグを足すだけで
 //     メール固定は残す(§7-11「先にフラグを立ててからハードコードを消す」)。
 import { calculateBillingAmounts, isBillingAllowedEmail, normalizeBillingMonthKey, TAX_RATE, type BillingInvoiceRow } from './billing'
+import { isRegisteredDevelopmentClassroom } from './developmentClassroomRegistry'
 
 export const DEFAULT_STUDENT_UNIT_PRICE = 300
 
@@ -21,6 +22,12 @@ export type CompanyBillingProfile = {
   recipientEmail: string
   /** 会社の標準単価(billing.standardUnitPrice)。null = 未設定(教室単価 → 既定 300 円)。 */
   standardUnitPrice: number | null
+  /**
+   * 会社宛合算に**含めない**教室 ID(billing.excludedClassroomIds・2026-10-10 オーナー要望「テスト教室・開発用教室は合算に出したくない」)。
+   * null = 一度も保存していない → 登録済みの検証用教室(developmentClassroomRegistry)だけを既定で除外する。
+   * 配列(空配列を含む)= 保存済み → その一覧どおり(既定は使わない)。
+   */
+  excludedClassroomIds: string[] | null
 }
 
 function readText(value: unknown): string {
@@ -45,7 +52,34 @@ export function parseCompanyBillingProfile(workspaceKey: string, data: unknown):
     recipientName: readText(billing.recipientName) || companyName,
     recipientEmail: readText(billing.recipientEmail),
     standardUnitPrice: readNonNegativeInteger(billing.standardUnitPrice),
+    excludedClassroomIds: readClassroomIdList(billing.excludedClassroomIds),
   }
+}
+
+function readClassroomIdList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const ids = value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+  return [...new Set(ids)].sort()
+}
+
+/**
+ * 合算から除外する教室 ID の集合。保存済み(配列)ならそれ、未保存(null)なら登録済みの検証用教室(開発用教室・テスト教室)を既定で除外。
+ * 既定を使うのは「一度もチェックを触っていない会社」だけ(触ると配列で保存され、以後は保存どおり)。
+ */
+export function resolveCompanyInvoiceExcludedIds(
+  profile: Pick<CompanyBillingProfile, 'workspaceKey' | 'excludedClassroomIds'>,
+  classroomIds: readonly string[],
+): Set<string> {
+  if (profile.excludedClassroomIds !== null) return new Set(profile.excludedClassroomIds)
+  return new Set(classroomIds.filter((classroomId) => isRegisteredDevelopmentClassroom(profile.workspaceKey, classroomId)))
+}
+
+/** チェックを切り替えたあとの除外一覧(保存する値・ソート済み・重複なし)。現在の除外集合から作る。 */
+export function toggleCompanyInvoiceExclusion(currentExcluded: ReadonlySet<string>, classroomId: string, included: boolean): string[] {
+  const next = new Set(currentExcluded)
+  if (included) next.delete(classroomId)
+  else next.add(classroomId)
+  return [...next].sort()
 }
 
 /** 画面に出す会社の呼び名。会社名が未設定なら workspaceKey(既存運営会社 main は棟の文書に会社名が入るまで "main")。 */
@@ -109,10 +143,14 @@ export function buildCompanyInvoice(params: {
   rows: readonly BillingInvoiceRow[]
   monthKey: string
   snapshotDate: string
+  /** 合算から除外する教室 ID(resolveCompanyInvoiceExcludedIds の結果)。省略 = 全教室を含める。 */
+  excludedClassroomIds?: ReadonlySet<string>
 }): CompanyInvoice {
   const monthKey = normalizeBillingMonthKey(params.monthKey)
+  const excluded = params.excludedClassroomIds ?? new Set<string>()
   const lines: CompanyInvoiceLine[] = [...params.rows]
     .filter((row) => normalizeBillingMonthKey(row.monthKey) === monthKey)
+    .filter((row) => !excluded.has(row.classroomId))
     .sort((left, right) => left.classroomName.localeCompare(right.classroomName, 'ja') || left.classroomId.localeCompare(right.classroomId))
     .map((row) => {
       const amounts = calculateBillingAmounts(row.studentCount, row.unitPrice, row.billedAmount)

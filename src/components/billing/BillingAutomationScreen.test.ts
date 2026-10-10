@@ -216,6 +216,28 @@ describe('buildCompanyInvoiceFromRecords(保存済み請求行 → 会社宛合�
   })
 })
 
+// 2026-10-10 オーナー要望: テスト教室・開発用教室は合算に出さない(全社タブも同じ除外を使う)。
+describe('buildCompanyInvoiceFromRecords の合算除外', () => {
+  const records = [
+    { ...storedRecordBase, classroomId: 'prodA', classroomName: '緑が丘校', studentCount: 40, billedAmount: 12000 },
+    { ...storedRecordBase, classroomId: 'test_classroom_20260507_dai', classroomName: 'テスト教室', studentCount: 140, billedAmount: 0 },
+    { ...storedRecordBase, classroomId: 'v8OZ7zH8vONNHjjYVcR1', classroomName: '開発用教室', studentCount: 144, billedAmount: 0 },
+  ]
+
+  it('未保存なら main の検証用教室(開発用・テスト教室)を既定で外す', () => {
+    const invoice = buildCompanyInvoiceFromRecords({ profile: parseCompanyBillingProfile('main', {}), records, monthKey: '2026-10', snapshotDate: '2026-10-15' })
+    expect(invoice.lines.map((line) => line.classroomName)).toEqual(['緑が丘校'])
+    expect(invoice.studentCount).toBe(40)
+  })
+
+  it('保存済みの除外一覧があればそれどおり(空配列 = 全教室)', () => {
+    const all = buildCompanyInvoiceFromRecords({ profile: parseCompanyBillingProfile('main', { billing: { excludedClassroomIds: [] } }), records, monthKey: '2026-10', snapshotDate: '2026-10-15' })
+    expect(all.lines).toHaveLength(3)
+    const onlyProd = buildCompanyInvoiceFromRecords({ profile: parseCompanyBillingProfile('main', { billing: { excludedClassroomIds: ['prodA'] } }), records, monthKey: '2026-10', snapshotDate: '2026-10-15' })
+    expect(onlyProd.lines.map((line) => line.classroomName)).toEqual(['テスト教室', '開発用教室'])
+  })
+})
+
 // 配線の固定(source-scan): 許可判定はフラグ経路つきの isBillingAllowedUser・タブ 2 つ・会社宛合算ボタン。
 describe('BillingAutomationScreen の配線(P-11)', () => {
   const source = readFileSync(fileURLToPath(new URL('./BillingAutomationScreen.tsx', import.meta.url)), 'utf8')
@@ -230,5 +252,16 @@ describe('BillingAutomationScreen の配線(P-11)', () => {
     expect(source).toContain('data-billing-tab="all"')
     expect(source).toContain('data-billing-company-invoice="true"')
     expect(source).toContain('listFirebaseBillingWorkspaces()')
+  })
+
+  it('教室ごとの「合算」チェック・合算請求先名の入力があり、合算 PDF はチェック済みの教室だけ(プレビューと同じ請求書)を使う', () => {
+    expect(source).toContain('data-billing-include={row.classroomId}')
+    expect(source).toContain('checked={!companyInvoiceExcludedIds.has(row.classroomId)}')
+    expect(source).toContain('data-billing-recipient-name="true"')
+    expect(source).toContain('onBlur={handleRecipientNameCommit}')
+    expect(source).toContain('const invoice = companyInvoicePreview')
+    expect(source).toContain('excludedClassroomIds: companyInvoiceExcludedIds')
+    // 全社タブも除外を適用する(buildCompanyInvoiceFromRecords 内)。
+    expect(source).toContain('const excludedClassroomIds = resolveCompanyInvoiceExcludedIds(params.profile, rows.map((row) => row.classroomId))')
   })
 })

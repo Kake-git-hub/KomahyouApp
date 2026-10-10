@@ -186,6 +186,26 @@ describe('Firestore rules: billing は billing開発者のみ', () => {
     await assertSucceeds(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: false, displayName: 'x' }))
   })
 
+  // 2026-10-10: 合算請求先名・合算に含めない教室は棟の文書の billing に保存する。変えられるのは請求許可者だけ。
+  it('請求許可者は棟の文書の billing(合算請求先名・除外教室)を merge 保存できる', async () => {
+    await assertSucceeds(setDoc(doc(devdb(), `workspaces/${WORKSPACE}`), { billing: { recipientName: '株式会社アーチ', excludedClassroomIds: ['A'] } }, { merge: true }))
+    const flagged = dbFor(DEV_FLAGGED, 'flagged@example.com')
+    await assertSucceeds(setDoc(doc(flagged, `workspaces/${WORKSPACE}`), { billing: { excludedClassroomIds: [] } }, { merge: true }))
+  })
+
+  it('許可の無い developer は棟の文書の billing を変えられないが、billing に触れない merge(教室追加時の name/updatedAt)は従来どおりできる', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { billing: { recipientName: '乗っ取り' } }, { merge: true }))
+    await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { name: WORKSPACE, schemaVersion: 1, updatedAt: '2026-10-10T00:00:00.000Z' }, { merge: true }))
+    await assertSucceeds(setDoc(doc(devdb(), `workspaces/${WORKSPACE}`), { billing: { recipientName: '正規' } }, { merge: true }))
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { billing: { recipientName: '正規', excludedClassroomIds: ['B'] } }, { merge: true }))
+    await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { updatedAt: '2026-10-11T00:00:00.000Z' }, { merge: true }))
+  })
+
+  it('室長は棟の文書を書けない(従来どおり)', async () => {
+    await assertFails(setDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}`), { billing: { recipientName: 'x' } }, { merge: true }))
+  })
+
   it('請求許可者(固定メール / フラグ)は会員文書に billingAllowed を立てられる・外せる', async () => {
     await assertSucceeds(updateDoc(doc(devdb(), `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: true }))
     const flagged = dbFor(DEV_FLAGGED, 'flagged@example.com')
