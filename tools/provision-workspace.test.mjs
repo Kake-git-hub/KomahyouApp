@@ -40,6 +40,8 @@ describe('validateArgs', () => {
 
   it('メール形式・単価の形式を検査', () => {
     expect(validateArgs({ ...good, developerEmail: 'bad' }).join()).toMatch(/--developer-email/)
+    expect(validateArgs({ ...good, developerUid: '../main' }).join()).toMatch(/--developer-uid/)
+    expect(validateArgs({ ...good, developerUid: 'ok_Uid-1' })).toEqual([])
     expect(validateArgs({ ...good, billingEmail: 'bad' }).join()).toMatch(/--billing-email/)
     expect(validateArgs({ ...good, unitPrice: '-1' }).join()).toMatch(/--unit-price/)
     expect(validateArgs({ ...good, unitPrice: '3.5' }).join()).toMatch(/--unit-price/)

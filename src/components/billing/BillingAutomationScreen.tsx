@@ -130,14 +130,16 @@ export function buildBillingRows(params: {
 
 /**
  * 保存済みの請求行(billingMonths/{月}/classrooms)から会社宛合算請求書を作る(「全社」タブ・P-11 ③)。
- * ⚠️ 生徒数も保存済みの値を使う(他社の名簿はこの画面では読まない)。この会社の「この会社」タブは恒久記録 > ライブで
- *    組み立て直すので、両者を一致させたいときは「入力内容を保存」で請求行を保存してから全社タブを開く。
+ * 生徒数は **恒久記録(studentCountLedger)があればその教室の記録値**、無ければ保存済みの値(この画面では他社の名簿を読まない
+ * ので、ライブ計算はできない)。「この会社」タブと同じ「恒久記録 > それ以外」の優先(レビュー所見 2026-10-10)。
+ * 金額(billedAmount)は保存値(「この会社」タブでも保存値が優先)。
  */
 export function buildCompanyInvoiceFromRecords(params: {
   profile: CompanyBillingProfile
   records: BillingClassroomRecord[]
   monthKey: string
   snapshotDate: string
+  ledgerEntry?: StudentCountLedgerEntry | null
 }): CompanyInvoice {
   const rows: BillingInvoiceRow[] = params.records.map((record) => ({
     classroomId: record.classroomId,
@@ -145,7 +147,10 @@ export function buildCompanyInvoiceFromRecords(params: {
     managerEmail: record.managerEmail,
     monthKey: normalizeBillingMonthKey(record.monthKey, params.monthKey as BillingMonthKey),
     snapshotDate: record.snapshotDate,
-    studentCount: record.studentCount,
+    studentCount: resolveBillingStudentCount({
+      ledgerStudentCount: params.ledgerEntry?.countByClassroomId[record.classroomId]?.studentCount ?? null,
+      liveStudentCount: record.studentCount,
+    }).studentCount,
     unitPrice: record.unitPrice,
     calculatedAmount: record.calculatedAmount,
     billedAmount: record.billedAmount,
@@ -324,7 +329,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
               recipientEmail: entry.recipientEmail,
               standardUnitPrice: entry.standardUnitPrice,
             }
-            return { entry, invoice: buildCompanyInvoiceFromRecords({ profile, records, monthKey, snapshotDate }), ledgerRecorded: ledger !== null, error: '' }
+            return { entry, invoice: buildCompanyInvoiceFromRecords({ profile, records, monthKey, snapshotDate, ledgerEntry: ledger }), ledgerRecorded: ledger !== null, error: '' }
           } catch (error) {
             return { entry, invoice: null, ledgerRecorded: false, error: error instanceof Error ? error.message : '読み込みに失敗しました。' }
           }
@@ -625,7 +630,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
             <div>
               <p className="panel-kicker">全社</p>
               <h2>{formatBillingMonthLabel(monthKey)} の会社宛請求</h2>
-              <p className="page-summary">自分が開発者として所属する会社だけが出ます(他社の棟は列挙されません)。金額は各社の<strong>保存済みの請求行</strong>(「入力内容を保存」した値)から合算します。開いている会社の最新の行を反映するには、先に「この会社」タブで保存してください。</p>
+              <p className="page-summary">自分が開発者として所属する会社だけが出ます(他社の棟は列挙されません)。金額は各社の<strong>保存済みの請求行</strong>(「入力内容を保存」した値)から合算し、生徒数は恒久記録があればその記録値を使います。開いている会社の最新の行を反映するには、先に「この会社」タブで保存してください。</p>
             </div>
             <div className="basic-data-row-actions developer-actions-right">
               <button className="secondary-button" type="button" onClick={() => setAllReloadToken((current) => current + 1)} disabled={isLoadingAll || authMode !== 'firebase'}>{isLoadingAll ? '読み込み中...' : '再読み込み'}</button>
@@ -642,7 +647,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                     <th>workspace</th>
                     <th>教室数(登録)</th>
                     <th>請求行</th>
-                    <th>生徒数</th>
+                    <th>生徒数(記録 or 保存時)</th>
                     <th>請求金額（税抜）</th>
                     <th>消費税（10%）</th>
                     <th>請求金額（税込）</th>

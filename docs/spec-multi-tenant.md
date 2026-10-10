@@ -659,6 +659,10 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 - 判定は **developer かつ（`members/{uid}.billingAllowed == true` または 従来のメール固定）** の 2 経路。
   rules `isBillingDeveloper` と `src/utils/companyBilling.ts` `isBillingAllowedUser` を同時に変える（片方だけ変えない）。
   rules の検証は `firebase/rules/firestore.rules.test.ts`（フラグ経路・フラグ無し拒否・メール固定の維持）。
+- **フラグを変えられるのは請求許可者だけ**（レビュー所見 2026-10-10）: `members/{uid}` の create/update は developer に開いているので、
+  rules `billingAllowedUnchanged()` で「`billingAllowed` を変える書き込みは `isBillingDeveloper` のみ」に絞る（許可外の developer が
+  自分に `true` を書いて請求を読めるようになる穴を塞ぐ。室長発行・表示名変更など他の書き込みは従来どおり）。
+- 「全社」タブの生徒数は、その workspace の恒久記録があれば記録値、無ければ保存時の値（金額は保存値）。
 - **第 2 段（メール固定の撤去）は別 push**。前提: オーナーが各 workspace（`main` と 2 社目）の自分の会員文書に
   `billingAllowed: true` を立て（Firebase コンソール or 新設時は `provision-workspace.mjs` が付与）、請求画面が開けることを確認
   してから、rules と `BILLING_ALLOWED_EMAILS` を同じ push で消す（§2-A 影響 3 承認済み・runbook `company-onboarding.md`）。

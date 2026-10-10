@@ -198,6 +198,22 @@ describe('buildCompanyInvoiceFromRecords(保存済み請求行 → 会社宛合�
     expect(invoice.taxAmount).toBe(320)
     expect(invoice.companyName).toBe('株式会社デモ')
   })
+
+  it('恒久記録がある教室はその記録値を生徒数にし、無い教室は保存時の値(記録 > 保存・レビュー所見 2026-10-10)', () => {
+    const profile = parseCompanyBillingProfile('demo', { companyName: '株式会社デモ' })
+    const records = [
+      { ...storedRecordBase, classroomId: 'a', classroomName: 'A校', studentCount: 4, billedAmount: 1200 },
+      { ...storedRecordBase, classroomId: 'b', classroomName: 'B校', studentCount: 6, billedAmount: 1800 },
+    ]
+    const ledgerEntry: StudentCountLedgerEntry = {
+      snapshotDate: '2026-10-15', monthKey: '2026-10', classroomCount: 1, studentCountTotal: 9, recordedAt: '2026-10-15T00:10:00.000Z', source: 'scheduled',
+      countByClassroomId: { a: { classroomId: 'a', classroomName: 'A校', snapshotDate: '2026-10-15', monthKey: '2026-10', studentCount: 9, recordedAt: '2026-10-15T00:10:00.000Z' } },
+    }
+    const invoice = buildCompanyInvoiceFromRecords({ profile, records, monthKey: '2026-10', snapshotDate: '2026-10-15', ledgerEntry })
+    expect(invoice.lines.map((line) => [line.classroomName, line.studentCount])).toEqual([['A校', 9], ['B校', 6]])
+    // 金額は保存値のまま。
+    expect(invoice.billedAmount).toBe(3000)
+  })
 })
 
 // 配線の固定(source-scan): 許可判定はフラグ経路つきの isBillingAllowedUser・タブ 2 つ・会社宛合算ボタン。

@@ -50,6 +50,8 @@ export function parseArgs(argv) {
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Firebase Auth の UID(英数字と _ -)。URL に埋め込むので `../` のような文字列を通さない(ガードは解決前の文字列で比較するため)。
+export const UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 
 export function validateArgs(options) {
   const errors = []
@@ -59,6 +61,7 @@ export function validateArgs(options) {
   else if (RESERVED_WORKSPACE_KEYS.includes(options.workspaceKey)) errors.push(`--workspace "${options.workspaceKey}" は既存運営会社のキーです。新設には使えません。`)
   if (!options.companyName) errors.push('--company-name <会社名> は必須です。')
   if (!options.developerUid) errors.push('--developer-uid <オーナーの Firebase Auth UID> は必須です。')
+  else if (!UID_PATTERN.test(options.developerUid)) errors.push(`--developer-uid "${options.developerUid}" の形式が不正です(英数字と _ - のみ・128 文字まで)。`)
   if (!options.developerEmail) errors.push('--developer-email <オーナーのメール> は必須です。')
   else if (!EMAIL_PATTERN.test(options.developerEmail)) errors.push(`--developer-email "${options.developerEmail}" の形式が不正です。`)
   if (options.billingEmail && !EMAIL_PATTERN.test(options.billingEmail)) errors.push(`--billing-email "${options.billingEmail}" の形式が不正です。`)

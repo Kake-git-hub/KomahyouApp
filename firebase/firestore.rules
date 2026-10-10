@@ -43,6 +43,12 @@ service cloud.firestore {
         );
     }
 
+    // members の create/update で billingAllowed が変わらない(無い = false 扱い)。
+    function billingAllowedUnchanged() {
+      return request.resource.data.get('billingAllowed', false)
+        == (resource == null ? false : resource.data.get('billingAllowed', false));
+    }
+
     function canAccessClassroom(workspaceKey, classroomId) {
       return hasWorkspaceMembership(workspaceKey)
         && (
@@ -57,7 +63,12 @@ service cloud.firestore {
 
       match /members/{userId} {
         allow read: if isDeveloper(workspaceKey) || (hasWorkspaceMembership(workspaceKey) && request.auth.uid == userId);
-        allow write: if isDeveloper(workspaceKey);
+        // 請求許可フラグ billingAllowed(P-11 ④)を変えられるのは請求許可者だけ(レビュー所見 2026-10-10)。
+        // developer なら誰でも members を書けるので、ここを塞がないと許可外の developer が自分に true を書いて
+        // billingMonths / 台帳を読めるようになる(メール固定が担っていた「developer の中でも請求は特定の人」が外れる)。
+        allow create, update: if isDeveloper(workspaceKey)
+          && (isBillingDeveloper(workspaceKey) || billingAllowedUnchanged());
+        allow delete: if isDeveloper(workspaceKey);
       }
 
       match /classrooms/{classroomId} {

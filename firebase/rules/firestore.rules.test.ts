@@ -168,6 +168,29 @@ describe('Firestore rules: billing は billing開発者のみ', () => {
   it('固定メールの developer はフラグ無しでも従来どおり読める(第 1 段ではメール固定を残す)', async () => {
     await assertSucceeds(getDoc(doc(devdb(), `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
   })
+
+  // レビュー所見(2026-10-10): members は developer なら書けるので、許可外の developer が自分に billingAllowed:true を
+  // 書けると請求の制限が外れる。フラグを変えられるのは請求許可者だけ。
+  it('許可の無い developer は自分(や他人)の会員文書に billingAllowed:true を書けない', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertFails(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: true }))
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { role: 'developer', email: 'unflagged@example.com', billingAllowed: true }))
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/new-dev`), { role: 'developer', email: 'n@example.com', billingAllowed: true }))
+  })
+
+  it('許可の無い developer でもフラグを変えない会員文書の書き込み(室長発行・表示名変更)は従来どおりできる', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertSucceeds(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${MGR_A}`), { displayName: '改名' }))
+    await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/new-mgr`), { role: 'manager', assignedClassroomId: 'A', email: 'n@example.com' }))
+    // false → false(フラグ据え置き)も可。
+    await assertSucceeds(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: false, displayName: 'x' }))
+  })
+
+  it('請求許可者(固定メール / フラグ)は会員文書に billingAllowed を立てられる・外せる', async () => {
+    await assertSucceeds(updateDoc(doc(devdb(), `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: true }))
+    const flagged = dbFor(DEV_FLAGGED, 'flagged@example.com')
+    await assertSucceeds(updateDoc(doc(flagged, `workspaces/${WORKSPACE}/members/${DEV_FLAGGED}`), { billingAllowed: false }))
+  })
 })
 
 // 在籍生徒数の恒久記録(台帳)。請求の根拠なので、クライアントからは**読めるだけ**。
