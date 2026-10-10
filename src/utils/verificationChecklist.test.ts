@@ -62,13 +62,14 @@ describe('確認リストの項目定義', () => {
 
   it('第41版(v1.5.582): 第40版の結果待ち項目はそのまま残し、2 社目準備 P-2(タブ名「コマ表アプリ_教室名」)の mc-1 を足した', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-31', 'tp-32', 'tp-33', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-31', 'tp-32', 'tp-33', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3', 'bl-4'])
     // 第41版(2026-10-10): mc-1 = タブ名の形(D-7・§2-A 影響 1 承認済み)。室長に見える唯一の変更なので開発用教室で先に見てもらう。
     expect(VERIFICATION_CHECKLIST.items.find((item) => item.id === 'mc-1')?.introducedIn).toBe('v1.5.582')
     // 同版に bl-1(請求画面の合算チェック・合算請求先名・オーナー要望 2026-10-10)を足した。確認中の版へ足すだけなので版は据え置き。
     expect(VERIFICATION_CHECKLIST.items.find((item) => item.id === 'bl-1')?.introducedIn).toBe('v1.5.583')
     expect(VERIFICATION_CHECKLIST.items.find((item) => item.id === 'bl-2')?.introducedIn).toBe('v1.5.584')
     expect(VERIFICATION_CHECKLIST.items.find((item) => item.id === 'bl-3')?.introducedIn).toBe('v1.5.585')
+    expect(VERIFICATION_CHECKLIST.items.find((item) => item.id === 'bl-4')?.introducedIn).toBe('v1.5.586')
     // 第39版の結果(2026-10-07・受付 20261007-114407125-114ac7b6)で hm-1〜hm-4 がすべて OK。
     for (const okId of ['hm-1', 'hm-2', 'hm-3', 'hm-4']) expect(ids, okId).not.toContain(okId)
     // 第37版の結果(2026-10-03・受付 20261003-141217458-0166a9a2)で OK。

@@ -858,82 +858,15 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
         ) : (
         <>
         <section className="board-panel board-panel-unified billing-control-panel">
-          <div className="basic-data-header developer-header">
-            <div>
+          {/* 上段: 対象月と恒久記録(左)・集計日と記録ボタン(右)。2026-10-10 オーナー要望でレイアウトを整理。 */}
+          <div className="billing-control-head">
+            <div className="billing-control-head-main">
               <p className="panel-kicker">対象月</p>
               <h2>{formatBillingMonthLabel(monthKey)}</h2>
-              <p className="page-summary">集計基準: {formatJapaneseDate(snapshotDate)} 0:00時点 / 支払期限: {formatJapaneseDate(dueDate)}</p>
-              {companyProfile ? (
-                <p className="page-summary billing-company-summary">
-                  会社: <strong>{companyDisplayLabel(companyProfile)}</strong>
-                  {companyProfile.brandName ? `(${companyProfile.brandName})` : ''}
-                  {' / '}標準単価: {companyProfile.standardUnitPrice === null ? '未設定(教室単価 → 300円)' : `${companyProfile.standardUnitPrice.toLocaleString('ja-JP')}円`}
-                </p>
-              ) : null}
-              <label className="basic-data-inline-field billing-recipient-field">
-                <span>会社名(「この会社」タブの表示・合算請求先名が空のときの宛名)</span>
-                <input
-                  data-billing-company-name="true"
-                  value={companyNameDraft}
-                  placeholder={effectiveCompanyProfile.workspaceKey}
-                  onChange={(event) => setCompanyNameDraft(event.target.value)}
-                  onBlur={handleCompanyNameCommit}
-                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-                  disabled={isSavingCompanySettings}
-                />
-              </label>
-              <label className="basic-data-inline-field billing-recipient-field">
-                <span>合算請求先名(請求書の宛名・「御中」は自動)</span>
-                <input
-                  data-billing-recipient-name="true"
-                  value={recipientNameDraft}
-                  placeholder={effectiveCompanyProfile.companyName || effectiveCompanyProfile.workspaceKey}
-                  onChange={(event) => setRecipientNameDraft(event.target.value)}
-                  onBlur={handleRecipientNameCommit}
-                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-                  disabled={isSavingCompanySettings}
-                />
-              </label>
-              <label className="basic-data-inline-field billing-recipient-field">
-                <span>合算請求先メール(会社宛合算メールの宛先・1 件)</span>
-                <input
-                  type="email"
-                  data-billing-recipient-email="true"
-                  value={recipientEmailDraft}
-                  placeholder="keiri@example.com"
-                  onChange={(event) => setRecipientEmailDraft(event.target.value)}
-                  onBlur={handleRecipientEmailCommit}
-                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-                  disabled={isSavingCompanySettings}
-                />
-              </label>
-              <p className="page-summary billing-company-draft-summary" data-billing-company-draft-status="true">
-                会社宛合算メール({formatBillingMonthLabel(monthKey)}):{' '}
-                {companyInvoiceDraft
-                  ? <span className="status-chip secondary">準備済 {formatDraftCreatedAt(companyInvoiceDraft.draftCreatedAt)}{companyInvoiceDraft.recipientEmail ? ` → ${companyInvoiceDraft.recipientEmail}` : ''}</span>
-                  : <span className="status-chip warning">未作成</span>}
-              </p>
-              <p className="page-summary billing-ledger-summary">
-                {ledgerEntry ? (
-                  <>
-                    <span className="status-chip secondary">恒久記録</span>
-                    {' '}{formatJapaneseDate(snapshotDate)} 0:00時点の在籍生徒数として記録済み（記録日時 {formatDraftCreatedAt(ledgerEntry.recordedAt) || '不明'}{ledgerEntry.source === 'manual' ? ' / 手動記録' : ''}）。名簿を後から直してもこの人数は変わりません。
-                    {studentCountAudit.driftRowCount > 0 ? ` 現在の名簿から計算し直すと ${studentCountAudit.driftRowCount} 教室で人数が変わります（請求は記録値で出します）。` : ''}
-                  </>
-                ) : (
-                  <>
-                    <span className="status-chip warning">暫定</span>
-                    {' '}この日の恒久記録はありません。現在の名簿から計算した参考値です（名簿を直すと人数が変わります）。
-                    {isFutureSnapshotDate
-                      ? 'まだ来ていない日なので記録もできません（先回りして記録すると、その日の自動記録がスキップされます）。'
-                      : isSnapshotDayOfMonth ? '毎月15日 0:00 に自動記録されます。' : `恒久記録があるのは毎月${DEFAULT_BILLING_SNAPSHOT_DAY}日です。`}
-                  </>
-                )}
-              </p>
             </div>
-            <div className="basic-data-row-actions developer-actions-right">
-              <label className="basic-data-inline-field billing-month-field">
-                <span>集計日（請求月）</span>
+            <div className="billing-control-head-side">
+              <label className="billing-field billing-field-date">
+                <span className="billing-field-label">集計日（請求月）</span>
                 <input type="date" value={snapshotDate} onChange={(event) => handleSnapshotDateChange(event.target.value)} />
               </label>
               {!ledgerEntry ? (
@@ -947,31 +880,132 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                     : 'この集計日の在籍生徒数を、後から名簿を直しても変わらない恒久記録として保存します。'}
                 >{isRecordingLedger ? '記録中...' : 'この日の人数を恒久記録する'}</button>
               ) : null}
-              <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
-              <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>
-              <button
-                className="secondary-button"
-                type="button"
-                data-billing-company-invoice="true"
-                onClick={() => void handleCompanyInvoice()}
-                disabled={isLoading || isPreparingCompanyInvoice || companyInvoicePreview.lines.length === 0}
-                title="「合算」にチェックした教室を 1 通にまとめた会社宛の請求書PDFをダウンロードします(教室宛の請求書とは別・保存状態は変えません)"
-              >{isPreparingCompanyInvoice ? '準備中...' : `会社宛合算請求書PDF(${companyInvoicePreview.lines.length}教室)`}</button>
-              <button
-                className="primary-button"
-                type="button"
-                data-billing-company-mail="true"
-                onClick={() => void handleCompanyInvoiceMail()}
-                disabled={isLoading || isDraftingCompanyInvoice || companyInvoicePreview.lines.length === 0 || !companyInvoicePreview.recipientEmail.trim()}
-                title={companyInvoicePreview.recipientEmail.trim()
-                  ? `合算請求書を ${companyInvoicePreview.recipientEmail} 宛のメールにします(${isGmailDraftCreationConfigured() ? 'PDF添付済みの Gmail 下書きを作成' : 'PDFをダウンロードして Gmail 作成画面を開く'})`
-                  : '合算請求先メールを入力すると押せます'}
-              >{isDraftingCompanyInvoice ? '準備中...' : (isGmailDraftCreationConfigured() ? '会社宛合算メール下書きを作成' : '会社宛合算メール作成')}</button>
             </div>
           </div>
-          <div className="workspace-auth-note">{isGmailDraftCreationConfigured()
-            ? '各行の「メール作成」で、請求書PDFを添付済みの Gmail 下書きを作成します。Gmail で内容を確認して送信してください。'
-            : '各行の「メール作成」で請求書PDFをダウンロードし、宛先・件名・本文を入力済みの Gmail 作成画面が開きます。ダウンロードしたPDFを添付して送信してください。（.env に VITE_GOOGLE_OAUTH_CLIENT_ID を設定すると、PDF添付済みの下書きを自動生成できます）'}</div>
+
+          <div className="billing-control-summary">
+            <p className="page-summary">
+              集計基準: {formatJapaneseDate(snapshotDate)} 0:00時点 / 支払期限: {formatJapaneseDate(dueDate)}
+              {companyProfile ? (
+                <span className="billing-company-summary">
+                  {' / '}会社: <strong>{companyDisplayLabel(companyProfile)}</strong>
+                  {companyProfile.brandName ? `(${companyProfile.brandName})` : ''}
+                  {' / '}標準単価: {companyProfile.standardUnitPrice === null ? '未設定(教室単価 → 300円)' : `${companyProfile.standardUnitPrice.toLocaleString('ja-JP')}円`}
+                </span>
+              ) : null}
+            </p>
+            <p className="page-summary billing-ledger-summary">
+              {ledgerEntry ? (
+                <>
+                  <span className="status-chip secondary">恒久記録</span>
+                  {' '}{formatJapaneseDate(snapshotDate)} 0:00時点の在籍生徒数として記録済み（記録日時 {formatDraftCreatedAt(ledgerEntry.recordedAt) || '不明'}{ledgerEntry.source === 'manual' ? ' / 手動記録' : ''}）。名簿を後から直してもこの人数は変わりません。
+                  {studentCountAudit.driftRowCount > 0 ? ` 現在の名簿から計算し直すと ${studentCountAudit.driftRowCount} 教室で人数が変わります（請求は記録値で出します）。` : ''}
+                </>
+              ) : (
+                <>
+                  <span className="status-chip warning">暫定</span>
+                  {' '}この日の恒久記録はありません。現在の名簿から計算した参考値です（名簿を直すと人数が変わります）。
+                  {isFutureSnapshotDate
+                    ? 'まだ来ていない日なので記録もできません（先回りして記録すると、その日の自動記録がスキップされます）。'
+                    : isSnapshotDayOfMonth ? '毎月15日 0:00 に自動記録されます。' : `恒久記録があるのは毎月${DEFAULT_BILLING_SNAPSHOT_DAY}日です。`}
+                </>
+              )}
+            </p>
+          </div>
+
+          {/* 下段: 教室ごとの請求(左)と会社宛合算(右)を横に並べる。狭い画面では縦に積む。 */}
+          <div className="billing-action-groups">
+            <div className="billing-action-group">
+              <div className="billing-action-group-head">
+                <h3>教室ごとの請求</h3>
+                <span className="detail-note">{rows.length}教室</span>
+              </div>
+              <p className="billing-action-group-note" title={isGmailDraftCreationConfigured() ? undefined : '.env に VITE_GOOGLE_OAUTH_CLIENT_ID を設定すると、PDF添付済みの Gmail 下書きを自動生成できます'}>{isGmailDraftCreationConfigured()
+                ? '表の各行の「メール作成」で、請求書PDFを添付済みの Gmail 下書きを作成します。Gmail で内容を確認して送信してください。'
+                : '表の各行の「メール作成」で請求書PDFをダウンロードし、宛先・件名・本文入りの Gmail 作成画面を開きます。PDFを添付して送信してください。'}</p>
+              <div className="billing-action-buttons">
+                <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
+                <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>
+              </div>
+            </div>
+
+            <div className="billing-action-group billing-action-group-company">
+              <div className="billing-action-group-head">
+                <h3>会社宛合算</h3>
+                <span className="detail-note">合算対象 {companyInvoicePreview.lines.length}/{rows.length}教室 / 税込 {formatYen(companyInvoicePreview.billedAmountWithTax)}</span>
+              </div>
+              <div className="billing-settings-grid">
+                <label className="billing-field">
+                  <span className="billing-field-label">会社名</span>
+                  <input
+                    data-billing-company-name="true"
+                    value={companyNameDraft}
+                    placeholder={effectiveCompanyProfile.workspaceKey}
+                    onChange={(event) => setCompanyNameDraft(event.target.value)}
+                    onBlur={handleCompanyNameCommit}
+                    onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                    disabled={isSavingCompanySettings}
+                  />
+                  <span className="billing-field-hint">「この会社」タブの表示。請求先名が空のときの宛名</span>
+                </label>
+                <label className="billing-field">
+                  <span className="billing-field-label">合算請求先名</span>
+                  <input
+                    data-billing-recipient-name="true"
+                    value={recipientNameDraft}
+                    placeholder={effectiveCompanyProfile.companyName || effectiveCompanyProfile.workspaceKey}
+                    onChange={(event) => setRecipientNameDraft(event.target.value)}
+                    onBlur={handleRecipientNameCommit}
+                    onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                    disabled={isSavingCompanySettings}
+                  />
+                  <span className="billing-field-hint">請求書の宛名(「御中」は自動で付きます)</span>
+                </label>
+                <label className="billing-field">
+                  <span className="billing-field-label">合算請求先メール</span>
+                  <input
+                    type="email"
+                    data-billing-recipient-email="true"
+                    value={recipientEmailDraft}
+                    placeholder="keiri@example.com"
+                    onChange={(event) => setRecipientEmailDraft(event.target.value)}
+                    onBlur={handleRecipientEmailCommit}
+                    onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                    disabled={isSavingCompanySettings}
+                  />
+                  <span className="billing-field-hint">会社宛合算メールの宛先(1 件)</span>
+                </label>
+              </div>
+              <div className="billing-action-group-footer">
+                <p className="billing-company-draft-summary" data-billing-company-draft-status="true">
+                  {formatBillingMonthLabel(monthKey)}のメール:{' '}
+                  {companyInvoiceDraft
+                    ? <span className="status-chip secondary">準備済 {formatDraftCreatedAt(companyInvoiceDraft.draftCreatedAt)}{companyInvoiceDraft.recipientEmail ? ` → ${companyInvoiceDraft.recipientEmail}` : ''}</span>
+                    : <span className="status-chip warning">未作成</span>}
+                </p>
+                <div className="billing-action-buttons">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    data-billing-company-invoice="true"
+                    onClick={() => void handleCompanyInvoice()}
+                    disabled={isLoading || isPreparingCompanyInvoice || companyInvoicePreview.lines.length === 0}
+                    title="「合算」にチェックした教室を 1 通にまとめた会社宛の請求書PDFをダウンロードします(教室宛の請求書とは別・保存状態は変えません)"
+                  >{isPreparingCompanyInvoice ? '準備中...' : `会社宛合算請求書PDF(${companyInvoicePreview.lines.length}教室)`}</button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    data-billing-company-mail="true"
+                    onClick={() => void handleCompanyInvoiceMail()}
+                    disabled={isLoading || isDraftingCompanyInvoice || companyInvoicePreview.lines.length === 0 || !companyInvoicePreview.recipientEmail.trim()}
+                    title={companyInvoicePreview.recipientEmail.trim()
+                      ? `合算請求書を ${companyInvoicePreview.recipientEmail} 宛のメールにします(${isGmailDraftCreationConfigured() ? 'PDF添付済みの Gmail 下書きを作成' : 'PDFをダウンロードして Gmail 作成画面を開く'})`
+                      : '合算請求先メールを入力すると押せます'}
+                  >{isDraftingCompanyInvoice ? '準備中...' : (isGmailDraftCreationConfigured() ? '会社宛合算メール下書きを作成' : '会社宛合算メール作成')}</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section className="board-panel board-panel-unified billing-issuer-panel">

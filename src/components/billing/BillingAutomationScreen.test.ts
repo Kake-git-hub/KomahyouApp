@@ -291,6 +291,16 @@ describe('BillingAutomationScreen の配線(P-11)', () => {
     expect(source).toContain("if (typeof updates.companyName === 'string') {")
   })
 
+  // オーナー要望(2026-10-10)「レイアウトを揃えて見やすく・横をもっと使って」: 上部は専用レイアウト。
+  it('上部の入力欄は請求画面専用の .billing-field(ラベルが上)で、ラベル幅 42px 固定の .basic-data-inline-field に戻さない', () => {
+    const panel = source.slice(source.indexOf('billing-control-panel'), source.indexOf('billing-issuer-panel'))
+    expect(panel).not.toContain('basic-data-inline-field')
+    expect(panel).toContain('className="billing-settings-grid"')
+    expect(panel.match(/className="billing-field"/g)?.length).toBe(3)
+    expect(panel).toContain('className="billing-action-groups"')
+    expect(panel).toContain('className="billing-control-summary"')
+  })
+
   it('「会社宛合算請求書PDF」はダウンロードだけ(メール作成は別ボタン)', () => {
     const download = source.slice(source.indexOf('const downloadCompanyInvoice = async'), source.indexOf('// 会社宛合算の対象'))
     expect(download).toContain('downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))')
