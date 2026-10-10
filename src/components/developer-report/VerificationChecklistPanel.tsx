@@ -21,6 +21,7 @@ import {
   countVerificationChecklistProgress,
   getVerificationChecklistEntry,
   parseVerificationChecklistDraft,
+  resolveVerificationChecklistText,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
   setVerificationChecklistMemo,
@@ -35,6 +36,11 @@ export type VerificationChecklistPanelProps = {
   classroomName?: string
   /** 1通ぶんの本文を送る。App 側の submitDeveloperReport(source: 'board', category: 'request')へ委譲。 */
   onSubmitNote: (note: string) => Promise<DeveloperReportSubmitResult>
+  /**
+   * 文面の `{{student:<生徒ID>}}` を名前にする(2026-10-10 オーナー指示「開発用教室は名前を見ていい」)。
+   * App が開いている教室(開発用教室)の生徒データから引く。送信本文(id と結果だけ)には使わない。
+   */
+  resolveStudentName?: (studentId: string) => string | null | undefined
 }
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: VerificationChecklistStatus; label: string }> = [
@@ -61,7 +67,8 @@ function writeStorage(key: string, value: string) {
 
 // 教室を切り替えたときは App 側が key={classroomId} で作り直すため、下書きは初期化時に読み直される
 // (他教室の入力を持ち越さない)。ここで effect を使って state を書き戻さない。
-export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName }: VerificationChecklistPanelProps) {
+  const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
   const [draft, setDraft] = useState<VerificationChecklistDraft>(() => parseVerificationChecklistDraft(readStorage(storageKey)))
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
@@ -167,18 +174,18 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>
                   <div className="verification-checklist-item-title">
                     <span className="verification-checklist-item-id">{item.id}</span>
-                    {item.title}
+                    {text(item.title)}
                   </div>
-                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">前提</span>{item.prep}</p> : null}
+                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">前提</span>{text(item.prep)}</p> : null}
                   <div className="verification-checklist-label">操作</div>
                   <ol className="verification-checklist-steps">
-                    {item.steps.map((step) => <li key={step}>{step}</li>)}
+                    {item.steps.map((step) => <li key={step}>{text(step)}</li>)}
                   </ol>
                   {item.check && item.check.length > 0 ? (
                     <>
                       <div className="verification-checklist-label">見るところ</div>
                       <ul className="verification-checklist-check">
-                        {item.check.map((line) => <li key={line}>{line}</li>)}
+                        {item.check.map((line) => <li key={line}>{text(line)}</li>)}
                       </ul>
                     </>
                   ) : null}
