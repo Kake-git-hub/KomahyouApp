@@ -228,6 +228,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   const [isSavingCompanySettings, setIsSavingCompanySettings] = useState(false)
   // 合算請求先メール(棟の文書 billing.recipientEmail へ blur で保存)と、その月の会社宛合算メールの準備記録(2026-10-10 オーナー要望)。
   const [recipientEmailDraft, setRecipientEmailDraft] = useState('')
+  // 会社名(棟の文書の companyName・「この会社(…)」タブと合算の宛名の既定に使う・2026-10-10 オーナー要望で編集可に)。
+  const [companyNameDraft, setCompanyNameDraft] = useState('')
   const [companyInvoiceDraft, setCompanyInvoiceDraft] = useState<CompanyInvoiceDraftRecord | null>(null)
   const [isDraftingCompanyInvoice, setIsDraftingCompanyInvoice] = useState(false)
   // 「この会社」/「全社」タブ(P-11 ③)。全社は自分が developer として所属する workspace の保存済み請求行から合算する。
@@ -295,6 +297,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
         setCompanyProfile(nextCompanyProfile)
         setRecipientNameDraft(nextCompanyProfile.recipientName)
         setRecipientEmailDraft(nextCompanyProfile.recipientEmail)
+        setCompanyNameDraft(nextCompanyProfile.companyName)
         const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records, ledgerEntry: nextLedgerEntry, companyProfile: nextCompanyProfile })
         setRows(nextRows)
 
@@ -534,7 +537,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   // 合算設定の保存(棟の文書 billing へ merge)。ローカル表示では画面上だけ反映する。失敗したら元に戻す。
   const persistCompanySettings = async (
     next: CompanyBillingProfile,
-    updates: { recipientName?: string; recipientEmail?: string; excludedClassroomIds?: string[] },
+    updates: { companyName?: string; recipientName?: string; recipientEmail?: string; excludedClassroomIds?: string[] },
     successMessage: string,
   ) => {
     const previous = companyProfile
@@ -546,12 +549,21 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     setIsSavingCompanySettings(true)
     try {
       await saveFirebaseCompanyBillingSettings(updates)
+      // 会社名を変えると、請求先名が未入力の会社では宛名の既定も変わる。保存後に棟の文書を読み直して派生値を正しくする。
+      if (typeof updates.companyName === 'string') {
+        const reloaded = await loadFirebaseCompanyBillingProfile().catch(() => null)
+        if (reloaded) {
+          setCompanyProfile(reloaded)
+          setRecipientNameDraft(reloaded.recipientName)
+        }
+      }
       setStatusMessage(successMessage)
     } catch (error) {
       setCompanyProfile(previous)
       if (previous) {
         setRecipientNameDraft(previous.recipientName)
         setRecipientEmailDraft(previous.recipientEmail)
+        setCompanyNameDraft(previous.companyName)
       }
       setStatusMessage(error instanceof Error ? `合算設定の保存に失敗しました: ${error.message}` : '合算設定の保存に失敗しました。')
     } finally {
@@ -576,6 +588,19 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
       { ...effectiveCompanyProfile, recipientName: recipientName || effectiveCompanyProfile.companyName },
       { recipientName },
       recipientName ? `合算請求先名を「${recipientName}」に保存しました。` : '合算請求先名を空にしました(会社名を使います)。',
+    )
+  }
+
+  const handleCompanyNameCommit = () => {
+    const companyName = companyNameDraft.trim()
+    setCompanyNameDraft(companyName)
+    if (companyName === effectiveCompanyProfile.companyName) return
+    // 請求先名がまだ会社名の既定どおり(=入力していない)なら、画面上の宛名も新しい会社名に合わせる(保存後に読み直して確定)。
+    const followsCompanyName = effectiveCompanyProfile.recipientName === effectiveCompanyProfile.companyName
+    void persistCompanySettings(
+      { ...effectiveCompanyProfile, companyName, ...(followsCompanyName ? { recipientName: companyName } : {}) },
+      { companyName },
+      companyName ? `会社名を「${companyName}」に保存しました。` : `会社名を空にしました(workspace キー「${effectiveCompanyProfile.workspaceKey}」で表示します)。`,
     )
   }
 
@@ -845,6 +870,18 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   {' / '}標準単価: {companyProfile.standardUnitPrice === null ? '未設定(教室単価 → 300円)' : `${companyProfile.standardUnitPrice.toLocaleString('ja-JP')}円`}
                 </p>
               ) : null}
+              <label className="basic-data-inline-field billing-recipient-field">
+                <span>会社名(「この会社」タブの表示・合算請求先名が空のときの宛名)</span>
+                <input
+                  data-billing-company-name="true"
+                  value={companyNameDraft}
+                  placeholder={effectiveCompanyProfile.workspaceKey}
+                  onChange={(event) => setCompanyNameDraft(event.target.value)}
+                  onBlur={handleCompanyNameCommit}
+                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                  disabled={isSavingCompanySettings}
+                />
+              </label>
               <label className="basic-data-inline-field billing-recipient-field">
                 <span>合算請求先名(請求書の宛名・「御中」は自動)</span>
                 <input

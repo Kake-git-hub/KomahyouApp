@@ -656,13 +656,15 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
   サーバー `listBillingWorkspaces` は生の配列（未保存は null）を返し、既定の解決はクライアントだけで行う。
 - **合算請求先名**は同タブの入力欄（blur / Enter で保存）→ `billing.recipientName`。請求書の宛名は「<請求先名> 御中」。
   空にすると会社名（未設定なら workspace キー）に戻る。
+- **会社名**は同タブの入力欄（blur / Enter）→ 棟の文書の最上位 `companyName`。「この会社（…）」タブの表示と、合算請求先名が空のときの
+  宛名に使う（空なら workspace キー）。保存後に棟の文書を読み直して宛名の既定を確定する。
 - **合算請求先メール**は同タブの入力欄（blur / Enter・`normalizeRecipientEmail` で 1 件の形式を検査し小文字化・不正なら保存しない）→
   `billing.recipientEmail`。**「会社宛合算メール作成」ボタン**（宛先未設定・合算 0 教室では押せない）は教室ごとの「メール作成」と同じ
   ハイブリッド: `VITE_GOOGLE_OAUTH_CLIENT_ID` があれば合算請求書PDFを添付した Gmail 下書き、無ければ PDF をダウンロードして作成画面。
   CC は運営控え。準備した日時と宛先を `billingMonths/{月}.companyInvoice`（`draftCreatedAt`・`recipientEmail`・`draftId`）に残し、
   画面に「準備済 日時 → 宛先」を出す。「会社宛合算請求書PDF」ボタンはダウンロードだけ（メールは開かない）。
 - 書き込みは `saveFirebaseCompanyBillingSettings`（棟の文書へ `billing` だけ merge）。rules `workspaceBillingUnchanged()` で
-  **`billing` を変えられるのは請求許可者だけ**（教室追加時の `name`/`updatedAt` の merge など `billing` に触れない書き込みは従来どおり）。
+  **`billing` と `companyName` を変えられるのは請求許可者だけ**（教室追加時の `name`/`updatedAt` の merge など `billing` に触れない書き込みは従来どおり）。
 
 ### 13-3. 全社タブと窓口 callable（P-11 ③・§7-12）
 
@@ -693,6 +695,7 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-10-10 | §13-2b に会社名（`companyName`）の編集を追記。rules で `companyName` の変更も請求許可者に限定。 |
 | 2026-10-10 | §13-2b に合算請求先メールの入力と「会社宛合算メール作成」（`billingMonths/{月}.companyInvoice` に準備記録）を追記。PDF ボタンはダウンロードだけに。 |
 | 2026-10-10 | §13-2b 追加（オーナー要望: 教室ごとの「合算」チェック `billing.excludedClassroomIds`・未保存なら検証用教室を既定除外・合算請求先名の編集・`billing` の書き込みは請求許可者のみ）。 |
 | 2026-10-10 | §13 Phase 3 追補（P-11 会社宛の請求: 棟の文書の会社項目と単価の優先順・会社宛合算請求書・全社タブと `listBillingWorkspaces`・請求許可者のフラグ化 第 1 段）。 |

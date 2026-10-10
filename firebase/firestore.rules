@@ -43,10 +43,12 @@ service cloud.firestore {
         );
     }
 
-    // 棟の文書の create/update で billing が変わらない(無い = null 扱い)。
+    // 棟の文書の create/update で billing と companyName(請求の宛名に使う会社名)が変わらない(無い = null 扱い)。
     function workspaceBillingUnchanged() {
       return request.resource.data.get('billing', null)
-        == (resource == null ? null : resource.data.get('billing', null));
+          == (resource == null ? null : resource.data.get('billing', null))
+        && request.resource.data.get('companyName', null)
+          == (resource == null ? null : resource.data.get('companyName', null));
     }
 
     // members の create/update で billingAllowed が変わらない(無い = false 扱い)。

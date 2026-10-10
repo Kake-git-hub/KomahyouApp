@@ -58,15 +58,19 @@ export async function loadFirebaseCompanyBillingProfile(workspaceKey?: string): 
  * (2026-10-10 オーナー要望)。書けるのは請求許可者だけ(rules の workspaceBillingUnchanged)。指定した項目だけ書き、
  * 会社名・標準単価など他の billing 項目は残す(Firestore の merge は入れ子の map も項目単位で合流する)。
  */
-export async function saveFirebaseCompanyBillingSettings(updates: { recipientName?: string; recipientEmail?: string; excludedClassroomIds?: readonly string[] }) {
+export async function saveFirebaseCompanyBillingSettings(updates: { companyName?: string; recipientName?: string; recipientEmail?: string; excludedClassroomIds?: readonly string[] }) {
   const user = await ensureFirebaseAuthenticatedUser()
+  // 会社名は棟の文書の最上位 companyName(tools/provision-workspace.mjs が書く場所・2026-10-10 オーナー要望で画面から編集可に)。
+  const topLevel: Record<string, unknown> = {}
+  if (typeof updates.companyName === 'string') topLevel.companyName = updates.companyName.trim()
   const billing: Record<string, unknown> = {}
   if (typeof updates.recipientName === 'string') billing.recipientName = updates.recipientName.trim()
   if (typeof updates.recipientEmail === 'string') billing.recipientEmail = updates.recipientEmail.trim().toLowerCase()
   if (updates.excludedClassroomIds) billing.excludedClassroomIds = [...new Set(updates.excludedClassroomIds)].sort()
-  if (Object.keys(billing).length === 0) return
+  if (Object.keys(billing).length === 0 && Object.keys(topLevel).length === 0) return
   await setDoc(doc(requireFirestore(), 'workspaces', resolveWorkspaceKey()), {
-    billing,
+    ...topLevel,
+    ...(Object.keys(billing).length > 0 ? { billing } : {}),
     billingUpdatedAt: new Date().toISOString(),
     billingUpdatedBy: user.uid,
   }, { merge: true })

@@ -283,6 +283,14 @@ describe('BillingAutomationScreen の配線(P-11)', () => {
     expect(handler).toContain('markFirebaseCompanyInvoiceDraftCreated({ monthKey, recipientEmail: to, draftId })')
   })
 
+  // オーナー要望(2026-10-10):「この会社(main)」の main(会社名)も編集できるように。
+  it('会社名の入力があり、保存は棟の文書の companyName へ(保存後に読み直して宛名の既定を更新)', () => {
+    expect(source).toContain('data-billing-company-name="true"')
+    expect(source).toContain('onBlur={handleCompanyNameCommit}')
+    expect(source).toContain('{ companyName },')
+    expect(source).toContain("if (typeof updates.companyName === 'string') {")
+  })
+
   it('「会社宛合算請求書PDF」はダウンロードだけ(メール作成は別ボタン)', () => {
     const download = source.slice(source.indexOf('const downloadCompanyInvoice = async'), source.indexOf('// 会社宛合算の対象'))
     expect(download).toContain('downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))')

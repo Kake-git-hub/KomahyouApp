@@ -202,6 +202,15 @@ describe('Firestore rules: billing は billing開発者のみ', () => {
     await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { updatedAt: '2026-10-11T00:00:00.000Z' }, { merge: true }))
   })
 
+  // 2026-10-10: 会社名(棟の文書の最上位 companyName)も請求画面から編集する。変えられるのは請求許可者だけ。
+  it('会社名 companyName を変えられるのは請求許可者だけ', async () => {
+    await assertSucceeds(setDoc(doc(devdb(), `workspaces/${WORKSPACE}`), { companyName: '株式会社アーチ' }, { merge: true }))
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { companyName: '乗っ取り' }, { merge: true }))
+    // 会社名に触れない merge は従来どおり。
+    await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}`), { updatedAt: '2026-10-12T00:00:00.000Z' }, { merge: true }))
+  })
+
   it('室長は棟の文書を書けない(従来どおり)', async () => {
     await assertFails(setDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}`), { billing: { recipientName: 'x' } }, { merge: true }))
   })
