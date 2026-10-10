@@ -1,0 +1,127 @@
+name: Deploy Company Hosting
+
+# 会社(workspace)ごとのフロントを、その会社の Hosting サイト(komahyou-<会社キー>.web.app)へ配信する(P-4・2026-10-10)。
+# 計画: docs/plan-2026-09-18-second-company-onboarding.md §3 P-4 / runbook: docs/runbooks/company-onboarding.md
+#
+# 既存運営会社(main)の自動デプロイ deploy-firebase-hosting.yml とは別物で、次を**しない**:
+#   - package.json の patch bump(版番号はコア版のまま。会社版は formatAppVersionLabel の会社版 = 空)
+#   - functions / firestore rules / storage rules のデプロイ(会社サイトは hosting だけ)
+#   - 自動起動(手動 workflow_dispatch のみ)
+#
+# 必要な GitHub Secrets(会社キーごと・会社を足すたびにオーナーが登録する):
+#   FIREBASE_WEB_ENV_<会社キー>         … 本番用の .env 形式テキスト全文。VITE_FIREBASE_WORKSPACE_KEY=<会社キー> と
+#                                         VITE_COMPANY_KEY=<会社キー> を含める(食い違うとビルドが止まる = 混線防止)
+#   STAGING_FIREBASE_WEB_ENV_<会社キー> … staging 用(projectId=komahyouapp-staging)
+#   RE_FIREBASE_SERVICE_ACCOUNT / STAGING_FIREBASE_SERVICE_ACCOUNT … 既存の SA(hosting の配信に使う)
+#
+# 事前条件(無ければ fail-closed で止まる):
+#   - src/company/profiles/<会社キー>.ts と profiles/index.ts の登録(P-1)
+#   - tools/company-sites.json の会社行、.firebaserc の hosting target(= 会社キー)、firebase.json の hosting 要素(P-3)
+#   - Firebase コンソールで Hosting サイト(siteId)が作成済み
+
+on:
+  workflow_dispatch:
+    inputs:
+      company_key:
+        description: '会社キー(英小文字と数字・3〜16 文字。main は不可 = 既存運営会社は deploy-firebase-hosting.yml)'
+        type: string
+        required: true
+      target_project:
+        description: '配信先プロジェクト'
+        type: choice
+        required: true
+        default: komahyouapp-staging
+        options:
+          - komahyouapp-staging
+          - komahyouapp-prod
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-company-hosting-${{ inputs.company_key }}-${{ inputs.target_project }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-company:
+    runs-on: ubuntu-latest
+    env:
+      COMPANY_KEY: ${{ inputs.company_key }}
+      TARGET_PROJECT: ${{ inputs.target_project }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 会社キーの検査: 命名規則・main の拒否・プロファイル(P-1)と会社サイト一覧(P-3)への登録・.firebaserc の target。
+      - name: Guard company key and registrations
+        run: node tools/company-deploy-guard.mjs --company "$COMPANY_KEY" --project "$TARGET_PROJECT"
+
+      # 会社ごとの secret(FIREBASE_WEB_ENV_<会社キー> / STAGING_FIREBASE_WEB_ENV_<会社キー>)からビルド env を復元し、
+      # workspace キー・会社キー・プロジェクトが入力と一致することを検査する(本番に別会社の設定で出さない)。
+      - name: Write frontend build env from company secret
+        run: |
+          if [ "$TARGET_PROJECT" = "komahyouapp-prod" ]; then
+            SECRET_NAME="FIREBASE_WEB_ENV_${COMPANY_KEY}"
+            printf '%s\n' "$PROD_WEB_ENV" > .env.production.local
+          else
+            SECRET_NAME="STAGING_FIREBASE_WEB_ENV_${COMPANY_KEY}"
+            printf '%s\n' "$STAGING_WEB_ENV" > .env.production.local
+          fi
+          if [ ! -s .env.production.local ] || [ "$(tr -d '[:space:]' < .env.production.local)" = "" ]; then
+            echo "GitHub secret $SECRET_NAME が未登録です(会社キー $COMPANY_KEY・$TARGET_PROJECT)。docs/runbooks/company-onboarding.md を参照。"
+            exit 1
+          fi
+          node tools/company-deploy-guard.mjs --company "$COMPANY_KEY" --project "$TARGET_PROJECT" --env-file .env.production.local
+        env:
+          PROD_WEB_ENV: ${{ secrets[format('FIREBASE_WEB_ENV_{0}', inputs.company_key)] }}
+          STAGING_WEB_ENV: ${{ secrets[format('STAGING_FIREBASE_WEB_ENV_{0}', inputs.company_key)] }}
+
+      # vite.config.ts が env の会社キーで src/company/profiles/<会社キー>.ts を選ぶ(無ければここで失敗)。bump はしない。
+      - name: Build app (company profile)
+        run: npm run build
+
+      - name: Write Firebase service account credentials
+        run: |
+          if [ "$TARGET_PROJECT" = "komahyouapp-prod" ]; then
+            printf '%s' "$PROD_SA" > "$RUNNER_TEMP/firebase-sa.json"
+          else
+            printf '%s' "$STAGING_SA" > "$RUNNER_TEMP/firebase-sa.json"
+          fi
+          if [ ! -s "$RUNNER_TEMP/firebase-sa.json" ]; then
+            echo "サービスアカウントの secret が未登録です($TARGET_PROJECT)。"
+            exit 1
+          fi
+        env:
+          PROD_SA: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+          STAGING_SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      # hosting の target = 会社キーだけを配信する(functions / rules は含めない)。
+      - name: Deploy to company Hosting site
+        run: |
+          set +e
+          npx --yes firebase-tools deploy --project "$TARGET_PROJECT" --only "hosting:${COMPANY_KEY}" --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            if grep -q "is the current active version" "$RUNNER_TEMP/deploy.log"; then
+              echo "現行ライブと同一内容のため新規リリースはスキップされました(既に反映済み)。成功として続行します。"
+            else
+              echo "会社サイトへの配信に失敗しました(会社キー $COMPANY_KEY・$TARGET_PROJECT)。"
+              exit "$code"
+            fi
+          fi
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+
+      - name: Verify company site (asset integrity)
+        run: node tools/verify-firebase-hosting.mjs --project "$TARGET_PROJECT" --company "$COMPANY_KEY" --retries 20 --retryDelayMs 3000

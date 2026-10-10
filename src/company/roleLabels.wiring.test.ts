@@ -102,8 +102,12 @@ describe('役割名辞書の配線(画面と印刷を同時に)', () => {
   it('App.tsx: アカウント一覧の役割表示・タブ名・ログイン題名は辞書経由(直書きへ戻さない)', () => {
     expect(APP_TSX).toContain("{user.role === 'developer' ? roleLabel('developer') : roleLabel('classroomAdmin')}")
     expect(APP_TSX).not.toContain("'developer' ? '開発者' : '教室管理者'")
-    expect(APP_TSX).toContain("document.title = `${roleLabel('developer')}画面 | ${appName()}`")
-    expect(APP_TSX).toContain('document.title = classroomName ? `${classroomName} | ${appName()}` : appName()')
+    // タブ名は `<アプリ名>_<場面>`(P-2・オーナー確定 2026-09-18 D-7)。旧形「<教室名> | コマ表アプリ」へ戻さない。
+    expect(APP_TSX).toContain("document.title = appDocumentTitle(`${roleLabel('developer')}画面`)")
+    expect(APP_TSX).toContain("document.title = appDocumentTitle(classroomName ?? '')")
+    expect(APP_TSX).toContain('document.title = appName()')
+    expect(APP_TSX).not.toContain("document.title = `${roleLabel('developer')}画面 | ${appName()}`")
+    expect(APP_TSX).not.toContain('document.title = classroomName ? `${classroomName} | ${appName()}` : appName()')
     expect(APP_TSX).toContain('<h1>{appName()}ログイン</h1>')
     expect(APP_TSX).not.toContain("document.title = 'コマ表アプリ'")
     expect(APP_TSX).not.toContain("document.title = '開発者画面 | コマ表アプリ'")

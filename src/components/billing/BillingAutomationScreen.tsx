@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
 import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integrations/gmail/compose'
-import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
+import { listFirebaseBillingWorkspaces, loadFirebaseBillingMonth, loadFirebaseCompanyBillingProfile, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord, type BillingWorkspaceListEntry } from '../../integrations/firebase/billingStore'
 import { loadStudentCountLedgerEntry, recordStudentCountLedgerEntry, type StudentCountLedgerEntry } from '../../integrations/firebase/studentCountLedger'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
+import { buildCompanyInvoice, companyDisplayLabel, isBillingAllowedUser, parseCompanyBillingProfile, resolveBillingUnitPrice, type CompanyBillingProfile, type CompanyInvoice } from '../../utils/companyBilling'
+import { buildCompanyInvoiceMailBody, buildCompanyInvoiceMailSubject, buildCompanyInvoicePdfFileName } from '../../utils/companyInvoiceHtml'
+import { getFirebaseBackendConfig } from '../../integrations/firebase/config'
 import { getJstTodayDateKey } from '../../utils/jstDate'
-import { buildInvoicePdfFileName, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
+import { buildInvoicePdfFileName, createCompanyInvoicePdfBlob, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
 
 type BillingAutomationScreenProps = {
   currentUser: WorkspaceUser
@@ -27,7 +30,6 @@ type BillingRowDraft = BillingInvoiceRow & {
   hasStudentCountDrift: boolean
 }
 
-const DEFAULT_STUDENT_UNIT_PRICE = 300
 const ISSUER_STORAGE_KEY = 'billingInvoiceIssuerInfo:v1'
 // 請求メールに自動で追加する CC 宛先（運営控え用）。
 const BILLING_CC_ADDRESS = 'bkkdmzn@gmail.com'
@@ -72,6 +74,8 @@ export function buildBillingRows(params: {
   snapshotDate: string
   records: BillingClassroomRecord[]
   ledgerEntry: StudentCountLedgerEntry | null
+  /** 棟の文書の会社プロファイル(標準単価・P-11 ①)。null/省略 = 標準単価なし(従来どおり教室単価 → 300 円)。 */
+  companyProfile?: CompanyBillingProfile | null
 }) {
   const recordByClassroomId = new Map(params.records.map((record) => [record.classroomId, record]))
   const managerById = new Map(params.users.map((user) => [user.id, user]))
@@ -92,7 +96,12 @@ export function buildBillingRows(params: {
       ledgerStudentCount: params.ledgerEntry?.countByClassroomId[classroom.id]?.studentCount ?? null,
       liveStudentCount,
     })
-    const unitPrice = record?.unitPrice ?? classroom.studentUnitPrice ?? DEFAULT_STUDENT_UNIT_PRICE
+    // 単価: 保存済みの請求行 > 教室の studentUnitPrice > 会社の標準単価(棟の文書・P-11 ①) > 既定 300 円。
+    const unitPrice = resolveBillingUnitPrice({
+      recordUnitPrice: record?.unitPrice,
+      classroomUnitPrice: classroom.studentUnitPrice,
+      companyStandardUnitPrice: params.companyProfile?.standardUnitPrice ?? null,
+    })
     const amounts = calculateBillingAmounts(resolvedStudentCount.studentCount, unitPrice, record?.billedAmount)
 
     return {
@@ -117,6 +126,47 @@ export function buildBillingRows(params: {
       draftCreatedAt: record?.draftCreatedAt,
     }
   })
+}
+
+/**
+ * 保存済みの請求行(billingMonths/{月}/classrooms)から会社宛合算請求書を作る(「全社」タブ・P-11 ③)。
+ * 生徒数は **恒久記録(studentCountLedger)があればその教室の記録値**、無ければ保存済みの値(この画面では他社の名簿を読まない
+ * ので、ライブ計算はできない)。「この会社」タブと同じ「恒久記録 > それ以外」の優先(レビュー所見 2026-10-10)。
+ * 金額(billedAmount)は保存値(「この会社」タブでも保存値が優先)。
+ */
+export function buildCompanyInvoiceFromRecords(params: {
+  profile: CompanyBillingProfile
+  records: BillingClassroomRecord[]
+  monthKey: string
+  snapshotDate: string
+  ledgerEntry?: StudentCountLedgerEntry | null
+}): CompanyInvoice {
+  const rows: BillingInvoiceRow[] = params.records.map((record) => ({
+    classroomId: record.classroomId,
+    classroomName: record.classroomName,
+    managerEmail: record.managerEmail,
+    monthKey: normalizeBillingMonthKey(record.monthKey, params.monthKey as BillingMonthKey),
+    snapshotDate: record.snapshotDate,
+    studentCount: resolveBillingStudentCount({
+      ledgerStudentCount: params.ledgerEntry?.countByClassroomId[record.classroomId]?.studentCount ?? null,
+      liveStudentCount: record.studentCount,
+    }).studentCount,
+    unitPrice: record.unitPrice,
+    calculatedAmount: record.calculatedAmount,
+    billedAmount: record.billedAmount,
+    taxAmount: record.taxAmount,
+    billedAmountWithTax: record.billedAmountWithTax,
+    invoiceNumber: record.invoiceNumber,
+    memo: record.memo,
+  }))
+  return buildCompanyInvoice({ profile: params.profile, rows, monthKey: params.monthKey, snapshotDate: params.snapshotDate })
+}
+
+type AllWorkspaceSummary = {
+  entry: BillingWorkspaceListEntry
+  invoice: CompanyInvoice | null
+  ledgerRecorded: boolean
+  error: string
 }
 
 function buildMailSubject(row: BillingInvoiceRow) {
@@ -166,7 +216,17 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   // 手動記録の直後に請求データ＋台帳を読み直すためのトークン(値が変われば読み込み effect が再実行される)。
   const [reloadToken, setReloadToken] = useState(0)
 
-  const canUseBilling = isBillingAllowedEmail(currentUser.email) && currentUser.role === 'developer'
+  // 請求画面の許可: developer かつ(member の billingAllowed フラグ または 従来のメール固定)(P-11 ④ 第 1 段・rules と同じ 2 経路)。
+  const canUseBilling = isBillingAllowedUser(currentUser)
+  // 棟の文書の会社プロファイル(会社名・請求先・標準単価・P-11 ①)。ローカル表示では空(従来どおり)。
+  const [companyProfile, setCompanyProfile] = useState<CompanyBillingProfile | null>(null)
+  const [isPreparingCompanyInvoice, setIsPreparingCompanyInvoice] = useState(false)
+  // 「この会社」/「全社」タブ(P-11 ③)。全社は自分が developer として所属する workspace の保存済み請求行から合算する。
+  const [activeTab, setActiveTab] = useState<'company' | 'all'>('company')
+  const [allSummaries, setAllSummaries] = useState<AllWorkspaceSummary[]>([])
+  const [isLoadingAll, setIsLoadingAll] = useState(false)
+  const [allReloadToken, setAllReloadToken] = useState(0)
+  const currentWorkspaceKey = authMode === 'firebase' ? getFirebaseBackendConfig().workspaceKey : 'local'
   // 請求月は集計日の年月から導出する（請求月ピッカーは集計日カレンダーに統合）。
   const monthKey = normalizeBillingMonthKey(snapshotDate.slice(0, 7))
   const dueDate = getBillingDueDate(monthKey)
@@ -207,16 +267,21 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
       try {
         // 恒久記録の取得は請求データと独立。台帳が読めなくても画面は暫定値で使えるようにする
         // (記録が無い日付・移行前の月でも請求作業を止めない)。
-        const [records, nextLedgerEntry] = await Promise.all([
+        // 棟の文書(会社プロファイル)が読めなくても画面は止めない(標準単価なし = 従来の単価解決)。
+        const [records, nextLedgerEntry, nextCompanyProfile] = await Promise.all([
           authMode === 'firebase' ? loadFirebaseBillingMonth(monthKey) : Promise.resolve([]),
           authMode === 'firebase'
             ? loadStudentCountLedgerEntry(snapshotDate).catch(() => null)
             : Promise.resolve(null),
+          authMode === 'firebase'
+            ? loadFirebaseCompanyBillingProfile().catch(() => parseCompanyBillingProfile(currentWorkspaceKey, undefined))
+            : Promise.resolve(parseCompanyBillingProfile('local', undefined)),
         ])
         if (cancelled) return
 
         setLedgerEntry(nextLedgerEntry)
-        const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records, ledgerEntry: nextLedgerEntry })
+        setCompanyProfile(nextCompanyProfile)
+        const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records, ledgerEntry: nextLedgerEntry, companyProfile: nextCompanyProfile })
         setRows(nextRows)
 
         const ledgerNote = nextLedgerEntry
@@ -240,7 +305,48 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     return () => {
       cancelled = true
     }
-  }, [authMode, canUseBilling, classrooms, monthKey, reloadToken, snapshotDate, users])
+  }, [authMode, canUseBilling, classrooms, currentWorkspaceKey, monthKey, reloadToken, snapshotDate, users])
+
+  // 「全社」タブ: 窓口 callable で所属 workspace を列挙し、各社の保存済み請求行と恒久記録の有無を読む(読み取りのみ)。
+  useEffect(() => {
+    if (!canUseBilling || activeTab !== 'all' || authMode !== 'firebase') return
+    let cancelled = false
+    setIsLoadingAll(true)
+    void (async () => {
+      try {
+        const entries = await listFirebaseBillingWorkspaces()
+        const summaries = await Promise.all(entries.map(async (entry): Promise<AllWorkspaceSummary> => {
+          try {
+            const [records, ledger] = await Promise.all([
+              loadFirebaseBillingMonth(monthKey, entry.workspaceKey),
+              loadStudentCountLedgerEntry(snapshotDate, entry.workspaceKey).catch(() => null),
+            ])
+            const profile: CompanyBillingProfile = {
+              workspaceKey: entry.workspaceKey,
+              companyName: entry.companyName,
+              brandName: entry.brandName,
+              recipientName: entry.recipientName,
+              recipientEmail: entry.recipientEmail,
+              standardUnitPrice: entry.standardUnitPrice,
+            }
+            return { entry, invoice: buildCompanyInvoiceFromRecords({ profile, records, monthKey, snapshotDate, ledgerEntry: ledger }), ledgerRecorded: ledger !== null, error: '' }
+          } catch (error) {
+            return { entry, invoice: null, ledgerRecorded: false, error: error instanceof Error ? error.message : '読み込みに失敗しました。' }
+          }
+        }))
+        if (cancelled) return
+        setAllSummaries(summaries)
+        setStatusMessage(`全社一覧を読み込みました(${summaries.length} 社・${formatBillingMonthLabel(monthKey)}・保存済みの請求行から集計)。`)
+      } catch (error) {
+        if (!cancelled) setStatusMessage(error instanceof Error ? error.message : '全社一覧の読み込みに失敗しました。')
+      } finally {
+        if (!cancelled) setIsLoadingAll(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, allReloadToken, authMode, canUseBilling, monthKey, snapshotDate])
 
   const updateIssuerInfo = (updates: Partial<InvoiceIssuerInfo>) => {
     setIssuerInfo((current) => {
@@ -388,6 +494,51 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     }
   }
 
+  // 会社宛合算請求書(P-11 ②): 表示中の教室行を 1 通にまとめて PDF をダウンロードし、請求先メールがあれば Gmail 作成画面を開く。
+  // 教室宛の請求書はそのまま残す(§7-10「会社ごとに選べる」)。保存状態(billingMonths)は変えない。
+  const downloadCompanyInvoice = async (invoice: CompanyInvoice) => {
+    const pdfBlob = await createCompanyInvoicePdfBlob(invoice, issuerInfo)
+    downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))
+    if (invoice.recipientEmail.trim()) {
+      openGmailCompose({
+        to: invoice.recipientEmail,
+        cc: BILLING_CC_ADDRESS,
+        subject: buildCompanyInvoiceMailSubject(invoice),
+        body: buildCompanyInvoiceMailBody(invoice, issuerInfo, getInvoiceDateKey()),
+      })
+    }
+  }
+
+  const handleCompanyInvoice = async () => {
+    const profile = companyProfile ?? parseCompanyBillingProfile(currentWorkspaceKey, undefined)
+    const invoice = buildCompanyInvoice({ profile, rows, monthKey, snapshotDate })
+    setIsPreparingCompanyInvoice(true)
+    setStatusMessage(`${companyDisplayLabel(profile)} 宛の合算請求書PDF(${invoice.lines.length}教室)を準備しています。`)
+    try {
+      await downloadCompanyInvoice(invoice)
+      setStatusMessage(invoice.recipientEmail.trim()
+        ? `${companyDisplayLabel(profile)} 宛の合算請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`
+        : `${companyDisplayLabel(profile)} 宛の合算請求書PDFをダウンロードしました(請求先メールが未設定のため Gmail は開いていません)。`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '合算請求書の作成に失敗しました。')
+    } finally {
+      setIsPreparingCompanyInvoice(false)
+    }
+  }
+
+  const handleCompanyInvoiceForWorkspace = async (summary: AllWorkspaceSummary) => {
+    if (!summary.invoice) return
+    setIsPreparingCompanyInvoice(true)
+    try {
+      await downloadCompanyInvoice(summary.invoice)
+      setStatusMessage(`${summary.invoice.companyName} 宛の合算請求書PDF(${summary.invoice.lines.length}教室・保存済みの請求行から)をダウンロードしました。`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '合算請求書の作成に失敗しました。')
+    } finally {
+      setIsPreparingCompanyInvoice(false)
+    }
+  }
+
   const handlePrepareAll = async () => {
     const usesOAuth = isGmailDraftCreationConfigured()
     setIsCreatingAllDrafts(true)
@@ -451,15 +602,113 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
         <div className="toolbar-row toolbar-row-secondary">
           <div className="toolbar-status">{statusMessage}</div>
         </div>
+        <div className="toolbar-row toolbar-row-secondary billing-tab-row" role="tablist" aria-label="請求の対象">
+          <button
+            className={activeTab === 'company' ? 'primary-button slim' : 'secondary-button slim'}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'company'}
+            data-billing-tab="company"
+            onClick={() => setActiveTab('company')}
+          >この会社{companyProfile ? `(${companyDisplayLabel(companyProfile)})` : ''}</button>
+          <button
+            className={activeTab === 'all' ? 'primary-button slim' : 'secondary-button slim'}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'all'}
+            data-billing-tab="all"
+            onClick={() => setActiveTab('all')}
+            title="自分が開発者として所属する会社(workspace)の請求を、保存済みの請求行から合算して一覧します"
+          >全社</button>
+        </div>
       </section>
 
       <main className="developer-main billing-main">
+        {activeTab === 'all' ? (
+        <section className="board-panel board-panel-unified developer-backup-panel billing-all-panel">
+          <div className="basic-data-header developer-header">
+            <div>
+              <p className="panel-kicker">全社</p>
+              <h2>{formatBillingMonthLabel(monthKey)} の会社宛請求</h2>
+              <p className="page-summary">自分が開発者として所属する会社だけが出ます(他社の棟は列挙されません)。金額は各社の<strong>保存済みの請求行</strong>(「入力内容を保存」した値)から合算し、生徒数は恒久記録があればその記録値を使います。開いている会社の最新の行を反映するには、先に「この会社」タブで保存してください。</p>
+            </div>
+            <div className="basic-data-row-actions developer-actions-right">
+              <button className="secondary-button" type="button" onClick={() => setAllReloadToken((current) => current + 1)} disabled={isLoadingAll || authMode !== 'firebase'}>{isLoadingAll ? '読み込み中...' : '再読み込み'}</button>
+            </div>
+          </div>
+          {authMode !== 'firebase' ? (
+            <div className="workspace-auth-note">ローカル表示中は全社一覧を取得できません(Firebase 接続時のみ)。</div>
+          ) : (
+            <div className="billing-table-scroll">
+              <table className="developer-billing-table billing-table billing-all-table">
+                <thead>
+                  <tr>
+                    <th>会社</th>
+                    <th>workspace</th>
+                    <th>教室数(登録)</th>
+                    <th>請求行</th>
+                    <th>生徒数(記録 or 保存時)</th>
+                    <th>請求金額（税抜）</th>
+                    <th>消費税（10%）</th>
+                    <th>請求金額（税込）</th>
+                    <th>恒久記録</th>
+                    <th>請求先</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allSummaries.length === 0 && !isLoadingAll ? (
+                    <tr><td colSpan={11}>所属する会社がありません。</td></tr>
+                  ) : null}
+                  {allSummaries.map((summary) => (
+                    <tr key={summary.entry.workspaceKey} data-billing-workspace={summary.entry.workspaceKey}>
+                      <td>
+                        <strong>{summary.entry.companyName || summary.entry.workspaceKey}</strong>
+                        {summary.entry.brandName ? <><br /><span className="detail-note">{summary.entry.brandName}</span></> : null}
+                        {summary.entry.workspaceKey === currentWorkspaceKey ? <><br /><span className="status-chip secondary">開いている会社</span></> : null}
+                      </td>
+                      <td>{summary.entry.workspaceKey}</td>
+                      <td className="numeric-cell">{summary.entry.classroomCount}</td>
+                      <td className="numeric-cell">{summary.invoice ? summary.invoice.lines.length : '-'}</td>
+                      <td className="numeric-cell">{summary.invoice ? `${summary.invoice.studentCount.toLocaleString('ja-JP')}人` : '-'}</td>
+                      <td className="numeric-cell">{summary.invoice ? formatYen(summary.invoice.billedAmount) : '-'}</td>
+                      <td className="numeric-cell">{summary.invoice ? formatYen(summary.invoice.taxAmount) : '-'}</td>
+                      <td className="numeric-cell"><strong>{summary.invoice ? formatYen(summary.invoice.billedAmountWithTax) : '-'}</strong></td>
+                      <td>{summary.ledgerRecorded ? <span className="status-chip secondary">記録あり</span> : <span className="status-chip warning">記録なし</span>}</td>
+                      <td>
+                        {summary.entry.recipientName || <span className="basic-data-muted-inline">未設定</span>}
+                        {summary.entry.recipientEmail ? <><br /><span className="detail-note">{summary.entry.recipientEmail}</span></> : null}
+                        {!summary.entry.billingAllowed ? <><br /><span className="detail-note">請求許可フラグ未設定(メール固定で利用中)</span></> : null}
+                        {summary.error ? <><br /><span className="detail-note">{summary.error}</span></> : null}
+                      </td>
+                      <td>
+                        <div className="basic-data-row-actions billing-row-actions">
+                          <button className="primary-button slim" type="button" onClick={() => void handleCompanyInvoiceForWorkspace(summary)} disabled={!summary.invoice || summary.invoice.lines.length === 0 || isPreparingCompanyInvoice}>合算請求書PDF</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+        ) : (
+        <>
         <section className="board-panel board-panel-unified billing-control-panel">
           <div className="basic-data-header developer-header">
             <div>
               <p className="panel-kicker">対象月</p>
               <h2>{formatBillingMonthLabel(monthKey)}</h2>
               <p className="page-summary">集計基準: {formatJapaneseDate(snapshotDate)} 0:00時点 / 支払期限: {formatJapaneseDate(dueDate)}</p>
+              {companyProfile ? (
+                <p className="page-summary billing-company-summary">
+                  会社: <strong>{companyDisplayLabel(companyProfile)}</strong>
+                  {companyProfile.brandName ? `(${companyProfile.brandName})` : ''}
+                  {' / '}請求先: {companyProfile.recipientName || '未設定'}{companyProfile.recipientEmail ? ` <${companyProfile.recipientEmail}>` : ''}
+                  {' / '}標準単価: {companyProfile.standardUnitPrice === null ? '未設定(教室単価 → 300円)' : `${companyProfile.standardUnitPrice.toLocaleString('ja-JP')}円`}
+                </p>
+              ) : null}
               <p className="page-summary billing-ledger-summary">
                 {ledgerEntry ? (
                   <>
@@ -496,6 +745,14 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
               ) : null}
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
               <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>
+              <button
+                className="secondary-button"
+                type="button"
+                data-billing-company-invoice="true"
+                onClick={() => void handleCompanyInvoice()}
+                disabled={isLoading || isPreparingCompanyInvoice || rows.length === 0}
+                title="表示中の全教室を 1 通にまとめた会社宛の請求書PDFをダウンロードします(教室宛の請求書とは別・保存状態は変えません)"
+              >{isPreparingCompanyInvoice ? '準備中...' : '会社宛合算請求書PDF'}</button>
             </div>
           </div>
           <div className="workspace-auth-note">{isGmailDraftCreationConfigured()
@@ -596,6 +853,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
             </table>
           </div>
         </section>
+        </>
+        )}
       </main>
     </div>
   )

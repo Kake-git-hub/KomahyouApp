@@ -3,7 +3,7 @@
 // 誤って異常(赤=incident 起票+失敗メール)にしないこと。実ネットワークは使わず
 // fetchStatusFn を注入してリトライ挙動を検証する。
 import { describe, it, expect } from 'vitest'
-import { checkOnce, checkTarget, buildReport } from './uptime-check.mjs'
+import { buildTargets, checkOnce, checkTarget, buildReport } from './uptime-check.mjs'
 
 const target = { name: 'prod', base: 'https://example.test' }
 
@@ -102,5 +102,26 @@ describe('buildReport', () => {
     ])
     expect(bad.allOk).toBe(false)
     expect(bad.report).toContain('❌ [prod]')
+  })
+})
+
+describe('buildTargets(監視対象は tools/company-sites.json から・P-3)', () => {
+  it('既定は本番 main だけ。MONITOR_STAGING で staging が足される', () => {
+    expect(buildTargets()).toEqual([{ name: 'prod', base: 'https://komahyouapp-prod.web.app' }])
+    expect(buildTargets({ monitorStaging: true })).toEqual([
+      { name: 'prod', base: 'https://komahyouapp-prod.web.app' },
+      { name: 'staging', base: 'https://komahyouapp-staging.web.app' },
+    ])
+  })
+
+  it('会社を足すと本番サイトが監視対象に増える(monitor:false は除外)', () => {
+    const sites = {
+      companies: [
+        { companyKey: 'main', hosting: { 'komahyouapp-prod': { siteId: 'komahyouapp-prod', url: 'https://komahyouapp-prod.web.app' } }, monitor: true },
+        { companyKey: 'xyz', hosting: { 'komahyouapp-prod': { siteId: 'komahyou-xyz', url: 'https://komahyou-xyz.web.app' } }, monitor: true },
+        { companyKey: 'off', hosting: { 'komahyouapp-prod': { siteId: 'komahyou-off', url: 'https://komahyou-off.web.app' } }, monitor: false },
+      ],
+    }
+    expect(buildTargets({}, sites).map((t) => t.name)).toEqual(['prod', 'prod:xyz'])
   })
 })

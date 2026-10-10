@@ -16,6 +16,7 @@
   - ワークフローが**赤**になる → GitHub の通知設定で**オーナーにメール**が届く。
   - **復旧すると** その incident Issue に「復旧」コメント＋**自動クローズ**。
 - 手動実行: Actions →「Uptime Check」→ Run workflow（`monitor_staging` を入れると staging も確認）。
+- 監視対象の URL は `tools/company-sites.json`（会社ごとの Hosting サイト一覧・`monitor: true` の会社の本番サイト全部）。会社を足すと自動的に監視対象に増える（2026-10-10・P-3）。
 
 ### 2. リリース時のライブ検証（自動・既存）
 - `Deploy to Firebase Hosting` が毎デプロイ後に `tools/verify-firebase-hosting.mjs` で配信実体を検証。

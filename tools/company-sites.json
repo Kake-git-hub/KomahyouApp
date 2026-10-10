@@ -1,0 +1,14 @@
+{
+  "$comment": "会社(workspace)ごとの Hosting サイト一覧 = 唯一の正本(計画 docs/plan-2026-09-18-second-company-onboarding.md P-3)。.firebaserc の hosting target(= companyKey)・firebase.json の hosting 配列(target ごとに 1 要素・同内容)・tools/verify-firebase-hosting.mjs・tools/uptime-check.mjs がここを読む。整合は tools/company-sites.test.mjs が検査する。会社を足すとき: companies に 1 要素足す → .firebaserc の両プロジェクトに target を足す → firebase.json の hosting 配列に main の要素を複製して target だけ変える(docs/runbooks/company-onboarding.md)。",
+  "companies": [
+    {
+      "companyKey": "main",
+      "label": "株式会社アーチ(既存運営会社)",
+      "hosting": {
+        "komahyouapp-prod": { "siteId": "komahyouapp-prod", "url": "https://komahyouapp-prod.web.app" },
+        "komahyouapp-staging": { "siteId": "komahyouapp-staging", "url": "https://komahyouapp-staging.web.app" }
+      },
+      "monitor": true
+    }
+  ]
+}

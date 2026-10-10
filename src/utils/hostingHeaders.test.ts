@@ -5,13 +5,22 @@ import { resolve } from 'node:path'
 // 手動テスト No.210(2026-08-29): QR提出ページ /s/** と提出API /api/submission/** に Cache-Control が無く、
 // 端末が古いレスポンス(「すでに提出済みです」等)を見続けて「登録解除したのに再提出できない」の一因になり得た。
 // no-store をスペックロックする(外すと落ちる)。
-describe('firebase.json hosting headers (提出まわりのキャッシュ禁止)', () => {
-  const firebaseJson = JSON.parse(readFileSync(resolve(__dirname, '../../firebase.json'), 'utf-8')) as {
-    hosting: {
-      headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }>
-      rewrites: Array<{ source: string; destination?: string; function?: { functionId: string; region: string } }>
-    }
-  }
+// 2026-10-10(2 社目準備 P-3): hosting は会社ごとの配列(target = 会社キー)になった。配列の**全要素**に同じ headers / rewrites が
+// あることをここで検査する(会社サイトだけキャッシュ禁止や API rewrite が欠ける回帰を止める)。配列の中身の同一性は
+// tools/company-sites.test.mjs でも固定している。
+type HostingEntry = {
+  target?: string
+  headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }>
+  rewrites: Array<{ source: string; destination?: string; function?: { functionId: string; region: string } }>
+}
+
+const hostingEntries = (() => {
+  const raw = JSON.parse(readFileSync(resolve(__dirname, '../../firebase.json'), 'utf-8')) as { hosting: HostingEntry | HostingEntry[] }
+  return Array.isArray(raw.hosting) ? raw.hosting : [raw.hosting]
+})()
+
+describe.each(hostingEntries.map((entry) => [entry.target ?? '(single)', entry] as const))('firebase.json hosting[%s] headers (提出まわりのキャッシュ禁止)', (_target, hosting) => {
+  const firebaseJson = { hosting }
 
   const findCacheControl = (source: string) => firebaseJson.hosting.headers
     .find((entry) => entry.source === source)?.headers

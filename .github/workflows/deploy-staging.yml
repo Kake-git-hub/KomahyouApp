@@ -126,7 +126,7 @@ jobs:
       - name: Deploy hosting + rules to Staging
         run: |
           set +e
-          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only hosting,firestore,storage --non-interactive \
+          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only hosting:main,firestore,storage --non-interactive \
             2>&1 | tee "$RUNNER_TEMP/deploy-hosting.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then

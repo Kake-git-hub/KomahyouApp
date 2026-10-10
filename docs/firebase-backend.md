@@ -24,8 +24,13 @@ Hosting は `firebase.json` で `dist` をそのまま配信し、SPA なので�
 
 ### `workspaces/{workspaceKey}`
 
-- ワークスペース単位の親ドキュメント
-- 名前や将来の全体設定を置く
+- ワークスペース(= 会社)単位の親ドキュメント(棟の文書)
+- フィールド(`name`・`schemaVersion` は従来どおり。会社の項目は P-11・2026-10-10・`tools/provision-workspace.mjs` が書く)
+  - `companyName`: 会社名(請求画面の表示・合算請求書の宛名の既定)
+  - `brandName`: ブランド名
+  - `billing.recipientName` / `billing.recipientEmail`: 会社宛合算請求書の宛名・送付先
+  - `billing.standardUnitPrice`: 会社の標準単価(円)。教室の `studentUnitPrice` が優先し、どちらも無ければ 300 円
+  - 既存運営会社 `main` は会社の項目が無くてもよい(無ければ従来どおり。読み方は `src/utils/companyBilling.ts`)
 
 ### `workspaces/{workspaceKey}/members/{uid}`
 
@@ -35,6 +40,7 @@ Hosting は `firebase.json` で `dist` をそのまま配信し、SPA なので�
   - `email`
   - `role`: `developer` or `manager`
   - `assignedClassroomId`
+  - `billingAllowed`(任意・P-11 ④ 第 1 段): `true` なら請求画面を使える developer。無い場合は従来のメール固定で判定(rules と `src/utils/companyBilling.ts` の 2 経路)
 
 ### `workspaces/{workspaceKey}/classrooms/{classroomId}`
 

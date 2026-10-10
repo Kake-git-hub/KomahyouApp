@@ -75,7 +75,9 @@ function main() {
     runCommand(npmCommand, ['run', 'build:functions'])
   }
 
-  const deployTargets = withFunctions ? 'hosting,firestore,functions' : 'hosting,firestore'
+  // hosting は会社(= target)を明示する(P-3・2026-10-10)。firebase.json の hosting が配列になったため、`hosting` だけだと
+  // 全会社のサイトへ同じ dist を配信してしまう。このスクリプトは既存運営会社(main)専用。
+  const deployTargets = withFunctions ? 'hosting:main,firestore,functions' : 'hosting:main,firestore'
   runCommand(npxCommand, ['firebase-tools', 'deploy', '--project', projectId, '--only', deployTargets])
   runCommand(process.execPath, [verifyScriptPath, '--project', projectId, '--retries', '20', '--retryDelayMs', '3000'])
 

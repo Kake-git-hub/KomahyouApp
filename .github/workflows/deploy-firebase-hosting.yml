@@ -93,10 +93,13 @@ jobs:
       # 検知して失敗するので気付ける(その場合は Firebase コンソールで前リリースへロールバック)。
       # 注: プレビューチャンネル方式は firebase-tools の channel:deploy が成功時も 409/400 を
       # 返す不安定挙動のため不採用(run #3〜#5 で確認)。
+      # `hosting:main` = 既存運営会社のサイト(target 名 = 会社キー・.firebaserc)。firebase.json の hosting は会社ごとの配列
+      # (P-3・2026-10-10)なので `--only hosting` だけにすると全会社のサイトへこの dist が配信される。会社別の配信は
+      # deploy-company-hosting.yml(P-4)。
       - name: Deploy to Firebase Hosting (live)
         run: |
           set +e
-          npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive \
+          npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting:main --non-interactive \
             2>&1 | tee "$RUNNER_TEMP/deploy.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then

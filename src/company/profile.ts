@@ -7,7 +7,9 @@
 //   会社差を知らずに `companyProfile` を読むだけにする。フォークはコア本体ファイルを直接編集せず、
 //   ここ(と src/company/ 配下)だけを書き換える(上流同期の衝突と回帰を最小にするため)。
 //
-// ★既定値 = 既存運営会社(スクールIE・workspaces/main)の現行値。**全項目が「出力不変」**になるよう
+// ★会社ごとの値は src/company/profiles/<会社キー>.ts(P-1・2026-10-10)。env VITE_COMPANY_KEY(無ければ
+//   VITE_FIREBASE_WORKSPACE_KEY)で 1 社を選び、未登録のキーはビルド失敗(fail-closed)。
+// ★既定値 = 既存運営会社(株式会社アーチ・workspaces/main)の現行値。**全項目が「出力不変」**になるよう
 //   選んである(帳票フックは空・追加ボタン/メニューは空・会社版番号は空・呼称は今の言葉)。
 //   コアに手を入れずに会社差を出したい要望が来たら、まず「この差し込み口で足りるか／コアの機能にすべきか」を
 //   判定する(計画 §10-2「巨大ファイルは分割しない。差し込み口を数か所開けるだけ」)。
@@ -19,149 +21,96 @@
 //   - `featureDefaults` は**手書きしない**。コア台帳 src/utils/companyFeatureDefaults.ts から会社キーで
 //     引いた派生値で、サーバー(Cloud Functions)と同じ台帳を読む(片側だけ変えると保護者 QR・質問 AI が
 //     非対称になる)。会社既定を変えたいときは台帳へ行を足して上流(コア)へ取り込む。
-import type { CompanyFeatureDefault } from '../utils/companyFeatureDefaults'
 import { resolveCompanyFeatureDefaults } from '../utils/companyFeatureDefaults'
+import { COMPANY_PROFILE_DEFINITIONS, listRegisteredCompanyKeys } from './profiles'
+import type { CompanyProfile, CompanyProfileDefinition, CompanyReportHooks, CompanyRoleKey } from './profileTypes'
+
+// 型と既定値は profileTypes.ts に置く(profiles/<会社キー>.ts と循環させないため)。コア本体からは従来どおり
+// `@company/profile` から読めるよう、ここで再公開する。
+export type {
+  CompanyMenuItem,
+  CompanyProfile,
+  CompanyProfileDefinition,
+  CompanyReportHooks,
+  CompanyRoleKey,
+  CompanyRoleLabels,
+  CompanyScreenActionContext,
+  CompanyScreenExtensions,
+  CompanyToolbarButton,
+} from './profileTypes'
+export {
+  DEFAULT_APP_NAME,
+  DEFAULT_ROLE_LABELS,
+  EMPTY_COMPANY_REPORT_HOOKS,
+  EMPTY_COMPANY_SCREEN_EXTENSIONS,
+} from './profileTypes'
+export { COMPANY_PROFILE_DEFINITIONS, listRegisteredCompanyKeys } from './profiles'
 
 // ───────────────────────────────────────────────────────────────────────────
-// 呼称(役割名)辞書 — Phase 1 T1-3。役割名だけ(オーナー確定 2026-09-16。授業用語は辞書化しない)。
+// 会社の選択(P-1・2026-10-10)— env で 1 社を選ぶ。未知のキーは fail-closed(例外 = ビルド/起動失敗)。
 // ───────────────────────────────────────────────────────────────────────────
+
+/** 既存運営会社(株式会社アーチ)の会社キー = workspaces/main。env が無いローカルモードの既定でもある。 */
+export const DEFAULT_COMPANY_KEY = 'main'
+
+export type CompanyKeyEnv = {
+  VITE_COMPANY_KEY?: unknown
+  VITE_FIREBASE_WORKSPACE_KEY?: unknown
+}
+
+function readEnvValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
 
 /**
- * 役割名のキー。
- *  - manager       … 教室を運営する人(スクールIE では「室長」)。帳票・日程表の「室長登録」などに使う。
- *  - classroomAdmin … アカウント一覧に出す manager ロールの表示名(現行は「教室管理者」。manager と別の言葉なので別キー)。
- *  - developer     … 全教室を見る開発者(現行は「開発者」)。
+ * env から会社キーを決める。優先順: VITE_COMPANY_KEY → VITE_FIREBASE_WORKSPACE_KEY → 'main'(どちらも無い = ローカルモード)。
+ * 両方あって食い違う場合は例外(計画 §7「2 社目のビルドがアーチの secret で動く(workspace の混線)」の歯止め。
+ * プロファイル上は会社B・接続先は会社A のビルドを作らせない)。
  */
-export type CompanyRoleKey = 'manager' | 'classroomAdmin' | 'developer'
-export type CompanyRoleLabels = Readonly<Record<CompanyRoleKey, string>>
-
-// ───────────────────────────────────────────────────────────────────────────
-// 帳票フック — Phase 1 T1-4。生徒／講師日程表・空フォーマット(scheduleHtml.ts)への差し込み口。
-// 帳票は別タブ(埋め込み JS)で描くため、関数ではなく**静的な HTML 文字列**を payload で渡す。
-// ───────────────────────────────────────────────────────────────────────────
+export function resolveCompanyKeyFromEnv(env: CompanyKeyEnv): string {
+  const companyKey = readEnvValue(env.VITE_COMPANY_KEY)
+  const workspaceKey = readEnvValue(env.VITE_FIREBASE_WORKSPACE_KEY)
+  if (companyKey && workspaceKey && companyKey !== workspaceKey) {
+    throw new Error(
+      `会社キーと接続先 workspace が食い違っています: VITE_COMPANY_KEY=${companyKey} / VITE_FIREBASE_WORKSPACE_KEY=${workspaceKey}。`
+      + ' 同じ会社キーに揃えてください(会社ごとのビルド secret FIREBASE_WEB_ENV_<会社キー> を確認)。',
+    )
+  }
+  return companyKey || workspaceKey || DEFAULT_COMPANY_KEY
+}
 
 /**
- * 帳票への差し込み。**すべて空文字が既定**で、空のときは従来の出力と完全に同じ(出力不変)。
- *
- * ヘッダ差替(`*HeaderHtml`): 空でなければ、日程表 1 枚の上部ブロック(ロゴ欄・校舎名欄・題名欄・期間/氏名/ページ)
- *   を**丸ごと**この HTML に置き換える。次のトークンを埋め込める(値は HTML エスケープ済みで差し込まれる):
- *   `{{period}}`(期間)・`{{nameLabel}}`(「生徒名」/「講師名」)・`{{name}}`(氏名)・`{{page}}`(ページ番号 1 始まり)。
- *   `{{qr}}` だけは QR の SVG(HTML そのまま)。空フォーマットは生徒側のヘッダを使う(氏名は空)。
- * 追加注記(`*NoteHtml`): 空でなければ、日程表 1 枚の末尾(回数表の下)にそのまま挿入する。
- *   空フォーマットは `emptyFormatNoteHtml` を使う(生徒側の注記は入れない)。
- * 既定ロゴ(`logoDefaultUrl`): 空でなければ、利用者がロゴを未設定のときだけ「ロゴ欄」の代わりに表示する
- *   (利用者が設定したロゴが常に優先)。
+ * 会社キーで登録簿(src/company/profiles/index.ts)から 1 社を選び、コア台帳の会社既定(featureDefaults)を補って
+ * 完全なプロファイルにする。未登録のキーは例外(fail-closed: 既定の main に黙って落とさない)。
  */
-export type CompanyReportHooks = {
-  studentHeaderHtml: string
-  teacherHeaderHtml: string
-  studentNoteHtml: string
-  teacherNoteHtml: string
-  emptyFormatNoteHtml: string
-  logoDefaultUrl: string
+export function selectCompanyProfile(companyKey: string): CompanyProfile {
+  const key = companyKey.trim()
+  const definition: CompanyProfileDefinition | undefined = Object.prototype.hasOwnProperty.call(COMPANY_PROFILE_DEFINITIONS, key)
+    ? COMPANY_PROFILE_DEFINITIONS[key]
+    : undefined
+  if (!definition) {
+    throw new Error(
+      `会社プロファイルが未登録です: "${key}"(登録済み: ${listRegisteredCompanyKeys().join(', ')})。`
+      + ' src/company/profiles/<会社キー>.ts を作り profiles/index.ts に登録してください。',
+    )
+  }
+  if (definition.companyKey !== key) {
+    throw new Error(`会社プロファイルの companyKey(${definition.companyKey})が登録キー(${key})と一致しません。`)
+  }
+  return Object.freeze({
+    ...definition,
+    featureDefaults: resolveCompanyFeatureDefaults(definition.companyKey),
+  })
 }
 
-export const EMPTY_COMPANY_REPORT_HOOKS: CompanyReportHooks = Object.freeze({
-  studentHeaderHtml: '',
-  teacherHeaderHtml: '',
-  studentNoteHtml: '',
-  teacherNoteHtml: '',
-  emptyFormatNoteHtml: '',
-  logoDefaultUrl: '',
-})
-
-// ───────────────────────────────────────────────────────────────────────────
-// 画面フック — Phase 1 T1-5。盤面ツールバーの追加ボタンとメニューの追加項目の登録口(既定は空 = DOM 不変)。
-// ───────────────────────────────────────────────────────────────────────────
-
-/** 追加ボタン/項目を押したときに渡す文脈。コアの内部 state は渡さない(フォークがコアの形に依存しないため)。 */
-export type CompanyScreenActionContext = {
-  /** いま開いている教室の名前(未確定なら空文字)。 */
-  classroomName: string
-  /** 盤面が表示している週の開始日(YYYY-MM-DD)。メニューから呼ばれたときは空文字。 */
-  weekStartDate: string
-}
-
-export type CompanyToolbarButton = {
-  /** DOM の data-company-button と React key に使う一意な ID(英数字とハイフン)。 */
-  id: string
-  label: string
-  title?: string
-  onClick: (context: CompanyScreenActionContext) => void
-}
-
-export type CompanyMenuItem = {
-  /** DOM の data-company-menu-item と React key に使う一意な ID(英数字とハイフン)。 */
-  id: string
-  label: string
-  onClick: (context: CompanyScreenActionContext) => void
-}
-
-export type CompanyScreenExtensions = {
-  /** 盤面ツールバー左側(質問・要望ボタンの右)に並べる追加ボタン。 */
-  boardToolbarButtons: readonly CompanyToolbarButton[]
-  /** メニュー(コマ表/基本データ/…)の既存項目の下・ログアウトの上に並べる追加項目。 */
-  appMenuItems: readonly CompanyMenuItem[]
-}
-
-export const EMPTY_COMPANY_SCREEN_EXTENSIONS: CompanyScreenExtensions = Object.freeze({
-  boardToolbarButtons: [],
-  appMenuItems: [],
-})
-
-// ───────────────────────────────────────────────────────────────────────────
-// プロファイル本体
-// ───────────────────────────────────────────────────────────────────────────
-
-export type CompanyProfile = {
-  /** 会社キー = workspaceKey(`workspaces/{companyKey}`)。接続先 env VITE_FIREBASE_WORKSPACE_KEY と一致させる。 */
-  companyKey: string
-  /** 会社の表示名(請求書の宛名などではなく、会社レイヤの識別用。画面には Phase 1 では出さない)。 */
-  displayName: string
-  /** アプリ名(ブラウザのタブ名・ログイン画面の題名)。 */
-  appName: string
-  /** 既定ロゴ(帳票のロゴ欄に、利用者がロゴ未設定のときだけ出す)。null = 既定ロゴなし(従来どおり「ロゴ欄」)。 */
-  logoDefault: string | null
-  roleLabels: CompanyRoleLabels
-  /** 会社既定の機能スイッチ(コア台帳 companyFeatureDefaults.ts からの派生値・手書きしない)。 */
-  featureDefaults: Readonly<Record<string, CompanyFeatureDefault>>
-  /**
-   * 会社版番号(例 'companyB.12')。コア版と組み合わせて `1.5.530+companyB.12` の形にする(計画 §10-4)。
-   * 空文字 = コアそのもの。表示への配線は Phase 2(T2-2)で行い、Phase 1 では値だけ持つ。
-   */
-  companyVersion: string
-  reportHooks: CompanyReportHooks
-  screenExtensions: CompanyScreenExtensions
-}
-
-/** 既存運営会社(スクールIE)の会社キー = workspaces/main。 */
-export const COMPANY_KEY = 'main'
-
-/** 現行アプリの名前。index.html の <title> とも一致させる(テストで固定)。 */
-export const DEFAULT_APP_NAME = 'コマ表アプリ'
-
-/** 現行の役割名(出力不変の基準。変えるときは docs/spec-multi-tenant.md §11 の一覧も更新)。 */
-export const DEFAULT_ROLE_LABELS: CompanyRoleLabels = Object.freeze({
-  manager: '室長',
-  classroomAdmin: '教室管理者',
-  developer: '開発者',
-})
+/** このビルドの会社キー(env から決定)。 */
+export const COMPANY_KEY: string = resolveCompanyKeyFromEnv(import.meta.env as unknown as CompanyKeyEnv)
 
 /**
- * 既存運営会社(スクールIE)のプロファイル = 最初の会社プロファイル。
- * ★全項目が現行値(出力不変)。フォークはこのオブジェクトを差し替える。
+ * このビルドの会社プロファイル。env VITE_COMPANY_KEY(無ければ VITE_FIREBASE_WORKSPACE_KEY)で profiles/ から 1 社を選ぶ。
+ * ★既存運営会社(main)を選ぶと全項目が現行値(出力不変・src/company/profile.test.ts で固定)。
  */
-export const companyProfile: CompanyProfile = Object.freeze({
-  companyKey: COMPANY_KEY,
-  displayName: 'スクールIE',
-  appName: DEFAULT_APP_NAME,
-  logoDefault: null,
-  roleLabels: DEFAULT_ROLE_LABELS,
-  featureDefaults: resolveCompanyFeatureDefaults(COMPANY_KEY),
-  companyVersion: '',
-  reportHooks: EMPTY_COMPANY_REPORT_HOOKS,
-  screenExtensions: EMPTY_COMPANY_SCREEN_EXTENSIONS,
-})
+export const companyProfile: CompanyProfile = selectCompanyProfile(COMPANY_KEY)
 
 // ───────────────────────────────────────────────────────────────────────────
 // コア本体から使う小さな読み取り関数(プロファイルの形に直接依存する箇所を減らす)
@@ -175,6 +124,18 @@ export function roleLabel(key: CompanyRoleKey, profile: CompanyProfile = company
 /** アプリ名(タブ名・題名用)。 */
 export function appName(profile: CompanyProfile = companyProfile): string {
   return profile.appName
+}
+
+/**
+ * ブラウザのタブ名(document.title)。形は `<アプリ名>_<場面>`(オーナー確定 2026-09-18 D-7・§2-A 影響 1 承認済み・P-2)。
+ *   - 場面が空(ログイン前など) → アプリ名だけ「コマ表アプリ」
+ *   - 教室を開いている        → 「コマ表アプリ_緑が丘校」
+ *   - 開発者画面              → 「コマ表アプリ_開発者画面」
+ * 旧形「緑が丘校 | コマ表アプリ」へ戻さない(src/company/roleLabels.wiring.test.ts が字面を固定)。
+ */
+export function appDocumentTitle(scene: string, profile: CompanyProfile = companyProfile): string {
+  const suffix = scene.trim()
+  return suffix ? `${appName(profile)}_${suffix}` : appName(profile)
 }
 
 /**

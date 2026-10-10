@@ -34,19 +34,20 @@ export type StudentCountLedgerEntry = {
   countByClassroomId: Record<string, StudentCountLedgerClassroomRecord>
 }
 
-function getStudentCountLedgerRef(snapshotDate: string) {
+// workspaceKey の既定は接続先(env)。「全社」タブ(P-11 ③)だけが別 workspace の記録を**読む**(書き込み経路は変えない)。
+function getStudentCountLedgerRef(snapshotDate: string, workspaceKey?: string) {
   const firestore = getFirebaseFirestoreInstance()
   if (!firestore) throw new Error('Firebase 設定が不足しています。 .env に接続情報を設定してください。')
-  const config = getFirebaseBackendConfig()
-  return doc(firestore, 'workspaces', config.workspaceKey, 'studentCountLedger', snapshotDate)
+  const key = workspaceKey?.trim() || getFirebaseBackendConfig().workspaceKey
+  return doc(firestore, 'workspaces', key, 'studentCountLedger', snapshotDate)
 }
 
 // 指定日の恒久記録を読む。記録が無ければ null(呼び出し側はライブ計算へフォールバックする)。
-export async function loadStudentCountLedgerEntry(snapshotDate: string): Promise<StudentCountLedgerEntry | null> {
+export async function loadStudentCountLedgerEntry(snapshotDate: string, workspaceKey?: string): Promise<StudentCountLedgerEntry | null> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshotDate)) return null
 
   await ensureFirebaseAuthenticatedUser()
-  const ledgerRef = getStudentCountLedgerRef(snapshotDate)
+  const ledgerRef = getStudentCountLedgerRef(snapshotDate, workspaceKey)
   const summarySnapshot = await getDoc(ledgerRef)
   if (!summarySnapshot.exists()) return null
 

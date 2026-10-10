@@ -24,6 +24,9 @@ const MGR_A = 'mgrA-uid'
 const MGR_B = 'mgrB-uid'
 // 2 社目(other)の開発者・室長(担当は other 側の教室 A)
 const DEV_OTHER = 'devO-uid'
+// P-11 ④ 第 1 段: 固定メールではないが会員文書に billingAllowed:true を持つ developer(2 社目の請求担当の形)・フラグ false の developer。
+const DEV_FLAGGED = 'devF-uid'
+const DEV_UNFLAGGED = 'devU-uid'
 const MGR_OTHER = 'mgrO-uid'
 // 保護者向け固定QR(docs/spec-parent-portal.md §B-1)のトークン(32 文字・[A-Za-z0-9_-])。
 const PORTAL_TOKEN = 'AbCdEfGhIjKlMnOpQrStUvWxYz012345'
@@ -50,6 +53,8 @@ beforeEach(async () => {
     const db = ctx.firestore()
     await setDoc(doc(db, `workspaces/${WORKSPACE}/members/${DEV}`), { role: 'developer', email: 'bkkdmzn@gmail.com' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/members/${MGR_A}`), { role: 'manager', assignedClassroomId: 'A', email: 'a@example.com' })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/members/${DEV_FLAGGED}`), { role: 'developer', email: 'flagged@example.com', billingAllowed: true })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { role: 'developer', email: 'unflagged@example.com', billingAllowed: false })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/members/${MGR_B}`), { role: 'manager', assignedClassroomId: 'B', email: 'b@example.com' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/A`), { name: '教室A' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/B`), { name: '教室B' })
@@ -144,6 +149,47 @@ describe('Firestore rules: billing は billing開発者のみ', () => {
 
   it('マネージャーは billingMonths を読めない', async () => {
     await assertFails(getDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
+  })
+
+  // P-11 ④ 第 1 段(2026-10-10): 会員文書の billingAllowed フラグでも許可する(メール固定はそのまま残す = 両経路が緑)。
+  it('固定メールでなくても billingAllowed:true の developer は billingMonths と台帳を読める(フラグ経路)', async () => {
+    const flagged = dbFor(DEV_FLAGGED, 'flagged@example.com')
+    await assertSucceeds(getDoc(doc(flagged, `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
+    await assertSucceeds(setDoc(doc(flagged, `workspaces/${WORKSPACE}/billingMonths/2026-06`), { total: 1 }))
+    await assertSucceeds(getDoc(doc(flagged, `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`)))
+  })
+
+  it('billingAllowed:false(または無し)で固定メールでもない developer は読めない', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertFails(getDoc(doc(unflagged, `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
+    await assertFails(getDoc(doc(unflagged, `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`)))
+  })
+
+  it('固定メールの developer はフラグ無しでも従来どおり読める(第 1 段ではメール固定を残す)', async () => {
+    await assertSucceeds(getDoc(doc(devdb(), `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
+  })
+
+  // レビュー所見(2026-10-10): members は developer なら書けるので、許可外の developer が自分に billingAllowed:true を
+  // 書けると請求の制限が外れる。フラグを変えられるのは請求許可者だけ。
+  it('許可の無い developer は自分(や他人)の会員文書に billingAllowed:true を書けない', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertFails(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: true }))
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { role: 'developer', email: 'unflagged@example.com', billingAllowed: true }))
+    await assertFails(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/new-dev`), { role: 'developer', email: 'n@example.com', billingAllowed: true }))
+  })
+
+  it('許可の無い developer でもフラグを変えない会員文書の書き込み(室長発行・表示名変更)は従来どおりできる', async () => {
+    const unflagged = dbFor(DEV_UNFLAGGED, 'unflagged@example.com')
+    await assertSucceeds(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${MGR_A}`), { displayName: '改名' }))
+    await assertSucceeds(setDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/new-mgr`), { role: 'manager', assignedClassroomId: 'A', email: 'n@example.com' }))
+    // false → false(フラグ据え置き)も可。
+    await assertSucceeds(updateDoc(doc(unflagged, `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: false, displayName: 'x' }))
+  })
+
+  it('請求許可者(固定メール / フラグ)は会員文書に billingAllowed を立てられる・外せる', async () => {
+    await assertSucceeds(updateDoc(doc(devdb(), `workspaces/${WORKSPACE}/members/${DEV_UNFLAGGED}`), { billingAllowed: true }))
+    const flagged = dbFor(DEV_FLAGGED, 'flagged@example.com')
+    await assertSucceeds(updateDoc(doc(flagged, `workspaces/${WORKSPACE}/members/${DEV_FLAGGED}`), { billingAllowed: false }))
   })
 })
 

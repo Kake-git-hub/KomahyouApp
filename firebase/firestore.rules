@@ -26,16 +26,27 @@ service cloud.firestore {
       return hasWorkspaceMembership(workspaceKey) && workspaceRole(workspaceKey) == 'developer';
     }
 
+    // 請求の許可者(P-11 ④ 第 1 段・2026-10-10・docs/spec-multi-tenant.md §7-11): developer かつ
+    // (会員文書の billingAllowed フラグ **または** 従来のメール固定)。第 2 段(メール固定の撤去)は、オーナーが
+    // 各 workspace の自分の会員文書に billingAllowed:true を立ててから(片方だけの状態を作らない)。
+    // クライアント側の同じ判定は src/utils/companyBilling.ts isBillingAllowedUser(片方だけ変えない)。
     function isBillingDeveloper(workspaceKey) {
       return isDeveloper(workspaceKey)
         && (
-          get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
+          get(memberDoc(workspaceKey)).data.get('billingAllowed', false) == true
+          || get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
           || get(memberDoc(workspaceKey)).data.email == 'bkkdmzn@gmail.com'
           || get(memberDoc(workspaceKey)).data.email == 'd.ishikawa@agc-akasaka.com'
           || request.auth.token.email == 'dai.in.the.mood@gmail.com'
           || request.auth.token.email == 'bkkdmzn@gmail.com'
           || request.auth.token.email == 'd.ishikawa@agc-akasaka.com'
         );
+    }
+
+    // members の create/update で billingAllowed が変わらない(無い = false 扱い)。
+    function billingAllowedUnchanged() {
+      return request.resource.data.get('billingAllowed', false)
+        == (resource == null ? false : resource.data.get('billingAllowed', false));
     }
 
     function canAccessClassroom(workspaceKey, classroomId) {
@@ -52,7 +63,12 @@ service cloud.firestore {
 
       match /members/{userId} {
         allow read: if isDeveloper(workspaceKey) || (hasWorkspaceMembership(workspaceKey) && request.auth.uid == userId);
-        allow write: if isDeveloper(workspaceKey);
+        // 請求許可フラグ billingAllowed(P-11 ④)を変えられるのは請求許可者だけ(レビュー所見 2026-10-10)。
+        // developer なら誰でも members を書けるので、ここを塞がないと許可外の developer が自分に true を書いて
+        // billingMonths / 台帳を読めるようになる(メール固定が担っていた「developer の中でも請求は特定の人」が外れる)。
+        allow create, update: if isDeveloper(workspaceKey)
+          && (isBillingDeveloper(workspaceKey) || billingAllowedUnchanged());
+        allow delete: if isDeveloper(workspaceKey);
       }
 
       match /classrooms/{classroomId} {
