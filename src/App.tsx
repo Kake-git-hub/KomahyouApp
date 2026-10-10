@@ -39,7 +39,7 @@ import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
-import { appName, roleLabel } from '@company/profile'
+import { appDocumentTitle, appName, roleLabel } from '@company/profile'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { readBackupFileText } from './utils/backupFileText'
@@ -5165,11 +5165,11 @@ function AuthenticatedApp() {
     if (screen === 'developer') {
       // 開発者画面は開発者専用で特定の校舎に紐づかないため、タブ名に校舎名は出さない。
       // (acting 教室名を出すと、前に開いていた教室名が残って混乱を招く)
-      document.title = `${roleLabel('developer')}画面 | ${appName()}`
+      document.title = appDocumentTitle(`${roleLabel('developer')}画面`)
       return
     }
 
-    document.title = classroomName ? `${classroomName} | ${appName()}` : appName()
+    document.title = appDocumentTitle(classroomName ?? '')
   }, [actingClassroom?.name, currentUser, screen])
 
   useEffect(() => {

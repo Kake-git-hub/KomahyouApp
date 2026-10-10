@@ -14,6 +14,9 @@
 
 ## 未リリース
 
+- feat: **2 社目受け入れ準備 P-1(プロファイルの会社別選択)**(計画 docs/plan-2026-09-18-second-company-onboarding.md §3・オーナー指示 2026-10-10「計画通り着手」)。会社ごとの値を `src/company/profiles/<会社キー>.ts` に置き(登録簿 `profiles/index.ts`・型と既定値は `profileTypes.ts`)、`src/company/profile.ts` は env `VITE_COMPANY_KEY`(無ければ `VITE_FIREBASE_WORKSPACE_KEY`・どちらも無ければ main)で 1 社を選ぶ。**未登録のキーは例外(fail-closed)**・両 env の食い違いも例外(会社 B のプロファイルで会社 A に接続する混線の防止)。同じ規則を `vite.config.ts` の `resolveCompanyKeyForBuild` がビルド開始時に検査し `profiles/<キー>.ts` が無ければビルド失敗。D-6: `displayName` を会社名「株式会社アーチ」にし `brandName`「スクールIE」を新設(どちらも画面に出ない)。**main を選ぶと現行の出力と完全に同一**(profile.test.ts で固定・テスト 11 件＋ profileBuildGuard.test.ts 4 件) (src/company/profile.ts, profileTypes.ts, profiles/main.ts, profiles/index.ts, vite.config.ts, docs/spec-multi-tenant.md §11-1)
+- feat: **2 社目受け入れ準備 P-2(タブ名を「コマ表アプリ_教室名」に)**(オーナー確定 2026-09-18 D-7・§2-A 影響 1 承認済み)。`document.title` を `<アプリ名>_<場面>` の形に統一(`appDocumentTitle`): 教室「コマ表アプリ_緑が丘校」・開発者画面「コマ表アプリ_開発者画面」・ログイン前「コマ表アプリ」。旧形「<教室名> | コマ表アプリ」の字面へ戻さないことを wiring テストで固定。日程表タブは対象外。確認リスト mc-1 を追加し第41版 v1.5.582 へ (src/App.tsx, src/company/profile.ts, roleLabels.wiring.test.ts, verificationChecklist.ts)
+
 ## v1.5.581 (2026-10-07)
 
 - docs: 進行中テーマ台帳から `holiday-return-manual-added` を削除（完了: v1.5.579 で全教室へ反映・確認 hm-1〜hm-4 OK・室長への回答は開発者画面で解決済み〔`resolvedAt` 2026-10-07 11:44Z〕・Issue #73 をオーナー指示でクローズ）。既知の限界 3 件は Issue #74 で継続 (developmentStatusLedger.ts / docs/plan-2026-10-07-holiday-return-manual-added.md)

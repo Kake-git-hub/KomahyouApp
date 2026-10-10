@@ -472,20 +472,32 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 
 ### 11-1. 会社プロファイル（T1-1・§7-5）
 
-- 置き場は **`src/company/profile.ts`** 1 ファイル（フォークが差し替えてよい唯一の入口。§2-2 L3）。コア本体からは
-  alias **`@company/profile`**（vite / vitest / tsconfig で同一定義）で読む。
-- `CompanyProfile` の項目: `companyKey`（= workspaceKey。接続先 env と一致させる）／`displayName`（会社の表示名・
-  Phase 1 では画面に出さない）／`appName`（タブ名・ログイン題名）／`logoDefault`（帳票の既定ロゴ・null = なし）／
-  `roleLabels`（§11-3）／`featureDefaults`（§11-2 の台帳からの**派生値**・手書き禁止）／`companyVersion`（§7-7・
+- 入口は **`src/company/profile.ts`**（コア本体からは alias **`@company/profile`**。vite / vitest / tsconfig で同一定義）。
+  **会社ごとの値は `src/company/profiles/<会社キー>.ts`**（P-1・2026-10-10。計画 `plan-2026-09-18-second-company-onboarding.md` §3）。
+  型と既定値は `src/company/profileTypes.ts`、登録簿は `src/company/profiles/index.ts`（会社キー → 定義。キー＝ファイル名＝
+  定義の `companyKey` を `profile.test.ts` が検査）。
+- **会社の選択**: env **`VITE_COMPANY_KEY`**（無ければ `VITE_FIREBASE_WORKSPACE_KEY`、どちらも無ければ `main` = ローカルモード）で
+  登録簿から 1 社を選ぶ（`resolveCompanyKeyFromEnv` / `selectCompanyProfile`）。**未登録のキーは例外 = fail-closed**（既定の
+  `main` に黙って落とさない）。`VITE_COMPANY_KEY` と `VITE_FIREBASE_WORKSPACE_KEY` が両方あって食い違う場合も例外（会社 B の
+  プロファイルで会社 A に接続するビルドを作らせない）。同じ規則を `vite.config.ts`（`resolveCompanyKeyForBuild`）が
+  **ビルド開始時**に検査し、`src/company/profiles/<会社キー>.ts` が無ければビルドを止める（`profileBuildGuard.test.ts`）。
+- `CompanyProfile` の項目: `companyKey`（= workspaceKey。接続先 env と一致させる）／`displayName`（**会社名**・例「株式会社アーチ」・
+  画面・帳票・請求書に出さない。請求の会社名は棟の文書 §7-10）／`brandName`（**ブランド名**・例「スクールIE」・D-6 で会社名と
+  分けた・画面に出さない）／`appName`（タブ名・ログイン題名）／`logoDefault`（帳票の既定ロゴ・null = なし）／
+  `roleLabels`（§11-3）／`featureDefaults`（§11-2 の台帳からの**派生値**・手書き禁止。`profiles/<会社キー>.ts` の定義型
+  `CompanyProfileDefinition` には無く、`selectCompanyProfile` が補う）／`companyVersion`（§7-7・
   Phase 1 では値だけ持ち表示への配線は Phase 2）／`reportHooks`（§11-4）／`screenExtensions`（§11-5）。
-- 既定値 = スクールIE の現行値。プロファイルは `Object.freeze` し実行時に書き換えない。
+- 既定値（`profiles/main.ts`）= 既存運営会社（株式会社アーチ・ブランド スクールIE）の現行値。プロファイルは `Object.freeze` し
+  実行時に書き換えない。`main` を選ぶと Phase 1 時点の出力と完全に同じ（出力不変・テストで固定）。
 - **会社の壁とは無関係**: プロファイルを別会社のキーにしても他社データは見えない・書けない（壁は §1 の
   workspaceKey・rules・callable 検査が担う）。プロファイルは見た目と差し込み口だけを決める。
 - `companyKey` と接続先 env `VITE_FIREBASE_WORKSPACE_KEY` の一致は `src/company/profile.test.ts` が検査する
   （env が設定された環境で食い違うと赤。フォークは env と profile を同時に変える）。
-- **Phase 2 の宿題**: `index.html` の `<title>` は静的で `appName` と一致することをテストが強制している。フォークが
-  `appName` を変えるときは `index.html` も編集する必要があり「触ってよいのは `src/company/` だけ」（§7-8）と衝突する。
-  Phase 2（T2-2）で vite の注入に寄せるか、`index.html` を「フォークが触ってよい例外」として明記するかを決める。
+- **タブ名（D-7・P-2・2026-10-10 確定）**: `document.title` は **`<アプリ名>_<場面>`** の形（`appDocumentTitle(scene)`）。
+  教室を開いていれば「コマ表アプリ_緑が丘校」、開発者画面は「コマ表アプリ_開発者画面」、ログイン前は「コマ表アプリ」だけ。
+  旧形「<教室名> | コマ表アプリ」へ戻さない（`roleLabels.wiring.test.ts` が字面を固定）。日程表タブ（`scheduleHtml.ts`）は対象外。
+  `index.html` の静的 `<title>` は**コアの値（`DEFAULT_APP_NAME`）で固定**し、実行時に差し替える（ロード中の一瞬だけ静的値が
+  見える）。フォークを切らない方針（計画 §0）なので「`appName` を変えるとき `index.html` も編集が要る」宿題はこれで閉じる。
 
 ### 11-2. 機能スイッチの 2 段解決（T1-2・§7-1）
 
@@ -583,5 +595,6 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-10-10 | §11-1 を P-1/P-2（計画 plan-2026-09-18 §3）に合わせて改定: 会社ごとの値は `src/company/profiles/<会社キー>.ts`、env `VITE_COMPANY_KEY` で選択（未登録は fail-closed・ビルド時も検査）、`displayName`=会社名「株式会社アーチ」と `brandName`=「スクールIE」を分離（D-6）、タブ名を `<アプリ名>_<場面>` に確定（D-7）し Phase 2 の宿題を閉じた。 |
 | 2026-09-18 | §11 Phase 1 追補（会社レイヤ T1-1〜T1-5 の詳細化: プロファイル・機能スイッチ 2 段解決とコア台帳・役割名辞書の対象一覧・帳票フック 6 項目・画面フック）。§7 の確定値は不変。既定値で出力不変。 |
 | 2026-09-18 | regression-reviewer 監査の反映: §11-1 に companyKey と env の一致検査・`index.html` の宿題、§11-2 に会社既定 'on' と段階公開の制約、§11-3 の対象外を追記、§11-4 にヘッダ差替の副作用と対象外、§9 の台帳件数を 12 件に訂正。INV 候補 C1 の採否は Phase 2 着手前にオーナー確定が必要（§10-4）。 |
