@@ -278,6 +278,8 @@ describe('index.ts の getStudentLessonHistory（ソース検査・h-2）', () =
   it('想定外の例外は toLessonHistoryHttpsError で原因文つきの HttpsError に包む（汎用 INTERNAL に潰さない）', () => {
     expect(body).toContain('throw toLessonHistoryHttpsError(error)')
     expect(body).toContain("if (error instanceof HttpsError) return error")
-    expect(body).toContain("new HttpsError('internal', `サーバーで履歴を読めませんでした(")
+    // 画面の文言は平易に、原因は details.reason へ(2026-10 文言見直し #525)。
+    expect(body).toContain("new HttpsError('internal', '履歴を読み込めませんでした。', { reason: message.slice(0, 300) })")
+    expect(body).not.toContain('サーバーで履歴を読めませんでした(')
   })
 })

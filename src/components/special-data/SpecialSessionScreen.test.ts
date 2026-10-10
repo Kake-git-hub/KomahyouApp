@@ -192,7 +192,16 @@ describe('SpecialSessionScreen 編集パネルの案内文（回帰: 死んだ�
     expect(source).not.toMatch(/期間帯をクリックすると別タブ/)
   })
 
-  it('登録経路の案内は日程表（生徒/講師）とQRに統一されている', () => {
-    expect(source).toContain('欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います')
+  it('登録経路の案内は日程表とQRに統一され、画面上部の1か所だけに出る(一覧下の重複注記は削除済み)', () => {
+    expect(source).toContain('欠席不可コマ・希望科目数は日程表とQRから登録します')
+    expect(source.split('日程表とQRから登録します').length - 1).toBe(1)
+    expect(source).not.toContain('欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います')
+  })
+
+  it('文言の整理(オーナー確定 2026-10): 削除確認は全角「？」・入力例に「テスト」を付けない', () => {
+    expect(source).toContain('この特別講習データを削除します。よろしいですか？')
+    expect(source).not.toContain('この特別講習データを削除します。よろしいですか。')
+    expect(source).toContain('placeholder="2027 春期講習"')
+    expect(source).not.toContain('春期講習テスト')
   })
 })

@@ -626,7 +626,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
   }
 
   const removeSession = (id: string) => {
-    if (!window.confirm('この特別講習データを削除します。よろしいですか。')) {
+    if (!window.confirm('この特別講習データを削除します。よろしいですか？')) {
       setStatusMessage('特別講習データの削除をキャンセルしました。')
       return
     }
@@ -747,7 +747,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
           <div className="basic-data-header">
             <div>
               <h2>講習設定</h2>
-              <p className="basic-data-subcopy">ここでは講習名と講習期間だけを管理します。欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います。</p>
+              <p className="basic-data-subcopy">ここでは講習名と期間だけを登録します。欠席不可コマ・希望科目数は日程表とQRから登録します。</p>
             </div>
           </div>
 
@@ -769,7 +769,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                 <div className="special-session-name-row">
                   <label className="basic-data-inline-field basic-data-inline-field-medium special-session-inline-label">
                     <span>講習名</span>
-                    <input value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder="2027 春期講習テスト" data-testid="special-data-draft-label" />
+                    <input value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder="2027 春期講習" data-testid="special-data-draft-label" />
                   </label>
                 </div>
                 <section className="special-session-picker-panel">
@@ -854,7 +854,6 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                                 showRange
                               />
                             </section>
-                            <p className="basic-data-subcopy">欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います。</p>
                           </div>
                         </td>
                       </tr>

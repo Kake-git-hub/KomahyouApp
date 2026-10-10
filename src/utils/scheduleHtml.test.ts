@@ -1241,7 +1241,11 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const html = write.mock.calls[0]?.[0] as string
     expect(html).toContain("const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'))")
     expect(html).toContain("schedule-note:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE")
-    expect(html).toContain('共通連絡事項(学年別)')
+    expect(html).toContain('共通連絡(学年別)')
+    expect(html).toContain('>個別連絡</div>')
+    // 文言統一(オーナー確定 2026-10-10): 見出しは「事項」を付けない。
+    expect(html).not.toContain('共通連絡事項')
+    expect(html).not.toContain('個別連絡事項')
     expect(html).toContain("var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定')")
     expect(html).toContain('renderBottomSection(gradeCommonKey')
     expect(html).toContain('中2 共通連絡')
@@ -4587,7 +4591,21 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
       targetWindow: popup,
     })
     const html = write.mock.calls[0]?.[0] as string
-    // 位置: 「登録された講習期間を表示する」の直後(右)に配置する。
+    // 位置: 「講習期間を表示」の直後(右)に配置する。
+    // 文言統一(オーナー確定 2026-10-10): 期間ラベル・最新表示のツールチップ・別タブ通信失敗・履歴の丸め注記・印刷準備・送信結果。
+    expect(html).toContain('>講習期間を表示</label>')
+    expect(html).not.toContain('登録された講習期間を表示する')
+    expect(html).toContain('title="選んだ期間・生徒・講師で、コマ表の最新の内容を取り込み直します。"')
+    expect(html).not.toContain('最新の出欠・振替などを取り込んで')
+    expect(html).toContain('コマ表から応答がありません。コマ表のタブを開いたまま、もう一度お試しください。')
+    expect(html).not.toContain('本体(コマ表)')
+    expect(html).toContain('指定期間が1年を超えたため、終了日から1年分だけ表示します。')
+    expect(html).not.toContain('に丸めました')
+    expect(html).toContain('印刷用全員表示を準備しています…')
+    expect(html).not.toContain('印刷用全員表示を準備しています...')
+    expect(html).toContain("'開発者へ送りました。' : '送れませんでした。'")
+    expect(html).not.toContain('開発者へ報告しました。')
+    expect(html).not.toContain('報告を送れませんでした。')
     const periodIndex = html.indexOf('id="schedule-period-select"')
     const buttonIndex = html.indexOf('id="schedule-report-developer-button"')
     const showAllIndex = html.indexOf('id="schedule-show-all-button"')
@@ -4602,7 +4620,8 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     // 種類(不具合/要望)のラジオと #テスト の案内を盤面と同じ文言で埋め込む。
     // 使い方の質問(question)も盤面と同じ 3 択で埋め込む(2026-09-13)。
     // 並びは 質問 → 要望 → 不具合、既定は質問(オーナー指示 2026-09-14)。
-    expect(html).toContain('"categoryOptions":[{"value":"question","label":"使い方の質問"},{"value":"request","label":"追加してほしい・要望"},{"value":"bug","label":"不具合・おかしい"}]')
+    // 表示ラベルは 2026-10-10 文言見直し(#461/#462)で「要望」「不具合」へ短縮(value は不変)。
+    expect(html).toContain('"categoryOptions":[{"value":"question","label":"使い方の質問"},{"value":"request","label":"要望"},{"value":"bug","label":"不具合"}]')
     expect(html).toContain('"defaultCategory":"question"')
     expect(html).toContain('let selectedCategory = DEVELOPER_REPORT_TEXT.defaultCategory;')
     expect(html).toContain("name = 'schedule-developer-report-category'")
@@ -4619,8 +4638,8 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).toContain('"questionAiAnswerEnabled":false')
     expect(html).toContain('const aiAnswerEnabled = Boolean(DATA.questionAiAnswerEnabled);')
     expect(html).toContain("const waitingForAi = aiAnswerEnabled && selectedCategory === 'question';")
-    // 入力のヒント(生徒名・日付・コマ・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04)。
-    expect(html).toContain('"inputHint":"生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか')
+    // 入力のヒント(生徒名・日付・何限・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04・2026-10-10 #464 で短縮)。
+    expect(html).toContain('"inputHint":"生徒名・日付・何限・どうしたら何が起きたかを書いていただくと、調べやすくなります。"')
     expect(html).toContain("inputHint.className = 'developer-report-hint developer-report-hint-primary'")
     // 色だけ変える(同じ枠線ボタン)。
     expect(html).toContain('.toolbar button.report-developer {')
@@ -4631,7 +4650,7 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).not.toContain('window.prompt(')
     expect(html).toContain('const DEVELOPER_REPORT_TEXT = {')
     expect(html).toContain('"requiredError":"内容を入力してください。')
-    expect(html).toContain('"placeholder":"例: 9/3(水) 3限、田中先生の机で')
+    expect(html).toContain('"placeholder":"例: 体験生徒を追加する方法は？"')
     expect(html).not.toContain('空欄のままでも送れます')
     expect(html).toContain('.developer-report-modal {')
     expect(html).toContain("id = 'schedule-developer-report-modal'")

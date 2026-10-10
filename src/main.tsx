@@ -125,7 +125,7 @@ if (isSubmissionDebug()) {
   // (片方だけ真似ると極小文字になる)。提出ページと同じく App 本体は読み込まない。
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
+      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中…</div>}>
         <ParentPortalPage token={parentPortalToken} />
       </Suspense>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

@@ -201,7 +201,7 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   {
     key: 'regularTeachersOnly',
     label: '通常講師のみ',
-    description: '割振りを通常授業で担当している講師だけに制限します。',
+    description: '自動割振りを通常授業で担当している講師だけに制限します。',
   },
   {
     key: 'preferLateAfternoon',

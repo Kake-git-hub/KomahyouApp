@@ -174,7 +174,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
   return new Promise((resolve, reject) => {
     const request = window.indexedDB.open(DB_NAME, 4)
 
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB を開けませんでした。'))
+    request.onerror = () => reject(request.error ?? new Error('この端末の保存領域を開けませんでした。'))
     request.onupgradeneeded = () => {
       const database = request.result
       if (!database.objectStoreNames.contains(STORE_NAME)) {
@@ -206,7 +206,7 @@ async function readFromIndexedDb(): Promise<AppSnapshot | null> {
     const store = transaction.objectStore(STORE_NAME)
     const request = store.get(SNAPSHOT_KEY)
 
-    request.onerror = () => reject(request.error ?? new Error('保存済みスナップショットの読込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('保存データの読み込みに失敗しました。'))
     request.onsuccess = () => {
       const result = request.result
       resolve(isAppSnapshot(result) ? result : null)
@@ -224,12 +224,12 @@ async function writeToIndexedDb(snapshot: AppSnapshot) {
     const store = transaction.objectStore(STORE_NAME)
     const request = store.put(snapshot, SNAPSHOT_KEY)
 
-    request.onerror = () => reject(request.error ?? new Error('保存済みスナップショットの書込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('保存データの書き込みに失敗しました。'))
     transaction.oncomplete = () => {
       database.close()
       resolve(true)
     }
-    transaction.onerror = () => reject(transaction.error ?? new Error('保存済みスナップショットの書込に失敗しました。'))
+    transaction.onerror = () => reject(transaction.error ?? new Error('保存データの書き込みに失敗しました。'))
   })
 }
 
@@ -242,7 +242,7 @@ async function readWorkspaceFromIndexedDb(): Promise<WorkspaceSnapshot | null> {
     const store = transaction.objectStore(WORKSPACE_STORE_NAME)
     const request = store.get(WORKSPACE_SNAPSHOT_KEY)
 
-    request.onerror = () => reject(request.error ?? new Error('管理ワークスペースの読込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('教室データの読み込みに失敗しました。'))
     request.onsuccess = () => {
       const result = request.result
       resolve(isWorkspaceSnapshot(result) ? result : null)
@@ -260,12 +260,12 @@ async function writeWorkspaceToIndexedDb(snapshot: WorkspaceSnapshot) {
     const store = transaction.objectStore(WORKSPACE_STORE_NAME)
     const request = store.put(snapshot, WORKSPACE_SNAPSHOT_KEY)
 
-    request.onerror = () => reject(request.error ?? new Error('管理ワークスペースの書込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('教室データの書き込みに失敗しました。'))
     transaction.oncomplete = () => {
       database.close()
       resolve(true)
     }
-    transaction.onerror = () => reject(transaction.error ?? new Error('管理ワークスペースの書込に失敗しました。'))
+    transaction.onerror = () => reject(transaction.error ?? new Error('教室データの書き込みに失敗しました。'))
   })
 }
 
@@ -313,7 +313,7 @@ async function readAllWorkspaceAutoBackupRecordsFromIndexedDb(): Promise<Workspa
     const store = transaction.objectStore(WORKSPACE_AUTO_BACKUP_STORE_NAME)
     const request = store.getAll()
 
-    request.onerror = () => reject(request.error ?? new Error('管理ワークスペース自動バックアップの読込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('教室データの自動バックアップの読み込みに失敗しました。'))
     request.onsuccess = () => {
       const result = request.result
       resolve(isWorkspaceAutoBackupRecordList(result) ? sortBackupRecords(result) : [])
@@ -331,7 +331,7 @@ async function readWorkspaceAutoBackupRecordFromIndexedDb(backupDateKey: string)
     const store = transaction.objectStore(WORKSPACE_AUTO_BACKUP_STORE_NAME)
     const request = store.get(backupDateKey)
 
-    request.onerror = () => reject(request.error ?? new Error('管理ワークスペース自動バックアップの読込に失敗しました。'))
+    request.onerror = () => reject(request.error ?? new Error('教室データの自動バックアップの読み込みに失敗しました。'))
     request.onsuccess = () => {
       resolve(isWorkspaceAutoBackupRecord(request.result) ? request.result : null)
     }
@@ -372,7 +372,7 @@ async function writeWorkspaceAutoBackupRecordsToIndexedDb(records: WorkspaceAuto
     const store = transaction.objectStore(WORKSPACE_AUTO_BACKUP_STORE_NAME)
     const clearRequest = store.clear()
 
-    clearRequest.onerror = () => reject(clearRequest.error ?? new Error('管理ワークスペース自動バックアップの更新に失敗しました。'))
+    clearRequest.onerror = () => reject(clearRequest.error ?? new Error('教室データの自動バックアップの更新に失敗しました。'))
     clearRequest.onsuccess = () => {
       records.forEach((record) => {
         store.put(record)
@@ -383,7 +383,7 @@ async function writeWorkspaceAutoBackupRecordsToIndexedDb(records: WorkspaceAuto
       database.close()
       resolve(true)
     }
-    transaction.onerror = () => reject(transaction.error ?? new Error('管理ワークスペース自動バックアップの更新に失敗しました。'))
+    transaction.onerror = () => reject(transaction.error ?? new Error('教室データの自動バックアップの更新に失敗しました。'))
   })
 }
 
@@ -680,7 +680,7 @@ export function serializeAppSnapshot(snapshot: AppSnapshot) {
 
 export function parseAppSnapshot(serializedSnapshot: string) {
   const parsed = JSON.parse(serializedSnapshot)
-  if (!isAppSnapshot(parsed)) throw new Error('バックアップ形式が不正です。')
+  if (!isAppSnapshot(parsed)) throw new Error('バックアップの形式が違います。')
   return parsed
 }
 
@@ -691,7 +691,7 @@ export function serializeWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
 // サーバー自動バックアップ等には、新フィールド追加前に保存された教室データが混ざりうる。
 // 例: groupLessons / pairConstraints / autoAssignRules を持たない旧 classroomSnapshot。
 // これらを欠くと厳格な isWorkspaceSnapshot が false を返し、ワークスペース全体の復元が
-// 「開発者バックアップ形式が不正です。」で落ちてしまう（教室1つの欠落で全教室が復元不能）。
+// 「バックアップの形式が違います。」(旧文言「開発者バックアップ形式が不正です。」)で落ちてしまう（教室1つの欠落で全教室が復元不能）。
 // 検証前に欠落配列を [] で補完して許容する（後段の sanitize と同等の補完。値が配列以外なら厳格判定に委ねる）。
 const REQUIRED_PAYLOAD_ARRAY_FIELDS = [
   'managers', 'teachers', 'students', 'regularLessons',
@@ -723,7 +723,7 @@ function backfillWorkspaceSnapshotShape(parsed: unknown): unknown {
 
 export function parseWorkspaceSnapshot(serializedSnapshot: string) {
   const parsed = backfillWorkspaceSnapshotShape(JSON.parse(serializedSnapshot))
-  if (!isWorkspaceSnapshot(parsed)) throw new Error('開発者バックアップ形式が不正です。')
+  if (!isWorkspaceSnapshot(parsed)) throw new Error('バックアップの形式が違います。')
 
   return {
     ...parsed,

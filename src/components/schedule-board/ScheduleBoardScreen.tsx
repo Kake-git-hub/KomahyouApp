@@ -600,7 +600,7 @@ function compareScoreVectors(left: number[], right: number[]) {
   return 0
 }
 
-function buildForcedConstraintScoreParts(params: {
+export function buildForcedConstraintScoreParts(params: {
   firstPeriodRuleApplied: boolean
   firstPeriodPreferred: boolean
   subjectCapableRuleApplied: boolean
@@ -623,14 +623,14 @@ function buildForcedConstraintScoreParts(params: {
       // ⑧: デバッグレポート集計ラベル(autoAssignDebugLabelOrder)と一致させる（旧「1限回避」）。
       label: '指定時限回避',
       value: forcedScores[0] ?? 0,
-      detail: !params.firstPeriodRuleApplied ? '対象ルールなし' : params.firstPeriodPreferred ? '満たす' : '指定時限のため不利',
+      detail: !params.firstPeriodRuleApplied ? '対象ルールなし' : params.firstPeriodPreferred ? '満たす' : '指定時限のため優先度低め',
       applicable: params.firstPeriodRuleApplied,
       satisfied: params.firstPeriodRuleApplied ? params.firstPeriodPreferred : false,
     },
     {
       label: '科目対応講師',
       value: forcedScores[1] ?? 0,
-      detail: !params.subjectCapableRuleApplied ? '対象ルールなし' : params.subjectCapablePreferred ? '満たす' : '科目対応外のため不利',
+      detail: !params.subjectCapableRuleApplied ? '対象ルールなし' : params.subjectCapablePreferred ? '満たす' : '科目対応外のため優先度低め',
       applicable: params.subjectCapableRuleApplied,
       satisfied: params.subjectCapableRuleApplied ? params.subjectCapablePreferred : false,
     },
@@ -5035,7 +5035,7 @@ export function checkScheduleViewMoveRangeWithinCap(
   if (daysBefore > maxDays || daysAfter > maxDays) {
     return {
       ok: false,
-      reason: `移動先が現在表示中の週から離れすぎているため移動できません(上限: 約${maxExtensionWeeks}週間)。日程表またはコマ表の表示週を移動先に近づけてから操作してください。`,
+      reason: `表示中の週から離れすぎているため移動できません（約${maxExtensionWeeks}週間まで）。表示週を近づけてからお試しください。`,
     }
   }
   return { ok: true }
@@ -5471,7 +5471,7 @@ export function computeStudentMove(params: {
     [movedStudent.id, targetStudentBeforeMove?.id],
   )
   if (duplicateStudent) {
-    return { status: 'blocked', message: `同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動不可です。` }
+    return { status: 'blocked', message: `同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動できません。` }
   }
   // Issue #56: 入れ替え相手の着地先(移動元コマ)にも同一生徒がいないか検査する。ここに検査が無く、
   // 相手が移動元コマへ入ったとき既に同じ生徒が居ると二重配置になっていた(日程表D&Dスワップで顕在化)。
@@ -5487,7 +5487,7 @@ export function computeStudentMove(params: {
         )
       : null
     if (swapDuplicate) {
-      return { status: 'blocked', message: `入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているため入れ替え不可です。` }
+      return { status: 'blocked', message: `入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているため入れ替えできません。` }
     }
   }
 
@@ -6458,7 +6458,7 @@ export function computePendingLowerStudentMove(params: {
   const targetRealCell = params.weeks.flat().find((cell) => cell.id === params.cellId)
   const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, params.managedStudentByAnyName, params.resolveBoardStudentDisplayName)
   const duplicate = targetRealCell ? findDuplicateStudentInCellByKey(targetRealCell, resolveComparableKey(lowerStudent), resolveComparableKey, [lowerStudent.id]) : null
-  if (duplicate) return { status: 'blocked', message: `同コマにすでに${params.resolveBoardStudentDisplayName(duplicate.name)}が組まれているため移動不可です。` }
+  if (duplicate) return { status: 'blocked', message: `同コマにすでに${params.resolveBoardStudentDisplayName(duplicate.name)}が組まれているため移動できません。` }
 
   // 同じ保留の机の上段の空席へ戻す（regression-reviewer H-1・2026-10-02・INV-02 / INV-13 / INV-06）。
   // 席単位化（Q34-12）で、下段の無い席（上段 [T, 空]・下段 [A, 空] の席 2）への「手入力データを移動」が着地ガードを通るようになった。
@@ -6860,7 +6860,7 @@ export function buildWholeDayTransferConfirmMessage(sourceDateKey: string, targe
   } else {
     lines.push('振替先に既存のコマはありません。')
   }
-  lines.push('よろしいですか。')
+  lines.push('よろしいですか？')
   return lines.join('\n')
 }
 
@@ -7018,7 +7018,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [editStudentDraft, setEditStudentDraft] = useState<EditStudentDraft | null>(null)
   const [addExistingStudentDraft, setAddExistingStudentDraft] = useState<AddExistingStudentDraft | null>(null)
   const [trialStudentDraft, setTrialStudentDraft] = useState<TrialStudentDraft | null>(null)
-  const [statusMessage, setStatusMessage] = useState('左クリックで生徒を選ぶか、空欄の生徒マスを左クリックしてメモを保存できます。')
+  const [statusMessage, setStatusMessage] = useState('生徒をクリックして選ぶか、空いたマスをクリックしてメモを書けます。')
   const [suppressedRegularLessonOccurrences, setSuppressedRegularLessonOccurrences] = useState<string[]>(initialBoardSnapshot.suppressedRegularLessonOccurrences)
   const [scheduleCountAdjustments, setScheduleCountAdjustments] = useState<ScheduleCountAdjustmentEntry[]>(initialBoardSnapshot.scheduleCountAdjustments)
   const [manualMakeupAdjustments, setManualMakeupAdjustments] = useState<MakeupOriginMap>(initialBoardSnapshot.manualMakeupAdjustments)
@@ -8743,7 +8743,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             value: !dateAlreadyUsed ? 100 + coverageScore * 10 + minimumGapScore * 2 + dateSpacingRegularityScore : dateSpacingRegularityScore,
             detail: !dateAlreadyUsed
               ? `別日の登校へ分散 / 範囲 ${coverageScore}日 / 最短間隔 ${minimumGapScore}日 / 間隔 ${dateSpacingRegularityScore}`
-              : `同じ登校日にまとまるため不利 / 間隔 ${dateSpacingRegularityScore}`,
+              : `同じ登校日にまとまるため優先度低め / 間隔 ${dateSpacingRegularityScore}`,
             applicable: true,
             satisfied: !dateAlreadyUsed,
           })
@@ -8760,7 +8760,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         scoreParts.push({
           label: '科目分散',
           value: adjacentSameSubject ? 0 : 2,
-          detail: adjacentSameSubject ? '隣接コマに同一科目があり不利' : '隣接コマに同一科目なし',
+          detail: adjacentSameSubject ? '隣接コマに同一科目があり優先度低め' : '隣接コマに同一科目なし',
           applicable: true,
           satisfied: !adjacentSameSubject,
         })
@@ -8798,7 +8798,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     scoreParts.push({
       label: '相性制約',
       value: params.pairConstraintPreferred ? 1 : 0,
-      detail: params.pairConstraintPreferred ? '組み合わせ問題なし' : '相性制約で不利',
+      detail: params.pairConstraintPreferred ? '組み合わせ問題なし' : '相性制約で優先度低め',
     })
     scoreParts.push({
       label: '通常担当講師との連続性',
@@ -9925,7 +9925,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return marks
   }, [isTemplateMode, teacherMenuContext, teacherOptions, specialSessions])
 
-  const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null
+  const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('できません。') ? statusMessage : null
 
   // ── Template mode helpers ──
   const cloneTemplateCells = (src: SlotCell[]): SlotCell[] =>
@@ -10055,7 +10055,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const comparableStudentKey = resolveStockComparableStudentKey(sourceStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey, sourceStudent.id)
     if (duplicateStudent) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているためテンプレ移動不可です。`)
+      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動できません。`)
       return
     }
     // Issue #56(INV監査 2026-08-29): 入れ替え相手の着地先(移動元コマ)にも同一生徒がいないか検査する。
@@ -10067,7 +10067,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         [targetStudent.id, sourceStudent.id],
       )
       if (swapDuplicate) {
-        setStatusMessage(`入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているためテンプレ入れ替え不可です。`)
+        setStatusMessage(`入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているため入れ替えできません。`)
         return
       }
     }
@@ -10922,7 +10922,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const confirmed = window.confirm(`${dateKey} を休日に設定します。\nこの日に入っている授業はすべてストックへ移行します。\nよろしいですか。`)
+    const confirmed = window.confirm(`${dateKey} を休日に設定します。\nこの日に入っている授業はすべてストックへ移行します。\nよろしいですか？`)
     if (!confirmed) {
       setStatusMessage('休日設定をキャンセルしました。')
       return
@@ -11259,7 +11259,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const comparableStudentKey = selectedMakeupStockEntry.studentId ?? `name:${selectedMakeupStockEntry.displayName}`
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
     if (duplicateStudent) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため振替不可です。`)
+      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため振替できません。`)
       return
     }
 
@@ -11354,7 +11354,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const comparableStudentKey = selectedLectureStockEntry.studentId ?? `name:${selectedLectureStockEntry.displayName}`
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
     if (duplicateStudent) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため講習配置不可です。`)
+      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため配置できません。`)
       return
     }
 
@@ -11438,7 +11438,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
     if (!entry.studentId) {
-      setStatusMessage(`${entry.displayName} は基本データの生徒と未連携のため、自動割振できません。`)
+      setStatusMessage(`${entry.displayName} は基本データの生徒と結び付いていないため、自動割振できません。`)
       return
     }
 
@@ -11672,7 +11672,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleDeleteLecturePendingItem = (entry: GroupedLectureStockEntry, item: LectureStockPendingItem) => {
     const sessionLabel = item.sessionLabel ? ` (${item.sessionLabel})` : ''
-    if (!window.confirm(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除します。よろしいですか。`)) {
+    if (!window.confirm(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除します。よろしいですか？`)) {
       setStatusMessage('未消化講習の削除をキャンセルしました。')
       return
     }
@@ -11712,7 +11712,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleDeleteMakeupOriginItem = (entry: GroupedMakeupStockEntry, item: MakeupStockOriginItem) => {
-    if (!window.confirm(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除します。よろしいですか。`)) {
+    if (!window.confirm(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除します。よろしいですか？`)) {
       setStatusMessage('未消化振替の削除をキャンセルしました。')
       return
     }
@@ -11939,7 +11939,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentUnavailableSlotsById,
     })
     if (reopenTargets.length > 0 && !seat.reopenApproved) {
-      return { ok: false, message: '移動先は出席不可と提出されたコマです。「最新表示」で日程表を更新してから、確認ダイアログで承認して移動してください。' }
+      return { ok: false, message: '移動先は出席不可で提出されたコマです。「最新表示」で更新してから、確認画面で承認して移動してください。' }
     }
     // Issue #57(INV-06): 移動が上書きで消した出欠記録(移動由来振替の休み等)を台帳へ確定してから commit する。
     let nextManualMakeupAdjustments = manualMakeupAdjustments
@@ -12789,7 +12789,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     const duplicateStudent = findDuplicateStudentInCell(targetCell, managedStudent.id)
     if (duplicateStudent) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため追加不可です。`)
+      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため追加できません。`)
       return
     }
 
@@ -13919,7 +13919,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const confirmBody = isSessionLecture
       ? '削除すると講習の希望数が1減ります（未消化ストックには戻りません）。'
       : '削除した授業は振替の対象になりません。'
-    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n${confirmBody}\nよろしいですか。`)
+    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n${confirmBody}\nよろしいですか？`)
     if (!confirmed) {
       setStatusMessage('授業の削除をキャンセルしました。')
       return

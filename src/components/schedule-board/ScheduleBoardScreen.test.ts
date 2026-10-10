@@ -6079,7 +6079,7 @@ describe('checkScheduleViewMoveRangeWithinCap (日程表コマ組みD&Dの週自
     const result = checkScheduleViewMoveRangeWithinCap(weeks, '2026-05-10', '2026-07-12')
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.reason).toContain('移動先が現在表示中の週から離れすぎている')
+      expect(result.reason).toContain('表示中の週から離れすぎている')
       expect(result.reason).toContain(`約${SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS}週間`)
     }
   })

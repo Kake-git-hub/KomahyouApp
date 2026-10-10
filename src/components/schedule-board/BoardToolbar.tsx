@@ -11,6 +11,7 @@ import {
   todayDateKey,
 } from './weekJumpCalendar'
 import { resolveSaveBoardButtonState } from './saveButtonState'
+import { formatCloudSavingFallbackStatus } from '../../utils/saveProgressMessages'
 import { companyProfile, type CompanyScreenActionContext } from '@company/profile'
 
 type BoardToolbarProps = {
@@ -286,10 +287,10 @@ function BoardToolbarComponent({
         </div>
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">
           {syncProgressPercent !== null && syncProgressPercent !== undefined ? (
-            <div className="toolbar-sync-progress" aria-label={`Firebase 同期 ${syncProgressPercent}%`} role="status" aria-live="polite">
+            <div className="toolbar-sync-progress" aria-label={`クラウドへ保存 ${syncProgressPercent}%`} role="status" aria-live="polite">
               <div className="toolbar-sync-progress-text">
                 <span className="button-spinner" aria-hidden="true" />
-                {syncStatusMessage || `データベースへ保存中(${syncProgressPercent}%完了)`}
+                {syncStatusMessage || formatCloudSavingFallbackStatus(syncProgressPercent)}
                 {syncElapsedSeconds !== null && syncElapsedSeconds !== undefined ? ` / ${syncElapsedSeconds}秒経過` : ''}
               </div>
               <div className="toolbar-sync-progress-track is-indeterminate" aria-hidden="true">
@@ -399,7 +400,7 @@ function BoardToolbarComponent({
                 disabled={isSaveButtonDisabled}
                 data-testid="save-board-button"
                 data-state={resolveSaveBoardButtonState({ isSavingInProgress, hasPendingSave: Boolean(hasPendingSave) })}
-                title={hasPendingSave ? '保存してデータベースへ同期します。' : 'データベースと同期済みです。'}
+                title={hasPendingSave ? '保存してクラウドへ送ります。' : 'クラウドと同じ内容です。'}
               >
                 {isSavingInProgress ? (
                   <span className="button-saving-content">

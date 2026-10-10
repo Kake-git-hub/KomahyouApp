@@ -60,6 +60,7 @@ import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsence
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
+import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus } from './utils/saveProgressMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { collectTemplatePendingCellIds, templatePendingDesksForSignature } from './components/schedule-board/templatePendingDesks'
@@ -78,7 +79,7 @@ const SAVE_FAILURE_GUIDANCE_MESSAGE = [
   'まず、インターネットに接続されているかご確認ください。',
   '通信が不安定な場合は、接続が回復してからもう一度「保存」をお試しください。',
   '',
-  'データ保護のため、バックアップJSONを自動でダウンロードしました。',
+  '念のためバックアップを自動でダウンロードしました。',
   '接続が回復しても保存できない場合は、次の手順で復元してください。',
   '  1. インターネット接続を確認する',
   '  2. 一度ログアウトし、再ログインする',
@@ -111,7 +112,7 @@ const STALE_SNAPSHOT_GUIDANCE_MESSAGE = [
   '',
   'このタブの変更は、最新データを上書きしないようクラウド保存を止めています。',
   'お手数ですが、次の手順でご対応ください。',
-  '  1. データ保護のため、このタブの内容をバックアップJSONに書き出しました(ダウンロードフォルダ)',
+  '  1. このタブの内容をバックアップに書き出しました（ダウンロードフォルダ）',
   '  2. 画面を再読み込みして、最新のデータを取得してください',
   '  3. 必要な変更が最新データに無ければ、再度入力して保存してください',
   '',
@@ -1927,7 +1928,7 @@ function AuthenticatedApp() {
       <div className="remote-stale-conflict-banner" role="alert" data-testid="remote-stale-conflict-banner">
         <span className="remote-stale-conflict-banner-text">
           別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しています。
-          このタブの内容はバックアップJSONに書き出し済みです。最新データを取得するため、画面を再読み込みしてください。
+          このタブの内容はバックアップに書き出し済みです。最新データを取得するため、画面を再読み込みしてください。
         </span>
         <button
           type="button"
@@ -2354,7 +2355,7 @@ function AuthenticatedApp() {
     if (showProgress) {
       remoteSyncStartedAtRef.current = Date.now()
       clearRemoteSyncProgressTimer()
-      setRemoteSyncProgress({ percent: 1, label: 'データベースへ保存準備中', elapsedSeconds: 0 })
+      setRemoteSyncProgress({ percent: 1, label: SAVE_PROGRESS_LABELS.preparing, elapsedSeconds: 0 })
       remoteSyncProgressTimerRef.current = window.setInterval(() => {
         setRemoteSyncProgress((current) => current ? { ...current, elapsedSeconds: getRemoteSyncElapsedSeconds() } : current)
       }, 1000)
@@ -2378,12 +2379,12 @@ function AuthenticatedApp() {
       remoteSyncStartedAtRef.current = Date.now()
       clearRemoteSyncSlowTimer()
       if (isRemoteSyncVisibleRef.current) {
-        setRemoteSyncProgress({ percent: 1, label: 'データベースへ保存準備中', elapsedSeconds: 0 })
+        setRemoteSyncProgress({ percent: 1, label: SAVE_PROGRESS_LABELS.preparing, elapsedSeconds: 0 })
       }
       if (nextItem.showSlowMessage) {
         remoteSyncSlowTimerRef.current = window.setTimeout(() => {
           remoteSyncSlowTimerRef.current = null
-          setPersistenceMessage('ブラウザ内には保存済みです。Firebase 同期が遅れています。反映確認前に閉じる場合は確認ダイアログでキャンセルしてください。')
+          setPersistenceMessage(SAVE_RESULT_MESSAGES.slow)
         }, 5000)
       }
 
@@ -2395,20 +2396,20 @@ function AuthenticatedApp() {
           nextItem.snapshot.actingClassroomId,
         )
         if (targetClassrooms.length === 0) throw new Error('保存対象の教室データが見つかりません。')
-        const startProgress = { percent: 20, label: 'Cloud Functions 経由で保存準備中' }
+        const startProgress = { percent: 20, label: SAVE_PROGRESS_LABELS.preparing }
         if (isRemoteSyncVisibleRef.current) {
           const elapsedSeconds = getRemoteSyncElapsedSeconds()
           setRemoteSyncProgress({ ...startProgress, elapsedSeconds })
-          setPersistenceMessage(`${startProgress.label}(${startProgress.percent}%完了)`)
+          setPersistenceMessage(formatSaveProgressStatus(startProgress.label, startProgress.percent))
         }
         for (const [classroomIndex, targetClassroom] of targetClassrooms.entries()) {
           const percent = 20 + Math.floor((classroomIndex / targetClassrooms.length) * 75)
           const saveId = createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id)
           if (isRemoteSyncVisibleRef.current) {
             const elapsedSeconds = getRemoteSyncElapsedSeconds()
-            const progress = { percent, label: `Cloud Functions 経由で保存中: ${classroomIndex + 1}/${targetClassrooms.length}教室` }
+            const progress = { percent, label: formatSaveProgressClassroomLabel(classroomIndex + 1, targetClassrooms.length) }
             setRemoteSyncProgress({ ...progress, elapsedSeconds })
-            setPersistenceMessage(`${progress.label}(${progress.percent}%完了)`)
+            setPersistenceMessage(formatSaveProgressStatus(progress.label, progress.percent))
           }
           const maxAttempts = manualFirebaseSaveStabilityEnabled ? 3 : 1
           let result: Awaited<ReturnType<typeof saveClassroomSnapshotViaFunction>> | null = null
@@ -2466,18 +2467,18 @@ function AuthenticatedApp() {
               })
             }
           }
-          if (!result) throw new Error('Firebase 同期の再試行が完了できませんでした。')
+          if (!result) throw new Error('クラウドへの保存を再試行しましたが完了できませんでした。')
           } catch (error) {
             restoreOperationEvents(targetClassroom.id, operationEvents)
             recordOperationTrace('save', `保存失敗: ${error instanceof Error ? error.message : String(error)}`)
             throw error
           }
         }
-        const finishedProgress = { percent: 100, label: 'Cloud Functions 経由のデータベース保存完了' }
+        const finishedProgress = { percent: 100, label: SAVE_PROGRESS_LABELS.finished }
         if (isRemoteSyncVisibleRef.current) {
           const elapsedSeconds = getRemoteSyncElapsedSeconds()
           setRemoteSyncProgress({ ...finishedProgress, elapsedSeconds })
-          setPersistenceMessage(`${finishedProgress.label}(${finishedProgress.percent}%完了)`)
+          setPersistenceMessage(formatSaveProgressStatus(finishedProgress.label, finishedProgress.percent))
         }
         setLastSavedAt(nextItem.snapshot.savedAt)
         nextItem.onSuccess?.()
@@ -2490,8 +2491,8 @@ function AuthenticatedApp() {
           clearRemoteSyncProgressTimer()
           if (wasRemoteSyncVisible) {
             setPersistenceMessage(markedClean
-              ? 'Firebase へ同期しました。'
-              : 'Firebase 同期は完了しました。最新データ表示への切り替えを確認中です。')
+              ? SAVE_RESULT_MESSAGES.synced
+              : SAVE_RESULT_MESSAGES.syncedSwitchingToLatest)
           }
         }
       } catch (error) {
@@ -2511,7 +2512,7 @@ function AuthenticatedApp() {
           remoteStaleConflictRef.current = true
           setHasRemoteStaleConflict(true)
           setPersistenceMessage(downloadedStaleBackup
-            ? '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。このタブの内容をバックアップJSONに書き出したので、画面を再読み込みしてください。'
+            ? '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。このタブの内容をバックアップに書き出したので、画面を再読み込みしてください。'
             : '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。画面を再読み込みしてください。')
           // 初回だけダイアログで手順を明示する(連続編集での多重ダイアログを防ぐ)。
           if (!alreadyFlagged) {
@@ -2528,13 +2529,13 @@ function AuthenticatedApp() {
           clearRemoteSyncProgressTimer()
         }
         // 失敗時は cleanSignature を更新しないため、未保存状態 (dataSignature !== cleanSignature) が自動的に維持される。
-        const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
+        const message = error instanceof Error ? error.message : SAVE_RESULT_MESSAGES.failedFallback
         const downloadedBackup = manualFirebaseSaveStabilityEnabled && nextItem.downloadBackupOnFailure
           ? downloadFirebaseFailureBackup(nextItem.snapshot)
           : false
-        if (isRemoteSyncVisibleRef.current) setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}`)
+        if (isRemoteSyncVisibleRef.current) setPersistenceMessage(formatCloudSaveNotFinishedMessage(message))
         if (isRemoteSyncVisibleRef.current && downloadedBackup) {
-          setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}。バックアップJSONを自動ダウンロードしました。`)
+          setPersistenceMessage(formatCloudSaveNotFinishedMessage(message, true))
         }
         // バックアップを新規ダウンロードした失敗時のみ、再ログイン→復元の作業指示を明示する
         // (downloadFirebaseFailureBackup はスナップショット単位で重複DLを抑止するため、案内も重複しない)。
@@ -3582,10 +3583,10 @@ function AuthenticatedApp() {
 
     try {
       await signInToFirebaseWithPassword(normalizedEmail, remoteLoginPassword)
-      setPersistenceMessage('Firebase へログインしました。ワークスペースを読み込みます。')
+      setPersistenceMessage('ログインしました。教室データを読み込みます。')
       setRemoteLoginPassword('')
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Firebase ログインに失敗しました。'
+      const message = error instanceof Error ? error.message : 'ログインに失敗しました。'
       setRemoteAuthMessage(message)
     } finally {
       setIsRemoteLoginSubmitting(false)
@@ -3638,7 +3639,7 @@ function AuthenticatedApp() {
         .then(() => {
           setCurrentUserId('')
           setScreen('board')
-          setPersistenceMessage('Firebase からログアウトしました。')
+          setPersistenceMessage('ログアウトしました。')
         })
         .catch((error) => {
           const message = error instanceof Error ? error.message : 'ログアウトに失敗しました。'
@@ -3659,7 +3660,7 @@ function AuthenticatedApp() {
     const shouldShowManualSaveProgress = isRemoteBackendEnabled && Boolean(remoteSessionUserId)
     if (shouldShowManualSaveProgress) {
       updateRemoteSyncVisible(true)
-      setRemoteSyncProgress({ percent: 1, label: 'ブラウザへ保存中', elapsedSeconds: 0 })
+      setRemoteSyncProgress({ percent: 1, label: SAVE_PROGRESS_LABELS.savingOnDevice, elapsedSeconds: 0 })
     }
 
     clearDelayedAutoRemoteSyncTimer()
@@ -3730,7 +3731,7 @@ function AuthenticatedApp() {
         setRemoteSyncProgress(null)
         const downloaded = downloadFallbackBackup()
         setPersistenceMessage(downloaded
-          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。'
+          ? '保存できなかったため、バックアップを自動ダウンロードしました。'
           : '保存に失敗しました。バックアップを書き出してください。')
         if (downloaded) {
           window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
@@ -4394,7 +4395,7 @@ function AuthenticatedApp() {
             // No.210(2026-08-29): reset の失敗を握り潰すと「登録解除できたのに再提出できない」が無言で起きる。
       // 失敗したら知らせて再操作を促す(ガード自体は積んであるので復活はしない)。
       guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId).catch(() => {
-        window.alert('講習提出のリセット(再提出可能化)に失敗しました。通信状態を確認して、登録解除をもう一度お試しください。')
+        window.alert('登録解除できませんでした。通信状態を確認して、もう一度お試しください。')
       })
           }
         }
@@ -4521,7 +4522,7 @@ function AuthenticatedApp() {
           // 欠けていると解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活する。
           // No.210: 生徒側と同じく reset 失敗を可視化する。
       else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId).catch(() => {
-        window.alert('講習提出のリセット(再提出可能化)に失敗しました。通信状態を確認して、登録解除をもう一度お試しください。')
+        window.alert('登録解除できませんでした。通信状態を確認して、もう一度お試しください。')
       })
         }
         return
@@ -4919,7 +4920,7 @@ function AuthenticatedApp() {
           setWorkspaceUsers([])
           setWorkspaceClassrooms([])
           setHasHydratedSnapshot(true)
-          setPersistenceMessage('Firebase にログインしてください。')
+          setPersistenceMessage('ログインしてください。')
         })
         return () => {
           disposed = true
@@ -4943,13 +4944,13 @@ function AuthenticatedApp() {
           // 旧機能が localStorage に残したマーカーはもう参照しないため、ここで掃除だけする。
           clearPendingRemoteWorkspaceSnapshotMarker()
           const { snapshot: resolvedSnapshot } = resolveRemoteWorkspaceSnapshot(remoteSnapshot, localWorkspaceSnapshot)
-          applyWorkspaceSnapshot(resolvedSnapshot, 'Firebase から教室ワークスペースを読み込みました。')
+          applyWorkspaceSnapshot(resolvedSnapshot, '教室データを読み込みました。')
           setRemoteAuthMessage('')
           setHasHydratedSnapshot(true)
         })
         .catch((error) => {
           if (disposed) return
-          const message = error instanceof Error ? error.message : 'Firebase からの読み込みに失敗しました。'
+          const message = error instanceof Error ? error.message : '教室データの読み込みに失敗しました。'
           setRemoteAuthMessage(message)
           setPersistenceMessage(message)
           setHasHydratedSnapshot(true)
@@ -4971,7 +4972,7 @@ function AuthenticatedApp() {
           setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
         }
         if (workspaceSnapshot) {
-          applyWorkspaceSnapshot(workspaceSnapshot, '教室ワークスペースを読み込みました。')
+          applyWorkspaceSnapshot(workspaceSnapshot, '教室データを読み込みました。')
         } else if (legacySnapshot) {
           const migratedWorkspace = createInitialWorkspace(useImportedMasterData)
           migratedWorkspace.classrooms = migratedWorkspace.classrooms.map((classroom, index) => index === 0
@@ -4987,14 +4988,14 @@ function AuthenticatedApp() {
           applyWorkspaceSnapshot(migratedWorkspace, '既存の単一教室データを初期教室へ移行しました。')
         } else {
           const initialWorkspace = createInitialWorkspace(useImportedMasterData)
-          applyWorkspaceSnapshot(initialWorkspace, '初期教室ワークスペースを作成しました。')
+          applyWorkspaceSnapshot(initialWorkspace, '初期の教室データを作成しました。')
           setPersistenceMessage('保存データはまだありません。必要なら初期設定から開始してください。')
         }
         setHasHydratedSnapshot(true)
       })
       .catch(() => {
         if (disposed) return
-        setPersistenceMessage('保存データの読み込みに失敗しました。現在の初期データで続行します。')
+        setPersistenceMessage('読み込めませんでした。少し待ってから開き直してください。')
         setHasHydratedSnapshot(true)
       })
 
@@ -5270,7 +5271,7 @@ function AuthenticatedApp() {
         'バックアップを復元します。',
         `保存日時: ${new Date(snapshot.savedAt).toLocaleString('ja-JP')}`,
         '現在のデータはこの内容で上書きされます。',
-        '復元してよろしいですか?',
+        '復元してよろしいですか？',
       ].join('\n'))
       if (!confirmed) {
         setPersistenceMessage('バックアップの復元をキャンセルしました。')
@@ -5636,7 +5637,7 @@ function AuthenticatedApp() {
       if (hasAnyExistingSetupData() && !window.confirm([
         '基本データを初期取り込みします。',
         '現在の基本データ、自動割振ルール、盤面、開始時点ストックは初期化されます。',
-        '続行しますか?',
+        '続行しますか？',
       ].join('\n'))) {
         setPersistenceMessage('基本データの初期取り込みをキャンセルしました。')
         return
@@ -5835,7 +5836,7 @@ function AuthenticatedApp() {
   })
 
   if (!hasHydratedSnapshot) {
-    return <div className="workspace-auth-shell"><div className="workspace-auth-card"><h2>読み込み中</h2><p>教室ワークスペースを準備しています。</p></div></div>
+    return <div className="workspace-auth-shell"><div className="workspace-auth-card"><h2>読み込み中</h2><p>教室データを準備しています。</p></div></div>
   }
 
   if (isDuplicateTab) {
@@ -5844,7 +5845,7 @@ function AuthenticatedApp() {
         <div className="workspace-auth-card" data-testid="duplicate-tab-block">
           <h2>このタブは利用できません</h2>
           <p>同じ教室を既に別のタブまたはウィンドウで開いています。</p>
-          <p>データの整合性を保つため、コマ表アプリは教室ごとに 1 タブのみで利用できます。</p>
+          <p>コマ表は教室ごとに1つのタブでだけ使えます。</p>
           <p>先に開いているタブを閉じてから、このページを再読み込みしてください。</p>
           <button type="button" onClick={() => window.location.reload()} style={{ marginTop: 16 }}>再読み込み</button>
         </div>
@@ -5888,7 +5889,6 @@ function AuthenticatedApp() {
         <div className="workspace-auth-card">
           <p className="panel-kicker">Local Session</p>
           <h1>仮ログイン</h1>
-          <p className="page-summary">認証方式をまだ確定していないため、いまは画面操作の確認用にローカルアカウントを選んで入ります。</p>
           <div className="workspace-account-list">
             {workspaceUsers.map((user) => {
               const assignedClassroomName = user.assignedClassroomId
@@ -6195,7 +6195,7 @@ function AuthenticatedApp() {
       isBoardSaveDisabled={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
       hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
-        ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')
+        ? (remoteSyncProgress ? formatSaveProgressStatus(remoteSyncProgress.label, remoteSyncProgress.percent) : SAVE_PROGRESS_LABELS.preparing)
         : (manualFirebaseSaveStabilityEnabled ? undefined : ((isSavingNow || hasImmediateUnsavedBoardChanges) ? persistenceMessage : undefined))}
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}

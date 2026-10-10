@@ -2940,7 +2940,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         <input id="schedule-end-date" type="date" />
       </div>
       <div class="toolbar-field">
-        <label for="schedule-period-select">登録された講習期間を表示する</label>
+        <label for="schedule-period-select">講習期間を表示</label>
         <select id="schedule-period-select">
           <option value="">選択してください</option>
         </select>
@@ -2966,7 +2966,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
-        <button type="button" id="schedule-apply-button" title="選択した期間・生徒/講師の絞り込みを適用し、コマ表(盤面)の最新の出欠・振替などを取り込んで表示を更新します">最新表示</button>
+        <button type="button" id="schedule-apply-button" title="選んだ期間・生徒・講師で、コマ表の最新の内容を取り込み直します。">最新表示</button>
       </div>
     </div>`}
     <main class="pages" id="schedule-pages"></main>
@@ -5485,8 +5485,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const commonFieldAttr = emptyFormat ? ' data-empty-format-field="common"' : ' data-note-key="' + escapeHtml(commonKey) + '"';
         const individualFieldAttr = emptyFormat ? ' data-empty-format-field="individual"' : ' data-note-key="' + escapeHtml(individualKey) + '"';
         const noteInputClass = emptyFormat ? 'box-textarea' : 'box-textarea memo-input';
-        const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + commonFieldAttr + '>' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
-        const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + individualFieldAttr + '>' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
+        const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡(学年別)</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + commonFieldAttr + '>' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
+        const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + individualFieldAttr + '>' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
         const makeupSectionHtml = '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>';
         // 括弧内の呼称は通常と講習で出どころが違う。通常＝基本データ(テンプレ)由来の「予定数」、
         // 講習＝QR提出/室長登録の「希望数」。同じ「希望数」表記にすると通常側が提出由来だと誤読される。
@@ -7446,7 +7446,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         description.textContent = DATA.classroomName
           ? DEVELOPER_REPORT_TEXT.description.replace('__CLASSROOM__', String(DATA.classroomName))
           : DEVELOPER_REPORT_TEXT.descriptionNoClassroom;
-        // 種類(使い方の質問／追加要望／不具合・おかしい)。盤面モーダルと同じ選択肢・並び・既定(質問)。
+        // 種類(使い方の質問／要望／不具合)。盤面モーダルと同じ選択肢・並び・既定(質問)。
         const categoryField = document.createElement('fieldset');
         categoryField.className = 'developer-report-category';
         const categoryLegend = document.createElement('legend');
@@ -7566,7 +7566,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           }, '*');
           // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
           developerReportResultTimer = window.setTimeout(function() {
-            showDeveloperReportResult('本体(コマ表)から応答がありません。コマ表のタブを開いた状態で、もう一度お試しください。');
+            showDeveloperReportResult('コマ表から応答がありません。コマ表のタブを開いたまま、もう一度お試しください。');
           }, waitingForAi ? 200000 : 20000);
         });
         document.body.appendChild(overlay);
@@ -7729,7 +7729,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const events = getLessonHistoryFilteredEvents();
         const summary = summarizeLessonHistoryEvents(events);
         const clampedNote = lessonHistoryData.clamped
-          ? '<p class="lesson-history-note">指定期間が1年(366日)を超えたため、終了日から1年分に丸めました。</p>'
+          ? '<p class="lesson-history-note">指定期間が1年を超えたため、終了日から1年分だけ表示します。</p>'
           : '';
         const balances = Array.isArray(lessonHistoryData.makeupBalanceBySubject) ? lessonHistoryData.makeupBalanceBySubject : [];
         const balanceNote = balances.length
@@ -7815,7 +7815,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
         lessonHistoryResultTimer = window.setTimeout(function() {
           lessonHistoryLoading = false;
-          lessonHistoryErrorText = '本体(コマ表)から応答がありません。コマ表のタブを開いた状態で、もう一度お試しください。';
+          lessonHistoryErrorText = 'コマ表から応答がありません。コマ表のタブを開いたまま、もう一度お試しください。';
           renderLessonHistoryBody();
         }, 20000);
       }
@@ -7985,7 +7985,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             var targetWindow = window.open('', targetWindowName);
             if (targetWindow) {
               targetWindow.document.open();
-              targetWindow.document.write('<!doctype html><html><head><meta charset="utf-8"><title>印刷用全員表示</title></head><body style="font-family: sans-serif; padding: 24px;">印刷用全員表示を準備しています...</body></html>');
+              targetWindow.document.write('<!doctype html><html><head><meta charset="utf-8"><title>印刷用全員表示</title></head><body style="font-family: sans-serif; padding: 24px;">印刷用全員表示を準備しています…</body></html>');
               targetWindow.document.close();
             }
             window.opener.postMessage({
@@ -8133,7 +8133,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // 「開発者へ報告」の結果(本体が送信して返す)。盤面と同じくモーダル内に結果を表示する。
         if (message && message.type === 'schedule-developer-report-result') {
           if (developerReportResultTimer) { window.clearTimeout(developerReportResultTimer); developerReportResultTimer = 0; }
-          const resultText = String(message.message || (message.ok ? '開発者へ報告しました。' : '報告を送れませんでした。'));
+          const resultText = String(message.message || (message.ok ? '開発者へ送りました。' : '送れませんでした。'));
           if (developerReportOverlay) showDeveloperReportResult(resultText);
           else window.alert(resultText);
           return;

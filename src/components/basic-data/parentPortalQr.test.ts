@@ -113,12 +113,13 @@ describe('resolveParentPortalQrRowState (spec-parent-portal §K-6)', () => {
 describe('buildParentPortalQrPrintHtml', () => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><path d="M0,0h1v1h-1z" fill="#000"/></svg>'
 
-  it('教室名・生徒名・QR・URL・案内文・印刷ボタンを 1 枚に載せる', () => {
+  it('教室名・生徒名・QR・案内文・印刷ボタンを 1 枚に載せる(URL 文字列は印字しない・2026-10-10 文言整理)', () => {
     const html = buildParentPortalQrPrintHtml({ classroomName: '開発用教室', studentName: '青木', url: 'https://example.web.app/p/abc', svg })
     expect(html).toContain('開発用教室')
     expect(html).toContain('青木 さん')
     expect(html).toContain(svg)
-    expect(html).toContain('https://example.web.app/p/abc')
+    expect(html).not.toContain('https://example.web.app/p/abc')
+    expect(html).not.toContain('class="url"')
     expect(html).toContain(PARENT_PORTAL_QR_TEXT.guidance)
     expect(html).toContain(PARENT_PORTAL_QR_TEXT.caution)
     expect(html).toContain('onclick="window.print()"')
@@ -131,12 +132,19 @@ describe('buildParentPortalQrPrintHtml', () => {
     expect(PARENT_PORTAL_QR_TEXT.guidance).not.toContain('教室への連絡')
   })
 
-  it('名前・URL は HTML エスケープする', () => {
+  it('紙の案内文・注意文は 2026-10-10 の文言整理どおり(「第三者」を使わない)', () => {
+    expect(PARENT_PORTAL_QR_TEXT.guidance).toBe('このQRから、お子さまの授業予定の確認とお休みの連絡ができます。')
+    expect(PARENT_PORTAL_QR_TEXT.caution).toBe('ほかの方に見せないでください。紛失したときは教室へご連絡ください（再発行します）。')
+    expect(PARENT_PORTAL_QR_TEXT.caution).not.toContain('第三者')
+  })
+
+  it('名前は HTML エスケープし、URL はエスケープ有無にかかわらず載せない', () => {
     const html = buildParentPortalQrPrintHtml({ classroomName: '<b>x</b>', studentName: 'A&B', url: 'https://x/p/t?a=1&b=2', svg })
     expect(html).not.toContain('<b>x</b>')
     expect(html).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(html).toContain('A&amp;B')
-    expect(html).toContain('a=1&amp;b=2')
+    expect(html).not.toContain('a=1&amp;b=2')
+    expect(html).not.toContain('a=1&b=2')
   })
 
   it('空の名前はフォールバックし、生徒 ID などは載せない', () => {

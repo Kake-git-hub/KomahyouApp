@@ -45,7 +45,7 @@ const fixedAbsoluteConstraints = [
   {
     key: 'keep-existing',
     label: '既存コマは変更しない',
-    description: '割振は既存コマの変更を行わず、空いているところへの追加割り振りだけで行います。',
+    description: '自動割振は既存コマに触れず、空きコマだけで行います。',
   },
   {
     key: 'attendance-only',
@@ -118,7 +118,7 @@ const ruleGroupDefinitions: Array<{
   {
     key: 'regular-teachers',
     label: '通常講師のみ',
-    description: '割振りを通常授業で担当している講師だけに制限します。',
+    description: '自動割振りを通常授業で担当している講師だけに制限します。',
     orderKey: 'regularTeachersOnly',
     ruleKeys: ['regularTeachersOnly'],
   },
@@ -276,7 +276,7 @@ export function buildAutoAssignWorkbook(
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '対象/対象外', 説明: 'all または grade:中1 または students:青木太郎,伊藤花 を | 区切りで並べます。' },
-    { 項目: 'ルールキー', 説明: 'current 出力のルールキーをそのまま使ってください。未知のキーは取り込みません。' },
+    { 項目: 'ルールキー', 説明: 'current 出力のキー列をそのまま使ってください。未知のキーは取り込みません。' },
     { 項目: '分類', 説明: '制約事項 / 優先事項 を入力します。コマ数上限・指定時限禁止・科目対応講師のみ・通常講師のみ だけ制約事項にできます。他は優先事項に丸めます。' },
     { 項目: '禁止時限', 説明: '指定時限禁止ルールの禁止する時限を 1〜5 のカンマ区切りで入力します（例 1,2）。' },
     { 項目: '優先時限順', 説明: '時限優先ルールの優先順を 1〜5 で並べます（例 5,4,3,2,1）。先頭ほど優先します。' },
@@ -755,7 +755,7 @@ export function AutoAssignRuleScreen({
   }
 
   const removePairConstraint = (id: string) => {
-    if (!window.confirm('このペア制約を削除します。よろしいですか。')) {
+    if (!window.confirm('このペア制約を削除します。よろしいですか？')) {
       setStatusMessage('ペア制約の削除をキャンセルしました。')
       return
     }

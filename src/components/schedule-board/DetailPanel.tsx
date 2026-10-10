@@ -66,7 +66,7 @@ export function DetailPanel({
             <div className="detail-note">{selectedLesson.note ?? '補足なし'}</div>
           </div>
         ) : (
-          <div className="detail-empty">この机にはまだ授業が入っていません。ここを移動先の候補として使う想定です。</div>
+          <div className="detail-empty">この机にはまだ授業が入っていません。</div>
         )}
       </div>
 
@@ -106,16 +106,16 @@ export function DetailPanel({
       </div>
 
       <div className="detail-section">
-        <h3>デバッグコピー</h3>
+        <h3>この画面の内容をコピー</h3>
         <p className="detail-copy-guide">
-          問題報告を速くするために、選択中コマの内容をそのままコピーできます。
+          質問・要望に貼り付けられる形でコピーします。
         </p>
         <div className="detail-action-row">
           <button className="primary-button" type="button" onClick={onCopyDebug}>
-            デバッグコピー
+            この画面の内容をコピー
           </button>
           <button className="secondary-button" type="button" onClick={onCopyIssueTemplate}>
-            報告テンプレートをコピー
+            質問・要望用にコピー
           </button>
         </div>
         <pre className="debug-preview">{selectedDebugCopy}</pre>

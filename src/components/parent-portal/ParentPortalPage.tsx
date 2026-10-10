@@ -3,9 +3,12 @@ import {
   PARENT_ABSENCE_CONFIRM_CANCEL_LABEL,
   PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL,
   PARENT_ABSENCE_LIST_HINT,
+  PARENT_ABSENCE_SENDING_LABEL,
   PARENT_ABSENCE_SENT_MESSAGE,
   PARENT_MESSAGE_NETWORK_ERROR_MESSAGE,
+  PARENT_PORTAL_FOOTER_NOTE,
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
+  PARENT_PORTAL_LOADING_MESSAGE,
   PARENT_PORTAL_NETWORK_ERROR_MESSAGE,
   PARENT_PORTAL_NOTES,
   PARENT_SCHEDULE_TENTATIVE_LEGEND,
@@ -16,8 +19,8 @@ import {
   describeParentAbsenceBadge,
   describeParentAbsenceConfirm,
   formatParentScheduleMonthLabel,
+  formatParentPortalTitle,
   formatParentScheduleRowDateLabel,
-  formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
   readParentAbsenceNotices,
@@ -177,7 +180,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
       <div className="pp-container">
         <div className="pp-center-box">
           <div className="pp-spinner" />
-          <p className="pp-muted">読み込み中...</p>
+          <p className="pp-muted">{PARENT_PORTAL_LOADING_MESSAGE}</p>
         </div>
         <style>{baseStyles}</style>
       </div>
@@ -210,8 +213,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
     <div className="pp-container">
       <header className="pp-header">
         <div className="pp-header-classroom">{schedule.classroomName}</div>
-        <h1 className="pp-header-title">{schedule.studentName} さんの授業予定</h1>
-        <div className="pp-header-saved-at">{formatParentSnapshotSavedAtLabel(schedule.snapshotSavedAt)}</div>
+        <h1 className="pp-header-title">{formatParentPortalTitle(schedule.studentName)}</h1>
       </header>
 
       <ul className="pp-notes">
@@ -254,7 +256,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
       </section>
 
       <footer className="pp-footer">
-        <p className="pp-muted">このページは教室から配布されたQRコード専用です。第三者に共有しないでください。</p>
+        <p className="pp-muted">{PARENT_PORTAL_FOOTER_NOTE}</p>
       </footer>
 
       {confirm ? (
@@ -273,7 +275,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
                 onClick={submitAbsence}
                 disabled={sending}
               >
-                {sending ? '送信中...' : PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL}
+                {sending ? PARENT_ABSENCE_SENDING_LABEL : PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL}
               </button>
               <button type="button" className="pp-modal-cancel" onClick={() => setAbsenceTarget(null)} disabled={sending}>
                 {PARENT_ABSENCE_CONFIRM_CANCEL_LABEL}
@@ -353,7 +355,6 @@ const baseStyles = `
   .pp-header { background: #fff; border-bottom: 1px solid #ddd; padding: 18px 16px 14px; text-align: center; }
   .pp-header-classroom { font-size: 14px; color: #1f5d96; font-weight: 700; margin-bottom: 4px; }
   .pp-header-title { font-size: 22px; font-weight: 700; line-height: 1.3; }
-  .pp-header-saved-at { margin-top: 6px; font-size: 13px; color: #666; }
 
   .pp-notes { list-style: none; margin: 10px 12px 0; padding: 10px 12px; background: #fff8e1; border: 1px solid #f1e2a8; border-radius: 8px; font-size: 13px; color: #5a4a00; display: grid; gap: 4px; }
   .pp-notes li::before { content: '・'; }

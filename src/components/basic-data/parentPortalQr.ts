@@ -5,6 +5,7 @@
 //   基本データのタブ判定 resolveManagedRosterStatus(入塾日不問)は使わない(§F: 判定の分散を作らない)。
 // - 発行元教室の一致判定は developmentClassroom.ts の権威関数に委ね、ここで再実装しない(§B-3)。
 // - 印刷は 1 生徒 1 枚(生徒名・教室名・QR・短い案内文)。盤面/日程表の印刷レイアウトには触れない。
+//   URL 文字列は紙に印字しない(QR だけで足りる・2026-10-10 文言整理)。画面のモーダルには引き続き URL を出す。
 
 import { isActiveOnDate, type StudentRow } from './basicDataModel'
 import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
@@ -15,8 +16,8 @@ export const PARENT_PORTAL_QR_TEXT = {
   title: '保護者用QR',
   buttonLabel: 'QR',
   // 2026-09-18: 自由記述の連絡は廃止し、できるのは「授業の行をタップして休みを連絡する」だけ(spec-parent-portal §0-5)。
-  guidance: 'このQRコードを読み取ると、お子さまの授業予定の確認とお休みの連絡ができます。',
-  caution: 'QRコードは第三者に見せないでください。紛失した場合は教室へご連絡ください（再発行できます）。',
+  guidance: 'このQRから、お子さまの授業予定の確認とお休みの連絡ができます。',
+  caution: 'ほかの方に見せないでください。紛失したときは教室へご連絡ください（再発行します）。',
   issued: '保護者用QRを発行しました。忘れずに保存してください。',
   /** 権威トークンの確認に失敗したとき(写しで描けている場合)の注意文。印刷を止めるため文言を分けている。 */
   verifyFailed: '最新のQRか確認できませんでした。この場で印刷せず、通信状態を確認してから開き直してください。',
@@ -83,11 +84,11 @@ function escapeHtml(value: string): string {
 }
 
 // 1 生徒 1 枚の印刷 HTML(groupAttendanceHtml と同じ「印刷ボタン＋@media print で非表示」方式)。
-// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。URL・名前はエスケープする。
+// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。名前はエスケープする。
+// url は呼び出し側の互換のため受け取るが、紙には印字しない(QR だけで足りる・2026-10-10 文言整理)。
 export function buildParentPortalQrPrintHtml(params: { classroomName: string; studentName: string; url: string; svg: string }): string {
   const classroomName = escapeHtml(params.classroomName.trim() || '教室')
   const studentName = escapeHtml(params.studentName.trim() || '生徒')
-  const url = escapeHtml(params.url)
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -102,7 +103,6 @@ export function buildParentPortalQrPrintHtml(params: { classroomName: string; st
   .student { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
   .qr { display: inline-block; padding: 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
   .qr svg { display: block; width: 220px; height: 220px; }
-  .url { margin-top: 12px; font-size: 11px; color: #444; word-break: break-all; }
   .guidance { margin-top: 16px; font-size: 13px; line-height: 1.6; text-align: left; }
   .caution { margin-top: 8px; font-size: 12px; color: #7a2e2e; line-height: 1.6; text-align: left; }
   .print-button { display: block; margin: 0 auto 16px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
@@ -116,7 +116,6 @@ export function buildParentPortalQrPrintHtml(params: { classroomName: string; st
   <div class="title">${PARENT_PORTAL_QR_TEXT.title}</div>
   <div class="student">${studentName} さん</div>
   <div class="qr">${params.svg}</div>
-  <div class="url">${url}</div>
   <p class="guidance">${escapeHtml(PARENT_PORTAL_QR_TEXT.guidance)}</p>
   <p class="caution">${escapeHtml(PARENT_PORTAL_QR_TEXT.caution)}</p>
 </div>

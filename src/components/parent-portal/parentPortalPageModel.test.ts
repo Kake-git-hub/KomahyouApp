@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   PARENT_ABSENCE_BADGE_ACKNOWLEDGED,
@@ -7,13 +9,20 @@ import {
   PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY,
   PARENT_ABSENCE_CONFIRM_QUESTION,
   PARENT_ABSENCE_CONFLICT_MESSAGE,
+  PARENT_ABSENCE_LIST_HINT,
+  PARENT_ABSENCE_SENDING_LABEL,
   PARENT_MESSAGE_RATE_LIMIT_MESSAGE,
   PARENT_PORTAL_DISABLED_MESSAGE,
+  PARENT_PORTAL_FOOTER_NOTE,
+  PARENT_PORTAL_LOAD_FAILED_MESSAGE,
+  PARENT_PORTAL_LOADING_MESSAGE,
   PARENT_PORTAL_NOTES,
   PARENT_PORTAL_UNAVAILABLE_MESSAGE,
+  PARENT_SCHEDULE_CLOSED_MESSAGE,
   PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
   PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE,
   PARENT_SCHEDULE_NO_LESSON_MESSAGE,
+  PARENT_SCHEDULE_TENTATIVE_LEGEND,
   buildParentAbsenceRowAriaLabel,
   buildParentPortalRequestUrl,
   buildParentScheduleRows,
@@ -26,8 +35,8 @@ import {
   formatParentAbsenceTargetLabel,
   formatParentScheduleDayLabel,
   formatParentScheduleMonthLabel,
+  formatParentPortalTitle,
   formatParentScheduleRowDateLabel,
-  formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
   isParentScheduleDayTentative,
@@ -41,6 +50,15 @@ import {
   type ParentScheduleDay,
   type ParentScheduleLesson,
 } from './parentPortalPageModel'
+import {
+  PARENT_ABSENCE_ERROR_ALREADY_REPORTED,
+  PARENT_ABSENCE_ERROR_NOT_REPORTABLE,
+  PARENT_MESSAGE_ERROR_INVALID_INPUT,
+  PARENT_PORTAL_ERROR_DISABLED,
+  PARENT_PORTAL_ERROR_GONE,
+  PARENT_PORTAL_ERROR_INTERNAL,
+  PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED,
+} from '../../../functions/src/parentPortal'
 
 const lesson = (overrides: Partial<ParentScheduleLesson> = {}): ParentScheduleLesson => ({
   slotNumber: 3,
@@ -98,10 +116,11 @@ describe('formatParentScheduleDayLabel / formatParentScheduleDateShort', () => {
   })
 })
 
-describe('formatJstDateTimeLabel / formatParentSnapshotSavedAtLabel', () => {
+// 室長側の受信時刻表示(ParentMessagesModal / ParentContactHistoryModal)で使う。
+// 保護者ページ上部の「◯月◯日 ◯:◯◯ 時点」は 2026-10-10 の文言整理で廃止した(下の「保護者ページの文言」参照)。
+describe('formatJstDateTimeLabel', () => {
   it('ISO を JST で整形する(UTC 05:05 → 14:05)', () => {
     expect(formatJstDateTimeLabel('2026-09-13T05:05:00.000Z')).toBe('9月13日 14:05')
-    expect(formatParentSnapshotSavedAtLabel('2026-09-13T05:05:00.000Z')).toBe('9月13日 14:05 時点')
   })
 
   it('JST で日付をまたぐ(UTC 15:30 → 翌日 0:30)', () => {
@@ -111,7 +130,6 @@ describe('formatJstDateTimeLabel / formatParentSnapshotSavedAtLabel', () => {
   it('null/壊れた値は不明表示', () => {
     expect(formatJstDateTimeLabel(null)).toBeNull()
     expect(formatJstDateTimeLabel('not-a-date')).toBeNull()
-    expect(formatParentSnapshotSavedAtLabel(null)).toBe('保存時刻は不明です')
   })
 })
 
@@ -168,7 +186,8 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
     const origin = { dateKey: '2026-09-21', slotNumber: 1 }
     expect(describeParentScheduleLesson(lesson({ kind: 'makeup', subject: '英語', makeupOrigin: origin }))).toEqual({ main: '英語', sub: '9/21 1限の振替' })
     expect(describeParentScheduleLesson(lesson({ kind: 'attended', makeupOrigin: origin }))).toEqual({ main: '数学', sub: '出席（9/21 1限の振替）' })
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: 'お休み', sub: '9/21 1限分 振替なし' })
+    // 振無休は「お休み」だけ(「◯分 振替なし」は 2026-10-10 の文言整理で廃止)。
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: 'お休み' })
     // 元コマ不明なら日付だけ。
     expect(describeParentScheduleLesson(lesson({ kind: 'makeup', makeupOrigin: { dateKey: '2026-09-21', slotNumber: null } })).sub).toBe('9/21の振替')
     // 補足は 12 文字以内(スマホ幅で日付・時限の列と並べて 1 行に収まる長さ)。
@@ -183,7 +202,8 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
   })
 
   it('振替なし欠席・出席済み', () => {
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: 'お休み', sub: '振替なし' })
+    // 「振替なし」の補足は出さない(2026-10-10 文言整理)。
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: 'お休み' })
     expect(describeParentScheduleLesson(lesson({ kind: 'attended' }))).toEqual({ main: '数学', sub: '出席済み' })
   })
 
@@ -193,8 +213,8 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
 })
 
 describe('describeParentScheduleDayStatus / isParentScheduleDayTentative', () => {
-  it('臨時・祝日休みは「教室休み」。講習期間の「別途ご案内」は出さない(k-4)', () => {
-    expect(describeParentScheduleDayStatus(day({ kind: 'closed' }))).toBe('教室休み')
+  it('臨時・祝日休みは「教室お休み」。講習期間の「別途ご案内」は出さない(k-4)', () => {
+    expect(describeParentScheduleDayStatus(day({ kind: 'closed' }))).toBe('教室お休み')
     expect(describeParentScheduleDayStatus(day({ kind: 'board', lessons: [lesson()] }))).toBeNull()
   })
 
@@ -204,7 +224,7 @@ describe('describeParentScheduleDayStatus / isParentScheduleDayTentative', () =>
     expect(describeParentScheduleDayStatus(day({ kind: 'template', lessons: [lesson({ isTentative: true })] }))).toBeNull()
   })
 
-  it('テンプレ補完の日だけ「予定(変更の可能性あり)」', () => {
+  it('テンプレ補完の日だけ「予定」印', () => {
     expect(isParentScheduleDayTentative(day({ kind: 'template', lessons: [lesson({ isTentative: true })] }))).toBe(true)
     expect(isParentScheduleDayTentative(day({ kind: 'board', lessons: [lesson()] }))).toBe(false)
   })
@@ -230,7 +250,7 @@ describe('buildParentScheduleRows: 1 コマ 1 行(確認リスト その他 2026
       day({ dateKey: '2026-09-22', weekday: 2, kind: 'board', lessons: [] }),
     ], '2026-09-01')
     expect(rows.map((row) => [row.rowKind, row.main, row.slotLabel, row.isFirstOfDay])).toEqual([
-      ['closed', '教室休み', '', true],
+      ['closed', '教室お休み', '', true],
       ['status', PARENT_SCHEDULE_NO_LESSON_MESSAGE, '', true],
     ])
     expect(buildParentScheduleRows([], '2026-09-01')).toEqual([])
@@ -240,7 +260,7 @@ describe('buildParentScheduleRows: 1 コマ 1 行(確認リスト その他 2026
     const rows = buildParentScheduleRows([
       day({ dateKey: '2026-09-23', weekday: 3, kind: 'closed', lessons: [], makeupDestinations: [{ dateKey: '2026-09-30', slotNumber: 1 }, { dateKey: '2026-10-02', slotNumber: 3 }] }),
     ], '2026-09-01')
-    expect(rows.map((row) => [row.rowKind, row.main, row.sub ?? ''])).toEqual([['closed', '教室休み', '9/30 1限・10/2 3限に振替']])
+    expect(rows.map((row) => [row.rowKind, row.main, row.sub ?? ''])).toEqual([['closed', '教室お休み', '9/30 1限・10/2 3限に振替']])
   })
 
   it('行の日付は「14日(月)」(月は見出しにある)', () => {
@@ -253,15 +273,18 @@ describe('resolveParentPortalLoadError / resolveParentAbsenceSendError', () => {
   it('サーバーの { error } を優先して表示する', () => {
     expect(resolveParentPortalLoadError(410, { error: 'サーバー文言' })).toBe('サーバー文言')
     expect(resolveParentAbsenceSendError(429, { error: '本日の上限' })).toBe('本日の上限')
-    expect(resolveParentAbsenceSendError(409, { error: 'このコマはすでにお休みの連絡を受け付けています。' })).toBe('このコマはすでにお休みの連絡を受け付けています。')
+    expect(resolveParentAbsenceSendError(409, { error: 'この授業はすでにお休みの連絡を受け付けています。' })).toBe('この授業はすでにお休みの連絡を受け付けています。')
   })
 
-  it('410 は理由を出し分けない共通文言、403 は利用停止、400 は無効リンク', () => {
+  it('410 は理由を出し分けない共通文言、403 も同じ案内、400 は無効リンク', () => {
     expect(resolveParentPortalLoadError(410)).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
     expect(resolveParentPortalLoadError(404, {})).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
     expect(resolveParentPortalLoadError(403, { error: '' })).toBe(PARENT_PORTAL_DISABLED_MESSAGE)
     expect(resolveParentPortalLoadError(400)).toBe('このリンクは無効です。教室へお問い合わせください。')
-    expect(resolveParentPortalLoadError(500)).toBe('データの読み込みに失敗しました。')
+    expect(resolveParentPortalLoadError(500)).toBe('読み込めませんでした。少し待ってから開き直してください。')
+    // 403(機能が教室で無効)は 410 と同じ案内(2026-10-10 文言整理)。
+    expect(PARENT_PORTAL_DISABLED_MESSAGE).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
+    expect(PARENT_PORTAL_UNAVAILABLE_MESSAGE).toBe('このリンクは現在ご利用いただけません。教室へお問い合わせください。')
   })
 
   it('休み連絡 POST: 409/400 は連絡できない案内、429 は回数制限、410/403 は GET と同じ', () => {
@@ -461,13 +484,79 @@ describe('resolveParentScheduleMonthNotice', () => {
 })
 
 describe('PARENT_PORTAL_NOTES', () => {
-  it('注記 3 種(保存時点・変更あり・連絡導線)を常時表示する', () => {
-    expect(PARENT_PORTAL_NOTES).toHaveLength(3)
-    expect(PARENT_PORTAL_NOTES[0]).toContain('保存された時点')
-    expect(PARENT_PORTAL_NOTES[1]).toContain('変更になる')
-    // ★2026-09-18: 導線は「ページ下部のフォーム」ではなく「授業の行をタップ」(フォームは廃止)。
-    expect(PARENT_PORTAL_NOTES[2]).toContain('授業の行をタップ')
-    expect(PARENT_PORTAL_NOTES[2]).toContain('お電話')
-    expect(PARENT_PORTAL_NOTES[2]).not.toContain('ページ下部')
+  // 2026-10-10 文言整理(オーナー確認済み): 3 行 → 1 行。「保存された時点」と「行をタップ」の 2 行は廃止。
+  // タップの案内は連絡できる行があるときだけ一覧の上(PARENT_ABSENCE_LIST_HINT)に出る。
+  it('常時表示の注記は「予定は変更になることがあります。」の 1 行だけ', () => {
+    expect(PARENT_PORTAL_NOTES).toEqual(['予定は変更になることがあります。'])
+    expect(PARENT_PORTAL_NOTES.join('')).not.toContain('保存された時点')
+    expect(PARENT_PORTAL_NOTES.join('')).not.toContain('ページ下部')
+  })
+})
+
+// 2026-10-10 文言整理(オーナー確認済みの文言一覧 #2〜#46)。画面に出る保護者向け文言を固定する。
+describe('保護者ページの文言(2026-10-10 文言整理)', () => {
+  const PAGE_TSX = readFileSync(fileURLToPath(new URL('./ParentPortalPage.tsx', import.meta.url)), 'utf8')
+  const MODEL_TS = readFileSync(fileURLToPath(new URL('./parentPortalPageModel.ts', import.meta.url)), 'utf8')
+
+  it('見出し・読み込み中・送信中・最下部の注意', () => {
+    expect(formatParentPortalTitle('青木')).toBe('青木 さん 授業予定')
+    expect(PARENT_PORTAL_LOADING_MESSAGE).toBe('読み込み中…')
+    expect(PARENT_ABSENCE_SENDING_LABEL).toBe('送信中…')
+    expect(PARENT_PORTAL_FOOTER_NOTE).toBe('このページは配布先のご家庭専用です。ほかの方に共有しないでください。')
+    expect(PAGE_TSX).toContain('formatParentPortalTitle(schedule.studentName)')
+    expect(PAGE_TSX).toContain('{PARENT_PORTAL_LOADING_MESSAGE}')
+    expect(PAGE_TSX).toContain('PARENT_ABSENCE_SENDING_LABEL : PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL')
+    expect(PAGE_TSX).toContain('{PARENT_PORTAL_FOOTER_NOTE}')
+    expect(PAGE_TSX).not.toContain('さんの授業予定')
+    expect(PAGE_TSX).not.toContain('読み込み中...')
+    expect(PAGE_TSX).not.toContain('送信中...')
+    expect(PAGE_TSX).not.toContain('第三者')
+  })
+
+  it('見出し下の保存時刻(「◯時点」「保存時刻は不明です」)は出さない', () => {
+    expect(PAGE_TSX).not.toContain('snapshotSavedAt')
+    expect(PAGE_TSX).not.toContain('pp-header-saved-at')
+    expect(MODEL_TS).not.toContain('時点`')
+    expect(MODEL_TS).not.toContain('保存時刻は不明です')
+  })
+
+  it('「予定」印の長い読み上げラベル「予定（変更の可能性あり）」は付けない', () => {
+    expect(MODEL_TS).not.toContain("'予定（変更の可能性あり）'")
+    expect(PAGE_TSX).not.toContain('変更の可能性あり')
+    expect(PAGE_TSX).toContain('<span className="pp-row-tentative">予定</span>')
+  })
+
+  it('一覧の上の案内・確認モーダル・エラーの文言', () => {
+    expect(PARENT_ABSENCE_LIST_HINT).toBe('授業をタップすると、お休みの連絡ができます。')
+    expect(PARENT_SCHEDULE_TENTATIVE_LEGEND).toBe('「予定」印は変更になることがあります。')
+    expect(PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE).toBe('この月は通常授業がありません。')
+    expect(PARENT_SCHEDULE_CLOSED_MESSAGE).toBe('教室お休み')
+    expect(PARENT_ABSENCE_CONFIRM_QUESTION).toBe('この授業をお休みしますか？')
+    expect(PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE).toBe('教室が確認すると「教室確認済」と表示されます。')
+    expect(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY).toBe('当日のご連絡です。「教室確認済」にならない場合はお電話ください。')
+    expect(PARENT_PORTAL_LOAD_FAILED_MESSAGE).toBe('読み込めませんでした。少し待ってから開き直してください。')
+    expect(PARENT_ABSENCE_CONFLICT_MESSAGE).toBe('この授業はお休みの連絡ができません。ページを開き直してご確認ください。')
+    expect(PARENT_ABSENCE_CONFIRM_QUESTION).not.toContain('?')
+    expect(PARENT_ABSENCE_CONFLICT_MESSAGE).not.toContain('コマ')
+  })
+})
+
+// サーバーの { error } は画面にそのまま出る(readServerError が優先)。クライアントのフォールバックと同じ案内に揃っていること、
+// 技術用語(「コマ」「メソッド」「サーバー」「入力の形式」)が保護者に出ないことを固定する(2026-10-10 文言整理 #39 / #46〜#50)。
+describe('サーバーの保護者向けエラー文言(functions/src/parentPortal.ts)', () => {
+  it('クライアントのフォールバックと同文', () => {
+    expect(PARENT_PORTAL_ERROR_GONE).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
+    expect(PARENT_PORTAL_ERROR_DISABLED).toBe(PARENT_PORTAL_DISABLED_MESSAGE)
+    expect(PARENT_ABSENCE_ERROR_NOT_REPORTABLE).toBe(PARENT_ABSENCE_CONFLICT_MESSAGE)
+  })
+
+  it('二重連絡・不正な送信・405・500 の文言', () => {
+    expect(PARENT_ABSENCE_ERROR_ALREADY_REPORTED).toBe('この授業はすでにお休みの連絡を受け付けています。')
+    expect(PARENT_MESSAGE_ERROR_INVALID_INPUT).toBe('送信できませんでした。ページを開き直してお試しください。')
+    expect(PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED).toBe('ご利用いただけません。')
+    expect(PARENT_PORTAL_ERROR_INTERNAL).toBe('エラーが発生しました。時間をおいてお試しください。')
+    for (const message of [PARENT_ABSENCE_ERROR_ALREADY_REPORTED, PARENT_ABSENCE_ERROR_NOT_REPORTABLE, PARENT_MESSAGE_ERROR_INVALID_INPUT, PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED, PARENT_PORTAL_ERROR_INTERNAL, PARENT_PORTAL_ERROR_DISABLED]) {
+      expect(message).not.toMatch(/コマ|メソッド|サーバー|入力の形式/u)
+    }
   })
 })

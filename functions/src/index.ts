@@ -404,7 +404,12 @@ async function assertNoSnapshotDataLoss(params: {
   const previousManagementCount = previousPayload ? countClassroomManagementData(previousPayload) : 1
   if (previousManagementCount <= 0) return
 
-  throw new HttpsError('failed-precondition', `既存の教室管理データがあるため、空の管理データでのFirebase上書きを中止しました。前回データ件数=${previousManagementCount}`)
+  // 安全弁(空の管理データで既存データを上書きしない)。画面には平易な文言だけを出し、件数は details とログへ残す。
+  logger.warn('[saveClassroomSnapshot] 空の管理データでの上書きを中止しました', { previousManagementCount })
+  throw new HttpsError('failed-precondition', '中身が空のため、保存を中止しました。教室データを確認してください。', {
+    reason: 'empty-management-data',
+    previousManagementCount,
+  })
 }
 
 function isGoogleDriveBackupConfigured() {
@@ -1235,13 +1240,13 @@ function validateContractStatus(value: string) {
 
 async function requireDeveloperMember(authUid: string | undefined, workspaceKey: string) {
   if (!authUid) {
-    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+    throw new HttpsError('unauthenticated', 'ログインしてください。')
   }
 
   const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid)
   const memberSnapshot = await memberRef.get()
   if (!memberSnapshot.exists) {
-    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+    throw new HttpsError('permission-denied', 'この教室を利用する権限がありません。')
   }
 
   const member = memberSnapshot.data() as { role?: string } | undefined
@@ -1254,13 +1259,13 @@ async function requireDeveloperMember(authUid: string | undefined, workspaceKey:
 
 async function requireClassroomAccessMember(authUid: string | undefined, workspaceKey: string, classroomId: string) {
   if (!authUid) {
-    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+    throw new HttpsError('unauthenticated', 'ログインしてください。')
   }
 
   const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid)
   const memberSnapshot = await memberRef.get()
   if (!memberSnapshot.exists) {
-    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+    throw new HttpsError('permission-denied', 'この教室を利用する権限がありません。')
   }
 
   const member = memberSnapshot.data() as { role?: string; assignedClassroomId?: string | null } | undefined
@@ -1274,7 +1279,7 @@ async function requireClassroomAccessMember(authUid: string | undefined, workspa
   const decision = resolveClassroomAccessDecision(member, classroomId, classroomExists)
   if (!decision.allowed) {
     if (decision.reason === 'classroom-not-found') {
-      throw new HttpsError('not-found', 'この教室はこのワークスペースに存在しません。')
+      throw new HttpsError('not-found', 'この教室が見つかりません。')
     }
     throw new HttpsError('permission-denied', 'この教室を保存する権限がありません。')
   }
@@ -1723,7 +1728,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
       readbackHash,
       errorMessage: 'Firebase保存後の読み戻し検証に失敗しました。',
     }), { merge: true })
-    throw new HttpsError('internal', 'Firebase保存後の読み戻し検証に失敗しました。')
+    // 保存記録(saveAttempts)の errorMessage には開発者向けの原因文を残し、画面には平易な文言を出す。
+    throw new HttpsError('internal', '保存後の確認に失敗しました。もう一度保存してください。', { reason: 'readback-verification-failed' })
   }
 
   await saveAttemptRef.set(buildSaveAttemptPayload({
@@ -1813,14 +1819,16 @@ export const getStudentLessonHistory = onCall({ invoker: 'public', timeoutSecond
   }
 })
 
-// 想定外の例外(Firestore の索引不足・復号失敗など)を HttpsError('internal') に包み、原因文を画面まで届ける。
+// 想定外の例外(Firestore の索引不足・復号失敗など)を HttpsError('internal') に包み、原因文を details.reason でクライアントまで届ける
+// (画面の文言は平易な「履歴を読み込めませんでした。」だけ・2026-10 文言見直し。原因は通信応答の details とログで追う)。
 // 包まないと firebase-functions が汎用の「INTERNAL」だけを返し、利用者にも開発者にも原因が分からない
 // (確認リスト v1.5.504 h-2 で実際に起きた)。HttpsError はそのまま通す(権限・入力エラーの種別を保つ)。
 export function toLessonHistoryHttpsError(error: unknown): HttpsError {
   if (error instanceof HttpsError) return error
   const message = error instanceof Error ? error.message : String(error)
   logger.error('[getStudentLessonHistory] unexpected error', { message, stack: error instanceof Error ? error.stack : undefined })
-  return new HttpsError('internal', `サーバーで履歴を読めませんでした(${message.slice(0, 300)})`)
+  // 画面には原因の英文を出さない(2026-10 文言見直し)。原因は上の logger と details(reason)に残す。
+  return new HttpsError('internal', '履歴を読み込めませんでした。', { reason: message.slice(0, 300) })
 }
 
 // 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡と報告時点の教室データを
@@ -2191,9 +2199,9 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
 // 「他教室のバックアップを検証用教室(開発用教室・テスト教室)へ読み込む(Feature B)」のアクセス判定。
 // 許可: 開発者、または【検証用教室の室長】(サンドボックスのため任意教室を読み込める)。
 async function resolveDevelopmentBackupAccess(authUid: string | undefined, workspaceKey: string) {
-  if (!authUid) throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+  if (!authUid) throw new HttpsError('unauthenticated', 'ログインしてください。')
   const memberSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid).get()
-  if (!memberSnapshot.exists) throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+  if (!memberSnapshot.exists) throw new HttpsError('permission-denied', 'この教室を利用する権限がありません。')
   const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc
   if (member.role === 'developer') return { member, isDeveloper: true as const }
   const assignedId = typeof member.assignedClassroomId === 'string' ? member.assignedClassroomId.trim() : ''
@@ -2244,13 +2252,13 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
   const classroomId = readString(rawData.classroomId, 'classroomId')
 
   if (!request.auth?.uid) {
-    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+    throw new HttpsError('unauthenticated', 'ログインしてください。')
   }
 
   const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(request.auth.uid)
   const memberSnapshot = await memberRef.get()
   if (!memberSnapshot.exists) {
-    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+    throw new HttpsError('permission-denied', 'この教室を利用する権限がありません。')
   }
 
   // 許可: 開発者 / 自分の担当教室 / 検証用教室(開発用教室・テスト教室)の室長(任意教室を自教室へ読み込むため)。
@@ -2688,7 +2696,7 @@ export const triggerMonthlyStudentCountRecord = onCall({ invoker: 'public', time
 export const listBillingWorkspaces = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
   const authUid = request.auth?.uid
   if (!authUid) {
-    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+    throw new HttpsError('unauthenticated', 'ログインしてください。')
   }
   try {
     const workspaceSnapshots = await firestore.collection('workspaces').get()
@@ -3279,13 +3287,14 @@ export const parentPortalApi = onRequest({
   }
 })
 
-// 想定外の例外を HttpsError('internal', 原因) に包む(getStudentLessonHistory と同じ理由: 包まないと画面に
-// 汎用の INTERNAL しか出ず原因が分からない・確認リスト v1.5.504 h-2)。HttpsError はそのまま通す。
+// 想定外の例外を HttpsError('internal', 平易な文言, { reason: 原因 }) に包む(getStudentLessonHistory と同じ理由: 包まないと
+// 汎用の INTERNAL しか返らず原因が分からない・確認リスト v1.5.504 h-2)。HttpsError はそのまま通す。
 function toParentPortalHttpsError(functionName: string, error: unknown): HttpsError {
   if (error instanceof HttpsError) return error
   const message = error instanceof Error ? error.message : String(error)
   logger.error(`[${functionName}] unexpected error`, { message, stack: error instanceof Error ? error.stack : undefined })
-  return new HttpsError('internal', `サーバーで処理できませんでした(${message.slice(0, 300)})`)
+  // 画面には原因の英文を出さない(2026-10 文言見直し)。原因は上の logger と details(reason)に残す。
+  return new HttpsError('internal', '処理できませんでした。時間をおいてお試しください。', { reason: message.slice(0, 300) })
 }
 
 // 機能フラグ(§H)はサーバー側でも評価する(クライアントで隠すだけにしない)。

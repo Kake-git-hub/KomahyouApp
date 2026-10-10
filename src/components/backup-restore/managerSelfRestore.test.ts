@@ -85,6 +85,13 @@ describe('室長の自教室復元: 実行ガード(教室取り違え防止・2
     expect(resolveManagerSelfRestoreGuard({ ...base, role: null }).ok).toBe(false)
   })
 
+  it('接続できないときの文言に製品名(Firebase)を出さない(文言一覧 #414)', () => {
+    expect(resolveManagerSelfRestoreGuard({ ...base, isRemoteBackendEnabled: false })).toEqual({
+      ok: false,
+      message: '接続できないため、バックアップから復元できません。',
+    })
+  })
+
   it('開発者: 開いている教室 = 復元対象なら許可、違えば拒否', () => {
     expect(resolveManagerSelfRestoreGuard({ ...base, role: 'developer', assignedClassroomId: null })).toEqual({ ok: true })
     expect(resolveManagerSelfRestoreGuard({ ...base, role: 'developer', assignedClassroomId: null, targetClassroomId: 'classroom-b' }).ok).toBe(false)

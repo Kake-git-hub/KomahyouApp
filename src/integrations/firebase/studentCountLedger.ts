@@ -37,7 +37,10 @@ export type StudentCountLedgerEntry = {
 // workspaceKey の既定は接続先(env)。「全社」タブ(P-11 ③)だけが別 workspace の記録を**読む**(書き込み経路は変えない)。
 function getStudentCountLedgerRef(snapshotDate: string, workspaceKey?: string) {
   const firestore = getFirebaseFirestoreInstance()
-  if (!firestore) throw new Error('Firebase 設定が不足しています。 .env に接続情報を設定してください。')
+  if (!firestore) {
+    console.error('[studentCountLedger] Firestore を初期化できません。.env の Firebase 接続情報を確認してください。')
+    throw new Error('接続設定がされていません。開発者へご連絡ください。')
+  }
   const key = workspaceKey?.trim() || getFirebaseBackendConfig().workspaceKey
   return doc(firestore, 'workspaces', key, 'studentCountLedger', snapshotDate)
 }
@@ -83,7 +86,7 @@ export type RecordStudentCountLedgerResult = {
 export async function recordStudentCountLedgerEntry(snapshotDate: string): Promise<RecordStudentCountLedgerResult> {
   await ensureFirebaseAuthenticatedUser()
   const functions = getFirebaseFunctionsInstance()
-  if (!functions) throw new Error('Firebase Functions を利用できません。接続設定を確認してください。')
+  if (!functions) throw new Error('サーバーに接続できません。通信状態を確認してください。')
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<{ workspaceKey: string; snapshotDate: string }, RecordStudentCountLedgerResult>(
     functions,

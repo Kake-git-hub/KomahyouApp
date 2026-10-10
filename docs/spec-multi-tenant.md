@@ -218,7 +218,7 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 
 1. `requireClassroomAccessMember(uid, workspaceKey, classroomId)` の **developer 経路**に
    「`workspaces/{workspaceKey}/classrooms/{classroomId}` が存在すること」の検査を追加する。
-   存在しなければ **`not-found`**（「この教室はこのワークスペースに存在しません。」）。
+   存在しなければ **`not-found`**（「この教室が見つかりません。」）。
 2. **manager 経路は無改変**。`assignedClassroomId === classroomId` の一致判定により既に workspace 内へ
    束縛されており、読み取りを増やすと全操作のコストと回帰リスクが上がる。
 3. **判定は純関数に切り出す**（役割・割当教室・要求教室・教室の存在有無 → 許可／拒否理由）。呼び出し側は
