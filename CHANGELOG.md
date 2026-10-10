@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.584 (2026-10-10)
+
+- feat: **請求画面に合算請求先メールの入力と「会社宛合算メール作成」ボタン**(オーナー要望 2026-10-10)。メールは blur/Enter で棟の文書 `billing.recipientEmail` へ保存(1 件・形式検査・小文字化・不正なら保存しない `normalizeRecipientEmail`)。ボタンは教室ごとの「メール作成」と同じハイブリッド(OAuth 設定済みなら合算請求書PDF添付の Gmail 下書き・未設定なら PDF ダウンロード＋作成画面・CC は運営控え)で、宛先未設定・合算 0 教室では押せない。準備記録を `billingMonths/{月}.companyInvoice` に残し「準備済 日時 → 宛先」を表示。「会社宛合算請求書PDF」はダウンロードだけに変更(メールは新ボタンへ)。請求画面だけの変更なので staging は省略(オーナー指示)。テスト: normalizeRecipientEmail 2・配線 3。確認リスト bl-2 を第41版に追加(版据え置き) (src/utils/companyBilling.ts, BillingAutomationScreen.tsx, billingStore.ts, docs/spec-multi-tenant.md §13-2b)
+
 - docs: CLAUDE.md の標準フローに「請求画面(/billing・開発者専用)だけの変更は staging 実機確認を省いて本番へ直接出してよい」を追記(オーナー指示 2026-10-10・自動テストと rules テストは省かない)
 
 ## v1.5.583 (2026-10-10)
