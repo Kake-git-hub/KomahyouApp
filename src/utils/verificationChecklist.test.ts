@@ -14,6 +14,7 @@ import {
   createEmptyVerificationChecklistDraft,
   getVerificationChecklistEntry,
   parseVerificationChecklistDraft,
+  resolveVerificationChecklistText,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
   setVerificationChecklistMemo,
@@ -102,20 +103,29 @@ describe('確認リストの項目定義', () => {
     const tp32 = byId.get('tp-32')!
     expect(tp32.title).toContain('通常同士は保留にしない')
     expect(tp32.prep).toContain('10/16(金) 4限の机 9 の生徒 2')
-    expect(tp32.steps.join(' / ')).toContain('机 8 の生徒 1(中2・数)を押して「移動」→ 机 9 の生徒 2(空席)')
+    expect(tp32.steps.join(' / ')).toContain('机 8 の生徒 1({{student:s063}}・中2・数)を押して「移動」→ 机 9 の生徒 2(空席)')
     expect(tp32.check!.join(' / ')).toContain('同じ日の中で手で動かしていた通常授業1名はテンプレの位置に合わせます')
     expect(tp32.check!.join(' / ')).toContain('机 7 の生徒 2 に 1 行で出て')
     expect(tp32.check!.join(' / ')).toContain('振替・講習・手動追加の席がぶつかった場合は従来どおり緑')
     const tp33 = byId.get('tp-33')!
-    expect(tp33.prep).toContain('10/15(木) 3限の机 2 の生徒 1(小6・算)を押して「休み」')
-    expect(tp33.steps.join(' / ')).toContain('机 2 の生徒 2(小5・算)を押して「移動」→ 机 4 の生徒 1(小6・算)を押して入れ替え')
-    expect(tp33.steps.join(' / ')).toContain('10/13(火) 5限の机 8(緑)の上段の生徒 1(中2・数)を押して「休み」')
+    expect(tp33.prep).toContain('10/15(木) 3限の机 2 の生徒 1({{student:s032}}・小6・算)を押して「休み」')
+    expect(tp33.steps.join(' / ')).toContain('机 2 の生徒 2({{student:s011}}・小5・算)を押して「移動」→ 机 4 の生徒 1({{student:s028}}・小6・算)を押して入れ替え')
+    expect(tp33.steps.join(' / ')).toContain('10/13(火) 5限の机 8(緑)の上段の生徒 1({{student:s125}}・中2・数)を押して「休み」')
     expect(tp33.check!.join(' / ')).toContain('休みの記録は残る')
     expect(tp33.check!.join(' / ')).toContain('未消化振替の残数も変わらない')
-    // 生徒名は載せない(スナップショットの実名は「姓 + 全角スペース + 名」の形。学年・科目・机番号で指す)。
+    // 生徒名はソースに載せない(スナップショットの実名は「姓 + 全角スペース + 名」の形)。第43版(2026-10-10 オーナー指示「開発用教室は名前を見ていい」):
+    // 代わりに {{student:<生徒ID>}} を書き、画面が開いている教室の生徒データから名前を差し込む。
     for (const item of [tp32, tp33]) {
       for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) expect(line, item.id).not.toMatch(/[一-龠ぁ-んァ-ヶ]+\u3000[一-龠ぁ-んァ-ヶ]+/u)
     }
+    expect(tp32.prep).toContain('{{student:s069}}')
+    expect(tp32.steps[0]).toContain('{{student:s063}}')
+    expect(tp32.check!.join(' / ')).toContain('{{student:s141}}')
+    expect(tp33.prep).toContain('{{student:s032}}')
+    expect(tp33.steps.join(' / ')).toContain('{{student:s011}}')
+    expect(tp33.steps.join(' / ')).toContain('{{student:s028}}')
+    expect(tp33.steps.join(' / ')).toContain('{{student:s125}}')
+    expect(tp33.check!.join(' / ')).toContain('{{student:s089}}')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
@@ -146,6 +156,35 @@ describe('確認リストの項目定義', () => {
     // 第6版で OK だった保護者QRの項目(k-8 本番で入口が出ない / k-9 他教室コピー直後 = INV-08 の実経路を含む)も載せない。
     for (const okId of ['k-1', 'k-2', 'k-3', 'k-6', 'k-7', 'k-8', 'k-9']) {
       expect(ids, okId).not.toContain(okId)
+    }
+  })
+})
+
+describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10)', () => {
+  const names: Record<string, string> = { s069: '山田太郎', s063: '鈴木花子' }
+  const resolve = (id: string) => names[id] ?? null
+
+  it('{{student:ID}} を開いている教室の生徒名に置き換える(複数・同じ ID の繰り返しも)', () => {
+    expect(resolveVerificationChecklistText('机 9 の生徒 2({{student:s069}}・中2・社)と{{student:s063}}、再び{{student:s069}}', resolve))
+      .toBe('机 9 の生徒 2(山田太郎・中2・社)と鈴木花子、再び山田太郎')
+  })
+
+  it('名前が引けない ID は「名前不明(ID)」にして学年・科目で探せる形を残す。空文字も不明扱い', () => {
+    expect(resolveVerificationChecklistText('({{student:s999}}・小6・算)', resolve)).toBe('(名前不明(s999)・小6・算)')
+    expect(resolveVerificationChecklistText('{{student:s001}}', () => '  ')).toBe('名前不明(s001)')
+  })
+
+  it('resolver が無ければ全部「名前不明(ID)」。プレースホルダの無い文面はそのまま', () => {
+    expect(resolveVerificationChecklistText('{{student:s069}}')).toBe('名前不明(s069)')
+    expect(resolveVerificationChecklistText('机 2 の生徒 1(小6・算)', resolve)).toBe('机 2 の生徒 1(小6・算)')
+  })
+
+  it('定義の全プレースホルダが生徒 ID の形(s + 数字)で、画面に残らない', () => {
+    for (const item of VERIFICATION_CHECKLIST.items) {
+      for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) {
+        for (const match of line.matchAll(/\{\{student:([^}]*)\}\}/gu)) expect(match[1], item.id).toMatch(/^s\d{3}$/u)
+        expect(resolveVerificationChecklistText(line, () => '生徒名'), item.id).not.toContain('{{')
+      }
     }
   })
 })
