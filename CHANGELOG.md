@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.586 (2026-10-10)
+
+- style: **請求画面上部のレイアウトを整理**(オーナー要望 2026-10-10「揃えて見やすく・横をもっと使って」)。原因は共通スタイル `.basic-data-inline-field span` のラベル幅 42px 固定で、長いラベルが縦に潰れていた。上部を専用レイアウトに組み直し: 上段=対象月(左)と集計日・恒久記録ボタン(右)、説明文は横幅いっぱい、下段=「教室ごとの請求」と「会社宛合算」の 2 ブロック(横並び・1100px 以下で縦積み)。会社宛合算の 3 入力(会社名・合算請求先名・合算請求先メール)はラベル上・横 3 列(760px 以下で 1 列)、ボタンは各ブロック右下。OAuth の補足文は説明文のツールチップへ移動。挙動は不変。配線テスト +1(請求画面上部で .basic-data-inline-field に戻さない)・確認リスト bl-4。請求画面だけの変更なので staging は省略 (BillingAutomationScreen.tsx, App.css)
+
 ## v1.5.585 (2026-10-10)
 
 - feat: **請求画面で会社名を編集できるように**(オーナー要望 2026-10-10「この会社(main) の main も編集できるように」)。「会社名」欄(blur/Enter)→ 棟の文書の最上位 `companyName` へ保存。タブ「この会社(…)」と、合算請求先名が空のときの宛名に使う(保存後に読み直して宛名の既定を確定)。rules: `companyName` の変更も請求許可者だけ(`workspaceBillingUnchanged()` に追加・rules テスト +1)。配線テスト +1・確認リスト bl-3(第41版・版据え置き)。請求画面だけの変更なので staging は省略 (BillingAutomationScreen.tsx, billingStore.ts, firebase/firestore.rules, docs/spec-multi-tenant.md §13-2b)
