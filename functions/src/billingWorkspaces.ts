@@ -10,6 +10,8 @@ export type BillingWorkspaceSummary = {
   recipientName: string
   recipientEmail: string
   standardUnitPrice: number | null
+  /** 合算から除外する教室 ID(billing.excludedClassroomIds)。null = 未保存(クライアントが検証用教室を既定で除外)。 */
+  excludedClassroomIds: string[] | null
   classroomCount: number
   /** 呼び出した人の members/{uid}.billingAllowed(P-11 ④ 第 1 段のフラグ)。 */
   billingAllowed: boolean
@@ -17,6 +19,12 @@ export type BillingWorkspaceSummary = {
 
 function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readClassroomIdList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const ids = value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+  return [...new Set(ids)].sort()
 }
 
 function readNonNegativeInteger(value: unknown): number | null {
@@ -48,6 +56,7 @@ export function summarizeBillingWorkspace(params: {
     recipientName: readText(billing.recipientName) || companyName,
     recipientEmail: readText(billing.recipientEmail),
     standardUnitPrice: readNonNegativeInteger(billing.standardUnitPrice),
+    excludedClassroomIds: readClassroomIdList(billing.excludedClassroomIds),
     classroomCount: Math.max(0, Math.trunc(Number.isFinite(params.classroomCount) ? params.classroomCount : 0)),
     billingAllowed: member.billingAllowed === true,
   }

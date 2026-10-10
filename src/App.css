@@ -1047,6 +1047,15 @@
   font-weight: 700;
 }
 
+.billing-recipient-field {
+  max-width: 520px;
+  margin-top: 8px;
+}
+
+.billing-include-cell {
+  text-align: center;
+}
+
 .developer-classroom-card,
 .developer-classroom-grid {
   display: grid;

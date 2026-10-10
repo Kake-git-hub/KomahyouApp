@@ -7,6 +7,8 @@ import {
   isBillingAllowedUser,
   parseCompanyBillingProfile,
   resolveBillingUnitPrice,
+  resolveCompanyInvoiceExcludedIds,
+  toggleCompanyInvoiceExclusion,
 } from './companyBilling'
 
 function row(overrides: Partial<BillingInvoiceRow>): BillingInvoiceRow {
@@ -33,12 +35,12 @@ describe('parseCompanyBillingProfile(棟の文書 → 会社の請求プロフ�
       name: 'demo', companyName: '株式会社デモ', brandName: 'デモ塾',
       billing: { recipientName: '株式会社デモ 経理部', recipientEmail: 'keiri@demo.example.com', standardUnitPrice: 350 },
     })
-    expect(profile).toEqual({ workspaceKey: 'demo', companyName: '株式会社デモ', brandName: 'デモ塾', recipientName: '株式会社デモ 経理部', recipientEmail: 'keiri@demo.example.com', standardUnitPrice: 350 })
+    expect(profile).toEqual({ workspaceKey: 'demo', companyName: '株式会社デモ', brandName: 'デモ塾', recipientName: '株式会社デモ 経理部', recipientEmail: 'keiri@demo.example.com', standardUnitPrice: 350, excludedClassroomIds: null })
   })
 
   it('既存運営会社(main)のように会社の項目が無い棟の文書でも落ちない(空・null → 従来の挙動)', () => {
     const profile = parseCompanyBillingProfile('main', { name: 'main', schemaVersion: 1 })
-    expect(profile).toEqual({ workspaceKey: 'main', companyName: '', brandName: '', recipientName: '', recipientEmail: '', standardUnitPrice: null })
+    expect(profile).toEqual({ workspaceKey: 'main', companyName: '', brandName: '', recipientName: '', recipientEmail: '', standardUnitPrice: null, excludedClassroomIds: null })
     expect(companyDisplayLabel(profile)).toBe('main')
     expect(parseCompanyBillingProfile('x', undefined).standardUnitPrice).toBeNull()
     expect(parseCompanyBillingProfile('x', { billing: { standardUnitPrice: '400' } }).standardUnitPrice).toBe(400)
@@ -129,5 +131,47 @@ describe('isBillingAllowedUser(P-11 ④ 第 1 段: フラグ または メール
   it('manager はフラグがあっても固定メールでも通らない', () => {
     expect(isBillingAllowedUser({ email: 'bkkdmzn@gmail.com', role: 'manager', billingAllowed: true })).toBe(false)
     expect(isBillingAllowedUser(null)).toBe(false)
+  })
+})
+
+// オーナー要望(2026-10-10): テスト教室・開発用教室は合算に出したくない → 教室ごとに「合算に含める」チェック。
+describe('合算に含める教室(excludedClassroomIds)', () => {
+  it('未保存(null)なら登録済みの検証用教室(開発用教室・テスト教室)だけを既定で除外する', () => {
+    const profile = parseCompanyBillingProfile('main', {})
+    const excluded = resolveCompanyInvoiceExcludedIds(profile, ['v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai', 'prodA', 'prodB'])
+    expect([...excluded].sort()).toEqual(['test_classroom_20260507_dai', 'v8OZ7zH8vONNHjjYVcR1'])
+    // 別会社では main の開発用教室 ID でも既定除外しない(台帳は (workspaceKey, classroomId) の完全一致)。
+    expect([...resolveCompanyInvoiceExcludedIds(parseCompanyBillingProfile('demo', {}), ['v8OZ7zH8vONNHjjYVcR1'])]).toEqual([])
+  })
+
+  it('保存済み(配列)ならその一覧どおり・空配列は「全教室を含める」(既定除外を使わない)', () => {
+    const saved = parseCompanyBillingProfile('main', { billing: { excludedClassroomIds: ['prodB'] } })
+    expect([...resolveCompanyInvoiceExcludedIds(saved, ['v8OZ7zH8vONNHjjYVcR1', 'prodB'])]).toEqual(['prodB'])
+    const none = parseCompanyBillingProfile('main', { billing: { excludedClassroomIds: [] } })
+    expect([...resolveCompanyInvoiceExcludedIds(none, ['v8OZ7zH8vONNHjjYVcR1'])]).toEqual([])
+    expect(parseCompanyBillingProfile('x', { billing: { excludedClassroomIds: [' b ', 'a', 'a', 3, ''] } }).excludedClassroomIds).toEqual(['a', 'b'])
+  })
+
+  it('チェックの切替は現在の除外集合から保存値(ソート済み)を作る', () => {
+    const current = new Set(['dev', 'test'])
+    expect(toggleCompanyInvoiceExclusion(current, 'dev', true)).toEqual(['test'])
+    expect(toggleCompanyInvoiceExclusion(current, 'prodA', false)).toEqual(['dev', 'prodA', 'test'])
+    expect(toggleCompanyInvoiceExclusion(current, 'dev', false)).toEqual(['dev', 'test'])
+  })
+
+  it('buildCompanyInvoice は除外した教室を明細・合計から外す(0 円のテスト教室・開発用教室が合算に出ない)', () => {
+    const profile = parseCompanyBillingProfile('main', {})
+    const rows = [
+      row({ classroomId: 'prodA', classroomName: '緑が丘校', studentCount: 40, billedAmount: 12000 }),
+      row({ classroomId: 'test_classroom_20260507_dai', classroomName: 'テスト教室', studentCount: 140, billedAmount: 0 }),
+      row({ classroomId: 'v8OZ7zH8vONNHjjYVcR1', classroomName: '開発用教室', studentCount: 144, billedAmount: 0 }),
+    ]
+    const excluded = resolveCompanyInvoiceExcludedIds(profile, rows.map((entry) => entry.classroomId))
+    const invoice = buildCompanyInvoice({ profile, rows, monthKey: '2026-10', snapshotDate: '2026-10-15', excludedClassroomIds: excluded })
+    expect(invoice.lines.map((line) => line.classroomName)).toEqual(['緑が丘校'])
+    expect(invoice.studentCount).toBe(40)
+    expect(invoice.calculatedAmount).toBe(12000)
+    // 省略時は従来どおり全教室。
+    expect(buildCompanyInvoice({ profile, rows, monthKey: '2026-10', snapshotDate: '2026-10-15' }).lines).toHaveLength(3)
   })
 })

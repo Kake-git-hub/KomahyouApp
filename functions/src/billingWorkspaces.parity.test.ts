@@ -13,6 +13,8 @@ describe('棟の文書の読み方はクライアントとサーバーで同じ(
     ['neg', { companyName: '負の単価', billing: { standardUnitPrice: -1 } }],
     ['norecip', { companyName: '請求先なし', billing: {} }],
     ['empty', undefined],
+    ['excluded', { companyName: '除外あり', billing: { excludedClassroomIds: [' b ', 'a', 'a', 3, ''] } }],
+    ['excludedEmpty', { companyName: '除外なし保存済み', billing: { excludedClassroomIds: [] } }],
   ]
 
   it.each(docs)('workspaces/%s', (workspaceKey, data) => {
@@ -25,6 +27,7 @@ describe('棟の文書の読み方はクライアントとサーバーで同じ(
       recipientName: server.recipientName,
       recipientEmail: server.recipientEmail,
       standardUnitPrice: server.standardUnitPrice,
+      excludedClassroomIds: server.excludedClassroomIds,
     }).toEqual(client)
   })
 })

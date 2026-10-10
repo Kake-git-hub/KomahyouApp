@@ -53,6 +53,24 @@ export async function loadFirebaseCompanyBillingProfile(workspaceKey?: string): 
   return parseCompanyBillingProfile(key, snapshot.exists() ? snapshot.data() : undefined)
 }
 
+/**
+ * 会社宛合算の設定(合算請求先名・合算に含めない教室)を棟の文書 workspaces/{接続先}.billing へ merge 保存する
+ * (2026-10-10 オーナー要望)。書けるのは請求許可者だけ(rules の workspaceBillingUnchanged)。指定した項目だけ書き、
+ * 会社名・標準単価など他の billing 項目は残す(Firestore の merge は入れ子の map も項目単位で合流する)。
+ */
+export async function saveFirebaseCompanyBillingSettings(updates: { recipientName?: string; excludedClassroomIds?: readonly string[] }) {
+  const user = await ensureFirebaseAuthenticatedUser()
+  const billing: Record<string, unknown> = {}
+  if (typeof updates.recipientName === 'string') billing.recipientName = updates.recipientName.trim()
+  if (updates.excludedClassroomIds) billing.excludedClassroomIds = [...new Set(updates.excludedClassroomIds)].sort()
+  if (Object.keys(billing).length === 0) return
+  await setDoc(doc(requireFirestore(), 'workspaces', resolveWorkspaceKey()), {
+    billing,
+    billingUpdatedAt: new Date().toISOString(),
+    billingUpdatedBy: user.uid,
+  }, { merge: true })
+}
+
 export type BillingWorkspaceListEntry = {
   workspaceKey: string
   companyName: string
@@ -60,6 +78,7 @@ export type BillingWorkspaceListEntry = {
   recipientName: string
   recipientEmail: string
   standardUnitPrice: number | null
+  excludedClassroomIds: string[] | null
   classroomCount: number
   billingAllowed: boolean
 }
@@ -78,6 +97,8 @@ export async function listFirebaseBillingWorkspaces(): Promise<BillingWorkspaceL
     recipientName: String(entry.recipientName ?? ''),
     recipientEmail: String(entry.recipientEmail ?? ''),
     standardUnitPrice: typeof entry.standardUnitPrice === 'number' ? entry.standardUnitPrice : null,
+    // 古い functions(この項目を返さない)では null = 未保存扱い(検証用教室を既定除外)。
+    excludedClassroomIds: Array.isArray(entry.excludedClassroomIds) ? entry.excludedClassroomIds.filter((id): id is string => typeof id === 'string') : null,
     classroomCount: Number(entry.classroomCount ?? 0),
     billingAllowed: entry.billingAllowed === true,
   })).filter((entry) => entry.workspaceKey)

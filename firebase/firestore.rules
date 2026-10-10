@@ -43,6 +43,12 @@ service cloud.firestore {
         );
     }
 
+    // 棟の文書の create/update で billing が変わらない(無い = null 扱い)。
+    function workspaceBillingUnchanged() {
+      return request.resource.data.get('billing', null)
+        == (resource == null ? null : resource.data.get('billing', null));
+    }
+
     // members の create/update で billingAllowed が変わらない(無い = false 扱い)。
     function billingAllowedUnchanged() {
       return request.resource.data.get('billingAllowed', false)
@@ -59,7 +65,11 @@ service cloud.firestore {
 
     match /workspaces/{workspaceKey} {
       allow read: if hasWorkspaceMembership(workspaceKey);
-      allow write: if isDeveloper(workspaceKey);
+      // 棟の文書の billing(合算請求先・合算に含めない教室・標準単価)を変えられるのは請求許可者だけ(2026-10-10)。
+      // 既存の書き込み(教室追加時の name/schemaVersion/updatedAt の merge)は billing に触れないので従来どおり通る。
+      allow create, update: if isDeveloper(workspaceKey)
+        && (isBillingDeveloper(workspaceKey) || workspaceBillingUnchanged());
+      allow delete: if isDeveloper(workspaceKey);
 
       match /members/{userId} {
         allow read: if isDeveloper(workspaceKey) || (hasWorkspaceMembership(workspaceKey) && request.auth.uid == userId);

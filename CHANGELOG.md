@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.583 (2026-10-10)
+
+- feat: **請求画面に教室ごとの「合算」チェックと合算請求先名の編集**(オーナー要望 2026-10-10「テスト教室 140 人・開発用教室 144 人(0 円)は合算に表示したくない」)。表の「合算」列で外した教室は会社宛合算請求書・サマリーの「会社宛合算（税込）」・「全社」タブの合算から外れる(教室宛の請求書・保存・教室ごとの金額は不変)。保存先は棟の文書 `billing.excludedClassroomIds`(未保存の会社は登録済みの検証用教室=開発用教室・テスト教室を既定で除外し、チェックを触ると配列で保存)。合算請求先名は入力欄(blur/Enter で `billing.recipientName` へ保存・宛名は「<請求先名> 御中」・空なら会社名)。rules: 棟の文書の `billing` を変えられるのは請求許可者だけ(`workspaceBillingUnchanged()`・教室追加時の merge は従来どおり)。`listBillingWorkspaces` も除外一覧を返す(functions)。テスト: companyBilling +4・画面 +3・パリティ +2 行・rules +3(計 45 緑)。確認リスト bl-1 を第41版(v1.5.582 据え置き)に追加 (src/utils/companyBilling.ts, BillingAutomationScreen.tsx, billingStore.ts, functions/src/billingWorkspaces.ts, firebase/firestore.rules, docs/spec-multi-tenant.md §13-2b, docs/firebase-backend.md)
+
 ## v1.5.582 (2026-10-10)
 
 - fix: **請求許可フラグの自己付与を rules で禁止**(regression-reviewer 所見 2026-10-10・P-11 ④)。members は developer なら書けるため、許可外の developer が自分の会員文書に `billingAllowed: true` を書くと請求データを読めるようになる穴があった。`members/{uid}` の create/update に「`billingAllowed` を変える書き込みは請求許可者(isBillingDeveloper)だけ」(`billingAllowedUnchanged()`)を追加(他の会員文書の書き込みは従来どおり・rules テスト 3 件追加・計 42 緑)。併せて「全社」タブの生徒数を恒久記録があれば記録値にし(`buildCompanyInvoiceFromRecords` に ledgerEntry・テスト 1 件)、`provision-workspace.mjs` の `--developer-uid` を英数字と `_ -` に限定、`toWorkspaceUser` が `billingAllowed` の undefined キーを作らないことを source-scan で固定 (firebase/firestore.rules, firestore.rules.test.ts, BillingAutomationScreen.tsx, tools/provision-workspace.mjs, workspaceStore.billingAllowed.test.ts, docs/spec-multi-tenant.md §13-4)
