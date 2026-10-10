@@ -82,6 +82,19 @@ export function toggleCompanyInvoiceExclusion(currentExcluded: ReadonlySet<strin
   return [...next].sort()
 }
 
+const RECIPIENT_EMAIL_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/
+
+/**
+ * 合算請求先メールの入力を正規化する(前後の空白を落として小文字化)。空は「未設定」として有効。
+ * 形式が不正なら ok:false(保存しない)。宛先は 1 件だけ(カンマ・セミコロン区切りの複数指定は不可)。
+ */
+export function normalizeRecipientEmail(value: string): { ok: true; value: string } | { ok: false; value: string } {
+  const trimmed = value.trim()
+  if (!trimmed) return { ok: true, value: '' }
+  const normalized = trimmed.toLowerCase()
+  return RECIPIENT_EMAIL_PATTERN.test(normalized) ? { ok: true, value: normalized } : { ok: false, value: trimmed }
+}
+
 /** 画面に出す会社の呼び名。会社名が未設定なら workspaceKey(既存運営会社 main は棟の文書に会社名が入るまで "main")。 */
 export function companyDisplayLabel(profile: Pick<CompanyBillingProfile, 'workspaceKey' | 'companyName'>): string {
   return profile.companyName || profile.workspaceKey

@@ -264,4 +264,28 @@ describe('BillingAutomationScreen の配線(P-11)', () => {
     // 全社タブも除外を適用する(buildCompanyInvoiceFromRecords 内)。
     expect(source).toContain('const excludedClassroomIds = resolveCompanyInvoiceExcludedIds(params.profile, rows.map((row) => row.classroomId))')
   })
+
+  // オーナー要望(2026-10-10): 合算請求先メールの入力と会社宛合算のメール下書き作成。
+  it('合算請求先メールの入力(形式検査してから保存)と、会社宛合算メール作成ボタン(宛先未設定・合算 0 教室では押せない)がある', () => {
+    expect(source).toContain('data-billing-recipient-email="true"')
+    expect(source).toContain('onBlur={handleRecipientEmailCommit}')
+    expect(source).toContain('const normalized = normalizeRecipientEmail(recipientEmailDraft)')
+    expect(source).toContain('data-billing-company-mail="true"')
+    expect(source).toContain("disabled={isLoading || isDraftingCompanyInvoice || companyInvoicePreview.lines.length === 0 || !companyInvoicePreview.recipientEmail.trim()}")
+  })
+
+  it('会社宛合算メールは教室ごとのメールと同じハイブリッド(OAuth なら PDF 添付の下書き・無ければダウンロード＋作成画面)で、宛先は合算請求先・CC は運営控え', () => {
+    const handler = source.slice(source.indexOf('const handleCompanyInvoiceMail = async () => {'), source.indexOf('const handleCompanyInvoice = async () => {'))
+    expect(handler).toContain('const invoice = companyInvoicePreview')
+    expect(handler).toContain('createGmailDraftWithPdf({')
+    expect(handler).toContain('cc: BILLING_CC_ADDRESS')
+    expect(handler).toContain('openGmailCompose({ to, cc: BILLING_CC_ADDRESS, subject, body })')
+    expect(handler).toContain('markFirebaseCompanyInvoiceDraftCreated({ monthKey, recipientEmail: to, draftId })')
+  })
+
+  it('「会社宛合算請求書PDF」はダウンロードだけ(メール作成は別ボタン)', () => {
+    const download = source.slice(source.indexOf('const downloadCompanyInvoice = async'), source.indexOf('// 会社宛合算の対象'))
+    expect(download).toContain('downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))')
+    expect(download).not.toContain('openGmailCompose')
+  })
 })

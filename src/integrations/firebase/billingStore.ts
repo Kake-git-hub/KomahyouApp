@@ -58,10 +58,11 @@ export async function loadFirebaseCompanyBillingProfile(workspaceKey?: string): 
  * (2026-10-10 オーナー要望)。書けるのは請求許可者だけ(rules の workspaceBillingUnchanged)。指定した項目だけ書き、
  * 会社名・標準単価など他の billing 項目は残す(Firestore の merge は入れ子の map も項目単位で合流する)。
  */
-export async function saveFirebaseCompanyBillingSettings(updates: { recipientName?: string; excludedClassroomIds?: readonly string[] }) {
+export async function saveFirebaseCompanyBillingSettings(updates: { recipientName?: string; recipientEmail?: string; excludedClassroomIds?: readonly string[] }) {
   const user = await ensureFirebaseAuthenticatedUser()
   const billing: Record<string, unknown> = {}
   if (typeof updates.recipientName === 'string') billing.recipientName = updates.recipientName.trim()
+  if (typeof updates.recipientEmail === 'string') billing.recipientEmail = updates.recipientEmail.trim().toLowerCase()
   if (updates.excludedClassroomIds) billing.excludedClassroomIds = [...new Set(updates.excludedClassroomIds)].sort()
   if (Object.keys(billing).length === 0) return
   await setDoc(doc(requireFirestore(), 'workspaces', resolveWorkspaceKey()), {
@@ -69,6 +70,46 @@ export async function saveFirebaseCompanyBillingSettings(updates: { recipientNam
     billingUpdatedAt: new Date().toISOString(),
     billingUpdatedBy: user.uid,
   }, { merge: true })
+}
+
+export type CompanyInvoiceDraftRecord = {
+  draftId?: string
+  draftCreatedAt: string
+  recipientEmail: string
+}
+
+/** その月の会社宛合算メールの準備記録(billingMonths/{月}.companyInvoice)。無ければ null。 */
+export async function loadFirebaseCompanyInvoiceDraft(monthKey: string): Promise<CompanyInvoiceDraftRecord | null> {
+  await ensureFirebaseAuthenticatedUser()
+  const snapshot = await getDoc(getBillingMonthRef(monthKey))
+  const record = snapshot.exists() ? (snapshot.get('companyInvoice') as Partial<CompanyInvoiceDraftRecord> | undefined) : undefined
+  if (!record || typeof record.draftCreatedAt !== 'string' || !record.draftCreatedAt) return null
+  return {
+    ...(typeof record.draftId === 'string' && record.draftId ? { draftId: record.draftId } : {}),
+    draftCreatedAt: record.draftCreatedAt,
+    recipientEmail: typeof record.recipientEmail === 'string' ? record.recipientEmail : '',
+  }
+}
+
+/**
+ * 会社宛合算メールを準備した記録を月の文書へ残す(教室行の draftCreatedAt と同じ考え方・二重送信の目安)。
+ * 書き先は接続先 workspace の billingMonths/{月}(rules は請求許可者のみ)。教室行(classrooms サブコレクション)には触れない。
+ */
+export async function markFirebaseCompanyInvoiceDraftCreated(params: { monthKey: string; recipientEmail: string; draftId?: string }): Promise<CompanyInvoiceDraftRecord> {
+  const user = await ensureFirebaseAuthenticatedUser()
+  const draftCreatedAt = new Date().toISOString()
+  const record: CompanyInvoiceDraftRecord = {
+    ...(params.draftId ? { draftId: params.draftId } : {}),
+    draftCreatedAt,
+    recipientEmail: params.recipientEmail,
+  }
+  await setDoc(getBillingMonthRef(params.monthKey), sanitizeForFirestore({
+    monthKey: params.monthKey,
+    companyInvoice: { ...record, updatedBy: user.uid },
+    updatedAt: draftCreatedAt,
+    updatedBy: user.uid,
+  }), { merge: true })
+  return record
 }
 
 export type BillingWorkspaceListEntry = {

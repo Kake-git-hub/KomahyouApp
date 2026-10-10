@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
 import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integrations/gmail/compose'
-import { listFirebaseBillingWorkspaces, loadFirebaseBillingMonth, loadFirebaseCompanyBillingProfile, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, saveFirebaseCompanyBillingSettings, type BillingClassroomRecord, type BillingWorkspaceListEntry } from '../../integrations/firebase/billingStore'
+import { listFirebaseBillingWorkspaces, loadFirebaseBillingMonth, loadFirebaseCompanyBillingProfile, loadFirebaseCompanyInvoiceDraft, markFirebaseBillingDraftCreated, markFirebaseCompanyInvoiceDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, saveFirebaseCompanyBillingSettings, type BillingClassroomRecord, type BillingWorkspaceListEntry, type CompanyInvoiceDraftRecord } from '../../integrations/firebase/billingStore'
 import { loadStudentCountLedgerEntry, recordStudentCountLedgerEntry, type StudentCountLedgerEntry } from '../../integrations/firebase/studentCountLedger'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
-import { buildCompanyInvoice, companyDisplayLabel, isBillingAllowedUser, parseCompanyBillingProfile, resolveBillingUnitPrice, resolveCompanyInvoiceExcludedIds, toggleCompanyInvoiceExclusion, type CompanyBillingProfile, type CompanyInvoice } from '../../utils/companyBilling'
+import { buildCompanyInvoice, companyDisplayLabel, isBillingAllowedUser, normalizeRecipientEmail, parseCompanyBillingProfile, resolveBillingUnitPrice, resolveCompanyInvoiceExcludedIds, toggleCompanyInvoiceExclusion, type CompanyBillingProfile, type CompanyInvoice } from '../../utils/companyBilling'
 import { buildCompanyInvoiceMailBody, buildCompanyInvoiceMailSubject, buildCompanyInvoicePdfFileName } from '../../utils/companyInvoiceHtml'
 import { getFirebaseBackendConfig } from '../../integrations/firebase/config'
 import { getJstTodayDateKey } from '../../utils/jstDate'
@@ -226,6 +226,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   // 合算請求先名の入力中の値(棟の文書 billing.recipientName へ blur で保存・2026-10-10 オーナー要望)。
   const [recipientNameDraft, setRecipientNameDraft] = useState('')
   const [isSavingCompanySettings, setIsSavingCompanySettings] = useState(false)
+  // 合算請求先メール(棟の文書 billing.recipientEmail へ blur で保存)と、その月の会社宛合算メールの準備記録(2026-10-10 オーナー要望)。
+  const [recipientEmailDraft, setRecipientEmailDraft] = useState('')
+  const [companyInvoiceDraft, setCompanyInvoiceDraft] = useState<CompanyInvoiceDraftRecord | null>(null)
+  const [isDraftingCompanyInvoice, setIsDraftingCompanyInvoice] = useState(false)
   // 「この会社」/「全社」タブ(P-11 ③)。全社は自分が developer として所属する workspace の保存済み請求行から合算する。
   const [activeTab, setActiveTab] = useState<'company' | 'all'>('company')
   const [allSummaries, setAllSummaries] = useState<AllWorkspaceSummary[]>([])
@@ -282,11 +286,15 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
             ? loadFirebaseCompanyBillingProfile().catch(() => parseCompanyBillingProfile(currentWorkspaceKey, undefined))
             : Promise.resolve(parseCompanyBillingProfile('local', undefined)),
         ])
+        // 会社宛合算メールの準備記録は表示用(読めなくても画面は止めない)。
+        const nextCompanyInvoiceDraft = authMode === 'firebase' ? await loadFirebaseCompanyInvoiceDraft(monthKey).catch(() => null) : null
         if (cancelled) return
+        setCompanyInvoiceDraft(nextCompanyInvoiceDraft)
 
         setLedgerEntry(nextLedgerEntry)
         setCompanyProfile(nextCompanyProfile)
         setRecipientNameDraft(nextCompanyProfile.recipientName)
+        setRecipientEmailDraft(nextCompanyProfile.recipientEmail)
         const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records, ledgerEntry: nextLedgerEntry, companyProfile: nextCompanyProfile })
         setRows(nextRows)
 
@@ -501,19 +509,12 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     }
   }
 
-  // 会社宛合算請求書(P-11 ②): 表示中の教室行を 1 通にまとめて PDF をダウンロードし、請求先メールがあれば Gmail 作成画面を開く。
-  // 教室宛の請求書はそのまま残す(§7-10「会社ごとに選べる」)。保存状態(billingMonths)は変えない。
+  // 会社宛合算請求書(P-11 ②): 「合算」にチェックした教室行を 1 通にまとめて PDF をダウンロードする(ダウンロードだけ)。
+  // メールは「会社宛合算メール作成」ボタン(handleCompanyInvoiceMail)に分けた(2026-10-10 オーナー要望)。
+  // 教室宛の請求書はそのまま残す(§7-10「会社ごとに選べる」)。保存状態(billingMonths の教室行)は変えない。
   const downloadCompanyInvoice = async (invoice: CompanyInvoice) => {
     const pdfBlob = await createCompanyInvoicePdfBlob(invoice, issuerInfo)
     downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))
-    if (invoice.recipientEmail.trim()) {
-      openGmailCompose({
-        to: invoice.recipientEmail,
-        cc: BILLING_CC_ADDRESS,
-        subject: buildCompanyInvoiceMailSubject(invoice),
-        body: buildCompanyInvoiceMailBody(invoice, issuerInfo, getInvoiceDateKey()),
-      })
-    }
   }
 
   // 会社宛合算の対象(教室ごとの「合算に含める」チェック)。未保存なら登録済みの検証用教室(開発用・テスト教室)を既定で除外。
@@ -533,7 +534,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   // 合算設定の保存(棟の文書 billing へ merge)。ローカル表示では画面上だけ反映する。失敗したら元に戻す。
   const persistCompanySettings = async (
     next: CompanyBillingProfile,
-    updates: { recipientName?: string; excludedClassroomIds?: string[] },
+    updates: { recipientName?: string; recipientEmail?: string; excludedClassroomIds?: string[] },
     successMessage: string,
   ) => {
     const previous = companyProfile
@@ -548,7 +549,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
       setStatusMessage(successMessage)
     } catch (error) {
       setCompanyProfile(previous)
-      if (previous) setRecipientNameDraft(previous.recipientName)
+      if (previous) {
+        setRecipientNameDraft(previous.recipientName)
+        setRecipientEmailDraft(previous.recipientEmail)
+      }
       setStatusMessage(error instanceof Error ? `合算設定の保存に失敗しました: ${error.message}` : '合算設定の保存に失敗しました。')
     } finally {
       setIsSavingCompanySettings(false)
@@ -575,6 +579,75 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     )
   }
 
+  const handleRecipientEmailCommit = () => {
+    const normalized = normalizeRecipientEmail(recipientEmailDraft)
+    if (!normalized.ok) {
+      setStatusMessage(`合算請求先メール「${normalized.value}」の形式が正しくありません(1 件だけ・例 keiri@example.com)。保存していません。`)
+      return
+    }
+    setRecipientEmailDraft(normalized.value)
+    if (normalized.value === effectiveCompanyProfile.recipientEmail) return
+    void persistCompanySettings(
+      { ...effectiveCompanyProfile, recipientEmail: normalized.value },
+      { recipientEmail: normalized.value },
+      normalized.value ? `合算請求先メールを「${normalized.value}」に保存しました。` : '合算請求先メールを空にしました。',
+    )
+  }
+
+  // 会社宛合算のメール作成(2026-10-10 オーナー要望)。教室ごとの「メール作成」と同じハイブリッド方式:
+  //  - VITE_GOOGLE_OAUTH_CLIENT_ID 設定済み → 合算請求書PDFを添付した Gmail 下書きを作成して開く。
+  //  - 未設定 → 合算請求書PDFをダウンロードし、宛先・件名・本文入りの Gmail 作成画面を開く(PDF は手動添付)。
+  // 宛先は合算請求先メール(未設定ならボタンを押せない)。CC は教室宛と同じ運営控え。準備した日時を月の文書に残す。
+  const handleCompanyInvoiceMail = async () => {
+    const invoice = companyInvoicePreview
+    const to = invoice.recipientEmail.trim()
+    if (!to) {
+      setStatusMessage('合算請求先メールが未設定です。上の欄に入力してください。')
+      return
+    }
+    if (invoice.lines.length === 0) {
+      setStatusMessage('「合算」にチェックした教室がありません。')
+      return
+    }
+    const usesOAuth = isGmailDraftCreationConfigured()
+    setIsDraftingCompanyInvoice(true)
+    setStatusMessage(usesOAuth ? `${invoice.recipientName} 宛の合算メール下書きを作成しています。` : `${invoice.recipientName} 宛の合算請求書PDFを準備しています。`)
+    try {
+      const subject = buildCompanyInvoiceMailSubject(invoice)
+      const body = buildCompanyInvoiceMailBody(invoice, issuerInfo, getInvoiceDateKey())
+      const pdfBlob = await createCompanyInvoicePdfBlob(invoice, issuerInfo)
+      let draftId: string | undefined
+      if (usesOAuth) {
+        const token = await requestGmailComposeAccessToken()
+        const result = await createGmailDraftWithPdf({
+          accessToken: token,
+          to,
+          cc: BILLING_CC_ADDRESS,
+          subject,
+          bodyText: body,
+          pdfBlob,
+          pdfFileName: buildCompanyInvoicePdfFileName(invoice),
+        })
+        draftId = result.id
+        if (result.message?.id) openGmailDraft(result.message.id)
+      } else {
+        downloadBlob(pdfBlob, buildCompanyInvoicePdfFileName(invoice))
+        openGmailCompose({ to, cc: BILLING_CC_ADDRESS, subject, body })
+      }
+      const record = authMode === 'firebase'
+        ? await markFirebaseCompanyInvoiceDraftCreated({ monthKey, recipientEmail: to, draftId })
+        : { draftCreatedAt: new Date().toISOString(), recipientEmail: to, ...(draftId ? { draftId } : {}) }
+      setCompanyInvoiceDraft(record)
+      setStatusMessage(usesOAuth
+        ? `${invoice.recipientName} 宛の合算メール下書き(PDF添付済み・${invoice.lines.length}教室)を作成し、Gmail で開きました。内容を確認して送信してください。`
+        : `${invoice.recipientName} 宛の合算請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '合算メールの準備に失敗しました。')
+    } finally {
+      setIsDraftingCompanyInvoice(false)
+    }
+  }
+
   const handleCompanyInvoice = async () => {
     const profile = effectiveCompanyProfile
     const invoice = companyInvoicePreview
@@ -582,9 +655,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     setStatusMessage(`${companyDisplayLabel(profile)} 宛の合算請求書PDF(${invoice.lines.length}教室)を準備しています。`)
     try {
       await downloadCompanyInvoice(invoice)
-      setStatusMessage(invoice.recipientEmail.trim()
-        ? `${companyDisplayLabel(profile)} 宛の合算請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`
-        : `${companyDisplayLabel(profile)} 宛の合算請求書PDFをダウンロードしました(請求先メールが未設定のため Gmail は開いていません)。`)
+      setStatusMessage(`${companyDisplayLabel(profile)} 宛の合算請求書PDFをダウンロードしました。`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : '合算請求書の作成に失敗しました。')
     } finally {
@@ -771,7 +842,6 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                 <p className="page-summary billing-company-summary">
                   会社: <strong>{companyDisplayLabel(companyProfile)}</strong>
                   {companyProfile.brandName ? `(${companyProfile.brandName})` : ''}
-                  {companyProfile.recipientEmail ? ` / 請求先メール: ${companyProfile.recipientEmail}` : ''}
                   {' / '}標準単価: {companyProfile.standardUnitPrice === null ? '未設定(教室単価 → 300円)' : `${companyProfile.standardUnitPrice.toLocaleString('ja-JP')}円`}
                 </p>
               ) : null}
@@ -787,6 +857,25 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   disabled={isSavingCompanySettings}
                 />
               </label>
+              <label className="basic-data-inline-field billing-recipient-field">
+                <span>合算請求先メール(会社宛合算メールの宛先・1 件)</span>
+                <input
+                  type="email"
+                  data-billing-recipient-email="true"
+                  value={recipientEmailDraft}
+                  placeholder="keiri@example.com"
+                  onChange={(event) => setRecipientEmailDraft(event.target.value)}
+                  onBlur={handleRecipientEmailCommit}
+                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                  disabled={isSavingCompanySettings}
+                />
+              </label>
+              <p className="page-summary billing-company-draft-summary" data-billing-company-draft-status="true">
+                会社宛合算メール({formatBillingMonthLabel(monthKey)}):{' '}
+                {companyInvoiceDraft
+                  ? <span className="status-chip secondary">準備済 {formatDraftCreatedAt(companyInvoiceDraft.draftCreatedAt)}{companyInvoiceDraft.recipientEmail ? ` → ${companyInvoiceDraft.recipientEmail}` : ''}</span>
+                  : <span className="status-chip warning">未作成</span>}
+              </p>
               <p className="page-summary billing-ledger-summary">
                 {ledgerEntry ? (
                   <>
@@ -831,6 +920,16 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                 disabled={isLoading || isPreparingCompanyInvoice || companyInvoicePreview.lines.length === 0}
                 title="「合算」にチェックした教室を 1 通にまとめた会社宛の請求書PDFをダウンロードします(教室宛の請求書とは別・保存状態は変えません)"
               >{isPreparingCompanyInvoice ? '準備中...' : `会社宛合算請求書PDF(${companyInvoicePreview.lines.length}教室)`}</button>
+              <button
+                className="primary-button"
+                type="button"
+                data-billing-company-mail="true"
+                onClick={() => void handleCompanyInvoiceMail()}
+                disabled={isLoading || isDraftingCompanyInvoice || companyInvoicePreview.lines.length === 0 || !companyInvoicePreview.recipientEmail.trim()}
+                title={companyInvoicePreview.recipientEmail.trim()
+                  ? `合算請求書を ${companyInvoicePreview.recipientEmail} 宛のメールにします(${isGmailDraftCreationConfigured() ? 'PDF添付済みの Gmail 下書きを作成' : 'PDFをダウンロードして Gmail 作成画面を開く'})`
+                  : '合算請求先メールを入力すると押せます'}
+              >{isDraftingCompanyInvoice ? '準備中...' : (isGmailDraftCreationConfigured() ? '会社宛合算メール下書きを作成' : '会社宛合算メール作成')}</button>
             </div>
           </div>
           <div className="workspace-auth-note">{isGmailDraftCreationConfigured()

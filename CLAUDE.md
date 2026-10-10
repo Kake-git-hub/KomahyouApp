@@ -142,6 +142,8 @@ Claudeの自動チェックセッションが `actingClassroomId` を適切に�
 3. → **dev-fix** で実装＋回帰防止テスト（同コミット必須）。UX 系バグは INV 完了定義4点（該当 INV 特定→経路テスト＋マトリクス拡張→兄弟監査→コミットに INV-ID）を満たす。
 4. → **regression-reviewer** で INV 監査＋巻き戻し検査（リファクタ・マージ衝突解決後は必須）。差分が触れる INV の特定・兄弟被覆・マトリクス格下げ・権威関数の分散を点検する。
 5. → **safe-release** で staging 実機確認 → 本番マージ → ライブ検証。
+   - **例外: 請求画面(`/billing`・開発者専用)だけの変更は staging 実機確認を省き、本番へ直接出してよい(オーナー指示 2026-10-10)**。
+     室長・保護者の画面に出ないため。lint / unit / build と、rules を触ったときの `npm run test:rules` は省かない。
 
 ### スキル（`.claude/skills/`）
 - `solo-git-workflow`（Git運用）/ `regression-guard`（回帰防止の実務）/ `safe-release`（安全リリース）/

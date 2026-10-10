@@ -5,6 +5,7 @@ import {
   buildCompanyInvoiceNumber,
   companyDisplayLabel,
   isBillingAllowedUser,
+  normalizeRecipientEmail,
   parseCompanyBillingProfile,
   resolveBillingUnitPrice,
   resolveCompanyInvoiceExcludedIds,
@@ -173,5 +174,22 @@ describe('合算に含める教室(excludedClassroomIds)', () => {
     expect(invoice.calculatedAmount).toBe(12000)
     // 省略時は従来どおり全教室。
     expect(buildCompanyInvoice({ profile, rows, monthKey: '2026-10', snapshotDate: '2026-10-15' }).lines).toHaveLength(3)
+  })
+})
+
+// オーナー要望(2026-10-10): 合算請求先のメールアドレスを入力して、会社宛合算のメール下書きを作る。
+describe('normalizeRecipientEmail(合算請求先メール)', () => {
+  it('前後の空白を落として小文字化・空は未設定として有効', () => {
+    expect(normalizeRecipientEmail('  Keiri@Example.COM ')).toEqual({ ok: true, value: 'keiri@example.com' })
+    expect(normalizeRecipientEmail('')).toEqual({ ok: true, value: '' })
+    expect(normalizeRecipientEmail('   ')).toEqual({ ok: true, value: '' })
+  })
+
+  it('形式が不正・複数指定は ok:false(保存しない)', () => {
+    expect(normalizeRecipientEmail('keiri').ok).toBe(false)
+    expect(normalizeRecipientEmail('keiri@example').ok).toBe(false)
+    expect(normalizeRecipientEmail('a@example.com, b@example.com').ok).toBe(false)
+    expect(normalizeRecipientEmail('a@example.com;b@example.com').ok).toBe(false)
+    expect(normalizeRecipientEmail('a b@example.com').ok).toBe(false)
   })
 })
