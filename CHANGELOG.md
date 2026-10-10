@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.582 (2026-10-10)
+
 - docs: **2 社目受け入れ準備 P-6/P-7/P-8** runbook `docs/runbooks/company-onboarding.md`(決めること・前提チェック・staging 予行・本番の workspace 新設・リポジトリ登録・サイトと secret・配信・教室作成・開発用教室の台帳登録(P-6)・初期データの取込と個人情報の受け渡し(P-7)・仕上げ・ロールバック・請求許可者の第 2 段)。初期データの Excel 雛形 `docs/runbooks/company-onboarding-template.xlsx`(生成 `tools/build-company-onboarding-template.mjs`・列名は基本データ取込と同一でテストが同期を検査)。進行中テーマ台帳の 2 行を更新(残り = P-9 予行演習・P-0・④ 第 2 段)。計画 §8 に実装済みを記録
 
 - feat: **2 社目受け入れ準備 P-5/P-12(workspace 新設ツール)** `tools/provision-workspace.mjs`: `--project`・`--workspace` 必須、命名規則(英小文字と数字・3〜16 文字)、`main` と既存キーは拒否(create-only 前提つき PATCH)、本番は `--confirm <会社キー>`、書き込み先は棟の文書と オーナーの developer 会員の 2 文書だけ(http ガード・spec §6-2)。会社名・ブランド名・請求先・標準単価を棟の文書へ(P-11 ①の形)、会員に `billingAllowed: true`(P-11 ④)。`--dry-run` で文書を表示。テスト 9 件
