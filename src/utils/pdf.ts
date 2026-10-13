@@ -161,6 +161,23 @@ function resolveTargetExportWidth(currentWidth: number, currentHeight: number, t
   return Math.max(currentWidth, Math.ceil(currentHeight * targetAspectRatio))
 }
 
+// メモ(手入力)の「収まっているか」判定(2026-10-13・印刷したメモの文字が小さい報告)。
+// 従来は `memoNode.scrollHeight > clientHeight + 1` だったが、メモは行の高さを 1em 前後に詰めているため、
+// 游ゴシック・メイリオ等(字の上下の余白が 1em を超えるフォント)では最終行の字形の下端が 0.2〜0.3em ほど
+// scrollHeight に載り、収まっていても常に「はみ出し」と判定された。結果、二分探索が下限近くまで縮め、
+// 生徒セル(名前行・学年科目行は幅だけで判定)が約 28〜34px のところ、同じ文字数・改行のメモは約 10px になっていた。
+// 対策: 縦は「行が増えた(折り返して 3 行目ができた)」ときだけ真にする。行が 1 つ増えると高さは約 1em 増えるので、
+// 字形のはみ出し(1em 未満の端数)と区別できる 0.5em を許容する。横は改行できない長い英数字の見切れを検出する。
+export const PDF_MEMO_VERTICAL_OVERFLOW_TOLERANCE_EM = 0.5
+
+/** PDF のメモが箱(2 行・セル幅)からはみ出しているか。寸法 0 の環境(jsdom)では false。 */
+export function pdfMemoTextOverflows(memoNode: HTMLElement, fontSize: number): boolean {
+  const tolerance = Math.max(1, fontSize * PDF_MEMO_VERTICAL_OVERFLOW_TOLERANCE_EM)
+  const verticalOverflow = memoNode.scrollHeight > memoNode.clientHeight + tolerance
+  const horizontalOverflow = memoNode.scrollWidth > memoNode.clientWidth + 1
+  return verticalOverflow || horizontalOverflow
+}
+
 function getPdfMemoLineHeight(fontSize: number) {
   if (fontSize <= 8) return 1.02
   if (fontSize <= 14) return 1
@@ -228,7 +245,7 @@ function applyStudentTextEntryFontSize(entry: PreparedStudentTextEntry, fontSize
 function doesStudentTextEntryOverflow(entry: PreparedStudentTextEntry) {
   const { inner, nameRow, memoNode, detail } = entry
   const nameOverflow = nameRow ? nameRow.scrollWidth > nameRow.clientWidth + 1 : false
-  const memoOverflow = memoNode ? memoNode.scrollHeight > memoNode.clientHeight + 1 : false
+  const memoOverflow = memoNode ? pdfMemoTextOverflows(memoNode, Number.parseFloat(memoNode.style.fontSize) || 0) : false
   const detailOverflow = detail ? detail.scrollWidth > detail.clientWidth + 1 : false
   const heightOverflow = inner.scrollHeight > inner.clientHeight + 1
   // 部分選択で内側の高さを固定したときは、子の高さの合計でも判定する(第3版 p-2/p-3・上記コメント参照)。

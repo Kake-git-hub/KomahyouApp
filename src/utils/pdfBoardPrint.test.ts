@@ -40,6 +40,7 @@ const {
   singleLineTextOverflows,
   clearGroupSubjectPlaceholdersForPdf,
   PDF_GROUP_SUBJECT_EMPTY_CLASS,
+  pdfMemoTextOverflows,
 } = await import('./pdf')
 const {
   boardPrintCellKey,
@@ -502,6 +503,99 @@ describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
         expect(capturedElement.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`)).toHaveLength(0)
         expect(element.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`).length).toBeGreaterThan(0)
       }
+    })
+  })
+
+  // 2026-10-13 オーナー報告「コマ表を PDF 印刷するとメモ入力の文字が小さい」。
+  // メモは行の高さを 1em 前後に詰めるため、游ゴシック・メイリオ等では最終行の字形の下端(0.2〜0.3em)が
+  // scrollHeight に載り、旧判定(scrollHeight > clientHeight + 1)が常に「はみ出し」になって約 10px まで縮んでいた
+  // (同じ文字数・改行の生徒セルは約 28px)。縦は「3 行目ができた(約 1em 増えた)」ときだけ真にする。
+  describe('メモ(手入力)の文字サイズは生徒セルと同じ感覚で出す(2026-10-13)', () => {
+    function buildMemoNode(params: { clientHeight: number; scrollHeight: number; clientWidth?: number; scrollWidth?: number }) {
+      const node = document.createElement('span')
+      node.className = 'sa-student-name sa-student-name-note'
+      Object.defineProperty(node, 'clientHeight', { value: params.clientHeight, configurable: true })
+      Object.defineProperty(node, 'scrollHeight', { value: params.scrollHeight, configurable: true })
+      Object.defineProperty(node, 'clientWidth', { value: params.clientWidth ?? 108, configurable: true })
+      Object.defineProperty(node, 'scrollWidth', { value: params.scrollWidth ?? params.clientWidth ?? 108, configurable: true })
+      return node
+    }
+
+    it('字形の下端が少し載るだけ(1em 未満)なら収まっている扱い(旧判定は「はみ出し」)', () => {
+      // 実測(メイリオ相当の字の高さ・28px・2 行): clientHeight 55 / scrollHeight 62。
+      expect(pdfMemoTextOverflows(buildMemoNode({ clientHeight: 55, scrollHeight: 62 }), 28)).toBe(false)
+    })
+
+    it('折り返して 3 行目ができたら「はみ出し」', () => {
+      // 実測(28px で「山田太郎」が 1 行に収まらず 3 行): clientHeight 55 / scrollHeight 84。
+      expect(pdfMemoTextOverflows(buildMemoNode({ clientHeight: 55, scrollHeight: 84 }), 28)).toBe(true)
+    })
+
+    it('改行できない長い英数字が横にはみ出したら「はみ出し」', () => {
+      expect(pdfMemoTextOverflows(buildMemoNode({ clientHeight: 55, scrollHeight: 55, clientWidth: 108, scrollWidth: 140 }), 28)).toBe(true)
+    })
+
+    it('寸法 0 の環境(jsdom)では false(初期値のまま・落ちない)', () => {
+      expect(pdfMemoTextOverflows(buildMemoNode({ clientHeight: 0, scrollHeight: 0, clientWidth: 0 }), 34)).toBe(false)
+    })
+
+    // 出力経路の通し: メモの寸法を「メイリオ相当(字の高さ 1.5em・行の高さ約 1em)」で模し、
+    // 3 行目ができる大きさ(1 行の幅 108px に 4 文字が入らない)を超えたら折り返す。
+    function stubMemoMetrics(charsPerLine: number) {
+      const proto = HTMLElement.prototype
+      const originals = {
+        clientHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')!,
+        scrollHeight: Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight')!,
+        clientWidth: Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')!,
+        scrollWidth: Object.getOwnPropertyDescriptor(Element.prototype, 'scrollWidth')!,
+      }
+      const memoMetrics = (node: HTMLElement) => {
+        const fontSize = Number.parseFloat(node.style.fontSize) || 0
+        const lineHeight = Math.round(fontSize * 0.98)
+        const lines = fontSize * charsPerLine > 108 ? 3 : 2
+        return { clientHeight: lineHeight * 2, scrollHeight: lineHeight * lines + Math.round(fontSize * 0.26) }
+      }
+      const isMemo = (node: unknown) => node instanceof HTMLElement && node.classList.contains('sa-student-name-note')
+      Object.defineProperty(proto, 'clientHeight', { configurable: true, get(this: HTMLElement) { return isMemo(this) ? memoMetrics(this).clientHeight : originals.clientHeight.get!.call(this) } })
+      Object.defineProperty(proto, 'scrollHeight', { configurable: true, get(this: HTMLElement) { return isMemo(this) ? memoMetrics(this).scrollHeight : originals.scrollHeight.get!.call(this) } })
+      Object.defineProperty(proto, 'clientWidth', { configurable: true, get(this: HTMLElement) { return isMemo(this) ? 108 : originals.clientWidth.get!.call(this) } })
+      Object.defineProperty(proto, 'scrollWidth', { configurable: true, get(this: HTMLElement) { return isMemo(this) ? 108 : originals.scrollWidth.get!.call(this) } })
+      return () => {
+        delete (proto as unknown as Record<string, unknown>).clientHeight
+        delete (proto as unknown as Record<string, unknown>).scrollHeight
+        delete (proto as unknown as Record<string, unknown>).clientWidth
+        delete (proto as unknown as Record<string, unknown>).scrollWidth
+      }
+    }
+
+    async function exportMemoFontSize(memoText: string, charsPerLine: number) {
+      html2canvasMock.mockClear()
+      const element = buildElement()
+      const inner = element.querySelector<HTMLElement>('tr[data-slot-number] .sa-student-inner')!
+      inner.innerHTML = ''
+      const memo = document.createElement('span')
+      memo.className = 'sa-student-name sa-student-name-note'
+      memo.textContent = memoText
+      inner.appendChild(memo)
+      const restore = stubMemoMetrics(charsPerLine)
+      try {
+        await exportBoardPdfSelection({ element, fileName: 'memo.pdf', title: '盤面' }, resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid)))
+      } finally {
+        restore()
+        document.body.innerHTML = ''
+      }
+      const [capturedElement] = html2canvasMock.mock.calls[0]
+      return Number.parseFloat(capturedElement.querySelector<HTMLElement>('.sa-student-name-note')!.style.fontSize)
+    }
+
+    it('2 行に収まるメモは生徒セルと同じ上限(34px)のまま出す(旧: 下限近くまで縮んだ)', async () => {
+      expect(await exportMemoFontSize('面談\n欠席', 2)).toBe(34)
+    })
+
+    it('34px では 1 行に入らないメモは、3 行目ができない大きさまでだけ縮める', async () => {
+      const fontSize = await exportMemoFontSize('山田太郎\n中2数学', 4)
+      expect(fontSize).toBeLessThanOrEqual(27)
+      expect(fontSize).toBeGreaterThan(25)
     })
   })
 })

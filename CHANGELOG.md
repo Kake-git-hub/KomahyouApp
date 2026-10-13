@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.591 (2026-10-13)
+
+- fix: コマ表の PDF 印刷でメモ(手入力)の文字が極端に小さくなる不具合を修正。游ゴシック・メイリオ等では最終行の字形の下端が scrollHeight に載り、収まっていても「はみ出し」と判定されて約 10px 以下まで縮んでいた → 縦は 3 行目ができた(約 1em 増えた)ときだけはみ出しとし、同じ文字数・改行の生徒セルと同じ大きさで出す(`src/utils/pdf.ts` pdfMemoTextOverflows・回帰テスト `pdfBoardPrint.test.ts`・確認リスト pm-1・PDF は体裁のみで INV 対象外)
+
 ## v1.5.590 (2026-10-13)
 
 - feat: 開発用教室で先行していた 3 機能を**全教室へ昇格**(オーナー指示 2026-10-13「開発用教室にしか表示されていないこの3つの機能を、全教室に展開して」)。フラグ `transferSourceRestDisplay`(振替元「休)」表示・丸ごと振替/休日設定の記録保持・INV-06/INV-05)・`studentWithdrawAutoSweep`(退塾の自動掃除・高3卒業の退塾日自動入力)・`boardBasedPlannedCount`(生徒日程表の予定数を盤面ベースで数える・INV-05 Step 3)を development-only → all-classrooms。functions / Firestore ルールは無変更(3 フラグともクライアントだけの判定)。**本番への影響(読み取り専用の事前実測・2026-10-13 21:30 の 15 分バックアップに純関数を当てた)**: 退塾の自動掃除は日大前校の 2 名(いずれも退塾日 10/13)が初回の対象で、今日以降の通常授業 2 コマ(従来から剥がす対象)に加えて手置きの振替 1 コマ(11/5)が新たに消える(緑が丘校 0 名)。高3卒業の退塾日自動入力は対象 0 名(次の発火は 2027-04-01)。盤面ベース予定数は INV-05 の段取りどおり、既存の通常側の表示調整を読み捨てるため**過去月の予定数が一度だけ動く**(読み捨てで消さない＝戻せば旧値が復元される)。固定テストを昇格後の期待へ更新(本番 3 教室で ON・`featureRollout.test.ts` / `transferSourceRestDisplay.test.ts` / `scheduleHtml.test.ts` の OFF 前提 3 件を本番教室 ON の期待へ置換)。進行中テーマ台帳から 3 行を削除。確認リストは本番教室の昇格を開発用教室のパネルでは確かめられないため項目を足さない(v1.5.556 の昇格と同じ扱い) (featureRollout.ts / developmentStatusLedger.ts / docs/spec-makeup-stock.md / spec-basic-data.md / spec-invariants.md INV-05)
