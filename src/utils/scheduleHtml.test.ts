@@ -2562,7 +2562,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps moved-origin board markers out of schedule payload statuses', () => {
+  // ★2026-10-13: transferSourceRestDisplay を全教室へ昇格したので、教室を指定しない経路でも移動元マーカーが payload に載る
+  //   (旧: 載らない = フラグ OFF の挙動)。development-only へ戻すとここが落ちる。
+  it('moved-origin board markers reach the schedule payload in every classroom (transferSourceRestDisplay promoted)', () => {
     const write = vi.fn()
     const popup = {
       closed: false,
@@ -2632,7 +2634,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
-    expect(payload.cells[0]?.desks).toEqual([])
+    expect(payload.transferSourceRestDisplayEnabled).toBe(true)
+    expect(payload.cells[0]?.desks?.[0]?.statuses?.[0]?.status).toBe('moved')
+    expect(payload.cells[0]?.desks?.[0]?.statuses?.[0]?.moveDestinationDateKey).toBe('2026-04-08')
     vi.unstubAllGlobals()
   })
 
@@ -5114,11 +5118,15 @@ describe('transferSourceRestDisplay: payload と埋め込みスクリプト', ()
     }
   }
 
-  it('OFF(本番教室): 移動元マーカーは payload に載らない(従来どおり日程表は移動元を知らない)', () => {
-    const payload = readPayload(renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], '5w5OMueETerSKrSf14HC'))
-    expect(payload.transferSourceRestDisplayEnabled).toBe(false)
-    // 記録が 1 つも残らない机は payload から落ちる（既存仕様）。
-    expect(payload.cells[0]?.desks?.length ?? 0).toBe(0)
+  // ★2026-10-13 全教室へ昇格(オーナー指示)。旧テスト「OFF(本番教室): 載らない」はこの期待へ置き換えた。
+  it('本番教室でも移動元マーカーが移動先の日付/時限つきで載る(全教室へ昇格済み)', () => {
+    for (const classroomId of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
+      const payload = readPayload(renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], classroomId))
+      expect(payload.transferSourceRestDisplayEnabled, classroomId).toBe(true)
+      const statusEntry = payload.cells[0]?.desks?.[0]?.statuses?.[0]
+      expect(statusEntry?.status, classroomId).toBe('moved')
+      expect(statusEntry?.moveDestinationDateKey, classroomId).toBe('2026-04-08')
+    }
   })
 
   it('ON(開発用教室): 移動元マーカーが移動先の日付/時限つきで載る', () => {
@@ -5130,12 +5138,12 @@ describe('transferSourceRestDisplay: payload と埋め込みスクリプト', ()
     expect(statusEntry?.moveDestinationSlotNumber).toBe(2)
   })
 
-  it('★休日記録(holiday)はフラグ OFF の教室でも載る(会計を持たない表示専用の記録は常に正しく扱う)', () => {
+  it('★休日記録(holiday)は本番教室の payload にも載る(会計を持たない表示専用の記録は常に正しく扱う)', () => {
     const payload = readPayload(renderStudentHtml(
       [restCell('2026-04-01', 1, [restStatusEntry({ id: 'status-holiday', status: 'holiday', moveDestinationDateKey: undefined, moveDestinationSlotNumber: undefined })])],
       '5w5OMueETerSKrSf14HC',
     ))
-    expect(payload.transferSourceRestDisplayEnabled).toBe(false)
+    expect(payload.transferSourceRestDisplayEnabled).toBe(true)
     expect(payload.cells[0]?.desks?.[0]?.statuses?.[0]?.status).toBe('holiday')
   })
 
