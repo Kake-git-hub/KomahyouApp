@@ -385,3 +385,82 @@ describe('ツールバーのバッジ（条件 27）', () => {
     expect(TOOLBAR_TSX).toContain('data-testid="board-template-pending-badge"')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 保留の下段の生徒の長押し D&D（オーナー指示 2026-10-13「保留の生徒〔テンプレも既存もどちらも〕の移動を D&D でできるようにして」・Q26-8 追記）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('保留の下段の長押し D&D（Q26-8・2026-10-13）', () => {
+  it('下段の mousedown は専用ハンドラ onTemplatePendingLowerMouseDown へ届き、上段（td）の onStudentMouseDown へは伝播しない', async () => {
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const onStudentMouseDown = vi.fn()
+    const onTemplatePendingLowerMouseDown = vi.fn()
+    const onTemplatePendingLowerClick = vi.fn()
+    act(() => {
+      root.render(createElement(BoardGrid, {
+        cells: [boardCell()],
+        selectedStudentId: null,
+        highlightedCell: null,
+        highlightedHolidayDate: null,
+        yearLabel: '2026',
+        specialPeriods: [],
+        resolveStudentDisplayName: (name: string) => name,
+        resolveStudentGradeLabel: (_name: string, grade: string) => grade,
+        resolveDisplayedLessonType: (_name: string, _subject: string, lessonType) => lessonType,
+        onDayHeaderClick: () => {},
+        onTeacherClick: () => {},
+        onStudentClick: () => {},
+        onStudentMouseDown,
+        templatePendingDesks: PENDING,
+        onTemplatePendingLowerClick,
+        onTemplatePendingLowerMouseDown,
+      }))
+    })
+    const lower = container.querySelector<HTMLElement>(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)
+    expect(lower).not.toBeNull()
+    act(() => {
+      lower!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 12, clientY: 34 }))
+    })
+    expect(onTemplatePendingLowerMouseDown).toHaveBeenCalledWith(CELL_ID, 0, 0, 0, 12, 34)
+    expect(onStudentMouseDown).not.toHaveBeenCalled()
+    // 上段（td の内側）の mousedown は従来どおり上段のハンドラへ（下段のハンドラは呼ばれない）。
+    const upper = container.querySelector<HTMLElement>(`.sa-student[data-cell-id="${CELL_ID}"][data-desk-index="0"][data-student-index="0"] .sa-student-inner`)
+    expect(upper).not.toBeNull()
+    act(() => {
+      upper!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1, clientY: 2 }))
+    })
+    expect(onStudentMouseDown).toHaveBeenCalledTimes(1)
+    expect(onTemplatePendingLowerMouseDown).toHaveBeenCalledTimes(1)
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('画面側の配線: 専用ハンドラは共通セッション（startLongPressDragSession）で掴み、ドロップはメニュー移動と同じ executeTemplatePendingLowerMove（安定参照＋掴んでいる下段を明示）で確定する', () => {
+    const handler = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerMouseDown = (', 'const handleStudentClick = (')
+    expect(handler).toContain("if (!studentDragMoveEnabled || !activeTemplatePendingDesks || button !== 0) return")
+    expect(handler).toContain('startLongPressDragSession({')
+    expect(handler).toContain('setTemplatePendingLowerMove({ ...source, label })')
+    expect(handler).toContain('setIsDragMoveActive(true)')
+    expect(handler).toContain('stableExecuteTemplatePendingLowerMove(target.cellId, target.deskIndex, target.studentIndex, source)')
+    // ドロップ直後の click で保留メニュー／着地先のメニューを開かない（生徒 D&D と同じ抑止フラグ）。
+    expect(handler).toContain('suppressNextStudentClickRef.current = true')
+    // D&D は確定 or キャンセル: 着地できなくても選択を残さない。
+    expect(handler.indexOf('stableExecuteTemplatePendingLowerMove(')).toBeLessThan(handler.lastIndexOf('setTemplatePendingLowerMove(null)'))
+    // 実移動の関数は「掴んでいる下段」の明示を受け取る（古いクロージャで null にならない）。
+    expect(BOARD_TSX).toContain('const executeTemplatePendingLowerMove = (cellId: string, deskIndex: number, studentIndex: number, sourceOverride?: { cellId: string; deskId: string; lowerIndex: number } | null) => {')
+    expect(BOARD_TSX).toContain('const source = sourceOverride ?? templatePendingLowerMove')
+    expect(BOARD_TSX).toContain('const stableExecuteTemplatePendingLowerMove = useStableCallback(executeTemplatePendingLowerMove)')
+    expect(BOARD_TSX).toContain('const stableHandleTemplatePendingLowerMouseDown = useStableCallback(handleTemplatePendingLowerMouseDown)')
+    // BoardGrid へはテンプレ編集中・フラグ OFF（保留マップ無し／生徒 D&D 無効）では渡さない。
+    expect(BOARD_TSX).toContain('onTemplatePendingLowerMouseDown={isTemplateMode || !activeTemplatePendingDesks || !studentDragMoveEnabled ? undefined : stableHandleTemplatePendingLowerMouseDown}')
+    // 追従ラベルは下段の移動先待ち（メニュー・D&D のどちらも）で出る。
+    const preview = sliceBody(BOARD_TSX, 'const pointerPreviewLabel = useMemo(() => {', 'const isBoardInteractionLocked')
+    expect(preview).toContain('if (templatePendingLowerMove) {')
+    expect(preview).toContain('保留の下段（手入力データ） の移動先を選択中')
+  })
+})

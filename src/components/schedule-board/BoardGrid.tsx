@@ -267,6 +267,9 @@ type BoardGridProps = {
   // ★下段は盤面画面専用（INV-13）。盤面 PDF はクローンから .sa-pending-lower を外す（stripTemplatePendingLowerForPdf）。
   templatePendingDesks?: TemplatePendingDeskMap
   onTemplatePendingLowerClick?: (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => void
+  // 保留の下段の生徒の長押し D&D（2026-10-13・オーナー指示）。有効時のみ渡す。下段の mousedown は上段（td）の onStudentMouseDown へ伝播させない
+  // （上段の生徒を掴んでしまうのを防ぐ）。長押し判定・ドロップ先の解決は ScheduleBoardScreen 側（startLongPressDragSession）。
+  onTemplatePendingLowerMouseDown?: (cellId: string, deskIndex: number, lowerIndex: number, button: number, x: number, y: number) => void
 }
 
 function BoardGridComponent({
@@ -293,6 +296,7 @@ function BoardGridComponent({
   transferSourceRestDisplayEnabled = false,
   templatePendingDesks,
   onTemplatePendingLowerClick,
+  onTemplatePendingLowerMouseDown,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -546,7 +550,11 @@ function BoardGridComponent({
           event.stopPropagation()
           onTemplatePendingLowerClick?.(cell.id, deskIndex, studentIndex, event.clientX, event.clientY)
         }}
-        onMouseDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => {
+          // 上段（td）の長押し D&D を起こさない。下段の生徒の D&D は専用ハンドラで（Q26-8・2026-10-13）。
+          event.stopPropagation()
+          onTemplatePendingLowerMouseDown?.(cell.id, deskIndex, studentIndex, event.button, event.clientX, event.clientY)
+        }}
       >
         <div className="sa-pending-lower-inner">{content}</div>
         {/* 狭い画面の帯は下段のある席ごとに出す（2 つ目の席の下段にも届くように・regression-reviewer M-2）。n はその席の中身の数。 */}
