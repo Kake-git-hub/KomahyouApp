@@ -87,6 +87,7 @@ describe('確認リストの項目定義', () => {
     // 第44版(2026-10-13): PDF のメモ文字サイズ pm-1 を足しただけなので版は据え置き(v1.5.587)。
     // 第45版(2026-10-13): テンプレ保留 Q38 の tp-36・tp-37 を足しただけなので版は据え置き(v1.5.587)。
     // 第46版(2026-10-13): 保留の下段の D&D tp-38 を足しただけなので版は据え置き(v1.5.587)。
+    // 第47版(2026-10-14): 今の盤面に合わせて tp-15・tp-32・tp-33・tp-36・tp-37・tp-38 の文面を直しただけなので版は据え置き(v1.5.587)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.587')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
@@ -95,6 +96,9 @@ describe('確認リストの項目定義', () => {
     expect(ids.indexOf('tp-15')).toBe(ids.indexOf('q-6') + 1)
     expect(byId.get('tp-15')!.introducedIn).toBe('v1.5.572')
     expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
+    // 第47版: 今の緑の机(10/16(金) 5限の机 2)を名指し。上段を先に休みにすると机が 1 行に戻って下段でなくなるので、下段→上段の順。
+    expect(byId.get('tp-15')!.prep).toContain('10/16(金) 5限の机 2')
+    expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下段の\{\{student:s079\}\}.*次に上段の\{\{student:s085\}\}/u)
     // 第38版: オーナー報告 2026-10-03(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る)・指示(休み＝空白扱い・日程表の休みに日付不要)・
     // 確認リスト v1.5.577 その他欄(通常同士なのに保留・生徒 1 の操作で生徒 2 が動く)。
     // 第44版: オーナー報告 2026-10-13「コマ表を PDF 印刷するとメモ入力の文字が小さい」。
@@ -109,39 +113,46 @@ describe('確認リストの項目定義', () => {
       expect(byId.get(id)!.introducedIn, id).toBe('v1.5.592')
       expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
     }
-    expect(byId.get('tp-36')!.check!.join(' / ')).toContain('手動追加の通常授業4名はテンプレと同じ内容なのでテンプレの机に合わせます')
+    // 第47版(2026-10-14): tp-36 の保存はオーナーが 10/13 23:27 に済ませた → 盤面を見るだけ(確認文の件数は保存時にしか出ないので外した)。
+    expect(byId.get('tp-36')!.prep).toContain('済んでいる(盤面を見るだけ)')
+    expect(byId.get('tp-36')!.check!.join(' / ')).toContain('机 3 は「{{student:s051}}(中1・数) ＋ {{student:s122}}(小4・算国)」の 1 行で緑でない')
+    expect(byId.get('tp-36')!.check!.join(' / ')).not.toContain('手動追加の通常授業4名')
     expect(byId.get('tp-37')!.check!.join(' / ')).toContain('緑のまま')
+    // 第47版: 10/19(月) 5限の机 5 は片づいている → 今も緑の 10/26(月) 5限の机 5 と、下段が振替・講習の 3 机。
+    expect(byId.get('tp-37')!.steps[0]).toContain('10/26(月) 5限の机 5')
+    expect(byId.get('tp-37')!.steps.join(' / ')).not.toContain('10/19(月) 5限の机 5')
     expect(byId.get('tp-38')!.introducedIn).toBe('v1.5.593')
     expect(byId.get('tp-38')!.area).toBe('盤面(テンプレ保留)')
     expect(byId.get('tp-38')!.steps.join(' / ')).toContain('長押し')
+    expect(byId.get('tp-38')!.steps[0]).toContain('机 7 の生徒 2(空席)に離す')
     // 第42版(2026-10-10・受付 20261010-144912762-45a17afb 要改善「開発用教室の実データでどのコマの誰をどこのコマに移してどんなテンプレにすればいいか、詳細に明示して」):
     // 手順は日付・時限・机番号・席(生徒 1／生徒 2)・学年・科目で対象を指す。生徒名(個人情報)は書かない。
     const tp32 = byId.get('tp-32')!
     expect(tp32.title).toContain('通常同士は保留にしない')
-    expect(tp32.prep).toContain('10/16(金) 4限の机 9 の生徒 2')
-    expect(tp32.steps.join(' / ')).toContain('机 8 の生徒 1({{student:s063}}・中2・数)を押して「移動」→ 机 9 の生徒 2(空席)')
+    // 第47版(2026-10-14): 10/13 23:27 のテンプレ保存で机 9 の写しが無くなった → 今の盤面で写しが残る机 8 の生徒 2 を使う。
+    expect(tp32.prep).toContain('10/16(金) 4限の机 8 の生徒 2 に{{student:s105}}(中3・英)が机替えしてきた')
+    expect(tp32.steps.join(' / ')).toContain('机 7 の生徒 2({{student:s069}}・中2・社)を押して「移動」→ 机 8 の生徒 2(空席)')
+    expect(tp32.steps.join(' / ')).toContain('反映開始日は 10/13 のまま')
     expect(tp32.check!.join(' / ')).toContain('同じ日の中で手で動かしていた通常授業1名はテンプレの位置に合わせます')
-    expect(tp32.check!.join(' / ')).toContain('机 7 の生徒 2 に 1 行で出て')
+    expect(tp32.check!.join(' / ')).toContain('机 4 の生徒 2 に 1 行で出て')
     expect(tp32.check!.join(' / ')).toContain('振替・講習・手動追加の席がぶつかった場合は従来どおり緑')
     const tp33 = byId.get('tp-33')!
-    expect(tp33.prep).toContain('10/15(木) 3限の机 2 の生徒 1({{student:s032}}・小6・算)を押して「休み」')
-    expect(tp33.steps.join(' / ')).toContain('机 2 の生徒 2({{student:s011}}・小5・算)を押して「移動」→ 机 4 の生徒 1({{student:s028}}・小6・算)を押して入れ替え')
-    expect(tp33.steps.join(' / ')).toContain('10/13(火) 5限の机 8(緑)の上段の生徒 1({{student:s125}}・中2・数)を押して「休み」')
-    expect(tp33.check!.join(' / ')).toContain('休みの記録は残る')
+    // 第47版(2026-10-14): 旧手順の 10/15(木) 3限・10/13(火) 5限は組み替わった/過ぎた → 来週の 10/22(木) 5限の机 10。
+    expect(tp33.prep).toContain('10/22(木) 5限の机 10 の生徒 1({{student:s089}}・中3・英)を押して「休み」')
+    expect(tp33.steps.join(' / ')).toContain('机 10 の生徒 2({{student:s098}}・中3・理)を押して「移動」→ 机 12 の生徒 2(空席)')
+    expect(tp33.check!.join(' / ')).toContain('「休」と振替欄の行が残り')
     expect(tp33.check!.join(' / ')).toContain('未消化振替の残数も変わらない')
     // 生徒名はソースに載せない(スナップショットの実名は「姓 + 全角スペース + 名」の形)。第43版(2026-10-10 オーナー指示「開発用教室は名前を見ていい」):
     // 代わりに {{student:<生徒ID>}} を書き、画面が開いている教室の生徒データから名前を差し込む。
-    for (const item of [tp32, tp33]) {
+    for (const item of VERIFICATION_CHECKLIST.items) {
       for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) expect(line, item.id).not.toMatch(/[一-龠ぁ-んァ-ヶ]+\u3000[一-龠ぁ-んァ-ヶ]+/u)
     }
-    expect(tp32.prep).toContain('{{student:s069}}')
-    expect(tp32.steps[0]).toContain('{{student:s063}}')
-    expect(tp32.check!.join(' / ')).toContain('{{student:s141}}')
-    expect(tp33.prep).toContain('{{student:s032}}')
-    expect(tp33.steps.join(' / ')).toContain('{{student:s011}}')
-    expect(tp33.steps.join(' / ')).toContain('{{student:s028}}')
-    expect(tp33.steps.join(' / ')).toContain('{{student:s125}}')
-    expect(tp33.check!.join(' / ')).toContain('{{student:s089}}')
+    expect(tp32.prep).toContain('{{student:s105}}')
+    expect(tp32.steps[0]).toContain('{{student:s069}}')
+    expect(tp32.check!.join(' / ')).toContain('{{student:s069}}')
+    expect(tp33.prep).toContain('{{student:s089}}')
+    expect(tp33.steps.join(' / ')).toContain('{{student:s098}}')
+    expect(tp33.check!.join(' / ')).toContain('{{student:s053}}')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
