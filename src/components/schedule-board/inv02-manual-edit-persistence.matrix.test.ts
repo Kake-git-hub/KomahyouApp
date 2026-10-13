@@ -1686,16 +1686,20 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
     })
 
-    it('手動追加の通常授業（手入力データ）は写しでない: 同じ形でも従来どおり残り、テンプレの M は Q21-11 で置かない', () => {
+    it('手動追加の通常授業（手入力データ）は写しでないが、テンプレと同じ内容（同じ生徒×科目）なら Q38 でテンプレの机 2 に合わせる（2026-10-13 改定・Q36 の件数は 0）', () => {
+      // 〜v1.5.591: 手置きが勝ち（机 0 に残り・テンプレの M は Q21-11 で置かず・抑止キー 1）。v1.5.592（Q38・オーナー指示 2026-10-13）: 同じコマに同じ生徒×科目が
+      // 配置済みなら机は問わずテンプレを自動採用（手動追加を外す・抑止キーは積まない）。科目が違う／振替・講習は従来どおり（templateDiffApply.test.ts Q38）。
       const week = boardWithCopy().map((cell) => (cell.id !== CELL ? cell : {
         ...cell,
         desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', { manualAdded: true })] as [StudentEntry | null, StudentEntry | null] } } : desk)),
       }))
       const { saved, desk0 } = saveAndRemerge(week, OLD_ROWS_WITH_M)
-      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
-      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
+      expect(liveIds(desk0.lesson)).toEqual(['sA'])
+      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sM'])
       expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
-      expect(saved.summary.skippedDuplicateStudents).toBe(1)
+      expect(saved.summary.skippedDuplicateStudents).toBe(0)
+      expect(saved.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+      expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
     })
   })
 

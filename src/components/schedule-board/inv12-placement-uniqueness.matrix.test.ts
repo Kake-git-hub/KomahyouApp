@@ -344,6 +344,29 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveCount(remerged, 'sB')).toBe(1)
   })
 
+  // Q38（オーナー指示 2026-10-13）: 手動追加の通常授業は、同じコマの別の机にテンプレが同じ生徒×科目を置くならテンプレを自動採用（手動追加を外す）。
+  // 〜v1.5.591 は Q21-11 前段（手置きの 1 行の机が勝ち、テンプレ側を置かず抑止キー）か、席がぶつかると下段（緑）＋別の机の上段の 2 か所（Q21-11 後段）だった。
+  it('Q38（2026-10-13）: 机 2 に手で足した通常授業 A（テンプレは机 0 に A）→ 机 2 の A を外して机 0 だけ。抑止キー 0・再マージ 1 回の後も A は 1 か所（席がぶつかる形も同じ）', () => {
+    const handA = mkStudent('a-hand', '青木', { managedStudentId: 'sA', manualAdded: true })
+    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [handA, null]) } : desk)))
+    const free = saveThenRemerge(week)
+    expect(liveIdsAt(free.saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveIdsAt(free.saved.nextWeeks, 2)).toEqual([])
+    expect(liveCount(free.saved.nextWeeks, 'sA')).toBe(1)
+    expect(free.saved.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+    expect(free.saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(free.saved.addedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(liveCount(free.remerged, 'sA')).toBe(1)
+    expect(liveIdsAt(free.remerged, 2)).toEqual([])
+    // 席がぶつかる形: 新テンプレが机 2 の席 1 に D を置く → 下段（緑）に A を残さず 1 行（保留 0）・A は机 0 だけ。
+    const collide = saveThenRemerge(week, { rows: [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', 'sD')] })
+    expect(collide.saved.nextPendingDesks).toEqual({})
+    expect(liveIdsAt(collide.saved.nextWeeks, 2)).toEqual(['sD'])
+    expect(liveCount(collide.saved.nextWeeks, 'sA')).toBe(1)
+    expect(liveCount(collide.remerged, 'sA')).toBe(1)
+    expect(collide.saved.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+  })
+
   // regression-reviewer L-7（2026-09-30）: Q21-11 で生徒を全員外した机は「講師だけの机」になる。再マージは抑止で空になった
   // 管理授業の机を suppressManagedStudentsInCell と同じ形（講師名は残し teacherAssignmentTeacherId は外す）で置き直すので、
   // 保存結果も同じ形でなければ再マージの不動点にならない（INV-02 / INV-03）。生徒 ID の比較だけでは見えないため、セル丸ごと比べる。

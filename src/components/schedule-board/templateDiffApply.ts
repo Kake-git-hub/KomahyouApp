@@ -122,9 +122,10 @@ function detachManagedLessonIdentity(lesson: DeskLesson, deskId: string): DeskLe
 }
 
 // Q21-8：「既存をそのまま残す」机から、印を持たない通常生徒（旧テンプレ由来）を外す。
-function stripUnmarkedRegularStudents(lesson: DeskLesson | undefined, deskId: string): DeskLesson | undefined {
+// keep は「残す生徒」の判定（既定＝印のある生徒）。Q38 は「印はあるがテンプレが同じコマの別の机に同じ生徒×科目を置く手動追加の通常授業」も外すために渡す。
+function stripUnmarkedRegularStudents(lesson: DeskLesson | undefined, deskId: string, keep: (student: StudentEntry) => boolean = studentHasManualMark): DeskLesson | undefined {
   if (!lesson) return undefined
-  const slots = lesson.studentSlots.map((student) => (student && studentHasManualMark(student) ? { ...student } : null)) as StudentPair
+  const slots = lesson.studentSlots.map((student) => (student && keep(student) ? { ...student } : null)) as StudentPair
   if (!slots[0] && !slots[1]) return undefined
   return detachManagedLessonIdentity({ ...lesson, studentSlots: slots }, deskId)
 }
@@ -403,6 +404,36 @@ export type SameDayMoveCopyRevert = {
 
 export function studentSubjectKey(student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject'>) {
   return `${student.managedStudentId ?? student.name}__${student.subject}`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q38（オーナー指示 2026-10-13）：手動追加の通常授業は、同じコマの別の机にテンプレが同じ生徒×科目を置くならテンプレを自動採用
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 手動追加の通常授業（`lessonType='regular'` かつ `manualAdded`）が、同じコマの**別の机**のテンプレ（抑止を当てた後）に
+ * 同じ生徒×同じ科目の通常授業として居るか（Q38・オーナー回答 2026-10-13「手動追加の中身がテンプレと同じ場合はテンプレを自動採用としたい。
+ * 中身が違う場合は重複表示のままそこのセルに置いておきたい」「対象は通常授業だけ」）。
+ * 真なら既存の手動追加は外し（1 行の机からも、保留の下段〔緑〕にも残さない）、テンプレの机に任せる。机が違っても同じコマに居れば配置済み。
+ * 開発用教室の実例（2026-10-13）: 10/15(木) 4 限の机 3 に手で足した通常授業（国）と、テンプレが机 13 に置く同じ生徒（国）が、
+ * 机 3 の席がテンプレの別の生徒とぶつかったため下段（緑）＋机 13 の上段の 2 か所に出ていた（Q21-11 は 1 行の机しか見ないため）。
+ *  - **科目が違う**同じ生徒は「中身が違う」ので対象外（従来どおり保留〔緑〕で知らせる。同じ机の同じ席でも同じ。オーナー回答 2026-10-13）。
+ *  - 振替・講習・体験・増コマ、同日移動の写し（Q36・手動追加でない）、別日移動は対象外（手入力データとして従来どおり守る＝Q21-11）。
+ *  - **同じ机**のテンプレは見ない（席ごとの突き合わせ `planTemplateDeskSeats` の「同じ生徒×科目×種別は採用」が従来どおり扱う）。
+ *  - 評価に使うテンプレ机は Q35（丸ごと振替の日）を当てた後・Q21-11 の反復の**前**で固定する（反復と絡めず単調収束を保つ）。
+ */
+export function isManualRegularAdoptedByTemplateInCell(
+  student: StudentEntry,
+  templateDesks: readonly Pick<DeskCell, 'lesson'>[],
+  deskIndex: number,
+): boolean {
+  if (student.lessonType !== 'regular' || !student.manualAdded) return false
+  return templateDesks.some((templateDesk, index) => (
+    index !== deskIndex
+    && liveStudents(templateDesk.lesson).some((other) => (
+      other.lessonType === 'regular' && other.subject === student.subject && isSameTemplateStudent(other, student)
+    ))
+  ))
 }
 
 /**
@@ -760,10 +791,16 @@ export type TemplateDiffApplySummary = {
    * `computeTemplateDiffApplyForBoard` が外して数える（`computeTemplateDiffApply` 単体は候補を返すだけで 0 のまま）。
    */
   sameDayMoveCopiesReverted: number
+  /**
+   * 手動追加の通常授業のうち、同じコマの別の机にテンプレが同じ生徒×科目を置くので外してテンプレの机に任せた生徒の数
+   * （Q38・オーナー指示 2026-10-13「手動追加の中身がテンプレと同じ場合はテンプレを自動採用」）。1 行の机・保留になる机・保留中の再保存の下段のどこから外しても数える。
+   * 抑止キーは積まない（テンプレ側が置く）。科目が違う同じ生徒・振替・講習は対象外（従来どおり保留〔緑〕）。
+   */
+  manualRegularAdoptedByCellTemplate: number
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -1162,30 +1199,44 @@ function applyTemplateDiffToCell(context: {
   //  - 'pending-rebase'（保留中の再保存・Q29）… 上段に残した既存の生徒（印あり）と下段の印のある生徒を候補にする。
   // 席を確保する記録＝出席だけ（Q37: 休み・振無休の記録は空席と同じ扱い。その席に残した生徒の下に記録が残る）。
   const accountingCount = (slots: StatusPair | undefined) => (slots ?? []).filter((entry) => entry && isSeatReservingStatus(entry.status)).length
-  const planSeatsFor = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell): TemplateDeskSeatPlan | null => {
-    if (decision.kind === 'pending') {
-      const candidates = seatCandidatesOf(desk.lesson, studentHasManualMark)
-      return candidates.length > 0
-        ? planTemplateDeskSeats(templateLessonOf(templateDesk), candidates, cell.dateKey, { reservedSeats: accountingCount(desk.statusSlots) })
-        : null
-    }
+  // Q38（オーナー指示 2026-10-13）: 手動追加の通常授業のうち、同じコマの別の机にテンプレ（Q35 を当てた後・Q21-11 の反復の前で固定）が
+  // 同じ生徒×科目を置くものは、席の候補にも 1 行の机にも残さずテンプレの机に任せる（手順 0 の後で adoptionTemplateDesks を確定する）。
+  let adoptionTemplateDesks: readonly DeskCell[] = appliedTemplateDesks
+  const isAdoptedByCellTemplate = (student: StudentEntry, deskIndex: number) => isManualRegularAdoptedByTemplateInCell(student, adoptionTemplateDesks, deskIndex)
+  const keepsInOneRow = (deskIndex: number) => (student: StudentEntry) => studentHasManualMark(student) && !isAdoptedByCellTemplate(student, deskIndex)
+  const markedSeatCandidates = (desk: DeskCell, decision: DeskDecision): TemplateDeskSeatCandidate[] => {
+    if (decision.kind === 'pending') return seatCandidatesOf(desk.lesson, studentHasManualMark)
     if (decision.kind === 'pending-rebase') {
-      const candidates = [
+      return [
         ...seatCandidatesOf(desk.lesson, studentHasManualMark),
         ...seatCandidatesOf(decision.pending.lower.lesson, studentHasManualMark),
       ]
-      return planTemplateDeskSeats(templateLessonOf(templateDesk), candidates, cell.dateKey, {
-        reservedSeats: accountingCount(desk.statusSlots) + accountingCount(decision.pending.lower.statusSlots),
-      })
     }
-    return null
+    return []
+  }
+  /** Q38 でテンプレの机に任せる（席の候補から外す）手動追加の通常授業。件数表示用（保存本体と確認文が同じ関数で数える・Q32）。 */
+  const cellAdoptedStudents = (desk: DeskCell, decision: DeskDecision, deskIndex: number): StudentEntry[] => {
+    if (decision.kind === 'keep') return liveStudents(desk.lesson).filter((student) => isAdoptedByCellTemplate(student, deskIndex))
+    return markedSeatCandidates(desk, decision).map((candidate) => candidate.student).filter((student) => isAdoptedByCellTemplate(student, deskIndex))
+  }
+  const planSeatsFor = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): TemplateDeskSeatPlan | null => {
+    if (decision.kind !== 'pending' && decision.kind !== 'pending-rebase') return null
+    const marked = markedSeatCandidates(desk, decision)
+    // 'pending' で印のある生きている生徒がいなければ null（記録・メモだけの机＝Q28-6）。Q38 で全員外した机は候補 0 の plan（＝テンプレを採用）。
+    if (decision.kind === 'pending' && marked.length === 0) return null
+    const candidates = marked.filter((candidate) => !isAdoptedByCellTemplate(candidate.student, deskIndex))
+    const reservedSeats = decision.kind === 'pending'
+      ? accountingCount(desk.statusSlots)
+      : accountingCount(desk.statusSlots) + accountingCount(decision.pending.lower.statusSlots)
+    return planTemplateDeskSeats(templateLessonOf(templateDesk), candidates, cell.dateKey, { reservedSeats })
   }
 
   // 1 行の机として机に残る「テンプレ以外の生きている生徒」（Q21-11 の重複判定の相手）。
   // 席ごとの突き合わせで空いた席に残した既存の生徒も 1 行側で生きるので数える（2026-09-30）。
-  const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell): StudentEntry[] => {
-    if (decision.kind === 'keep') return liveStudents(stripUnmarkedRegularStudents(desk.lesson, desk.id))
-    const plan = planSeatsFor(desk, decision, templateDesk)
+  // Q38 でテンプレの机に任せる手動追加の通常授業は数えない（数えると Q21-11 がテンプレ側を外し、生徒がどこにも無くなる）。
+  const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): StudentEntry[] => {
+    if (decision.kind === 'keep') return liveStudents(stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(deskIndex)))
+    const plan = planSeatsFor(desk, decision, templateDesk, deskIndex)
     return plan && !plan.overflow ? plan.kept : []
   }
 
@@ -1207,6 +1258,8 @@ function applyTemplateDiffToCell(context: {
       return filtered.desk
     })
   }
+  // Q38: 手動追加の通常授業をテンプレの机に任せるかは、Q35 を当てた後・Q21-11 の反復の前のテンプレ机で固定する。
+  adoptionTemplateDesks = templateDesks
   let decisions = cell.desks.map((desk, index) => classify(desk, index, templateDesks[index]))
   const skippedByDesk = cell.desks.map(() => [] as StudentEntry[])
   // ── 2. Q21-11：同じコマの別の 1 行の机に生きている生徒は上段に置かない（振り分けが安定するまで繰り返す）。
@@ -1214,7 +1267,7 @@ function applyTemplateDiffToCell(context: {
   // テンプレの中身に依存するようになったため、机の数では足りない連鎖がありうる・regression-reviewer L-4）。
   const iterationLimit = appliedTemplateDesks.reduce((sum, desk) => sum + liveStudents(desk.lesson).length, 0) + 1
   for (let iteration = 0; iteration <= iterationLimit; iteration += 1) {
-    const livingByDesk = cell.desks.map((desk, index) => oneRowNonTemplateLiveStudents(desk, decisions[index], templateDesks[index]))
+    const livingByDesk = cell.desks.map((desk, index) => oneRowNonTemplateLiveStudents(desk, decisions[index], templateDesks[index], index))
     let changed = false
     const nextTemplateDesks = templateDesks.map((templateDesk, index) => {
       const elsewhere = livingByDesk.flatMap((students, otherIndex) => (otherIndex === index ? [] : students))
@@ -1278,7 +1331,9 @@ function applyTemplateDiffToCell(context: {
 
     if (decision.kind === 'keep') {
       summary.kept += 1
-      return withSlots(withTeacher, stripUnmarkedRegularStudents(desk.lesson, desk.id), desk.statusSlots, desk.memoSlots)
+      // Q38: テンプレが同じコマの別の机に置く手動追加の通常授業は、ここでも外してテンプレの机に任せる（抑止キーは積まない）。
+      summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
+      return withSlots(withTeacher, stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(index)), desk.statusSlots, desk.memoSlots)
     }
 
     if (decision.kind === 'adopt') {
@@ -1298,7 +1353,9 @@ function applyTemplateDiffToCell(context: {
     if (decision.kind === 'pending') {
       // 席ごと（2026-09-30）: テンプレの空いた席に入る既存の生徒は 1 行のまま残し、テンプレと同じ生徒×科目×種別は採用する。
       // 下段（保留）へ入るのは、席が埋まっていてぶつかった生徒だけ。ぶつかる生徒がいなければ 2 行にしない。
-      const plan = planSeatsFor(desk, decision, templateDesk)
+      // Q38: テンプレが同じコマの別の机に置く手動追加の通常授業は候補から外れ（下段にも入れない）、テンプレの机に任せる。
+      summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
+      const plan = planSeatsFor(desk, decision, templateDesk, index)
       if (plan) collectCollidedCopies(desk, undefined, plan)
       const filledDeletedTeacherDeskBySeat = teacher.reason === 'kept-deleted' && Boolean(upperLesson)
       if (plan && !plan.overflow && isEmptyPair(plan.lowerSlots) && upperLesson) {
@@ -1378,7 +1435,9 @@ function applyTemplateDiffToCell(context: {
     // ★席ごと（2026-09-30）: 上段に残した既存の生徒（印あり）と下段の印のある生徒を、新しいテンプレと席ごとに突き合わせ直す
     //   （同じ生徒×科目×種別は採用・空いた席に入れば 1 行・ぶつかった生徒だけ下段）。印のない通常生徒は新しいテンプレで置き換える。
     const pending = decision.pending
-    const plan = planSeatsFor(desk, decision, templateDesk)!
+    // Q38: 下段（旧版の保存が作った保留を含む）の手動追加の通常授業も、テンプレが同じコマの別の机に同じ生徒×科目を置くなら外す（再保存で片づく）。
+    summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
+    const plan = planSeatsFor(desk, decision, templateDesk, index)!
     collectCollidedCopies(desk, pending, plan)
     if (plan.overflow) {
       // 下段の席が足りない（整合の取れたデータでは起きない）→ 机の中身と保留を変えずに残す（黙って捨てない）。
@@ -1486,6 +1545,7 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     ...(summary.seatMerged > 0 ? [`テンプレの空いた席に既存の生徒を残して 1 行にする${summary.seatMerged}机。`] : []),
     ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`] : []),
     ...(summary.sameDayMoveCopiesReverted > 0 ? [`同じ日の中で手で動かしていた通常授業${summary.sameDayMoveCopiesReverted}名はテンプレの位置に合わせます。`] : []),
+    ...(summary.manualRegularAdoptedByCellTemplate > 0 ? [`手動追加の通常授業${summary.manualRegularAdoptedByCellTemplate}名はテンプレと同じ内容なのでテンプレの机に合わせます。`] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
     '',
@@ -1505,6 +1565,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
   if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`)
   if (summary.sameDayMoveCopiesReverted > 0) parts.push(`同じ日の中で手で動かしていた通常授業をテンプレの位置に合わせた生徒: ${summary.sameDayMoveCopiesReverted}名。`)
+  if (summary.manualRegularAdoptedByCellTemplate > 0) parts.push(`手動追加の通常授業をテンプレの机に合わせた生徒（テンプレと同じ内容）: ${summary.manualRegularAdoptedByCellTemplate}名。`)
   if (summary.tombstoneCleared > 0) parts.push(`講師の削除記録だけの空き机 ${summary.tombstoneCleared}机は記録を外しました。`)
   return parts.join('')
 }
