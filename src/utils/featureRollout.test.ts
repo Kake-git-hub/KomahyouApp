@@ -155,12 +155,14 @@ describe('featureRollout: テスト教室(sandbox)は development-only 機能の
   // 経緯: 旧配線(盤面側が教室名だけを渡していた)ではテスト教室 test_classroom_20260507_dai で
   //   盤面ベース予定数・講習履歴が偶然 OFF だった(regression-reviewer 所見 B-1)。台帳化で ON になり、
   //   オーナー確定によりこれが正となった。**この期待値を kind で絞る方向へ黙って反転させない。**
-  it('テスト教室でも development-only 機能(盤面ベース予定数・講習履歴)が有効', () => {
+  // ★2026-10-13: 盤面ベース予定数(boardBasedPlannedCount)は全教室へ昇格したので、まだ development-only の
+  //   講習履歴・AI 即答で同じ保証を固定する。
+  it('テスト教室でも development-only 機能(講習履歴・AI 即答)が有効', () => {
     const sandbox = { id: 'test_classroom_20260507_dai' }
-    expect(isFeatureEnabledForClassroom('boardBasedPlannedCount', sandbox, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('questionAiAnswer', sandbox, 'main')).toBe(true)
     // 別会社(workspaceKey 違い)では同じ ID でも無効(会社の壁)。
-    expect(isFeatureEnabledForClassroom('boardBasedPlannedCount', sandbox, 'other-company')).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'other-company')).toBe(false)
   })
 })
 
@@ -189,20 +191,18 @@ describe('featureRollout: managerSelfRestore（室長の自教室復元）', () 
   })
 })
 
-describe('featureRollout: studentWithdrawAutoSweep（退塾の自動掃除・確認なしの自動削除）', () => {
-  it('開発用/テスト教室でのみ有効。本番3教室では無効(昇格はオーナー確認後)', () => {
-    // レビュー指摘 2026-09-21: 確認ダイアログなしに盤面のコマ・記録を消して自動保存へ載る操作なので、
-    // 段階導入する。本番3教室は従来どおり「退塾生徒の通常授業の剥がしだけ」。ここを勝手に広げないこと。
-    expect(featureRolloutRegistry.studentWithdrawAutoSweep.scope).toBe('development-only')
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    // テスト教室は開発用教室と同扱い(オーナー確定 2026-09-16・spec-multi-tenant §4-2-11)。
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
-    // 他社(別 workspace)の同じ教室IDでは有効にならない(会社の壁)。
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(false)
-    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', null, 'main')).toBe(false)
+describe('featureRollout: 開発用教室で先行した 3 機能の全教室昇格(オーナー指示 2026-10-13)', () => {
+  // 「振替元『休)』表示・丸ごと振替/休日設定の記録保持」「退塾の自動掃除・高3卒業の退塾日自動入力」
+  // 「生徒日程表の予定数を盤面ベースで数える(INV-05)」を全教室へ展開した。
+  // 回帰防止: development-only へ戻すと本番3教室で表示・自動掃除・予定数の数え方が旧方式へ戻る。戻すのはオーナー指示があるときだけ。
+  const PROMOTED = ['transferSourceRestDisplay', 'studentWithdrawAutoSweep', 'boardBasedPlannedCount'] as const
+  const PRODUCTION_CLASSROOM_IDS = ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb'] as const
+
+  it.each(PROMOTED)('%s は全教室で有効(本番3教室・開発用/テスト教室)', (key) => {
+    expect(featureRolloutRegistry[key].scope).toBe('all-classrooms')
+    for (const id of [...PRODUCTION_CLASSROOM_IDS, 'v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai']) {
+      expect(isFeatureEnabledForClassroom(key, { id }, 'main'), `${key} / ${id}`).toBe(true)
+    }
   })
 })
 
