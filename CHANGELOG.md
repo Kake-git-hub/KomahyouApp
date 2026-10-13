@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.590 (2026-10-13)
+
+- fix: コマ表の PDF 印刷でメモ(手入力)の文字が極端に小さくなる不具合を修正。游ゴシック・メイリオ等では最終行の字形の下端が scrollHeight に載り、収まっていても「はみ出し」と判定されて約 10px 以下まで縮んでいた → 縦は 3 行目ができた(約 1em 増えた)ときだけはみ出しとし、同じ文字数・改行の生徒セルと同じ大きさで出す(`src/utils/pdf.ts` pdfMemoTextOverflows・回帰テスト `pdfBoardPrint.test.ts`・確認リスト pm-1・PDF は体裁のみで INV 対象外)
+
 ## v1.5.589 (2026-10-10)
 
 - style: 画面文言の見直しを反映(オーナーがレビューした文言一覧 `ui-text-review-2026-09-19.xlsx`・修正 154 行＋削除 15 行)。方針は ①短く ②平易に ③室長・保護者の画面に Firebase / Cloud Functions / Firestore / IndexedDB / ワークスペース / .env などの開発用語を出さない(保存まわりは「クラウドに保存」「この端末に保存」)。**保護者ポータル**(開発用教室のみ): 見出し「◯◯ さん 授業予定」・保存時刻の行と注記 2・3 行目を削除して注記 1 行・振無休の「振替なし」補足を削除・「教室お休み」・QR の紙から URL を削除・サーバーの 403/409/400/405/500 文言を平易に(画面の写しと一致)。**QR 提出ページ**: 無効リンク・凡例・案内を短く、`#/submit-debug` の表示調整パネルを削除(通常の補正値は不変)。**配布ページ**: 「配布用盤面」→「コマ表」。**保存・起動・ログイン**: 進捗ラベル・結果文言を `src/utils/saveProgressMessages.ts` へ集約(段階と % は不変・表示は「(N%)」)、Firebase 系のエラーを「サーバーに接続できません」等へ(開発者向けの詳細は console.error / HttpsError の details / logger に残す・#523 のガード条件は不変)。**盤面**: 同コマ重複の「…不可です。」→「…できません。」(中央表示の判定も追随)・確認文「よろしいですか？」・自動割振の内訳「不利」→「優先度低め」・「デバッグコピー」→「この画面の内容をコピー」。**質問・要望**: 種類の表示を「要望」「不具合」に(保存値 bug/request は不変)・例文「例: 体験生徒を追加する方法は？」・自動回答の失敗理由(Vertex AI 等)を室長に出さない(報告記録の aiAnswerError・開発ダッシュボードには残す)。スキップ: #305(対象文は 2026-09-20 に別文言へ改定済み)。INV-06 / INV-12 のマトリクスは期待文字列の差し替えのみ(薄化なし・台帳の備考に追記)。functions を含むので main マージで Deploy Cloud Functions が発火する。文言のみで重大な不具合につながらないため staging 確認・確認リストへの追加は省略(オーナー指示 2026-10-10)。テスト新規 7 ファイル・既存追随 (ParentPortalPage / parentPortalPageModel / parentPortalQr / SubmissionPage / BoardShareScreen / boardShare / scheduleHtml / App / BoardToolbar / BackupRestoreScreen / appSnapshotRepository / integrations/firebase/* / ScheduleBoardScreen / DetailPanel / IssuesPanel / GroupAttendanceModal / SpecialSessionScreen / AutoAssignRule* / parentMessages / developerReport / functions index・parentPortal・questionAiAnswer / docs spec-* / user-manual)

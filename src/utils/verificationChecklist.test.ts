@@ -63,7 +63,7 @@ describe('確認リストの項目定義', () => {
 
   it('第42版(v1.5.587): 第41版で OK だった項目を外し、要改善の tp-32・tp-33 を開発用教室の実データで指す手順に書き換えた', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33', 'pm-1'])
     // 第41版の結果(2026-10-10・受付 20261010-144912762-45a17afb)で OK → 外す(タブ名 mc-1・請求画面 bl-1〜bl-4・テンプレ保留 tp-31/tp-34/tp-35・講習の重複 tp-30)。
     for (const okId of ['tp-31', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3', 'bl-4']) expect(ids, okId).not.toContain(okId)
     // 第39版の結果(2026-10-07・受付 20261007-114407125-114ac7b6)で hm-1〜hm-4 がすべて OK。
@@ -84,6 +84,7 @@ describe('確認リストの項目定義', () => {
     // 第40版(2026-10-07): hm-1〜hm-4 が OK → 外したので v1.5.580 へ上げる。
     // 第41版(2026-10-10): 2 社目準備 P-2(タブ名)の mc-1 を足したので v1.5.582 へ上げる。
     // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ上げる(tp-32・tp-33 は同じ id で書き換え＝introducedIn は据え置き)。
+    // 第44版(2026-10-13): PDF のメモ文字サイズ pm-1 を足しただけなので版は据え置き(v1.5.587)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.587')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
@@ -94,6 +95,9 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
     // 第38版: オーナー報告 2026-10-03(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る)・指示(休み＝空白扱い・日程表の休みに日付不要)・
     // 確認リスト v1.5.577 その他欄(通常同士なのに保留・生徒 1 の操作で生徒 2 が動く)。
+    // 第44版: オーナー報告 2026-10-13「コマ表を PDF 印刷するとメモ入力の文字が小さい」。
+    expect(byId.get('pm-1')!.introducedIn).toBe('v1.5.590')
+    expect(byId.get('pm-1')!.area).toBe('盤面PDF')
     for (const id of ['tp-32', 'tp-33']) {
       expect(byId.get(id)!.introducedIn, id).toBe('v1.5.578')
       expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
