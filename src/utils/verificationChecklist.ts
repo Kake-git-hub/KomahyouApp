@@ -194,7 +194,7 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.587'
  * 第43版(v1.5.588・2026-10-10): オーナー指示「開発用教室は名前を見ていいので、確認リストに生徒名を表示して」→ tp-32・tp-33 の文面に
  *   `{{student:<生徒ID>}}` を入れ、画面(VerificationChecklistPanel)が開いている教室の生徒データから名前を差し込む(resolveVerificationChecklistText)。
  *   ソースに実名は置かない(テストで固定)。★版は v1.5.587 据え置き(確認中の版の文面を直しただけ・結果はまだ無い＝第14版の決まり)。
- * 第44版(v1.5.590・2026-10-13): オーナー報告「コマ表を PDF 印刷するとメモ入力の文字が小さい」→ PDF のメモの収まり判定を直した確認 pm-1 を追加。
+ * 第44版(v1.5.591・2026-10-13): オーナー報告「コマ表を PDF 印刷するとメモ入力の文字が小さい」→ PDF のメモの収まり判定を直した確認 pm-1 を追加。
  *   ★版は v1.5.587 据え置き(項目を足しただけ・第42版の結果はまだ無い＝第14版の決まり)。
  */
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
@@ -378,7 +378,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '1 行の「面談」は生徒セルと同じくらい大きく出る',
         'メモの文字が欠けたり、3 行目にはみ出したりしていない',
       ],
-      introducedIn: 'v1.5.590',
+      introducedIn: 'v1.5.591',
     },
   ],
 }

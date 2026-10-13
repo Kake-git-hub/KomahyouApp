@@ -74,8 +74,10 @@ export const featureRolloutRegistry = {
   // ★有効時は増コマの予定側 +1 も同時に止める（盤面から直接数えるため。止めないと1コマで予定が2増える）。
   // ★デプロイした瞬間に既存の通常側 scheduleCountAdjustments を読み捨てるため過去月の数字が動く。
   //   開発用教室で実機確認 → staging → 全教室、の順で昇格する（オーナー確定の段階導入）。
+  // 開発用教室で先行(v1.5.471・2026-08-07) → オーナー指示(2026-10-13「全教室に展開して」)で全教室へ昇格。
+  // 回帰で development-only へ戻さない(戻すと本番教室の予定数がテンプレ由来へ戻り、過去月の数字がもう一度動く)。
   boardBasedPlannedCount: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Student schedule: derive the regular planned count from the board (actual + outstanding absences) instead of template-derived occurrences.',
   },
   // 【INV-01/INV-02】生徒/講師日程表を「盤面そのまま」で描く。オーナー指示「必ず盤面と日程表が
@@ -145,9 +147,10 @@ export const featureRolloutRegistry = {
   //   どちらも会計対象外)。OFF では payload にも盤面にも新しい記録が生まれないため挙動は従来と完全一致する。
   // ★'holiday' 記録の**会計ガードと表示はフラグに依らず常に有効**(一度 ON で作った記録を OFF に戻しても
   //   正しく無視・表示される)。ここを「フラグ OFF なら holiday を absent と同じに扱う」へ変えてはいけない。
-  // 開発用教室 → staging → 全教室の順に昇格する(昇格はオーナー確認後)。
+  // 開発用教室で先行(v1.5.539・確認リスト r-1〜r-8 / t-1 OK) → オーナー指示(2026-10-13「全教室に展開して」)で
+  // 全教室へ昇格。回帰で development-only へ戻さない。
   transferSourceRestDisplay: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Show moved-source / holiday records as 休) with destination, source-origin makeup box with 未定, keep records on whole-day transfer and holiday setting.',
   },
   // 室長による自教室のサーバーバックアップ復元(オーナー確定 2026-09-18・docs/spec-save-restore.md §4-1)。
@@ -178,8 +181,10 @@ export const featureRolloutRegistry = {
   //   (preserveWithdrawnStudentRowsOnImport)・退塾確認モーダルそのもの。
   //   ただし退塾確認モーダルの**本文だけ**はフラグで出し分ける(OFF の教室で「今日以降のコマと記録も消えます」は
   //   事実と違うため。buildStudentWithdrawConfirmation の autoSweepEnabled)。
+  // 開発用教室で先行(v1.5.553〜554・確認リスト b-2 / b-3 OK) → オーナー指示(2026-10-13「全教室に展開して」)で
+  // 全教室へ昇格。回帰で development-only へ戻さない。
   studentWithdrawAutoSweep: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Withdraw auto-sweep: board removes a withdrawn student\'s traces from the sweep start date, and graduated high-school 3rd graders get 3/31 written into withdrawDate.',
   },
   // テンプレ保存の差分反映＋保留(2 行表示)(Issue #72・docs/spec-template-behavior.md §H Q21〜Q33・オーナー確定 2026-09-29

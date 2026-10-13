@@ -96,7 +96,7 @@ describe('確認リストの項目定義', () => {
     // 第38版: オーナー報告 2026-10-03(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る)・指示(休み＝空白扱い・日程表の休みに日付不要)・
     // 確認リスト v1.5.577 その他欄(通常同士なのに保留・生徒 1 の操作で生徒 2 が動く)。
     // 第44版: オーナー報告 2026-10-13「コマ表を PDF 印刷するとメモ入力の文字が小さい」。
-    expect(byId.get('pm-1')!.introducedIn).toBe('v1.5.590')
+    expect(byId.get('pm-1')!.introducedIn).toBe('v1.5.591')
     expect(byId.get('pm-1')!.area).toBe('盤面PDF')
     for (const id of ['tp-32', 'tp-33']) {
       expect(byId.get(id)!.introducedIn, id).toBe('v1.5.578')

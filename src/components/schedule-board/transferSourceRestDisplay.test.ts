@@ -18,15 +18,14 @@ import type { StudentRow } from '../basic-data/basicDataModel'
 import type { DeskCell, SlotCell, StudentStatusEntry } from './types'
 
 describe('featureRollout: transferSourceRestDisplay（振替元「休)」表示）', () => {
-  it('開発用/テスト教室でのみ有効（本番3教室では従来表示のまま）', () => {
-    // 昇格(staging → 全教室)はオーナー確認後。ここを勝手に広げないこと。
-    expect(featureRolloutRegistry.transferSourceRestDisplay.scope).toBe('development-only')
+  it('全教室で有効（開発用教室で先行 → オーナー指示 2026-10-13 で全教室へ昇格）', () => {
+    // 回帰で development-only へ戻さない(戻すと本番3教室の振替元が「移」表示・記録を残さない旧挙動へ戻る)。
+    expect(featureRolloutRegistry.transferSourceRestDisplay.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
     for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
-      expect(isFeatureEnabledForClassroom('transferSourceRestDisplay', { id }, 'main'), id).toBe(false)
+      expect(isFeatureEnabledForClassroom('transferSourceRestDisplay', { id }, 'main'), id).toBe(true)
     }
-    expect(isFeatureEnabledForClassroom('transferSourceRestDisplay', null, 'main')).toBe(false)
   })
 })
 

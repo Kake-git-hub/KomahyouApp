@@ -60,26 +60,6 @@ export type DevelopmentStatusEntry = {
 export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   // ── 開発用教室だけで動いている先行機能 ──────────────────────────────────────
   {
-    id: 'transfer-source-rest-display',
-    title: '振替元「休)」表示・丸ごと振替/休日設定の記録保持',
-    stage: 'awaiting-owner',
-    summary: '実装済み(v1.5.539・2026-09-16・INV-06/INV-05)。r-1〜r-8 は OK。A→B→C の再移動で日付が追いつかない件(v1.5.556 で修正)の確認 t-1 も OK(2026-09-28)。',
-    featureKeys: ['transferSourceRestDisplay'],
-    nextAction: 'staging → 全教室への昇格をオーナーが決める。',
-    references: ['docs/spec-makeup-stock.md', 'CHANGELOG v1.5.556'],
-    updatedOn: '2026-09-28',
-  },
-  {
-    id: 'student-withdraw-auto-sweep',
-    title: '退塾の自動掃除・高3卒業の退塾日 自動入力',
-    stage: 'awaiting-owner',
-    summary: '実装済み(v1.5.553〜554・2026-09-20/21)。室長の確認なしに実データを書き換えるため開発用教室限定で先行。本番 3 教室の初回対象は 0 名(2026-09-21 実測)。確認 b-2 / b-3 は OK(2026-09-28)。',
-    featureKeys: ['studentWithdrawAutoSweep'],
-    nextAction: '全教室への昇格をオーナーが決める。',
-    references: ['docs/spec-basic-data.md §B/§H'],
-    updatedOn: '2026-09-28',
-  },
-  {
     id: 'parent-portal-qr',
     title: '保護者向け固定QR(休み連絡専用)',
     stage: 'awaiting-checklist',
@@ -98,16 +78,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     featureKeys: ['lessonHistory'],
     nextAction: 'オーナーが昇格を決めたら scope を all-classrooms へ(functions は読み取りのみなので片側昇格の非対称は無い)。',
     references: ['docs/plan-2026-09-11-five-requests.md §6'],
-    updatedOn: '2026-09-25',
-  },
-  {
-    id: 'board-based-planned-count',
-    title: '生徒日程表の通常回数(予定数)を盤面ベースで数える(INV-05 Step2)',
-    stage: 'awaiting-owner',
-    summary: 'オーナー確定 2026-08-05 で開発用教室に導入(v1.5.471・2026-08-07)したまま 7 週間止まっている。ON にすると過去月の数字が動くため段階導入(開発用 → staging → 全教室)。確認リストの項目は未作成。',
-    featureKeys: ['boardBasedPlannedCount'],
-    nextAction: '開発用教室で数字を見比べる確認項目を確認リストへ足し、OK なら staging → 全教室へ。',
-    references: ['docs/spec-invariants.md INV-05'],
     updatedOn: '2026-09-25',
   },
   {
