@@ -10,6 +10,7 @@ import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specia
 import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
 import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
+import { startLongPressDragSession, type LongPressDragSession } from './longPressDrag'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 // 操作ログ(在庫が減る・記録が消える操作の監査記録)。詳細は src/utils/operationLog.ts。
 import { recordOperationEvent } from '../../utils/operationLog'
@@ -9795,8 +9796,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return `${resolveBoardStudentDisplayName(movingStudentContext.student.name)} / ${movingStudentContext.student.subject} / ${previewSlotLabel} を移動中`
     }
 
+    // 保留の下段の生徒の移動先待ち（メニューの「手入力データを移動」・長押し D&D のどちらも・Q26-8）。
+    if (templatePendingLowerMove) {
+      return `${templatePendingLowerMove.label} / 保留の下段（手入力データ） の移動先を選択中（空いている席へ）`
+    }
+
     return null
-  }, [draggingTeacherLabel, movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry])
+  }, [draggingTeacherLabel, movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry, templatePendingLowerMove])
 
   const isBoardInteractionLocked = interactionLockOwner !== null && interactionLockOwner !== 'board'
   const boardInteractionLockMessage = isBoardInteractionLocked
@@ -12186,8 +12192,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`下段の ${label} を選択しました。移動先の空いている席を左クリックしてください（入れ替え・2 行の机への移動はできません）。`)
   }
 
-  const executeTemplatePendingLowerMove = (cellId: string, deskIndex: number, studentIndex: number) => {
-    const source = templatePendingLowerMove
+  // sourceOverride: 長押し D&D のドロップ確定で「掴んでいる下段」を明示で渡す（state の templatePendingLowerMove は更新が非同期で、
+  // mousedown 時点の古いクロージャ経由では null になりうる＝生徒 D&D の stableExecuteMoveStudent と同じ理由）。
+  const executeTemplatePendingLowerMove = (cellId: string, deskIndex: number, studentIndex: number, sourceOverride?: { cellId: string; deskId: string; lowerIndex: number } | null) => {
+    const source = sourceOverride ?? templatePendingLowerMove
     if (!source || !activeTemplatePendingDesks) return
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
@@ -12251,6 +12259,74 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     setTemplatePendingLowerMove(null)
     setStatusMessage(result.message)
+  }
+
+  // 長押し D&D のドロップ確定で呼ぶ安定参照（常に最新の weeks / cells / 保留マップを見る）。
+  const stableExecuteTemplatePendingLowerMove = useStableCallback(executeTemplatePendingLowerMove)
+
+  // 保留（2 行）の下段の生徒の長押し D&D（オーナー指示 2026-10-13「保留の生徒〔テンプレも既存もどちらも〕の移動を D&D でできるようにして」）。
+  // 上段（テンプレ側）は従来の生徒 D&D（handleStudentMouseDown → executeMoveStudent・Q26-7）で動く。下段は td の mousedown を止めている
+  // （BoardGrid の .sa-pending-lower）ので、ここで専用に掴む。掴む→落とすの実移動はメニューの「手入力データを移動」と同じ
+  // executeTemplatePendingLowerMove（computePendingLowerStudentMove・Q26-8: 開校コマの保留でない机の空席か同じ机の上段の空席だけ・入れ替え不可）。
+  // D&D は「離した瞬間に確定 or キャンセル」＝着地できない席（生徒のいる席・保留の机・休校コマ・同コマ重複）に離したら理由を出して選択を解除する。
+  const pendingLowerDragSessionRef = useRef<LongPressDragSession | null>(null)
+  useEffect(() => () => {
+    pendingLowerDragSessionRef.current?.dispose()
+    pendingLowerDragSessionRef.current = null
+  }, [])
+  const handleTemplatePendingLowerMouseDown = (cellId: string, deskIndex: number, lowerIndex: number, button: number, clientX: number, clientY: number) => {
+    if (!studentDragMoveEnabled || !activeTemplatePendingDesks || button !== 0) return
+    const sourceCell = cells.find((cell) => cell.id === cellId)
+    const sourceDesk = sourceCell?.desks[deskIndex]
+    if (!sourceCell || !sourceDesk) return
+    const found = findTemplatePendingDeskEntry(activeTemplatePendingDesks, cellId, sourceDesk.id)
+    const lowerStudent = found?.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
+    if (!found || !lowerStudent) return // 記録・メモだけの下段は掴めない（クリックで保留メニュー）。
+    const source = { cellId, deskId: sourceDesk.id, lowerIndex }
+    const label = resolveBoardStudentDisplayName(lowerStudent.name)
+
+    pendingLowerDragSessionRef.current?.dispose()
+    let armed = false
+    pendingLowerDragSessionRef.current = startLongPressDragSession({
+      button,
+      clientX,
+      clientY,
+      onArm: () => {
+        armed = true
+        setSelectedStudentId(null)
+        setSelectedMakeupStockKey(null)
+        setSelectedLectureStockKey(null)
+        setStudentMenu(null)
+        setTemplatePendingDeskMenu(null)
+        setTemplatePendingLowerMove({ ...source, label })
+        setIsDragMoveActive(true)
+      },
+      onDrop: (target) => {
+        pendingLowerDragSessionRef.current = null
+        // ドロップ確定後に発火する click（上段の td／下段）が、着地先のメニューや保留メニューを開かないよう抑止する。
+        suppressNextStudentClickRef.current = true
+        window.setTimeout(() => { suppressNextStudentClickRef.current = false }, 0)
+        setIsDragMoveActive(false)
+        if (!target) {
+          setTemplatePendingLowerMove(null)
+          setStatusMessage('移動をキャンセルしました。')
+          return
+        }
+        // 実移動はメニューの「手入力データを移動」と同じ経路（着地ガード・同コマ重複・出席不可コマの確認も同じ）。
+        stableExecuteTemplatePendingLowerMove(target.cellId, target.deskIndex, target.studentIndex, source)
+        // 着地できなかった（blocked）ときは理由のメッセージを残して選択だけ解除する（D&D は確定 or キャンセル）。
+        setTemplatePendingLowerMove(null)
+      },
+      onCancel: (_reason, message) => {
+        pendingLowerDragSessionRef.current = null
+        // 長押し成立前の取りやめ（ただのクリック）は何も変えない。掴んだ後の Esc は選択と色枠を解除する。
+        if (armed) {
+          setIsDragMoveActive(false)
+          setTemplatePendingLowerMove(null)
+        }
+        if (message) setStatusMessage(message)
+      },
+    })
   }
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
@@ -14330,6 +14406,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const stableHandleSelectDesk = useStableCallback(handleSelectDesk)
   const stableHandleStudentClick = useStableCallback(handleStudentClick)
   const stableHandleTemplatePendingLowerClick = useStableCallback(handleTemplatePendingLowerClick)
+  const stableHandleTemplatePendingLowerMouseDown = useStableCallback(handleTemplatePendingLowerMouseDown)
   const stableHandleStudentMouseDown = useStableCallback(handleStudentMouseDown)
   const stableHandleTeacherMouseDown = useStableCallback(handleTeacherMouseDown)
   const stableHandleDayHeaderClick = useStableCallback(handleDayHeaderClick)
@@ -14670,6 +14747,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             transferSourceRestDisplayEnabled={transferSourceRestDisplayEnabled}
             templatePendingDesks={isTemplateMode ? undefined : (activeTemplatePendingDesks ?? undefined)}
             onTemplatePendingLowerClick={isTemplateMode || !activeTemplatePendingDesks ? undefined : stableHandleTemplatePendingLowerClick}
+            onTemplatePendingLowerMouseDown={isTemplateMode || !activeTemplatePendingDesks || !studentDragMoveEnabled ? undefined : stableHandleTemplatePendingLowerMouseDown}
           />
           {!isTemplateMode && templatePendingDeskMenuContext && templatePendingDeskMenu ? (
             // spec-template-behavior Q26-1・Q26-3・Q30（第 1 段 (B)）: 保留（2 行・緑）の机のメニュー。下段の中身と

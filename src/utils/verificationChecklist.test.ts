@@ -63,7 +63,7 @@ describe('確認リストの項目定義', () => {
 
   it('第42版(v1.5.587): 第41版で OK だった項目を外し、要改善の tp-32・tp-33 を開発用教室の実データで指す手順に書き換えた', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33', 'tp-36', 'tp-37', 'pm-1'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33', 'tp-36', 'tp-37', 'tp-38', 'pm-1'])
     // 第41版の結果(2026-10-10・受付 20261010-144912762-45a17afb)で OK → 外す(タブ名 mc-1・請求画面 bl-1〜bl-4・テンプレ保留 tp-31/tp-34/tp-35・講習の重複 tp-30)。
     for (const okId of ['tp-31', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3', 'bl-4']) expect(ids, okId).not.toContain(okId)
     // 第39版の結果(2026-10-07・受付 20261007-114407125-114ac7b6)で hm-1〜hm-4 がすべて OK。
@@ -86,6 +86,7 @@ describe('確認リストの項目定義', () => {
     // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ上げる(tp-32・tp-33 は同じ id で書き換え＝introducedIn は据え置き)。
     // 第44版(2026-10-13): PDF のメモ文字サイズ pm-1 を足しただけなので版は据え置き(v1.5.587)。
     // 第45版(2026-10-13): テンプレ保留 Q38 の tp-36・tp-37 を足しただけなので版は据え置き(v1.5.587)。
+    // 第46版(2026-10-13): 保留の下段の D&D tp-38 を足しただけなので版は据え置き(v1.5.587)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.587')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
@@ -110,6 +111,9 @@ describe('確認リストの項目定義', () => {
     }
     expect(byId.get('tp-36')!.check!.join(' / ')).toContain('手動追加の通常授業4名はテンプレと同じ内容なのでテンプレの机に合わせます')
     expect(byId.get('tp-37')!.check!.join(' / ')).toContain('緑のまま')
+    expect(byId.get('tp-38')!.introducedIn).toBe('v1.5.593')
+    expect(byId.get('tp-38')!.area).toBe('盤面(テンプレ保留)')
+    expect(byId.get('tp-38')!.steps.join(' / ')).toContain('長押し')
     // 第42版(2026-10-10・受付 20261010-144912762-45a17afb 要改善「開発用教室の実データでどのコマの誰をどこのコマに移してどんなテンプレにすればいいか、詳細に明示して」):
     // 手順は日付・時限・机番号・席(生徒 1／生徒 2)・学年・科目で対象を指す。生徒名(個人情報)は書かない。
     const tp32 = byId.get('tp-32')!
