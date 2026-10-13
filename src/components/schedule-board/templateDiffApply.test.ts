@@ -32,6 +32,7 @@ import {
   computePendingDeskCollapse,
   computeTemplateDiffApply,
   isAbsenceRecordStatus,
+  isManualRegularAdoptedByTemplateInCell,
   isSameDayMovedTemplateCopy,
   isSeatReservingStatus,
   isTemplateDeskStudentContentEqual,
@@ -778,7 +779,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   })
 
   it('条件 25：確認文は 4 件数を出し、「すべてのデータが消去され」を出さない', () => {
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0 })
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 })
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
@@ -1415,7 +1416,7 @@ describe('Q36: 同日移動の写しはテンプレに合わせる（オーナ�
     remergeAll(result, newRows, [KEY_A_SLOT5])
   })
 
-  it('元の日付へ戻した通常授業（makeupSourceDate がその日）も写しとして同じ扱い。手動追加の通常授業は写しでない（従来どおり Q21-11 で手置きが勝つ）', () => {
+  it('元の日付へ戻した通常授業（makeupSourceDate がその日）も写しとして同じ扱い。手動追加の通常授業は写しでないが、同じ内容なら Q38 でテンプレの机に合わせる', () => {
     const returned = entry('sA', { makeupSourceDate: DATE, makeupSourceLabel: '2026/10/7(水) 5限' })
     const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'returned_sA', studentSlots: [returned, null] } }))
     const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sC', '数')]
@@ -1426,10 +1427,14 @@ describe('Q36: 同日移動の写しはテンプレに合わせる（オーナ�
 
     const manual = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'hand_sA', studentSlots: [entry('sA', { manualAdded: true }), null] } }))
     const manualResult = applyDiff({ week: manual, newRows: [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')] })
-    expect(liveNames(deskOf(manualResult.nextWeeks, 0))).toEqual([])
-    expect(liveNames(deskOf(manualResult.nextWeeks, 2))).toEqual(['sA'])
+    // 〜v1.5.591: 手置きが勝ち（机 2 に残り・机 0 のテンプレの A は置かず・抑止キー 1）。v1.5.592（Q38・オーナー指示 2026-10-13）: 手動追加の通常授業は
+    // 写しではないが「テンプレと同じ内容（同じ生徒×科目）」なのでテンプレの机 0 に合わせる（Q36 の件数には入れず Q38 の件数で数える・抑止キーは積まない）。
+    expect(liveNames(deskOf(manualResult.nextWeeks, 0))).toEqual(['sA'])
+    expect(liveNames(deskOf(manualResult.nextWeeks, 2))).toEqual([])
     expect(manualResult.summary.sameDayMoveCopiesReverted).toBe(0)
-    expect(manualResult.summary.skippedDuplicateStudents).toBe(1)
+    expect(manualResult.summary.skippedDuplicateStudents).toBe(0)
+    expect(manualResult.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+    expect(manualResult.addedSuppressedRegularLessonOccurrences).toEqual([])
   })
 
   it('丸ごと振替した日（Q35）はテンプレの生徒を置かないので写しは外さない（振替の日の姿を固定）', () => {
@@ -1698,5 +1703,142 @@ describe('Q36 監査（2026-10-03）: 写しの誤判定・消失・取りこぼ
     expect(liveNames(desk0)).toEqual(['sC'])
     expect(desk0.statusSlots?.map((item) => (item ? [item.managedStudentId, item.status] : null))).toEqual([['sA', 'absent'], ['sB', 'attended']])
     expect(result.nextPendingDesks).toEqual({})
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q38：手動追加の通常授業は、同じコマの別の机にテンプレが同じ生徒×科目を置くならテンプレを自動採用（オーナー指示 2026-10-13）
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 開発用教室の実例（2026-10-13・10/15(木) 4 限）: 机 3 に手で足した通常授業（国）が、新テンプレで机 3 の席 1 に別の生徒・机 13 に同じ生徒（国）が置かれると、
+// 席がぶつかった机 3 側が下段（緑）に残り、机 13 の上段と合わせて同じコマに 2 か所に出ていた（Q21-11 は 1 行の机しか見ない）。
+// オーナー回答: 「手動追加の中身がテンプレと同じ場合はテンプレを自動採用。中身が違う場合は重複表示のまま」「対象は通常授業だけ」「科目が違えば緑のまま」。
+
+describe('Q38: 手動追加の通常授業とテンプレの同じ生徒×科目が同じコマの別の机に居るとき（オーナー指示 2026-10-13）', () => {
+  const handC = (overrides: Partial<StudentEntry> = {}) => entry('sC', { id: 'hand_sC', manualAdded: true, ...overrides })
+  const withStudentAt = (student: StudentEntry, deskIndex: number, base = buildWeek(OLD_ROWS)) =>
+    mutateDesk(base, deskIndex, (desk) => ({ ...desk, lesson: { id: `${desk.id}_manual`, studentSlots: [student, null] } }))
+  // 新テンプレ: 机 0 = A ＋ C（席 2）、机 1 = B、机 2 = D（席 1）＝手動追加の C の席とぶつかる
+  const ROWS_COLLIDE = [row('r0', 't1', 'sA', '数', 'sC', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sD', '数')]
+  // 新テンプレ: 机 0 = A ＋ C（席 2）、机 2 は講師だけ＝ぶつからない
+  const ROWS_FREE = [row('r0', 't1', 'sA', '数', 'sC', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+
+  it('席がぶつかる形（実例）: 机 2 の手動追加 C を下段（緑）に残さず、テンプレの机 0 に C が 1 か所。抑止キーは積まず、保存結果は再マージの不動点', () => {
+    const result = applyDiff({ week: withStudentAt(handC(), 2), newRows: ROWS_COLLIDE })
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual(['sD'])
+    expect(countLiveInCell(result.nextWeeks, 'sC')).toBe(1)
+    expect(result.nextPendingDesks).toEqual({})
+    expect(result.summary.pending).toBe(0)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([])
+    const once = remerge(result.nextWeeks, ROWS_COLLIDE, [])
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('手動追加の通常授業1名はテンプレと同じ内容なのでテンプレの机に合わせます')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('手動追加の通常授業をテンプレの机に合わせた生徒（テンプレと同じ内容）: 1名')
+  })
+
+  it('席がぶつからない形: 〜v1.5.591 は手置きの机に残してテンプレ側を置かなかった（Q21-11）が、同じ内容ならテンプレの机に合わせる（机 2 は講師だけ・抑止キー 0）', () => {
+    const result = applyDiff({ week: withStudentAt(handC(), 2), newRows: ROWS_FREE })
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual([])
+    expect(countLiveInCell(result.nextWeeks, 'sC')).toBe(1)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([])
+    const once = remerge(result.nextWeeks, ROWS_FREE, [])
+    expect(countLiveInCell(once, 'sC')).toBe(1)
+    expect(liveNames(deskOf(once, 2))).toEqual([])
+  })
+
+  it('科目が違う同じ生徒は「中身が違う」: 従来どおり保留（緑）の下段に残し、テンプレの C は机 0 に置く（Q21-11 後段・件数 0）', () => {
+    const result = applyDiff({ week: withStudentAt(handC({ subject: '英' }), 2), newRows: ROWS_COLLIDE })
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 2).id)
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.subject).toBe('英')
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual(['sD'])
+    expect(result.summary.pending).toBe(1)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(0)
+  })
+
+  it('同じ机の同じ席で科目が違う（実例 10/19 5 限 机 5）: テンプレの「国」の下に手動追加の「数」が緑で残る（Q38 の対象外・従来どおり）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], handC({ subject: '英' })] } }))
+    const result = applyDiff({ week, newRows: [row('r0', 't1', 'sA', '数', 'sC', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')] })
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 0).id)
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(deskOf(result.nextWeeks, 0).lesson?.studentSlots[1]?.subject).toBe('数')
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[1]?.subject).toBe('英')
+    expect(result.summary.pending).toBe(1)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(0)
+  })
+
+  it.each([
+    ['振替', { lessonType: 'makeup' as const, makeupSourceDate: '2026-09-30', manualAdded: false }],
+    ['講習', { lessonType: 'special' as const, manualAdded: false }],
+    ['手動追加の振替', { lessonType: 'makeup' as const, makeupSourceDate: '2026-09-30', manualAdded: true }],
+  ])('%s の C は対象外: 席がぶつかれば従来どおり下段（緑）に残り、テンプレの C は机 0 に置く（通常授業だけ・オーナー回答）', (_label, overrides) => {
+    const result = applyDiff({ week: withStudentAt(handC(overrides), 2), newRows: ROWS_COLLIDE })
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 2).id)
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(result.summary.pending).toBe(1)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(0)
+  })
+
+  it('テンプレがそのコマに C を置かなければ本当の手入力: 従来どおり保留（緑）の下段に残る', () => {
+    const rows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sD', '数')]
+    const result = applyDiff({ week: withStudentAt(handC(), 2), newRows: rows })
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 2).id)
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+    expect(countLiveInCell(result.nextWeeks, 'sC')).toBe(0)
+    expect(result.summary.pending).toBe(1)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(0)
+  })
+
+  it('保留中の再保存（Q29）: 旧版の保存が作った下段の手動追加 C も、同じテンプレの再保存で外れて 1 行に戻る（今ある緑が再保存で片づく）', () => {
+    // v1.5.591 までの保存が作った形: 机 2 の上段＝テンプレの D、下段＝手動追加の C。机 0 はテンプレどおり A ＋ C。
+    const week = buildWeek(ROWS_COLLIDE)
+    const desk2Id = deskOf([week], 2).id
+    const pending: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(CELL_ID, desk2Id)]: {
+        lower: { lesson: { id: `${desk2Id}_manual`, studentSlots: [handC(), null] } },
+        effectiveStartDate: EFFECTIVE,
+        createdAt: '2026-10-13T13:01:51.889Z',
+      },
+    }
+    const result = applyDiff({ week, newRows: ROWS_COLLIDE, pending })
+    expect(result.nextPendingDesks).toEqual({})
+    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual(['sD'])
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sC'])
+    expect(countLiveInCell(result.nextWeeks, 'sC')).toBe(1)
+    expect(result.summary.pending).toBe(0)
+    expect(result.summary.manualRegularAdoptedByCellTemplate).toBe(1)
+  })
+
+  it('再保存の不動点（INV-03）: Q38 で合わせた後に同じテンプレをもう一度保存しても何も変わらない（件数 0・保留 0）', () => {
+    const first = applyDiff({ week: withStudentAt(handC(), 2), newRows: ROWS_COLLIDE })
+    const second = applyDiff({ week: first.nextWeeks[0], newRows: ROWS_COLLIDE, pending: first.nextPendingDesks, suppressed: first.addedSuppressedRegularLessonOccurrences })
+    expect(cellOf(second.nextWeeks)).toEqual(cellOf(first.nextWeeks))
+    expect(second.nextPendingDesks).toEqual({})
+    expect(second.summary.manualRegularAdoptedByCellTemplate).toBe(0)
+    expect(second.summary.pending).toBe(0)
+    expect(second.summary.replaced).toBe(0)
+  })
+
+  it('純関数 isManualRegularAdoptedByTemplateInCell: 別の机の同じ生徒×科目の通常授業だけ真（同じ机・科目違い・振替・手動追加でない通常授業は偽）', () => {
+    const templateDesks = [
+      { lesson: { id: 't0', studentSlots: [entry('sA'), entry('sC')] as [StudentEntry, StudentEntry] } },
+      { lesson: { id: 't1', studentSlots: [entry('sB'), null] as [StudentEntry, null] } },
+      { lesson: undefined },
+    ]
+    expect(isManualRegularAdoptedByTemplateInCell(handC(), templateDesks, 2)).toBe(true)
+    expect(isManualRegularAdoptedByTemplateInCell(handC(), templateDesks, 0)).toBe(false)
+    expect(isManualRegularAdoptedByTemplateInCell(handC({ subject: '英' }), templateDesks, 2)).toBe(false)
+    expect(isManualRegularAdoptedByTemplateInCell(handC({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), templateDesks, 2)).toBe(false)
+    expect(isManualRegularAdoptedByTemplateInCell(entry('sC'), templateDesks, 2)).toBe(false)
+    expect(isManualRegularAdoptedByTemplateInCell(handC({ sameDayMoveSourceDate: DATE }), templateDesks, 2)).toBe(true)
+    expect(isManualRegularAdoptedByTemplateInCell(entry('sD', { manualAdded: true }), templateDesks, 2)).toBe(false)
   })
 })
