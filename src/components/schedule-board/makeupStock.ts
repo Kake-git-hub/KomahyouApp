@@ -462,7 +462,7 @@ function countTotalLessonQuotaByKey(regularLessons: RegularLessonRow[]) {
   return totals
 }
 
-function isClosedDate(dateKey: string, classroomSettings: ClassroomSettings) {
+export function isClosedDate(dateKey: string, classroomSettings: ClassroomSettings) {
   if (classroomSettings.forceOpenDates.includes(dateKey)) return false
   if (classroomSettings.holidayDates.includes(dateKey)) return true
   return classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())

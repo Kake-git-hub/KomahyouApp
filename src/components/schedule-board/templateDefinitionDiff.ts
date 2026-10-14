@@ -277,6 +277,8 @@ export type TemplateDiffSlotFilter = {
   sameDayMoveStudentIdsByWeekday?: ReadonlyMap<number, ReadonlySet<string>>
   /** 全コマ突き合わせる日（Q39-9 で入口が足す）。 */
   fullDates?: ReadonlySet<string>
+  /** 突き合わせる（重ね合わせを当てる）セル ID（Q40 の追従で触ったセル。入口が足す）。 */
+  cellIds?: ReadonlySet<string>
 }
 
 /** 差分反映の本体が 1 セルごとに呼ぶ。filter が無ければ従来どおり全コマ。 */
@@ -284,6 +286,7 @@ export function isCellInTemplateDiffScope(cell: { dateKey: string; slotNumber: n
   if (!filter) return true
   if (filter.fullBeforeDate && cell.dateKey < filter.fullBeforeDate) return true
   if (filter.fullDates?.has(cell.dateKey)) return true
+  if (filter.cellIds && 'id' in cell && typeof (cell as { id?: unknown }).id === 'string' && filter.cellIds.has((cell as { id: string }).id)) return true
   return filter.slotKeys.has(buildTemplateSlotKeyForDate(cell.dateKey, cell.slotNumber))
 }
 

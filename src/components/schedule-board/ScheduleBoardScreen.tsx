@@ -38,6 +38,7 @@ import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonT
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
@@ -2600,23 +2601,50 @@ export function computeTemplateDiffApplyForBoard(input: {
   const outerLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
   for (let attempt = 0; attempt < outerLimit; attempt += 1) {
     const run = runTemplateDiffApplyWithCopyReverts(params, protectedCopies)
+    // Q40（Issue #75 段 2・オーナー確定 2026-10-14）: テンプレの生徒の増減を丸ごと振替・休日の振替に追従させる。
+    //   1. 根拠を失った振替（外した生徒）を机から外し、振替元の移動元記録も消す（在庫台帳は触らない）。
+    //   2. 丸ごと振替した日（振替元）に足した生徒を、振替先の同じ時限・同じ机番号の空いた席へ振替として置く。置けなければ未消化
+    //      （振替元が休日なら自動発生・休日でなければ台帳へ 1 件＝INV-06 の唯一の例外）。どちらも Q35-8 の −1 から外す。
+    //   触ったセルは保存直後の再マージの重ね合わせにも渡す（空いた席にテンプレの授業が戻るなら保存の時点で戻す＝不動点）。
+    const orphaned = collectOrphanedMakeups({ weeks: run.diff.nextWeeks, templateCells: run.templateCells, regularLessons: params.regularLessons, effectiveStartDate: params.effectiveStartDate, slotFilter: params.slotFilter })
+    const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned)
+    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, prepareStudentForMove, buildMovedSourceStatusEntry })
+    const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)))
+    params.slotFilter = extendTemplateDiffSlotFilterWithCells(params.slotFilter, new Set([...removal.touchedCellIds, ...follow.touchedCellIds]))
     const settledSuppressed = [...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]
     // 保存結果を再マージの不動点にする（regression-reviewer L-7 兄弟 2・INV-02 / INV-03）。差分反映はテンプレを机の位置どおりに置くが、
     // 再マージ（mergeManagedWeek）は講師だけの管理机を「同じコマに同じ講師名が居れば足さない → 先頭の空き机へ置き直す」ので、講師名が重なる
     // 講師だけの机（講師のいない行＝「講師未割当」が 2 本・同じ講師が 2 机）が空くと、保存直後の再マージで講師の机がずれていた。
     // その置き直しを差分反映に書き写さず（机をまたぐ計算なので写すと必ずずれる）、保存と同じ抑止（保存前－Q36 で外した分＋Q21-11 で足した分）で
     // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
-    const nextWeeks = run.diff.nextWeeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed }))
+    const nextWeeks = follow.weeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed }))
     const vanished = run.stripped.filter((revert) => revert.reason !== 'stale' && !hasLiveRegularOnDate(nextWeeks, revert.dateKey, studentSubjectKey(revert.student)))
     if (vanished.length === 0 || attempt === outerLimit - 1) {
       return {
         ...run.diff,
-        summary: { ...run.diff.summary, sameDayMoveCopiesReverted: run.stripped.length },
+        summary: {
+          ...run.diff.summary,
+          sameDayMoveCopiesReverted: run.stripped.length,
+          // Q40-2 で振替先へ置いた／未消化にした生徒は「置かず振替を優先」の数と −1 から外す。
+          wholeDayTransferSkippedStudents: run.diff.summary.wholeDayTransferSkippedStudents - follow.handledKeys.size,
+          wholeDayTransferCountAdjusted: wholeDayTransferCountAdjustments.length,
+          orphanedMakeupsRemoved: orphaned.length,
+          wholeDayTransferPlacedStudents: follow.placed.length,
+          wholeDayTransferStockedStudents: follow.stocked.length,
+        },
         nextWeeks,
+        wholeDayTransferCountAdjustments,
         /** Q36 で外した通常授業の抑止キー（保存が抑止から取り除く）。 */
         removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed],
         /** Q39-9: 入口がその日を全コマにした日（昇順）。確認文に出す。 */
         scopedFullDates: [...(params.slotFilter?.fullDates ?? [])].sort(),
+        /** Q40-1: 外した振替（確認・テスト用）。 */
+        orphanedMakeups: orphaned,
+        /** Q40-2: 置いた生徒・未消化にした生徒。 */
+        wholeDayTransferPlaced: follow.placed,
+        wholeDayTransferStocked: follow.stocked,
+        /** Q40-2: 保存が台帳（manualMakeupAdjustments）へ積む origin（振替元が休日でない未消化だけ＝INV-06 の唯一の例外）。 */
+        manualMakeupOriginAdditions: follow.stocked.filter((item) => item.ledger).map((item) => ({ student: item.student, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber })),
       }
     }
     for (const revert of vanished) protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))
@@ -2642,9 +2670,10 @@ function runTemplateDiffApplyWithCopyReverts(params: {
   let suppressed = params.suppressedRegularLessonOccurrences
   const removedSuppressed = new Set<string>()
   const stripped: SameDayMoveCopyRevert[] = []
+  let templateCells: TemplateDiffTemplateCell[] = []
   const compute = () => computeTemplateDiffApply({
     weeks,
-    templateCells: buildTemplateDiffTemplateCells({ ...params, weeks, suppressedRegularLessonOccurrences: suppressed }),
+    templateCells: (templateCells = buildTemplateDiffTemplateCells({ ...params, weeks, suppressedRegularLessonOccurrences: suppressed })),
     effectiveStartDate: params.effectiveStartDate,
     suppressedRegularLessonOccurrences: suppressed,
     pendingDesks,
@@ -2668,7 +2697,7 @@ function runTemplateDiffApplyWithCopyReverts(params: {
     suppressed = suppressed.filter((key) => !removedSuppressed.has(key))
     diff = compute()
   }
-  return { diff, suppressed, removedSuppressed, stripped }
+  return { diff, suppressed, removedSuppressed, stripped, templateCells }
 }
 
 // その日に同じ生徒×科目の通常授業（lessonType='regular'）が生きているか（Q36 の事後条件）。
@@ -7344,6 +7373,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     for (const target of plan.diff.wholeDayTransferCountAdjustments) {
       nextScheduleCountAdjustments = resolveDeletedStudentCountAccounting(nextScheduleCountAdjustments, target.student, target.dateKey).nextAdjustments
     }
+    // Q40-2-4（オーナー確定 2026-10-14・INV-06 の唯一の例外）: 丸ごと振替した日に足した生徒で振替先に空きが無く、その日が休日でないときだけ、
+    // 未消化振替の origin を台帳に 1 件積む（休日なら自動の不足 origin に任せる）。鍵は管理生徒 ID（テンプレの生徒は必ず管理生徒）。
+    let nextManualMakeupAdjustments = manualMakeupAdjustments
+    for (const addition of plan.diff.manualMakeupOriginAdditions) {
+      nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, buildMakeupStockKey(addition.student.managedStudentId ?? addition.student.name, addition.student.subject), addition.dateKey, addition.slotNumber)
+    }
+    if (nextManualMakeupAdjustments !== manualMakeupAdjustments) setManualMakeupAdjustments(nextManualMakeupAdjustments)
     const nextWeeks = plan.diff.nextWeeks
     setWeeks(nextWeeks)
     setTemplatePendingDesks(plan.diff.nextPendingDesks)
@@ -7362,7 +7398,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       selectedDeskIndex,
       suppressedRegularLessonOccurrences: [...nextSuppressedRegularLessonOccurrences],
       scheduleCountAdjustments: cloneScheduleCountAdjustments(nextScheduleCountAdjustments),
-      manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
+      manualMakeupAdjustments: cloneOriginMap(nextManualMakeupAdjustments),
       suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
       manualLectureStockCounts: { ...manualLectureStockCounts },

@@ -270,7 +270,12 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(byDiff).toContain('void onPreTemplateSaveBackup()')
     // 在庫台帳は差分反映で書き換えない（publish は現在値の複製だけ・INV-06 拡張）。希望回数補正は Q35-8（2026-10-02・オーナー決定）の −1 だけ積む
     // （クリアはしない＝Q10。積み方は単発削除と同じ resolveDeletedStudentCountAccounting・対象は差分反映の wholeDayTransferCountAdjustments だけ）。
-    expect(byDiff).not.toMatch(/setManualMakeupAdjustments|setManualLectureStockCounts|setManualLectureStockOrigins|setSuppressedMakeupOrigins|filterTemplateOverwriteHolidayDates/)
+    // Q40-2-4（2026-10-14・オーナー確定・INV-06 の唯一の例外）: 丸ごと振替した日に足した生徒で振替先に空きが無く休日でないときだけ、
+    // 未消化振替の origin を台帳へ 1 件積む（計画関数が返す manualMakeupOriginAdditions の分だけ。それ以外の台帳は触らない）。
+    expect(byDiff).not.toMatch(/setManualLectureStockCounts|setManualLectureStockOrigins|setSuppressedMakeupOrigins|filterTemplateOverwriteHolidayDates/)
+    expect(byDiff).toContain('for (const addition of plan.diff.manualMakeupOriginAdditions) {')
+    expect(byDiff).toContain('manualMakeupAdjustments: cloneOriginMap(nextManualMakeupAdjustments),')
+    expect(byDiff.match(/setManualMakeupAdjustments\(/g)).toHaveLength(1)
     expect(byDiff.match(/setScheduleCountAdjustments\(/g)).toHaveLength(1)
     expect(byDiff).toContain('for (const target of plan.diff.wholeDayTransferCountAdjustments) {')
     expect(byDiff).not.toContain('setScheduleCountAdjustments([])')
