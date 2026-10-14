@@ -1180,10 +1180,10 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
       expect(index).toBeGreaterThanOrEqual(0)
       return board.slice(index, index + length)
     }
-    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 6000)
+    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 9000)
     // Q36（2026-10-03）: 保存と同じ抑止＝保存前の抑止から写しの分を外し（suppressed）、Q21-11 / Q35 で足した分を加える
     expect(entryFn).toContain('[...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]')
-    expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed })')
+    expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed })')
     expect(entryFn).toContain('removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed]')
     // Q36 事後条件（H-2）: 外した写しの通常授業が最終結果で生きていなければ、その写しを「外さない」側に加えて計算し直す。
     expect(entryFn).toContain('hasLiveRegularOnDate(nextWeeks, revert.dateKey, studentSubjectKey(revert.student))')
