@@ -1388,6 +1388,20 @@ export function appendTemplateTransferMakeupOrigin(originMap: MakeupOriginMap, k
   }
 }
 
+// Q40-2 M-2: テンプレ保存が積んだ印つき origin を 1 件だけ取り下げる。**理由ラベルまで同じ origin だけ**を外す（日付×時限が同じ手積みの origin が先頭に居ても
+// それを外さない＝何も変えない保存〔全コマ〕を重ねても手積みの分が減らない）。無ければ台帳は参照ごとそのまま。
+export function removeTemplateTransferMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, slotNumber: number) {
+  const currentDates = originMap[key] ?? []
+  const targetIndex = currentDates.findIndex((entry) => entry.dateKey === originDate && entry.slotNumber === slotNumber && entry.reasonLabel === TEMPLATE_TRANSFER_STOCK_REASON)
+  if (targetIndex < 0) return originMap
+  const nextDates = currentDates.filter((_, index) => index !== targetIndex)
+  if (nextDates.length === 0) {
+    const { [key]: _removed, ...rest } = originMap
+    return rest
+  }
+  return { ...originMap, [key]: nextDates }
+}
+
 // 1件だけ外す。**外すのは「積んだときと同じ形の origin」**（2026-09-20・INV-06 レビュー指摘）。
 // ★同じ日付に「時限つき」と「時限なし」の origin が併存しうる（同じ日に2コマある生徒・削除抑制は時限つき・
 //   休日設定の配置ぶんは時限なし）。素朴に「同じ日付の先頭」を外すと、残すべき別コマの origin を誤って外して
@@ -7401,7 +7415,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 積む origin には理由ラベル（TEMPLATE_TRANSFER_STOCK_REASON）を付け、その生徒×科目を後のテンプレ保存でその曜日から外したら同じ保存が取り下げる（M-2・足す→外すで台帳が元に戻る）。
     let nextManualMakeupAdjustments = manualMakeupAdjustments
     for (const removal of plan.diff.manualMakeupOriginRemovals) {
-      nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, removal.stockKey, removal.dateKey, removal.slotNumber)
+      nextManualMakeupAdjustments = removeTemplateTransferMakeupOrigin(nextManualMakeupAdjustments, removal.stockKey, removal.dateKey, removal.slotNumber)
     }
     for (const addition of plan.diff.manualMakeupOriginAdditions) {
       nextManualMakeupAdjustments = appendTemplateTransferMakeupOrigin(nextManualMakeupAdjustments, resolveTemplateTransferStockKey(addition.student), addition.dateKey, addition.slotNumber)

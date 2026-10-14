@@ -125,6 +125,8 @@ describe('collectOrphanedMakeups（Q40-1）', () => {
     expect(collect({ weeks, templateCells: [], manualMakeupAdjustments: ledger, effectiveStartDate: THU }).ledgerRemovals).toEqual([{ stockKey: 'sB__数', dateKey: '2026-10-14', slotNumber: 5 }])
     expect(collect({ weeks, templateCells: [], manualMakeupAdjustments: ledger, slotFilter: { slotKeys: new Set([buildTemplateSlotKey(4, 5)]) } }).ledgerRemovals).toEqual([])
     expect(collect({ weeks, templateCells: [], manualMakeupAdjustments: { 'sA__数': [{ dateKey: WED, slotNumber: 5 }] } }).ledgerRemovals).toEqual([])
+    // 時限の無い印つき origin（保存は必ず時限つきで積む）は取り下げの対象にしない
+    expect(collect({ weeks, templateCells: [], manualMakeupAdjustments: { 'sA__数': [{ dateKey: WED, reasonLabel: TEMPLATE_TRANSFER_STOCK_REASON }] } }).ledgerRemovals).toEqual([])
   })
 
   it('removeOrphanedMakeups: 席を空け（机と講師は残す）、振替元の移動元記録だけ消し、触ったセルの ID を返す。触らないセルは参照ごと同じ', () => {

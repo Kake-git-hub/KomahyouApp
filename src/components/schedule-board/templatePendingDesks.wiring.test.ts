@@ -277,8 +277,9 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     // 積む形は理由ラベルつき（appendTemplateTransferMakeupOrigin）。以前の保存が積んだ分の取り下げ（M-2）は removeMakeupOrigin を同じ形で（計画関数が返す manualMakeupOriginRemovals の分だけ）。
     expect(byDiff).toContain('appendTemplateTransferMakeupOrigin(nextManualMakeupAdjustments, resolveTemplateTransferStockKey(addition.student), addition.dateKey, addition.slotNumber)')
     expect(byDiff).toContain('for (const removal of plan.diff.manualMakeupOriginRemovals) {')
-    expect(byDiff).toContain('removeMakeupOrigin(nextManualMakeupAdjustments, removal.stockKey, removal.dateKey, removal.slotNumber)')
+    expect(byDiff).toContain('removeTemplateTransferMakeupOrigin(nextManualMakeupAdjustments, removal.stockKey, removal.dateKey, removal.slotNumber)')
     expect(byDiff).not.toContain('appendMakeupOrigin(')
+    expect(byDiff).not.toContain('removeMakeupOrigin(')
     expect(byDiff).toContain('manualMakeupAdjustments: cloneOriginMap(nextManualMakeupAdjustments),')
     expect(byDiff.match(/setManualMakeupAdjustments\(/g)).toHaveLength(1)
     expect(byDiff.match(/setScheduleCountAdjustments\(/g)).toHaveLength(1)

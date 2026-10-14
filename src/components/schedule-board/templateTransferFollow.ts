@@ -54,7 +54,8 @@ export const TEMPLATE_TRANSFER_STOCK_REASON = 'テンプレ保存（丸ごと振
 export type TemplateTransferLedgerRemoval = {
   stockKey: string
   dateKey: string
-  slotNumber?: number
+  /** 積んだときの時限（Q40-2 は必ず時限つきで積む）。理由ラベルと合わせて同じ形の 1 件だけを外す。 */
+  slotNumber: number
 }
 
 /** 振替元（日×時限）が「テンプレで変えたコマ」の範囲に入るか。時限が分からない振替元は、その曜日のどれかの時限が範囲なら入る。 */
@@ -148,10 +149,10 @@ export function collectOrphanedMakeups(params: {
     const studentId = stockKey.slice(0, separator)
     const subject = stockKey.slice(separator + 2)
     for (const origin of origins) {
-      if (origin.reasonLabel !== TEMPLATE_TRANSFER_STOCK_REASON || origin.dateKey < params.effectiveStartDate) continue
-      if (!isSourceInScope(origin.dateKey, origin.slotNumber ?? null, params.slotFilter)) continue
+      if (origin.reasonLabel !== TEMPLATE_TRANSFER_STOCK_REASON || origin.slotNumber == null || origin.dateKey < params.effectiveStartDate) continue
+      if (!isSourceInScope(origin.dateKey, origin.slotNumber, params.slotFilter)) continue
       if (rowKeysByDay.get(resolveDayOfWeekFromDateKey(origin.dateKey))?.has(`${studentId}__${subject}`)) continue
-      ledgerRemovals.push({ stockKey, dateKey: origin.dateKey, ...(origin.slotNumber != null ? { slotNumber: origin.slotNumber } : {}) })
+      ledgerRemovals.push({ stockKey, dateKey: origin.dateKey, slotNumber: origin.slotNumber })
     }
   }
   return { removals, ledgerRemovals }

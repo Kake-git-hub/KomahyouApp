@@ -12,7 +12,7 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendTemplateTransferMakeupOrigin, buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData, removeMakeupOrigin } from './ScheduleBoardScreen'
+import { appendTemplateTransferMakeupOrigin, buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData, removeTemplateTransferMakeupOrigin } from './ScheduleBoardScreen'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { TEMPLATE_TRANSFER_STOCK_REASON } from './templateTransferFollow'
@@ -315,20 +315,28 @@ describe('INV-06 × Q40 regression-reviewer 監査（2026-10-14・H-1〜H-4・M-
     const rowsWithC = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
     const first = save(weeks, rowsWithC, board.suppressed, { manualMakeupAdjustments: board.ledgers })
     expect(first.manualMakeupOriginAdditions).toHaveLength(1)
-    // 保存本体と同じ形で積む（理由ラベルつき・時限つき）
-    const manualOrigin: ManualMakeupOrigin = { dateKey: '2026-10-14' }
-    let ledger: Record<string, ManualMakeupOrigin[]> = { ...board.ledgers, 'sC__数': [manualOrigin] }
+    // 保存本体と同じ形で積む（理由ラベルつき・時限つき）。手で積んだ origin（同じ日付×時限のものを先頭に・別の日のもの）は混ぜておく
+    const manualSameSlot: ManualMakeupOrigin = { dateKey: WED, slotNumber: SLOT }
+    const manualOtherDay: ManualMakeupOrigin = { dateKey: '2026-10-14' }
+    let ledger: Record<string, ManualMakeupOrigin[]> = { ...board.ledgers, 'sC__数': [manualSameSlot, manualOtherDay] }
     for (const addition of first.manualMakeupOriginAdditions) ledger = appendTemplateTransferMakeupOrigin(ledger, `${addition.student.managedStudentId}__${addition.student.subject}`, addition.dateKey, addition.slotNumber)
-    expect(ledger['sC__数']).toEqual([{ dateKey: WED, slotNumber: SLOT, reasonLabel: TEMPLATE_TRANSFER_STOCK_REASON }, manualOrigin])
+    expect(ledger['sC__数']).toEqual([manualSameSlot, { dateKey: WED, slotNumber: SLOT, reasonLabel: TEMPLATE_TRANSFER_STOCK_REASON }, manualOtherDay])
+    // 同じ日付×時限の origin は在庫の計算では 1 つのトークン（resolveEffectiveMakeupOriginDates）なので残数は 2 のまま＝残数では印つきの重なりが見えない。
+    // だからこそ取り下げは「印つきの 1 件だけ」を外さなければならない（手積みを外すと、印つきが残って次の保存でもう 1 件外れる＝手積みが黙って減る）。
     expect(balances(first.nextWeeks, rowsWithC, ledger)['sC__数']).toBe(2)
     // 次の保存で C を外す
     const second = save(first.nextWeeks, OLD_ROWS, suppressedAfter(board.suppressed, first), { manualMakeupAdjustments: ledger })
     expect(second.manualMakeupOriginRemovals).toEqual([{ stockKey: 'sC__数', dateKey: WED, slotNumber: SLOT }])
     expect(second.manualMakeupOriginAdditions).toEqual([])
     let ledgerAfter = ledger
-    for (const removal of second.manualMakeupOriginRemovals) ledgerAfter = removeMakeupOrigin(ledgerAfter, removal.stockKey, removal.dateKey, removal.slotNumber)
-    expect(ledgerAfter['sC__数']).toEqual([manualOrigin])
-    expect(balances(second.nextWeeks, OLD_ROWS, ledgerAfter)['sC__数']).toBe(1)
+    for (const removal of second.manualMakeupOriginRemovals) ledgerAfter = removeTemplateTransferMakeupOrigin(ledgerAfter, removal.stockKey, removal.dateKey, removal.slotNumber)
+    // 外れるのは印つきの 1 件だけ（同じ日付×時限の手積みが先頭に居ても外さない）
+    expect(ledgerAfter['sC__数']).toEqual([manualSameSlot, manualOtherDay])
+    expect(balances(second.nextWeeks, OLD_ROWS, ledgerAfter)['sC__数']).toBe(2)
+    // 取り下げ後に何も変えない保存（全コマ）を重ねても、印つきが無いので取り下げ 0・台帳は参照ごと不変
+    const third = save(second.nextWeeks, OLD_ROWS, suppressedAfter(suppressedAfter(board.suppressed, first), second), { manualMakeupAdjustments: ledgerAfter })
+    expect(third.manualMakeupOriginRemovals).toEqual([])
+    expect(removeTemplateTransferMakeupOrigin(ledgerAfter, 'sC__数', WED, SLOT)).toBe(ledgerAfter)
     // C を残したまま別の保存をしても取り下げない
     const keep = save(first.nextWeeks, rowsWithC, suppressedAfter(board.suppressed, first), { manualMakeupAdjustments: ledger })
     expect(keep.manualMakeupOriginRemovals).toEqual([])
