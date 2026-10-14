@@ -5,6 +5,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, buildTemplateTeacherSuppressionKey, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 
 // ============================================================================
@@ -556,6 +557,39 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveCount(remerged, 'sA')).toBe(0)
     // 回帰防止: 写しの抑止キーを外さないと（旧の抑止のまま再マージ）、A は 4 限と 5 限で 1 か所になるが写しが消えた机では戻れない。キーを外して不動点。
     expect(remerged.flat().find((cell) => cell.id === CELL)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  // Q39-9（Q36 の兄弟・regression-reviewer H-1・2026-10-14）: 「テンプレで変えたコマだけ」の絞り込み（Q39）で写しの時限が範囲の外にあっても、
+  // 変えた机に関わる生徒の写しがある日は入口がその日を全コマにするので、Q36 と同じく A はその日に 1 か所。絞り込みを渡さない全コマと同じ結果になる。
+  it('Q39-9: 範囲 {水4, 水5} の外（3 限）に A の写しがあっても、変えたコマだけの保存 → 再マージ 1 回の後も A はその日に 1 か所（4 限）だけ', () => {
+    const rowsMovedTo4 = [{ ...row('r0', 't1', 'sA'), slotNumber: 4 }, row('r1', 't2', 'sB'), row('r2', 't3')]
+    const copyOfA = mkStudent('a-copy', '青木', { managedStudentId: 'sA', sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' })
+    const keyA5 = buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5)
+    const savedSettings = settings({ templateFreezeBeforeDate: DATE })
+    // 実データの形: 5 限の A は同日移動の抑止で消え、3 限（範囲の外）に写し。読み込み時の再マージを通した正規形から始める。
+    const loaded = remergeBoardWeeksWithManagedData([board((desks) => desks)], {
+      classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: OLD_ROWS, suppressedRegularLessonOccurrences: [keyA5], todayKey: '2026-09-29',
+    })[0]
+    const week = loaded.map((cell) => (cell.id === `${DATE}_3` ? { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: mkLesson('moved_sA_3', [copyOfA, null]) } : desk)) } : cell))
+    const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
+    const save = (slotFilter: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']) => computeTemplateDiffApplyForBoard({
+      weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-14T10:00:00.000Z', slotFilter,
+    })
+    const scoped = save({ slotKeys: new Set([buildTemplateSlotKey(3, 4), buildTemplateSlotKey(3, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) })
+    const full = save(undefined)
+    expect(liveOnDay(scoped.nextWeeks)).toHaveLength(1)
+    expect(scoped.nextWeeks.flat().find((cell) => cell.id === `${DATE}_4`)!.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(scoped.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect(scoped.removedSuppressedRegularLessonOccurrences).toEqual([keyA5])
+    expect(scoped.scopedFullDates).toEqual([DATE])
+    expect(scoped.nextWeeks.flat().filter((cell) => cell.dateKey === DATE)).toEqual(full.nextWeeks.flat().filter((cell) => cell.dateKey === DATE))
+    const remerged = remergeBoardWeeksWithManagedData(scoped.nextWeeks, {
+      classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
+      suppressedRegularLessonOccurrences: [...scoped.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
+    })
+    expect(liveOnDay(remerged)).toHaveLength(1)
+    expect(remerged.flat().filter((cell) => cell.dateKey === DATE)).toEqual(scoped.nextWeeks.flat().filter((cell) => cell.dateKey === DATE))
   })
 
   // 再マージ（mergeManagedWeek）は講師だけの管理机を、同じコマに同じ講師名が居れば足さず（alreadyPresent）、残りを「先頭から最初の空き机」へ

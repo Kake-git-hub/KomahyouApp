@@ -306,7 +306,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
   it('確認文の件数（試し実行）は保存本体と同じ計画関数から出す（Q32-1）', () => {
     // Q39（2026-10-14）: 試し実行も保存本体も同じ計画関数（buildTemplateDiffSavePlan）が applyScope から絞り込みを作り直す（確認文と保存結果が食い違わない）。
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '')")
-    expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, todayKey: toDateKey(new Date()) })")
+    expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })")
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })")
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '', { applyScope })")
     // 絞り込みは差分反映の本体と保存直後の再マージの重ね合わせの両方に効く（絞り込みの外は参照ごと不変）。
@@ -320,6 +320,8 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(planFn).toContain('const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)')
     expect(planFn).toContain('const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))')
     expect(planFn).toContain('resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })')
+    // Q39-9: 入口がその日を全コマにした日は計画関数が範囲の説明に写す（確認文と件数が食い違わない・regression-reviewer M-1）。
+    expect(planFn).toContain("baseScopeNote.scope === 'changed-slots' && diff.scopedFullDates.length > 0 ? { ...baseScopeNote, fullDates: diff.scopedFullDates } : baseScopeNote")
     // 旧方式（フラグ OFF）の既定日と保存ボタンの文言は不変（差分反映の教室だけ来週の月曜・「反映（変えたコマだけ）」）。
     expect(BOARD_TSX).toContain("      : (filteredTemplate?.effectiveStartDate || today))")
     expect(BOARD_TSX).toContain("templateSaveButtonLabel={templateDiffApplyEnabled ? '反映開始日以降にこのテンプレを反映（変えたコマだけ）' : undefined}")

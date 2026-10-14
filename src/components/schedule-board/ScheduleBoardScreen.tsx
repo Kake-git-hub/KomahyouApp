@@ -167,6 +167,8 @@ type TemplateSaveConfirmState = {
   definitionDiff?: TemplateDefinitionDiff
   applyScope?: TemplateDiffApplyScope
   scopeNote?: TemplateDiffScopeNote
+  /** 「変えたコマだけ」で突き合わせるコマ数（テンプレで変えたコマ ∪ 盤面の行との差）。ラジオの表示用。 */
+  scopedSlotCount?: number
   todayKey?: string
 }
 
@@ -2613,6 +2615,8 @@ export function computeTemplateDiffApplyForBoard(input: {
         nextWeeks,
         /** Q36 で外した通常授業の抑止キー（保存が抑止から取り除く）。 */
         removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed],
+        /** Q39-9: 入口がその日を全コマにした日（昇順）。確認文に出す。 */
+        scopedFullDates: [...(params.slotFilter?.fullDates ?? [])].sort(),
       }
     }
     for (const revert of vanished) protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))
@@ -7274,7 +7278,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))
     const previousEffectiveStartDate = [baselineTemplate?.effectiveStartDate ?? '', classroomSettings.templateFreezeBeforeDate ?? ''].sort().pop() || null
     const slotFilter = resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })
-    const scopeNote = describeTemplateDiffScope(definitionDiff, applyScope, extraSlotKeys)
+    const scopedSlotCount = new Set([...definitionDiff.changedSlotKeys, ...extraSlotKeys]).size
     // spec-template-behavior Q16/Q18: 履歴は「新反映日以上の旧履歴を捨て新テンプレを追加」・最新3件まで（旧方式と同じ）。
     const prevHistory = classroomSettings.regularLessonTemplateHistory ?? []
     const nextHistory = [
@@ -7305,7 +7309,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // Q39: 変えたコマだけ突き合わせる（試し実行と保存本体に同じ絞り込みを渡す）。
       slotFilter,
     })
-    return { normalizedTemplateRegularLessons, nextClassroomSettings, diff, definitionDiff, applyScope, scopeNote, slotFilter }
+    // 範囲の説明は差分反映の後に作る（Q39-9 でその日を全コマにした日を入口から写す・regression-reviewer M-1）。
+    const baseScopeNote = describeTemplateDiffScope(definitionDiff, applyScope, extraSlotKeys)
+    const scopeNote: TemplateDiffScopeNote = baseScopeNote.scope === 'changed-slots' && diff.scopedFullDates.length > 0 ? { ...baseScopeNote, fullDates: diff.scopedFullDates } : baseScopeNote
+    return { normalizedTemplateRegularLessons, nextClassroomSettings, diff, definitionDiff, applyScope, scopeNote, slotFilter, scopedSlotCount }
   }, [classroomSettings, regularLessons, students, suppressedRegularLessonOccurrences, teachers, templatePendingDesks, weeks])
 
   // テンプレ保存（差分反映＋保留・機能フラグ templateDiffApply ON の教室だけ・Issue #72）。
@@ -10505,7 +10512,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         // Q39（オーナー案 2026-10-14）: 前回保存したテンプレ（編集を開いたときに読み込んだもの）と比べ、変えたコマだけを突き合わせるのを既定にする。
         // 変えたコマが 0（何も変えずに保存）・比べる前回が無い・机の数が違うときは従来どおり全コマ。
         const plan = buildTemplateDiffSavePlan(template, '')
-        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, todayKey: toDateKey(new Date()) })
+        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })
       } catch (error) {
         // 試し実行で例外が出たら保存の確認に進まず理由を出す(以前は同期で投げていた＝同じく保存には進まない)。
         setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
@@ -10531,7 +10538,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       try {
         const plan = buildTemplateDiffSavePlan(template, '', { applyScope })
         setTemplateSaveConfirm((current) => (current && current.template === template
-          ? { ...current, diffSummary: plan.diff.summary, applyScope: plan.applyScope, scopeNote: plan.scopeNote }
+          ? { ...current, diffSummary: plan.diff.summary, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount }
           : current))
       } catch (error) {
         setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
@@ -15335,7 +15342,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   <div className="student-menu-section" data-testid="template-save-scope">
                     <label style={{ display: 'block', marginBottom: 4 }}>
                       <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'changed-slots'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('changed-slots')} data-testid="template-save-scope-changed" />
-                      {` 変えたコマだけ反映（${templateSaveConfirm.definitionDiff.changedSlotKeys.length} コマ）`}
+                      {` 変えたコマだけ反映（${templateSaveConfirm.scopedSlotCount ?? templateSaveConfirm.definitionDiff.changedSlotKeys.length} コマ）`}
                     </label>
                     <label style={{ display: 'block', marginBottom: 6 }}>
                       <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'all'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('all')} data-testid="template-save-scope-all" />

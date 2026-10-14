@@ -313,7 +313,13 @@ export function resolveTemplateDiffSlotFilter(params: {
 }
 
 export type TemplateDiffScopeNote =
-  | { scope: 'changed-slots'; slotLabels: string[]; extraSlotLabels: string[] }
+  | {
+    scope: 'changed-slots'
+    slotLabels: string[]
+    extraSlotLabels: string[]
+    /** Q39-9: その日を全コマにした日（YYYY-MM-DD・昇順）。差分反映の入口が盤面を見て足した分を計画関数が写す（確認文と件数を揃える・regression-reviewer M-1）。 */
+    fullDates?: string[]
+  }
   | { scope: 'all'; reason: 'no-change' | TemplateDefinitionDiffReason | 'user' }
 
 /** 確認文・保存後メッセージに出す「どの範囲を突き合わせるか」。`extraSlotKeys` は盤面の行との差（テンプレで変えたコマに無いものだけ別枠で出す）。 */

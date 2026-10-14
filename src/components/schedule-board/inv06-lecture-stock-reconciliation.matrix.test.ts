@@ -261,7 +261,8 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // 差分反映の結果は台帳を持たない（在庫台帳に触る入口が無い）＝保存前後で台帳が同じなので残数も同じ。
     // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
     // Q36（2026-10-03）の removedSuppressedRegularLessonOccurrences（写しの抑止キーを外す）と sameDayMoveCopyReverts（検出結果）も台帳の書き換えではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'summary', 'wholeDayTransferCountAdjustments'])
+    // Q39-9（2026-10-14）の scopedFullDates は確認文用（入口がその日を全コマにした日）で、台帳の書き換えではない。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'summary', 'wholeDayTransferCountAdjustments'])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
     expect(before).toEqual({ sM: 1 })
@@ -300,7 +301,8 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     expect(upper().lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual(['sC', 'sD'])
     // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
     // Q36（2026-10-03）の removedSuppressedRegularLessonOccurrences（写しの抑止キーを外す）と sameDayMoveCopyReverts（検出結果）も台帳の書き換えではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'summary', 'wholeDayTransferCountAdjustments'])
+    // Q39-9（2026-10-14）の scopedFullDates は確認文用（入口がその日を全コマにした日）で、台帳の書き換えではない。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'summary', 'wholeDayTransferCountAdjustments'])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })
     const result = computePendingDeskResolution({

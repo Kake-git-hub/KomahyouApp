@@ -465,25 +465,30 @@ export function expandTemplateDiffSlotFilterForSameDayMoves(params: {
   filter: TemplateDiffSlotFilter | null | undefined
 }): TemplateDiffSlotFilter | null | undefined {
   const filter = params.filter
-  const byWeekday = filter?.sameDayMoveStudentIdsByWeekday
-  if (!filter || !byWeekday || byWeekday.size === 0) return filter
+  if (!filter) return filter
+  const byWeekday = filter.sameDayMoveStudentIdsByWeekday
+  const baseFilter: TemplateDiffSlotFilter = { ...filter, fullDates: undefined }
   const fullDates = new Set(filter.fullDates ?? [])
-  const consider = (student: StudentEntry | null | undefined, dateKey: string) => {
+  // 写しの日を広げる条件: (a) 変えた机に関わる生徒の写し、または (b) 範囲の中のコマに居る写し（どの生徒でも。範囲の中で collided になって外れると
+  //   元の時限の抑止キーも外れ、同じ日に同じ科目がもう 1 つあると元の時限へ戻るのが保存直後の再マージになる・regression-reviewer 再検査 L）。
+  const consider = (student: StudentEntry | null | undefined, cell: Pick<SlotCell, 'dateKey' | 'slotNumber'>) => {
+    const dateKey = cell.dateKey
     if (!student || dateKey < params.effectiveStartDate || fullDates.has(dateKey)) return
     if (!isSameDayMovedTemplateCopy(student, dateKey)) return
     const id = student.managedStudentId
-    if (id && byWeekday.get(resolveDayOfWeekFromDateKey(dateKey))?.has(id)) fullDates.add(dateKey)
+    const involved = Boolean(id) && Boolean(byWeekday?.get(resolveDayOfWeekFromDateKey(dateKey))?.has(id as string))
+    if (involved || isCellInTemplateDiffScope(cell, baseFilter)) fullDates.add(dateKey)
   }
-  const dateKeyByCellId = new Map<string, string>()
+  const cellById = new Map<string, SlotCell>()
   for (const week of params.weeks) for (const cell of week) {
-    dateKeyByCellId.set(cell.id, cell.dateKey)
-    for (const desk of cell.desks) for (const student of desk.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
+    cellById.set(cell.id, cell)
+    for (const desk of cell.desks) for (const student of desk.lesson?.studentSlots ?? []) consider(student, cell)
   }
   for (const [key, entry] of Object.entries(params.pendingDesks)) {
     const parsed = parseTemplatePendingDeskKey(key)
-    const dateKey = parsed ? dateKeyByCellId.get(parsed.cellId) : undefined
-    if (!dateKey) continue
-    for (const student of entry.lower.lesson?.studentSlots ?? []) consider(student, dateKey)
+    const cell = parsed ? cellById.get(parsed.cellId) : undefined
+    if (!cell) continue
+    for (const student of entry.lower.lesson?.studentSlots ?? []) consider(student, cell)
   }
   if (fullDates.size === (filter.fullDates?.size ?? 0)) return filter
   return { ...filter, fullDates }
@@ -1682,6 +1687,11 @@ export type TemplateDiffConfirmContext = {
   todayKey?: string
 }
 
+function formatMonthDay(dateKey: string) {
+  const [, month, day] = dateKey.split('-').map(Number)
+  return `${month}/${day}`
+}
+
 /** Q39: 範囲の説明（確認文・保存後メッセージ共通）。 */
 export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | undefined) {
   if (!note) return ''
@@ -1689,9 +1699,11 @@ export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | unde
     const base = `テンプレで変えたコマ（${note.slotLabels.join('・')}）だけを突き合わせます。変えていないコマは変わりません。`
     // Q39-2（regression-reviewer H-2b）: 盤面の通常授業の行が今のテンプレと食い違うコマ（退塾した講師が保存済みテンプレに残っているなど）は
     // テンプレで変えていなくても突き合わせる（保存直後の再マージで黙って変わるのを防ぐ）。
-    return note.extraSlotLabels.length > 0
-      ? `${base}\n加えて、盤面の通常授業の行が今のテンプレと食い違うコマ（${note.extraSlotLabels.join('・')}）も突き合わせます（退塾した講師の整理など）。`
-      : base
+    const lines = [base]
+    if (note.extraSlotLabels.length > 0) lines.push(`加えて、盤面の通常授業の行が今のテンプレと食い違うコマ（${note.extraSlotLabels.join('・')}）も突き合わせます（退塾した講師の整理など）。`)
+    // Q39-9: その日を全コマにした日は件数に入るので、確認文でも断る（regression-reviewer M-1）。
+    if (note.fullDates && note.fullDates.length > 0) lines.push(`同じ日の中で手で動かした授業がある日（${note.fullDates.map(formatMonthDay).join('・')}）は、その日の全コマを突き合わせます。`)
+    return lines.join('\n')
   }
   switch (note.reason) {
     case 'no-change': return 'テンプレの中身に変更はありません。すべてのコマを突き合わせます（講師の揃え・保留の片づけ）。'

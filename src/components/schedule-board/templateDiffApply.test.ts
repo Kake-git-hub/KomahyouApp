@@ -2089,6 +2089,18 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
     // 反映日より前の日の写しは数えない
     const earlier = expandTemplateDiffSlotFilterForSameDayMoves({ weeks: [week], pendingDesks: pending, effectiveStartDate: '2026-10-08', filter: { slotKeys: new Set([buildTemplateSlotKey(3, 4)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) } })
     expect(earlier?.fullDates).toBeUndefined()
+    // 範囲の中のコマ（3 限を範囲に入れる）に居る写しは、関わらない生徒 B でもその日を全コマにする（再検査 L: 範囲の中で外れた写しの抑止キーが元の時限にも効くため）
+    const insideScope = expandTemplateDiffSlotFilterForSameDayMoves({ weeks: [week], pendingDesks: {}, effectiveStartDate: EFFECTIVE, filter: { slotKeys: new Set([buildTemplateSlotKey(3, 3)]) } })
+    expect(insideScope?.fullDates).toEqual(new Set([DATE]))
+    // 絞り込み無し（全コマ）はそのまま
+    expect(expandTemplateDiffSlotFilterForSameDayMoves({ weeks: [week], pendingDesks: {}, effectiveStartDate: EFFECTIVE, filter: undefined })).toBeUndefined()
+  })
+
+  it('Q39-9 確認文: その日を全コマにした日は「同じ日の中で手で動かした授業がある日（10/7）は、その日の全コマを突き合わせます」と出る', () => {
+    const summary = createEmptyTemplateDiffApplySummary()
+    const text = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['水 4限', '水 5限'], extraSlotLabels: [], fullDates: ['2026-10-07', '2026-10-14'] } })
+    expect(text).toContain('同じ日の中で手で動かした授業がある日（10/7・10/14）は、その日の全コマを突き合わせます。')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['水 4限'], extraSlotLabels: [] } })).not.toContain('手で動かした授業がある日')
   })
 
   it('Q39 不動点: 絞り込み付きの保存結果に再マージを 2 回通しても、範囲の内も外も変わらない（L-7 兄弟 2 の範囲版・INV-03）', () => {
