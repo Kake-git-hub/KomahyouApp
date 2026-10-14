@@ -268,6 +268,24 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(merged.desks.some((desk) => desk.teacher === '落合講師')).toBe(false)
     })
 
+    it('×テンプレ再マージ（例外 2 の改定・2026-10-14）: 削除記録の机にテンプレが**別の講師**を置くなら、その講師が同じ机に置かれ削除記録は上書き', () => {
+      const board = createCell({ desks: [tombstoneDesk(), createDesk({ id: 'b-1' })] })
+      // テンプレは机0 に「永山講師」（削除した落合とは別人）
+      const managed = createCell({
+        id: board.id,
+        desks: [createDesk({ id: 'm-0', teacher: '永山講師', teacherAssignmentTeacherId: 't027' }), createDesk({ id: 'm-1' })],
+      })
+      const [merged] = overlayBoardWeeksOnScheduleCells([managed], [[board]])
+      expect(merged.desks[0]).toMatchObject({ teacher: '永山講師', manualTeacher: false, teacherAssignmentSource: undefined })
+      expect(merged.desks.some((desk) => desk.teacherAssignmentSource === 'deleted')).toBe(false)
+      expect(merged.desks.filter((desk) => desk.teacher === '永山講師')).toHaveLength(1)
+      // 講習 ID つき（QR 登録机の削除）は別の講師でも塞ぐ（自己修復の二重化防止・2026-09-14）
+      const qrDeleted = createCell({ desks: [{ ...tombstoneDesk(), teacherAssignmentSessionId: 'sess1' }, createDesk({ id: 'b-1' })] })
+      const [mergedQr] = overlayBoardWeeksOnScheduleCells([managed], [[qrDeleted]])
+      expect(mergedQr.desks[0]).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted', teacherAssignmentSessionId: 'sess1' })
+      expect(mergedQr.desks[0].teacher).toBe('')
+    })
+
     it('×詰め直し(repack): 削除tombstoneは詰め直しで消えない', () => {
       const out = repackTeacherOnlyDesks([tombstoneDesk(), createDesk({ id: 'b-1', teacher: '永山講師' })])
       expect(out.some((desk) => desk.teacherAssignmentSource === 'deleted' && desk.teacherAssignmentTeacherId === '落合講師')).toBe(true)
@@ -1766,14 +1784,29 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       expect(saved.summary.qrTeacherKept).toBe(1)
     })
 
-    it('講師の削除記録の机 → 印あり。テンプレ机に講師がいても講師欄は削除のまま（例外 2）・再マージでも戻らない', () => {
-      const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't1', lesson: undefined })
-      const teacherOnly = saveAndRemerge(board(tombstone), ROWS_TEACHER_ONLY, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+    // 例外 2 の改定（オーナー決定 2026-10-14）: 削除記録が塞ぐのは削除した講師と同じ講師だけ。
+    it('講師の削除記録の机 → 印あり。テンプレ机に**同じ講師**がいても講師欄は削除のまま（例外 2）・再マージでも戻らない', () => {
+      // 机0 で t3（ROWS_TEACHER_ONLY の机0）／t2（ROWS_WITH_C の机0）を削除した記録
+      const tombstoneOf = (deleted: string) => (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: deleted, lesson: undefined })
+      const teacherOnly = saveAndRemerge(board(tombstoneOf('t3')), ROWS_TEACHER_ONLY, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
       expect(teacherOnly.desk0).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
-      const withStudent = saveAndRemerge(board(tombstone), ROWS_WITH_C, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      const withStudent = saveAndRemerge(board(tombstoneOf('t2')), ROWS_WITH_C, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
       expect(withStudent.desk0).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
       expect(liveIds(withStudent.desk0.lesson)).toEqual(['sC'])
       expect(withStudent.saved.summary.deletedTeacherDeskFilled).toBe(1)
+    })
+
+    it("講師の削除記録の机にテンプレが**別の講師**を置く → その講師が同じ机に置かれ（削除記録は上書き・非 manual）、再マージでも同じ机のまま（例外 2 の改定・2026-10-14）", () => {
+      // 机0 で t1 を削除した記録。ROWS_TEACHER_ONLY の机0 は t3、ROWS_WITH_C の机0 は t2 ＝ どちらも別の講師
+      const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't1', lesson: undefined })
+      const teacherOnly = saveAndRemerge(board(tombstone), ROWS_TEACHER_ONLY, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(teacherOnly.desk0).toMatchObject({ teacher: '佐藤', manualTeacher: false, teacherAssignmentSource: undefined })
+      expect(teacherOnly.saved.summary.deletedTeacherDeskReassigned).toBe(1)
+      const withStudent = saveAndRemerge(board(tombstone), ROWS_WITH_C, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(withStudent.desk0).toMatchObject({ teacher: '鈴木', manualTeacher: false, teacherAssignmentSource: undefined })
+      expect(liveIds(withStudent.desk0.lesson)).toEqual(['sC'])
+      expect(withStudent.saved.summary.deletedTeacherDeskFilled).toBe(0)
+      expect(withStudent.saved.summary.deletedTeacherDeskReassigned).toBe(1)
     })
 
     it('削除記録だけの空き机で、テンプレ机も空 → 削除記録を外す（従来どおり・Q21-3 の 5 行目）', () => {

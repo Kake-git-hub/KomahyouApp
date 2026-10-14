@@ -941,25 +941,44 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(pagesOf('三好')).toEqual([])
   })
 
-  it('(e) 講師の削除記録の机にテンプレの生徒 → 講師欄は空のまま（再マージ 2 回でも T は戻らない）。井上はどの講師のページにも出ない（T・旧担当に漏れない）', () => {
+  // 例外 2 の改定（オーナー決定 2026-10-14「削除記録は削除した講師だけに有効に。別講師はそこに割り振ることがある」）:
+  //   同じ講師（削除した本人）がテンプレに居る → 従来どおり戻らない／別の講師 → その机に置かれ、生徒はその講師のページに出る。
+  it('(e) 講師の削除記録（落合を削除）の机にテンプレが**同じ講師**落合と生徒 → 講師欄は空のまま（再マージ 2 回でも戻らない）。井上はどの講師のページにも出ない', () => {
     const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合', lesson: undefined, memoSlots: ['欠勤', null] } : desk)))
-    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const newRows = [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_yamamoto', 'student-aoki', '数')]
     const { boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
     expect(boardDesk(0)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
     expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual([''])
     expect(pagesOf('井上')).toEqual([])
+    expect(pagesOf('青木')).toEqual(['山本'])
+  })
+
+  it("(e') 講師の削除記録（落合を削除）の机にテンプレが**別の講師**山本と生徒 → 山本がその机に置かれ（削除記録は上書き・非 manual）、井上は山本のページにだけ出る", () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合', lesson: undefined, memoSlots: ['欠勤', null] } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '山本', manualTeacher: false, teacherAssignmentSource: undefined })
+    expect(saved.summary.deletedTeacherDeskReassigned).toBe(1)
+    expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual(['山本'])
+    expect(pagesOf('井上')).toEqual(['山本'])
     expect(pagesOf('青木')).toEqual(['落合'])
   })
 
-  it('(f) 削除記録だけの机: テンプレ机に講師だけ → 削除記録のまま講師なし（T はその机に戻らない）／テンプレ机が空 → 削除記録が外れて空机', () => {
-    const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '山本', lesson: undefined })
-    // 机1（旧: 山本＋青木）を削除記録に（青木は抑止されない前提を避けるため青木をテンプレから外す）。新テンプレ: 机1=加藤(講師だけ)
-    const teacherOnly = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_kato')])
-    expect(teacherOnly.boardDesk(1)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
-    expect(teacherOnly.fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(0)
-    expect(teacherOnly.pagesOf('井上')).toEqual(['落合'])
+  it('(f) 削除記録だけの机: テンプレ机に**同じ講師**だけ → 削除記録のまま講師なし／**別の講師**だけ → その机に置く／テンプレ机が空 → 削除記録が外れて空机', () => {
+    const tombstone = (deleted: string) => (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: deleted, lesson: undefined })
+    // 机1（旧: 山本＋青木）で加藤を削除した記録に（青木は抑止されない前提を避けるため青木をテンプレから外す）。新テンプレ: 机1=加藤(講師だけ)＝同じ講師
+    const sameTeacher = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone('加藤')(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_kato')])
+    expect(sameTeacher.boardDesk(1)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+    expect(sameTeacher.fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(0)
+    expect(sameTeacher.pagesOf('井上')).toEqual(['落合'])
+    // 机1 で山本を削除した記録に。新テンプレ: 机1=加藤(講師だけ)＝別の講師 → 加藤がその机に置かれる（再マージ 2 回でも同じ机）
+    const otherTeacher = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone('山本')(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_kato')])
+    expect(otherTeacher.boardDesk(1)).toMatchObject({ teacher: '加藤', manualTeacher: false, teacherAssignmentSource: undefined })
+    expect(otherTeacher.fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(1)
+    expect(otherTeacher.saved.summary.deletedTeacherDeskReassigned).toBe(1)
+    expect(otherTeacher.pagesOf('井上')).toEqual(['落合'])
     // 新テンプレに机1 が無い（空）→ 削除記録が外れる
-    const empty = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue')])
+    const empty = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone('山本')(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue')])
     expect(empty.boardDesk(1).teacherAssignmentSource).toBeUndefined()
     expect(empty.boardDesk(1).teacher).toBe('')
     expect(empty.pagesOf('井上')).toEqual(['落合'])

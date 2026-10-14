@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+- feat: **講師の削除記録が塞ぐのは「削除した講師」だけにした**(オーナー指示 2026-10-14「削除した講師以外も塞いでいるなら塞がないようにして。別講師はそこに割り振ることがある」・spec-template-behavior Q21-9 例外 2 の改定・INV-02 台帳に記録)。盤面で講師を削除した記録(teacher='' ∧ source='deleted')は、これまで机単位で**どの講師も**塞いでいた(報告の盤面では 103 机・うち 94 机は削除した講師と今のテンプレの講師が別人)。改定後は削除した講師(表示名または講師 ID)と同じ講師だけを塞ぎ、テンプレ机の講師が別人ならその講師をその机に置く(削除記録は上書き・非 manual のテンプレ足場扱い。保存後のメッセージに「講師を削除した机に別の講師をテンプレから置いた机: ○机」)。差分反映(`resolveTemplateDeskTeacher`)と再マージ(`mergeManagedWeek`・読み込み時にも効く)の両方を権威関数 `doesDeletedTeacherTombstoneBlock` 1 か所で判定し、表示名↔講師 ID の対応は `buildTeacherAliasResolver`(teachers)で吸収。安全側で従来どおり誰でも塞ぐ: テンプレ机に講師なし／誰を消したか分からない旧データ(ID なし)／**講習 ID つきの削除記録(QR 登録机の削除)**＝上書きすると起動時の自己修復が消した QR 講師を別の空き机へ置き直す(2026-09-14 の再発)ため。テスト: `templateDiffApply.test.ts`(判定 3 件・条件 6(e') 2 件・不動点)、`inv01-teacher-attribution.matrix.test.ts`((e)(e')(f) 同じ講師は戻らない／別の講師は同じ机に置かれ生徒はその講師のページ)、`inv02-manual-edit-persistence.matrix.test.ts`(保存→再マージ・overlay の別講師・講習 ID つきは塞ぐ)。確認リスト tp-42 (templateDiffApply.ts / ScheduleBoardScreen.tsx / docs/spec-template-behavior.md / docs/spec-invariants.md)
+- fix(INV-12): **テンプレで同じ生徒を同じコマに置けないようにする検査を全経路・全教室に**(オーナー指示 2026-10-14「今後のテンプレ操作時に、そもそも同じ生徒を同じコマに配置できないようにして」)。保存前の全コマ検査を開発用教室限定から全教室へ(本番の日大前校は金 3限の重複を片方外すまで保存が止まる＝文言でコマと生徒を示す・案内は進行中テーマ台帳)。Excel 取り込みにも同じ検査(重複があれば「Excel を取り込めません。…」で取り込まない)。追加・変更・移動の検査は v1.5.596 のまま。テスト: `templatePendingDesks.wiring.test.ts`(ゲート無し・取り込みの配線)。確認リスト tp-43 (ScheduleBoardScreen.tsx / developmentStatusLedger.ts)
+- docs: 確認リスト第50版(tp-42・tp-43 を追加。版は v1.5.596 据え置き) (verificationChecklist.ts / verificationChecklist.test.ts)
+
 ## v1.5.596 (2026-10-14)
 
 - fix: **保留(緑)の机の D&D で、掴んでいる方の席だけ白抜きにした**(受付 20261014-062117803-c223100f の tp-38 メモ「保留生徒の D&D 中、両者が白抜きになりどちらを D&D しているかわかりにくい」)。上段を掴んだときの青地・白文字(`.sa-student-picked`)の文字ルールを上段 `.sa-student-inner` の中だけに限定(下段 `.sa-pending-lower` は上段と同じ文字クラスを使うため td 全体のルールだと下段も白くなっていた)。下段を掴んだときは `BoardGrid` の新 prop `highlightedPendingLower`(画面側の `templatePendingLowerMove` をそのまま渡す)でその下段だけ `.sa-pending-lower-picked`。テスト: `templatePendingBoard.wiring.test.ts`(下段だけ picked・上段 picked で下段に付かない・CSS の限定を source-scan)。確認リスト tp-39 (BoardGrid.tsx / ScheduleBoardScreen.tsx / App.css)

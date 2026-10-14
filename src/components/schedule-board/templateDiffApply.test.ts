@@ -45,6 +45,8 @@ import {
   shouldSeatSurviveRemerge,
   stripSameDayMoveCopies,
   stripTemplateScaffoldTeacherDesk,
+  buildTeacherAliasResolver,
+  doesDeletedTeacherTombstoneBlock,
 } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
@@ -339,9 +341,43 @@ describe('resolveTemplateDeskTeacher（Q21-9・条件 6）', () => {
     expect(resolveTemplateDeskTeacher(template, qr)).toEqual({ teacherFields: qr, reason: 'kept-qr' })
   })
 
-  it('(e) 講師の削除記録（講習 ID つきを含む）→ テンプレ机に講師がいても講師欄は空のまま・記録も残る', () => {
+  it('(e) 講師の削除記録（講習 ID つき）→ テンプレ机に別の講師がいても講師欄は空のまま・記録も残る（QR 登録机の削除は誰でも塞ぐ）', () => {
     const tombstone = { teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted' as const, teacherAssignmentSessionId: 'session-1', teacherAssignmentTeacherId: 't1' }
     expect(resolveTemplateDeskTeacher(template, tombstone)).toEqual({ teacherFields: tombstone, reason: 'kept-deleted' })
+  })
+
+  // オーナー決定 2026-10-14「削除した講師だけに有効にして。別講師はそこに割り振ることがある」。
+  describe("(e') 例外 2 の改定: 削除記録が塞ぐのは削除した講師と同じ講師だけ（doesDeletedTeacherTombstoneBlock）", () => {
+    const deletedByName = { teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted' as const, teacherAssignmentTeacherId: '田中' }
+    const deletedById = { ...deletedByName, teacherAssignmentTeacherId: 't1' }
+    const aliases = buildTeacherAliasResolver([{ id: 't1', name: '田中 太郎', displayName: '田中' }, { id: 't2', name: '鈴木 次郎', displayName: '鈴木' }])
+
+    it('別の講師（テンプレ=鈴木・削除=田中）→ 鈴木を置く（reason=template-over-deleted・非 manual のテンプレ足場）', () => {
+      expect(doesDeletedTeacherTombstoneBlock(deletedByName, template)).toBe(false)
+      expect(resolveTemplateDeskTeacher(template, deletedByName)).toEqual({
+        teacherFields: { teacher: '鈴木', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentSessionId: undefined, teacherAssignmentTeacherId: 't2' },
+        reason: 'template-over-deleted',
+      })
+    })
+
+    it('同じ講師（表示名で一致／講師 ID で一致／呼び名の対応表で一致）→ 塞ぐ（kept-deleted）', () => {
+      const tanaka = { teacher: '田中', teacherAssignmentTeacherId: 't1' }
+      expect(doesDeletedTeacherTombstoneBlock(deletedByName, tanaka)).toBe(true)
+      expect(doesDeletedTeacherTombstoneBlock(deletedById, tanaka)).toBe(true)
+      // テンプレ机に ID が無く削除記録が ID のときは、対応表が無いと別人に見える。対応表があれば同じ講師。
+      expect(doesDeletedTeacherTombstoneBlock(deletedById, { teacher: '田中' })).toBe(false)
+      expect(doesDeletedTeacherTombstoneBlock(deletedById, { teacher: '田中' }, aliases)).toBe(true)
+      expect(doesDeletedTeacherTombstoneBlock(deletedById, { teacher: '鈴木' }, aliases)).toBe(false)
+      expect(resolveTemplateDeskTeacher({ teacher: '田中' }, deletedById, aliases)).toEqual({ teacherFields: { ...deletedById, teacherAssignmentSessionId: undefined }, reason: 'kept-deleted' })
+    })
+
+    it('安全側: テンプレ机に講師なし／誰を消したか分からない（ID なし）／講習 ID つき → 塞ぐ', () => {
+      expect(doesDeletedTeacherTombstoneBlock(deletedByName, { teacher: '' })).toBe(true)
+      expect(doesDeletedTeacherTombstoneBlock({ ...deletedByName, teacherAssignmentTeacherId: undefined }, template)).toBe(true)
+      expect(doesDeletedTeacherTombstoneBlock({ ...deletedByName, teacherAssignmentSessionId: 'session-1' }, template)).toBe(true)
+      // 削除記録でない机は塞がない
+      expect(doesDeletedTeacherTombstoneBlock({ teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' }, template)).toBe(false)
+    })
   })
 })
 
@@ -597,12 +633,12 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(result.summary.pending).toBe(1)
   })
 
-  it('条件 6(e)(f)：削除記録の机は講師が戻らない。削除記録だけ＋テンプレ空＝消す／テンプレ講師だけ＝講師なしのまま 1 行', () => {
+  it('条件 6(e)(f)：削除記録の机は**同じ講師**なら戻らない。削除記録だけ＋テンプレ空＝消す／テンプレに同じ講師だけ＝講師なしのまま 1 行', () => {
     let week = buildWeek(OLD_ROWS)
-    const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't3', lesson: undefined })
-    week = mutateDesk(week, 1, tombstone)
-    week = mutateDesk(week, 2, tombstone)
-    // 新テンプレ: 机0=田中(A), 机1=鈴木(講師だけ), 机2=空
+    // 机1 で鈴木(t2)を削除、机2 で佐藤(t3)を削除（削除記録は講師 ID・表示名のどちらでも同じ講師と分かる）
+    week = mutateDesk(week, 1, (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't2', lesson: undefined }))
+    week = mutateDesk(week, 2, (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '佐藤', lesson: undefined }))
+    // 新テンプレ: 机0=田中(A), 机1=鈴木(講師だけ・削除した本人), 机2=空
     const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2')]
     const result = applyDiff({ week, newRows })
     const desk1 = deskOf(result.nextWeeks, 1)
@@ -612,11 +648,43 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(desk2.teacherAssignmentSource).toBeUndefined()
     expect(desk2.manualTeacher).toBe(false)
     expect(result.summary.tombstoneCleared).toBe(1)
+    expect(result.summary.deletedTeacherDeskReassigned).toBe(0)
     // 再マージを 2 回通しても鈴木は戻らない
     const once = remerge(result.nextWeeks, newRows, [])
     const twice = remerge(once, newRows, [])
     expect(deskOf(twice, 1).teacher).toBe('')
     expect(cellOf(twice).desks.some((desk) => desk.teacher === '鈴木')).toBe(false)
+  })
+
+  it("条件 6(e')：削除記録の机にテンプレが**別の講師**を置く → その講師を置く（削除記録は上書き・非 manual）。再マージを 2 回通しても同じ机に居る（オーナー決定 2026-10-14）", () => {
+    let week = buildWeek(OLD_ROWS)
+    // 机1 で鈴木(t2)を削除。新テンプレは机1 に佐藤(t3)を講師だけで置く
+    week = mutateDesk(week, 1, (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '鈴木', lesson: undefined }))
+    const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't3')]
+    const result = applyDiff({ week, newRows })
+    const desk1 = deskOf(result.nextWeeks, 1)
+    expect(desk1).toMatchObject({ teacher: '佐藤', manualTeacher: false, teacherAssignmentSource: undefined })
+    expect(result.summary.deletedTeacherDeskReassigned).toBe(1)
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('講師を削除した机に別の講師をテンプレから置いた机: 1机')
+    const once = remerge(result.nextWeeks, newRows, [])
+    const twice = remerge(once, newRows, [])
+    expect(deskOf(twice, 1).teacher).toBe('佐藤')
+    expect(cellOf(twice).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+    expect(cellOf(twice).desks.some((desk) => desk.teacherAssignmentSource === 'deleted')).toBe(false)
+    // 保存 → 再マージの不動点（セル丸ごと）
+    expect(JSON.stringify(cellOf(twice))).toBe(JSON.stringify(cellOf(once)))
+  })
+
+  it("条件 6(e')：削除記録の机にテンプレが別の講師と生徒を置く → 講師も生徒も載る（講師なしの 1 行にしない）", () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 1, (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '鈴木', lesson: undefined }))
+    const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't3', 'sC', '数')]
+    const result = applyDiff({ week, newRows })
+    const desk1 = deskOf(result.nextWeeks, 1)
+    expect(desk1.teacher).toBe('佐藤')
+    expect(liveNames(desk1)).toEqual(['sC'])
+    expect(result.summary.deletedTeacherDeskFilled).toBe(0)
+    expect(result.summary.deletedTeacherDeskReassigned).toBe(1)
   })
 
   it('条件 6(e)：削除記録の机にテンプレの生徒 → 講師なしの 1 行にテンプレの生徒が載り、件数に出る', () => {
@@ -779,7 +847,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   })
 
   it('条件 25：確認文は 4 件数を出し、「すべてのデータが消去され」を出さない', () => {
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 })
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 })
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')

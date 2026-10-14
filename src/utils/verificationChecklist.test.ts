@@ -72,7 +72,7 @@ describe('確認リストの項目定義', () => {
 
   it('第49版(v1.5.596): 第42〜48版で OK だった項目を外し、受付 20261014-062117803-c223100f の要望・質問の対応を確認項目にした', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-39', 'tp-41', 'tp-40', 'c-5', 'c-6'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-39', 'tp-41', 'tp-40', 'c-5', 'c-6', 'tp-42', 'tp-43'])
     // 第49版の結果(2026-10-14・受付 20261014-062117803-c223100f)で OK → 外す。
     for (const okId of ['tp-32', 'tp-33', 'tp-36', 'tp-37', 'tp-38', 'pm-1', 'c-4']) expect(ids, okId).not.toContain(okId)
     // 第41版の結果(2026-10-10・受付 20261010-144912762-45a17afb)で OK → 外す(タブ名 mc-1・請求画面 bl-1〜bl-4・テンプレ保留 tp-31/tp-34/tp-35・講習の重複 tp-30)。
@@ -92,6 +92,7 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
     // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ。第44〜48版は項目を足しただけで据え置き。
     // 第49版(2026-10-14): OK 済み 7 件を外したので次にデプロイされる版 v1.5.596 へ上げる。
+    // 第50版(2026-10-14): tp-42(削除記録は同じ講師だけ)・tp-43(Excel 取り込みの重複検査)を足しただけなので版は据え置き(v1.5.596)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.596')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
@@ -122,6 +123,12 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('c-6')!.steps.join(' / ')).toContain('Ctrl+V')
     expect(byId.get('c-6')!.check!.join(' / ')).toContain('3 枚まで')
     expect(byId.get('c-6')!.prep).toContain('Cloud Functions のデプロイが緑になってから')
+    // 第50版(2026-10-14): オーナー指示 2 件(削除記録は削除した講師だけ／テンプレで同じ生徒を同じコマに置けない＝Excel 取り込みも)。
+    for (const id of ['tp-42', 'tp-43']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.597')
+    expect(byId.get('tp-42')!.prep).toContain('tp-41 を済ませてから')
+    expect(byId.get('tp-42')!.check!.join(' / ')).toContain('削除した講師とは別人なので置かれる')
+    expect(byId.get('tp-42')!.check!.join(' / ')).toContain('同じなので戻らない')
+    expect(byId.get('tp-43')!.check!.join(' / ')).toContain('Excel を取り込めません')
     // 生徒名はソースに載せない(スナップショットの実名は「姓 + 全角スペース + 名」の形)。第43版(2026-10-10 オーナー指示「開発用教室は名前を見ていい」):
     // 代わりに {{student:<生徒ID>}} を書き、画面が開いている教室の生徒データから名前を差し込む。
     for (const item of VERIFICATION_CHECKLIST.items) {

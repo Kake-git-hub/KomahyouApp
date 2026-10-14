@@ -223,7 +223,48 @@ export function isTemplateDeskStudentContentEqual(templateDesk: Pick<DeskCell, '
 
 export type TemplateDeskTeacherFields = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>
 
-export type TemplateDeskTeacherReason = 'template' | 'kept-user' | 'kept-qr' | 'kept-deleted' | 'cleared'
+export type TemplateDeskTeacherReason = 'template' | 'template-over-deleted' | 'kept-user' | 'kept-qr' | 'kept-deleted' | 'cleared'
+
+/**
+ * 講師の削除記録（tombstone）が「この講師」を塞ぐか（Q21-9 例外 2・**オーナー決定 2026-10-14**「削除した講師だけに有効にして。
+ * 別講師はそこに割り振ることがある」）。
+ *  - 塞ぐ＝削除した講師（`teacherAssignmentTeacherId`。表示名か講師 ID。作る経路で違う）と同じ講師。
+ *  - 置く講師が居ない／誰を消したか分からない旧データ（ID なし）→ 従来どおり塞ぐ（安全側・記録を残す）。
+ *  - **講習 ID つき（QR 登録机の削除）は従来どおり誰でも塞ぐ**：記録を別の講師で上書きすると、起動時の自己修復
+ *    （reconcileSubmittedTeacherPlacements）が「室長が外した」印を失い、消した QR 講師を別の空き机へ置き直す（2026-09-14 の再発）。
+ * 差分反映（resolveTemplateDeskTeacher）と再マージ（mergeManagedWeek）の両方がこの 1 関数で判定する（権威関数）。
+ */
+export function doesDeletedTeacherTombstoneBlock(
+  tombstone: TemplateDeskTeacherFields,
+  teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): boolean {
+  if (!isTemplateDiffTeacherTombstone(tombstone)) return false
+  const target = teacher?.teacher?.trim() ?? ''
+  if (!target) return true
+  if (tombstone.teacherAssignmentSessionId) return true
+  const deleted = tombstone.teacherAssignmentTeacherId?.trim() ?? ''
+  if (!deleted) return true
+  const targetId = teacher?.teacherAssignmentTeacherId?.trim() ?? ''
+  // 削除記録は表示名か講師 ID、テンプレ机は表示名（＋ID が無いことがある）なので、同じ講師の呼び名をすべて並べて重なりを見る。
+  const deletedKeys = new Set(resolveAliases(deleted))
+  const targetKeys = [...resolveAliases(target), ...(targetId ? resolveAliases(targetId) : [])]
+  return targetKeys.some((key) => deletedKeys.has(key))
+}
+
+/** 講師の呼び名（講師 ID・登録名・表示名）を同じ講師としてまとめる。無ければそのキーだけ。 */
+export type TeacherAliasResolver = (key: string) => readonly string[]
+const defaultTeacherAliases: TeacherAliasResolver = (key) => [key]
+
+export function buildTeacherAliasResolver(teachers: ReadonlyArray<{ id: string; name: string; displayName?: string }>): TeacherAliasResolver {
+  const byKey = new Map<string, string[]>()
+  for (const teacher of teachers) {
+    const keys = [teacher.id, teacher.name, teacher.displayName ?? ''].map((key) => key.trim()).filter(Boolean)
+    const unique = [...new Set(keys)]
+    for (const key of unique) byKey.set(key, unique)
+  }
+  return (key) => byKey.get(key.trim()) ?? [key]
+}
 
 function pickTeacherFields(desk: TemplateDeskTeacherFields): TemplateDeskTeacherFields {
   return {
@@ -245,17 +286,23 @@ function isUserPlacedTeacher(desk: TemplateDeskTeacherFields) {
 
 /**
  * 机の講師を決める（Q21-9・オーナー確定 2026-09-29）。講師は突き合わせに使わない。
- *  - 例外 2：講師の削除記録（tombstone）の机 → 講師欄は削除のまま（テンプレの講師で埋めない・記録も保持）。
+ *  - 例外 2：講師の削除記録（tombstone）の机 → **削除した講師と同じ講師なら**講師欄は削除のまま（記録も保持）。
+ *    テンプレ机の講師が削除した講師と**別人**なら、その講師を置く（オーナー決定 2026-10-14・doesDeletedTeacherTombstoneBlock）。
  *  - 例外 1：QR 提出の自動割振り講師（schedule-registration＋講習期間 ID）→ そのまま残す（由来・講習期間 ID も保持）。
  *    置き換えると起動時の自己修復（reconcileSubmittedTeacherPlacements）が別の空き机へ置き直して二重化する。
  *  - テンプレ机に講師がいる → その講師（手置きの印〔manualTeacher・由来・講習期間 ID〕は外れ、テンプレ足場の講師として扱う）。
  *  - テンプレ机に講師がいない → ユーザーが置いた講師は残す／テンプレ足場の講師（非 manual）は外す（INV-02 の既存裁定）。
  */
-export function resolveTemplateDeskTeacher(templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined, existingDesk: TemplateDeskTeacherFields): {
+export function resolveTemplateDeskTeacher(
+  templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined,
+  existingDesk: TemplateDeskTeacherFields,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): {
   teacherFields: TemplateDeskTeacherFields
   reason: TemplateDeskTeacherReason
 } {
-  if (isTemplateDiffTeacherTombstone(existingDesk)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-deleted' }
+  const tombstone = isTemplateDiffTeacherTombstone(existingDesk)
+  if (tombstone && doesDeletedTeacherTombstoneBlock(existingDesk, templateDesk, resolveAliases)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-deleted' }
   if (isTemplateDiffQrTeacher(existingDesk)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-qr' }
   const templateTeacher = templateDesk?.teacher?.trim() ? templateDesk.teacher : ''
   if (templateTeacher) {
@@ -267,7 +314,7 @@ export function resolveTemplateDeskTeacher(templateDesk: Pick<DeskCell, 'teacher
         teacherAssignmentSessionId: undefined,
         teacherAssignmentTeacherId: templateDesk?.teacherAssignmentTeacherId,
       },
-      reason: 'template',
+      reason: tombstone ? 'template-over-deleted' : 'template',
     }
   }
   if (isUserPlacedTeacher(existingDesk)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-user' }
@@ -769,8 +816,10 @@ export type TemplateDiffApplySummary = {
   collapsedOnCreate: number
   /** テンプレ机に講師がいたが QR 自動割振りの講師を残した机（Q21-9 例外 1）。 */
   qrTeacherKept: number
-  /** 講師を削除した机にテンプレの生徒を置いた机（Q21-9 例外 2）。 */
+  /** 講師を削除した机にテンプレの生徒を置いた机（Q21-9 例外 2・削除した講師と同じ講師がテンプレに居て講師欄が空のままの机）。 */
   deletedTeacherDeskFilled: number
+  /** 講師を削除した机に、削除した講師とは別のテンプレの講師を置いた机（Q21-9 例外 2 の改定・オーナー決定 2026-10-14）。 */
+  deletedTeacherDeskReassigned: number
   /** 同じコマの別の 1 行の机に生きているため上段に置かなかった生徒（Q21-11）。 */
   skippedDuplicateStudents: number
   /**
@@ -800,7 +849,7 @@ export type TemplateDiffApplySummary = {
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -818,6 +867,8 @@ export type ComputeTemplateDiffApplyParams = {
    * どこにも残らなかった写し（regression-reviewer H-2(b): 移動先のコマで Q21-11 がテンプレの生徒を置かない等）を守って再計算するために渡す。
    */
   protectedSameDayMoveCopies?: ReadonlySet<string>
+  /** 講師の呼び名（ID・登録名・表示名）を同じ講師にまとめる（削除記録と同じ講師かの判定・2026-10-14）。無ければ文字列一致だけ。 */
+  teacherAliases?: TeacherAliasResolver
 }
 
 export type ComputeTemplateDiffApplyResult = {
@@ -1056,6 +1107,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
       const templateCell = templateById.get(cell.id) ?? templateByDateSlot.get(buildDateSlotKey(cell))
       if (!templateCell) return cell
       return applyTemplateDiffToCell({
+        teacherAliases: params.teacherAliases,
         cell,
         templateCell,
         suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
@@ -1120,6 +1172,7 @@ function applyTemplateDiffToCell(context: {
   templateRawOnDate: ReadonlySet<string> | undefined
   /** Q36 H-1: その日に会計を持つ出欠記録（休み・振無休・出席）がある生徒×科目（写しとしない）。 */
   accountingOnDate: ReadonlySet<string> | undefined
+  teacherAliases: TeacherAliasResolver | undefined
   /** Q36 H-2(b): 外さない写し（`buildSameDayMoveCopyProtectionKey`）。 */
   protectedSameDayMoveCopies: ReadonlySet<string> | undefined
 }): SlotCell {
@@ -1313,8 +1366,9 @@ function applyTemplateDiffToCell(context: {
       )
     const teacher = keepsWholeDayTeacher
       ? { teacherFields: pickTeacherFields(desk), reason: 'kept-user' as const }
-      : resolveTemplateDeskTeacher(templateDesk, desk)
+      : resolveTemplateDeskTeacher(templateDesk, desk, context.teacherAliases)
     if (teacher.reason === 'kept-qr' && templateDesk.teacher.trim()) summary.qrTeacherKept += 1
+    if (teacher.reason === 'template-over-deleted') summary.deletedTeacherDeskReassigned += 1
     const withTeacher = applyTeacherFields(desk, teacher.teacherFields)
     const upperLesson = templateLessonOf(templateDesk)
 
@@ -1568,6 +1622,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.collapsedOnCreate > 0) parts.push(`${summary.collapsedOnCreate}机は既存のメモ・記録を残してテンプレの生徒を置きました。`)
   if (summary.qrTeacherKept > 0) parts.push(`QR 自動割振りの講師を残した机: ${summary.qrTeacherKept}机。`)
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
+  if (summary.deletedTeacherDeskReassigned > 0) parts.push(`講師を削除した机に別の講師をテンプレから置いた机: ${summary.deletedTeacherDeskReassigned}机。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
   if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`)
   if (summary.sameDayMoveCopiesReverted > 0) parts.push(`同じ日の中で手で動かしていた通常授業をテンプレの位置に合わせた生徒: ${summary.sameDayMoveCopiesReverted}名。`)

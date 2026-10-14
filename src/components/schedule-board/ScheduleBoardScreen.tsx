@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -2632,6 +2632,8 @@ function runTemplateDiffApplyWithCopyReverts(params: {
     pendingDesks,
     createdAt: params.createdAt,
     protectedSameDayMoveCopies: protectedCopies,
+    // 削除記録(表示名か講師 ID)とテンプレ机の講師(表示名)を同じ講師として突き合わせる(Q21-9 例外 2 の改定・2026-10-14)。
+    teacherAliases: buildTeacherAliasResolver(params.teachers),
   })
   let diff = compute()
   const iterationLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
@@ -4565,6 +4567,12 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       }
     })
 
+    // 削除記録(表示名か講師 ID)と突き合わせる管理机の講師。抑止・strip 後の管理机は講師 ID を持たないことがあるので、
+    // 素の管理セル(originalManagedCell・buildManagedRegularLessonsRange が row.teacherId を入れる)から ID を補う(2026-10-14)。
+    const managedTeacherRef = (managedDesk: DeskCell, idx: number) => ({
+      teacher: managedDesk.teacher,
+      teacherAssignmentTeacherId: managedDesk.teacherAssignmentTeacherId ?? originalManagedCell.desks[idx]?.teacherAssignmentTeacherId,
+    })
     // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted, manual-replaced)
     // or desks where a lesson now exists (e.g. student was moved there)
     const consumedManagedTeacherIndexes = new Set<number>()
@@ -4580,7 +4588,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         return
       }
       // If the teacher was explicitly managed (deleted or replaced), mark consumed
-      if (boardDesk.manualTeacher && (boardDesk.teacherAssignmentSource === 'manual-replaced' || boardDesk.teacherAssignmentSource === 'deleted')) {
+      // 削除記録(deleted)が塞ぐのは**削除した講師と同じ講師**だけ(オーナー決定 2026-10-14・doesDeletedTeacherTombstoneBlock＝差分反映と同じ権威関数)。
+      // テンプレのこの机の講師が別人なら消費せず、下の配置で同じ机に置く。
+      if (boardDesk.manualTeacher && (boardDesk.teacherAssignmentSource === 'manual-replaced' || (boardDesk.teacherAssignmentSource === 'deleted' && doesDeletedTeacherTombstoneBlock(boardDesk, managedTeacherRef(managedDesk, idx))))) {
         consumedManagedTeacherIndexes.add(idx)
       }
     })
@@ -4606,8 +4616,13 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         // Skip if this teacher was explicitly deleted from any desk in the cell
         if (deletedTeacherNameSet.has(managedDesk.teacher)) continue
 
+        // 削除した講師とは別の講師がテンプレで同じ机に居るなら、その机(削除記録)に置く(記録は上書き・2026-10-14)。
         // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
-        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
+        const sameIndexDesk = nextDesks[mi]
+        const reassignDeletedDesk = sameIndexDesk && isTemplateDiffTeacherTombstone(sameIndexDesk) && !sameIndexDesk.lesson && !hasRecordedStatusSlots(sameIndexDesk)
+          && !doesDeletedTeacherTombstoneBlock(sameIndexDesk, managedTeacherRef(managedDesk, mi))
+        const targetDesk = (reassignDeletedDesk ? sameIndexDesk : undefined)
+          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
           ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
 
         if (!targetDesk) continue
@@ -10399,12 +10414,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleTemplateSaveRequest = () => {
     // INV-12(2026-10-14): 同じコマに同じ生徒が 2 か所にあるテンプレは保存しない(過去に追加・変更で作られた重複の救済。
     // 盤面生成が重複行を講師ごと飛ばすため、机の講師がテンプレと食い違う原因になっていた)。
-    // ★保存を止めるのは差分反映の教室(機能フラグ templateDiffApply＝開発用教室)だけ。本番の日大前校のテンプレにも同じ重複があり
-    //   (開発用教室は日大前のデータの写し)、室長の保存を予告なく止めない(全教室への展開はオーナー判断・進行中テーマ台帳)。
-    //   追加・変更で新しい重複を作らない検査(上)は全教室。
-    const duplicates = templateDiffApplyEnabled
-      ? findTemplateDuplicateStudents(templateCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
-      : []
+    // ★全教室で止める(オーナー指示 2026-10-14「今後のテンプレ操作時に、そもそも同じ生徒を同じコマに配置できないようにして」)。
+    //   本番の日大前校のテンプレにも同じ重複(金 3限)があるので、次の保存は文言どおり片方を外すまで止まる(案内は進行中テーマ台帳)。
+    const duplicates = findTemplateDuplicateStudents(templateCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
     if (duplicates.length > 0) {
       setStatusMessage(buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`))
       return
@@ -10542,6 +10554,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
     const filteredImported = filterTemplateParticipantsForReferenceDate({ template: importedTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })
     const importedCells = buildTemplateBoardCells({ template: filteredImported, teachers, students, deskCount: classroomSettings.deskCount })
+    // INV-12(オーナー指示 2026-10-14): Excel に同じコマの同じ生徒が 2 か所あれば取り込まない(どこを直すかを文言で示す)。
+    const duplicates = findTemplateDuplicateStudents(importedCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+    if (duplicates.length > 0) {
+      setStatusMessage(`Excel を取り込めません。${buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`).replace('保存できません', '取り込めません')} Excel を直してから取り込み直してください。`)
+      return
+    }
     pushTemplateUndo(templateCells)
     setTemplateCells(importedCells)
     setTemplateEffectiveStartDate(filteredImported.effectiveStartDate)
