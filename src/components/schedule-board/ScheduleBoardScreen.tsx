@@ -10399,7 +10399,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleTemplateSaveRequest = () => {
     // INV-12(2026-10-14): 同じコマに同じ生徒が 2 か所にあるテンプレは保存しない(過去に追加・変更で作られた重複の救済。
     // 盤面生成が重複行を講師ごと飛ばすため、机の講師がテンプレと食い違う原因になっていた)。
-    const duplicates = findTemplateDuplicateStudents(templateCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+    // ★保存を止めるのは差分反映の教室(機能フラグ templateDiffApply＝開発用教室)だけ。本番の日大前校のテンプレにも同じ重複があり
+    //   (開発用教室は日大前のデータの写し)、室長の保存を予告なく止めない(全教室への展開はオーナー判断・進行中テーマ台帳)。
+    //   追加・変更で新しい重複を作らない検査(上)は全教室。
+    const duplicates = templateDiffApplyEnabled
+      ? findTemplateDuplicateStudents(templateCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+      : []
     if (duplicates.length > 0) {
       setStatusMessage(buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`))
       return

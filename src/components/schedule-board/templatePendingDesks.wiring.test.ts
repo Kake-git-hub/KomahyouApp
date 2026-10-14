@@ -291,6 +291,8 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
     expect(request).toContain('findTemplateDuplicateStudents(templateCells,')
     expect(request.indexOf('findTemplateDuplicateStudents(')).toBeLessThan(request.indexOf('convertTemplateCellsToTemplate({'))
+    // 保存を止めるのは差分反映の教室(開発用教室)だけ。本番教室(日大前校に同じ重複あり)の保存は予告なく止めない(全教室展開はオーナー判断)。
+    expect(request).toContain('const duplicates = templateDiffApplyEnabled\n      ? findTemplateDuplicateStudents(templateCells,')
     expect(request).toContain('buildTemplateDuplicateStudentsMessage(duplicates,')
   })
 

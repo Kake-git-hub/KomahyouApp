@@ -60,6 +60,17 @@ export type DevelopmentStatusEntry = {
 export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   // ── 開発用教室だけで動いている先行機能 ──────────────────────────────────────
   {
+    id: 'template-duplicate-save-guard',
+    title: 'テンプレ保存前の同コマ重複検査(INV-12)の全教室展開と、日大前校のテンプレの重複の直し方',
+    stage: 'awaiting-owner',
+    summary: '確認リスト 2026-10-14 の質問「テンプレの講師が追従しない日がある」の調査で、テンプレの金 3限に同じ生徒が机 4 と机 7 に入っていた(テンプレ編集の追加・変更に検査が無かった)。追加・変更の検査は全教室で有効。保存前に全コマを検査して止める方は開発用教室(templateDiffApply)だけ。本番の日大前校のテンプレにも同じ重複があり(開発用教室は日大前の写し)、11/6 以降の金 3限で机 7 の講師が落ちている。',
+    featureKeys: ['templateDiffApply'],
+    checklistItemIds: ['tp-41'],
+    nextAction: 'オーナー: 日大前校へ「金曜 3限の机 7 の生徒を外して(机 4 に残す)テンプレを保存し直す」を案内するか、Claude が読み取りで確認した上で室長に伝えるかを決める。案内後に保存前検査を全教室へ(フラグ無しで)出す。',
+    references: ['docs/spec-invariants.md INV-12(2026-10-14)', 'src/components/schedule-board/templateEditorGuards.ts', '受付 20261014-062117803-c223100f'],
+    updatedOn: '2026-10-14',
+  },
+  {
     id: 'parent-portal-qr',
     title: '保護者向け固定QR(休み連絡専用)',
     stage: 'awaiting-checklist',
