@@ -953,14 +953,26 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(pagesOf('青木')).toEqual(['山本'])
   })
 
-  it("(e') 講師の削除記録（落合を削除）の机にテンプレが**別の講師**山本と生徒 → 山本がその机に置かれ（削除記録は上書き・非 manual）、井上は山本のページにだけ出る", () => {
+  it("(e') 講師の削除記録（落合を削除）の机にテンプレが**別の講師**山本と生徒（落合はこのコマのテンプレに居ない）→ 山本がその机に置かれ（削除記録は外れる・非 manual）、井上は山本のページにだけ出る", () => {
     const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合', lesson: undefined, memoSlots: ['欠勤', null] } : desk)))
-    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_kato', 'student-aoki', '数')]
     const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
     expect(boardDesk(0)).toMatchObject({ teacher: '山本', manualTeacher: false, teacherAssignmentSource: undefined })
     expect(saved.summary.deletedTeacherDeskReassigned).toBe(1)
     expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual(['山本'])
     expect(pagesOf('井上')).toEqual(['山本'])
+    expect(pagesOf('青木')).toEqual(['加藤'])
+  })
+
+  it("(e'') 落合を削除した机にテンプレが別の講師山本と生徒を置くが、落合がテンプレの**別の机**に居る → 記録は残り（講師欄は空のまま・H-1）、机0 に落合は戻らない。井上はどの講師のページにも出ない", () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合', lesson: undefined, memoSlots: ['欠勤', null] } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+    expect(saved.summary.deletedTeacherDeskReassigned).toBe(0)
+    // 落合は机0 には戻らない（削除記録）。机1 は生徒つきのテンプレ机なので従来どおり落合が青木と一緒に置かれる（講師だけの再付与を止める記憶とは別）。
+    expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual([''])
+    expect(pagesOf('井上')).toEqual([])
     expect(pagesOf('青木')).toEqual(['落合'])
   })
 

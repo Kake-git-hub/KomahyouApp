@@ -167,9 +167,16 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
       expect(duplicates).toHaveLength(1)
       expect(duplicates[0].cell.id).toBe('template_5_3')
       expect(duplicates[0].students.map((student) => student.id)).toEqual(['e1', 'e3'])
+      expect(duplicates[0].deskNumbers).toEqual([1, 2])
       const message = buildTemplateDuplicateStudentsMessage(duplicates, (name) => `${name}さん`, (cell) => `金曜 ${cell.slotLabel}`)
-      expect(message).toContain('金曜 3限: Aさん')
+      expect(message).toContain('金曜 3限: Aさん(机 1・机 2)')
       expect(message).toContain('保存できません')
+      // Excel 取り込み用の文言(オーナー指示 2026-10-14: 取り込みでも止める)
+      const importMessage = buildTemplateDuplicateStudentsMessage(duplicates, (name) => `${name}さん`, (cell) => `金曜 ${cell.slotLabel}`, 'import')
+      expect(importMessage).toMatch(/^Excel を取り込めません。/u)
+      expect(importMessage).toContain('金曜 3限: Aさん(机 1・机 2)')
+      expect(importMessage).toContain('Excel で片方の席から外してから取り込み直してください')
+      expect(importMessage).not.toContain('保存できません')
     })
 
     it('保存前の検査: 比較キーが空の生徒は比べない(止めない)', () => {

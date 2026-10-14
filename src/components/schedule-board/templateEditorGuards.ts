@@ -18,6 +18,8 @@ export type TemplateDuplicateStudent = {
   cell: SlotCell
   /** 同じキーで同じコマに生きている生徒(2 人以上・机の順)。 */
   students: StudentEntry[]
+  /** それぞれの生徒が居る机の番号(1 始まり・students と同じ順)。文言で「机 4・机 7」と示す用。 */
+  deskNumbers: number[]
 }
 
 /**
@@ -30,30 +32,37 @@ export function findTemplateDuplicateStudents(
 ): TemplateDuplicateStudent[] {
   const result: TemplateDuplicateStudent[] = []
   for (const cell of cells) {
-    const byKey = new Map<string, StudentEntry[]>()
-    for (const desk of cell.desks) {
+    const byKey = new Map<string, Array<{ student: StudentEntry; deskNumber: number }>>()
+    cell.desks.forEach((desk, deskIndex) => {
       for (const student of desk.lesson?.studentSlots ?? []) {
         if (!student) continue
         const key = resolveComparableKey(student)
         if (!key) continue
         const list = byKey.get(key) ?? []
-        list.push(student)
+        list.push({ student, deskNumber: deskIndex + 1 })
         byKey.set(key, list)
       }
-    }
-    for (const students of byKey.values()) {
-      if (students.length >= 2) result.push({ cell, students })
+    })
+    for (const entries of byKey.values()) {
+      if (entries.length >= 2) result.push({ cell, students: entries.map((entry) => entry.student), deskNumbers: entries.map((entry) => entry.deskNumber) })
     }
   }
   return result
 }
 
-/** 保存を止めるときの文言。「金曜 3限: ○○」の形でコマと生徒を並べる(表示名は呼び出し側が解決)。 */
+/**
+ * 止めるときの文言。「金曜 3限: ○○(机 4・机 7)」の形でコマ・生徒・机を並べる(表示名は呼び出し側が解決)。
+ * action は何を止めたか(保存／Excel の取り込み)。取り込みは「Excel を直して」と添える。
+ */
 export function buildTemplateDuplicateStudentsMessage(
   duplicates: readonly TemplateDuplicateStudent[],
   resolveDisplayName: (name: string) => string,
   resolveCellLabel: (cell: SlotCell) => string,
+  action: 'save' | 'import' = 'save',
 ): string {
-  const parts = duplicates.map((entry) => `${resolveCellLabel(entry.cell)}: ${resolveDisplayName(entry.students[0].name)}`)
+  const parts = duplicates.map((entry) => `${resolveCellLabel(entry.cell)}: ${resolveDisplayName(entry.students[0].name)}(${entry.deskNumbers.map((number) => `机 ${number}`).join('・')})`)
+  if (action === 'import') {
+    return `Excel を取り込めません。同じコマに同じ生徒が 2 か所に入っています(${parts.join(' / ')})。Excel で片方の席から外してから取り込み直してください。`
+  }
   return `同じコマに同じ生徒が 2 か所に入っているため保存できません(${parts.join(' / ')})。どちらかの席から外してください。`
 }

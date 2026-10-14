@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -2502,11 +2502,11 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
   // 管理セルの準備（createBoardWeek → 固定日で分離 → 抑止 → 足場講師 strip）はテンプレ差分反映と共有する（R-5）。
   const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate })
   if (!freezeDate) {
-    return overlayPreparedManagedCells(managedCells, [week])
+    return overlayPreparedManagedCells(managedCells, [week], buildTeacherAliasResolver(params.teachers))
   }
   // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
   const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
-  const postFreezeOverlaid = overlayPreparedManagedCells(managedCells, [postFreezeBoard])
+  const postFreezeOverlaid = overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers))
   return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
     if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
     return a.slotNumber - b.slotNumber
@@ -2693,7 +2693,7 @@ function settleTemplateDiffWeekWithRemerge(week: SlotCell[], params: {
   const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
   if (lastDateKey < params.effectiveStartDate) return week
   const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
-  const settledByDateSlot = new Map(overlayPreparedManagedCells(managedCells, [postFreezeBoard]).map((cell) => [buildCellDateSlotKey(cell), cell]))
+  const settledByDateSlot = new Map(overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers)).map((cell) => [buildCellDateSlotKey(cell), cell]))
   return week.map((cell) => (cell.dateKey < params.effectiveStartDate ? cell : (settledByDateSlot.get(buildCellDateSlotKey(cell)) ?? cell)))
 }
 
@@ -4162,12 +4162,12 @@ function applyManagedCellSuppressions(scheduleCells: SlotCell[], boardWeeks: Slo
   })
 }
 
-export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
-  return overlayPreparedManagedCells(applyManagedCellSuppressions(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys), boardWeeks)
+export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = [], teacherAliases?: TeacherAliasResolver) {
+  return overlayPreparedManagedCells(applyManagedCellSuppressions(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys), boardWeeks, teacherAliases)
 }
 
 // 抑止を当て済みの管理セル（applyManagedCellSuppressions の戻り値）へ盤面を重ねる。抑止の当て方はここに書かない（上の 1 か所だけ）。
-function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell }>, boardWeeks: SlotCell[][]) {
+function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell }>, boardWeeks: SlotCell[][], teacherAliases?: TeacherAliasResolver) {
   const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
   const managedCellIds = new Set(preparedCells.map(({ raw }) => raw.id))
   const managedCellDateSlots = new Set(preparedCells.map(({ raw }) => buildCellDateSlotKey(raw)))
@@ -4180,7 +4180,7 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
     // 理由と規則は carryBoardStatusRecordsOntoClosedDayCell を参照。
     if (!adjustedManagedCell.isOpenDay) return carryBoardStatusRecordsOntoClosedDayCell(adjustedManagedCell, boardCell)
     // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
-    return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell])[0] ?? adjustedManagedCell
+    return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell], teacherAliases)[0] ?? adjustedManagedCell
   })
 
   // ボードにあるが managed cells にないセルも結果に追加する。
@@ -4385,7 +4385,7 @@ export function buildScheduleCellsForRange(params: {
   const todayKey = params.todayKey ?? getJstTodayDateKey()
   const boardWeeks = params.boardWeeks.map((week) => stripWithdrawnStudentsFromBoardWeek(week, params.students, todayKey))
 
-  return overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, params.suppressedRegularLessonOccurrences ?? [])
+  return overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, params.suppressedRegularLessonOccurrences ?? [], buildTeacherAliasResolver(params.teachers))
 }
 
 // 出欠を記録済みの机は「実績が入った机」＝ユーザー操作の結果であり、空き机ではない。
@@ -4398,7 +4398,7 @@ function hasRecordedStatusSlots(desk: Pick<DeskCell, 'statusSlots'>) {
   return desk.statusSlots?.some((entry) => entry != null) ?? false
 }
 
-function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], originalManagedWeek?: SlotCell[]) {
+function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], originalManagedWeek?: SlotCell[], teacherAliases?: TeacherAliasResolver) {
   const managedCellById = new Map(managedWeek.map((cell) => [cell.id, cell]))
   const originalManagedCellById = originalManagedWeek
     ? new Map(originalManagedWeek.map((cell) => [cell.id, cell]))
@@ -4589,18 +4589,38 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       }
       // If the teacher was explicitly managed (deleted or replaced), mark consumed
       // 削除記録(deleted)が塞ぐのは**削除した講師と同じ講師**だけ(オーナー決定 2026-10-14・doesDeletedTeacherTombstoneBlock＝差分反映と同じ権威関数)。
-      // テンプレのこの机の講師が別人なら消費せず、下の配置で同じ机に置く。
-      if (boardDesk.manualTeacher && (boardDesk.teacherAssignmentSource === 'manual-replaced' || (boardDesk.teacherAssignmentSource === 'deleted' && doesDeletedTeacherTombstoneBlock(boardDesk, managedTeacherRef(managedDesk, idx))))) {
+      // テンプレのこの机の講師が別人なら消費しない＝その講師は下の配置で空き机へ置かれる。
+      if (boardDesk.manualTeacher && (boardDesk.teacherAssignmentSource === 'manual-replaced' || (boardDesk.teacherAssignmentSource === 'deleted' && doesDeletedTeacherTombstoneBlock(boardDesk, managedTeacherRef(managedDesk, idx), teacherAliases)))) {
         consumedManagedTeacherIndexes.add(idx)
       }
     })
 
     // Collect teacher names that were explicitly deleted from any desk (regardless of index)
+    // ★削除記録を消す(下)より前に集める＝この再マージでは消した講師を必ず外す。呼び名(表示名/ID)の対応表で比べる(2026-10-14)。
+    const aliasesOf: TeacherAliasResolver = teacherAliases ?? ((key) => [key])
     const deletedTeacherNameSet = new Set<string>()
     nextDesks.forEach((desk) => {
       if (desk.manualTeacher && desk.teacherAssignmentSource === 'deleted' && desk.teacherAssignmentTeacherId) {
-        deletedTeacherNameSet.add(desk.teacherAssignmentTeacherId)
+        for (const key of aliasesOf(desk.teacherAssignmentTeacherId)) deletedTeacherNameSet.add(key)
       }
+    })
+    const isDeletedTeacher = (managedDesk: DeskCell, idx: number) => {
+      const ref = managedTeacherRef(managedDesk, idx)
+      return [...aliasesOf(ref.teacher), ...(ref.teacherAssignmentTeacherId ? aliasesOf(ref.teacherAssignmentTeacherId) : [])].some((key) => deletedTeacherNameSet.has(key))
+    }
+
+    // 削除記録の机を空き机へ戻す(オーナー決定 2026-10-14「削除記録は削除した講師だけに有効に」): 消した講師がそのコマのテンプレの**どこにも居ない**ときだけ
+    // (canClearDeletedTeacherTombstone)。居る間は記録を残す＝消した講師を再付与しない唯一の記憶なので(消すと次の再マージで戻る・2026-07-10 の再発)。
+    // 空いた机には下の配置が「先頭の空き机」の規則でテンプレの講師を置く(別の講師が入る)。授業・出欠記録のある机は触らない。
+    const cellTemplateTeachers = managedCell.desks.map((managedDesk, idx) => managedTeacherRef(managedDesk, idx))
+    nextDesks.forEach((desk) => {
+      if (desk.lesson || hasRecordedStatusSlots(desk) || !isTemplateDiffTeacherTombstone(desk)) return
+      if (!canClearDeletedTeacherTombstone(desk, cellTemplateTeachers, teacherAliases)) return
+      desk.teacher = ''
+      desk.manualTeacher = false
+      desk.teacherAssignmentSource = undefined
+      desk.teacherAssignmentSessionId = undefined
+      desk.teacherAssignmentTeacherId = undefined
     })
 
     for (let mi = 0; mi < managedCell.desks.length; mi++) {
@@ -4614,15 +4634,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         if (alreadyPresent) continue
 
         // Skip if this teacher was explicitly deleted from any desk in the cell
-        if (deletedTeacherNameSet.has(managedDesk.teacher)) continue
+        if (isDeletedTeacher(managedDesk, mi)) continue
 
-        // 削除した講師とは別の講師がテンプレで同じ机に居るなら、その机(削除記録)に置く(記録は上書き・2026-10-14)。
         // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
-        const sameIndexDesk = nextDesks[mi]
-        const reassignDeletedDesk = sameIndexDesk && isTemplateDiffTeacherTombstone(sameIndexDesk) && !sameIndexDesk.lesson && !hasRecordedStatusSlots(sameIndexDesk)
-          && !doesDeletedTeacherTombstoneBlock(sameIndexDesk, managedTeacherRef(managedDesk, mi))
-        const targetDesk = (reassignDeletedDesk ? sameIndexDesk : undefined)
-          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
+        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
           ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
 
         if (!targetDesk) continue
@@ -7521,7 +7536,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const preFreezeBoard = week.filter((c) => c.dateKey < effectiveStart)
         const postFreezeBoard = week.filter((c) => c.dateKey >= effectiveStart)
         const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= effectiveStart)
-        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], nextSuppressedRegularLessonOccurrences)
+        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], nextSuppressedRegularLessonOccurrences, buildTeacherAliasResolver(teachers))
         return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
           if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
           return a.slotNumber - b.slotNumber
@@ -10557,7 +10572,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // INV-12(オーナー指示 2026-10-14): Excel に同じコマの同じ生徒が 2 か所あれば取り込まない(どこを直すかを文言で示す)。
     const duplicates = findTemplateDuplicateStudents(importedCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
     if (duplicates.length > 0) {
-      setStatusMessage(`Excel を取り込めません。${buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`).replace('保存できません', '取り込めません')} Excel を直してから取り込み直してください。`)
+      setStatusMessage(buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`, 'import'))
       return
     }
     pushTemplateUndo(templateCells)

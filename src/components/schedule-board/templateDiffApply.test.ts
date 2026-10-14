@@ -46,6 +46,7 @@ import {
   stripSameDayMoveCopies,
   stripTemplateScaffoldTeacherDesk,
   buildTeacherAliasResolver,
+  canClearDeletedTeacherTombstone,
   doesDeletedTeacherTombstoneBlock,
 } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -371,6 +372,21 @@ describe('resolveTemplateDeskTeacher（Q21-9・条件 6）', () => {
       expect(resolveTemplateDeskTeacher({ teacher: '田中' }, deletedById, aliases)).toEqual({ teacherFields: { ...deletedById, teacherAssignmentSessionId: undefined }, reason: 'kept-deleted' })
     })
 
+    it('記録を消してよいのは、消した講師がそのコマのテンプレのどこにも居ないときだけ（canClearDeletedTeacherTombstone・H-1）', () => {
+      const suzuki = { teacher: '鈴木', teacherAssignmentTeacherId: 't2' }
+      const sato = { teacher: '佐藤', teacherAssignmentTeacherId: 't3' }
+      expect(canClearDeletedTeacherTombstone(deletedByName, [suzuki, sato])).toBe(true)
+      expect(canClearDeletedTeacherTombstone(deletedByName, [suzuki, { teacher: '田中' }])).toBe(false)
+      expect(canClearDeletedTeacherTombstone(deletedById, [suzuki, { teacher: '田中' }], aliases)).toBe(false)
+      expect(canClearDeletedTeacherTombstone(deletedById, [suzuki, { teacher: '田中' }])).toBe(true) // 対応表が無いと別人に見える（入口は必ず渡す）
+      expect(canClearDeletedTeacherTombstone({ ...deletedByName, teacherAssignmentSessionId: 'session-1' }, [suzuki])).toBe(false)
+      expect(canClearDeletedTeacherTombstone({ ...deletedByName, teacherAssignmentTeacherId: undefined }, [suzuki])).toBe(false)
+      expect(canClearDeletedTeacherTombstone({ teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' }, [suzuki])).toBe(false)
+      // resolveTemplateDeskTeacher: この机は別人（鈴木）でも、田中がテンプレの別の机に居れば kept-deleted
+      expect(resolveTemplateDeskTeacher(template, deletedByName, undefined, [template, { teacher: '田中' }]).reason).toBe('kept-deleted')
+      expect(resolveTemplateDeskTeacher(template, deletedByName, undefined, [template, sato]).reason).toBe('template-over-deleted')
+    })
+
     it('安全側: テンプレ机に講師なし／誰を消したか分からない（ID なし）／講習 ID つき → 塞ぐ', () => {
       expect(doesDeletedTeacherTombstoneBlock(deletedByName, { teacher: '' })).toBe(true)
       expect(doesDeletedTeacherTombstoneBlock({ ...deletedByName, teacherAssignmentTeacherId: undefined }, template)).toBe(true)
@@ -673,6 +689,24 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(cellOf(twice).desks.some((desk) => desk.teacherAssignmentSource === 'deleted')).toBe(false)
     // 保存 → 再マージの不動点（セル丸ごと）
     expect(JSON.stringify(cellOf(twice))).toBe(JSON.stringify(cellOf(once)))
+  })
+
+  it("条件 6(e') H-1：削除した講師がテンプレの**別の机**に居るなら削除記録を残し（kept-deleted）、別の講師は入口の再マージが空き机へ置く。再マージ 2 回でも削除した講師は戻らない", () => {
+    let week = buildWeek(OLD_ROWS)
+    // 机1 で鈴木(t2)を削除。新テンプレ: 机1=佐藤(講師だけ)・机2=鈴木(講師だけ)＝鈴木は別の机に居る
+    week = mutateDesk(week, 1, (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '鈴木', lesson: undefined }))
+    const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't3'), row('r2', 't2')]
+    const result = applyDiff({ week, newRows })
+    const desks = cellOf(result.nextWeeks).desks
+    expect(deskOf(result.nextWeeks, 1)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '鈴木' })
+    expect(desks.some((desk) => desk.teacher === '鈴木')).toBe(false)
+    expect(desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+    expect(result.summary.deletedTeacherDeskReassigned).toBe(0)
+    const once = remerge(result.nextWeeks, newRows, [])
+    const twice = remerge(once, newRows, [])
+    expect(cellOf(twice).desks.some((desk) => desk.teacher === '鈴木')).toBe(false)
+    expect(cellOf(twice).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+    expect(JSON.stringify(cellOf(twice))).toBe(JSON.stringify(cellOf(result.nextWeeks)))
   })
 
   it("条件 6(e')：削除記録の机にテンプレが別の講師と生徒を置く → 講師も生徒も載る（講師なしの 1 行にしない）", () => {
@@ -1153,7 +1187,7 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     expect(entryFn).toContain('protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))')
     const settleFn = sliceOf('function settleTemplateDiffWeekWithRemerge(', 1400)
     expect(settleFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })')
-    expect(settleFn).toContain('overlayPreparedManagedCells(managedCells, [postFreezeBoard])')
+    expect(settleFn).toContain('overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers))')
     expect(settleFn).toContain('cell.dateKey < params.effectiveStartDate ? cell')
     expect(settleFn).not.toContain('mergeManagedWeek(')
   })

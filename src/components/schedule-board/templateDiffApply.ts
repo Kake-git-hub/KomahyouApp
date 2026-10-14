@@ -233,6 +233,7 @@ export type TemplateDeskTeacherReason = 'template' | 'template-over-deleted' | '
  *  - **講習 ID つき（QR 登録机の削除）は従来どおり誰でも塞ぐ**：記録を別の講師で上書きすると、起動時の自己修復
  *    （reconcileSubmittedTeacherPlacements）が「室長が外した」印を失い、消した QR 講師を別の空き机へ置き直す（2026-09-14 の再発）。
  * 差分反映（resolveTemplateDeskTeacher）と再マージ（mergeManagedWeek）の両方がこの 1 関数で判定する（権威関数）。
+ * ★「塞がない」＝その講師をそのコマに置いてよい、であって、削除記録を消してよいとは限らない（下の canClearDeletedTeacherTombstone）。
  */
 export function doesDeletedTeacherTombstoneBlock(
   tombstone: TemplateDeskTeacherFields,
@@ -245,11 +246,35 @@ export function doesDeletedTeacherTombstoneBlock(
   if (tombstone.teacherAssignmentSessionId) return true
   const deleted = tombstone.teacherAssignmentTeacherId?.trim() ?? ''
   if (!deleted) return true
+  return isSameTeacherKey(deleted, teacher, resolveAliases)
+}
+
+/** 削除記録の講師キー（表示名か ID）が、この講師（表示名＋ID）と同じ講師か。呼び名の対応表で重なりを見る。 */
+function isSameTeacherKey(deletedKey: string, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined, resolveAliases: TeacherAliasResolver) {
+  const target = teacher?.teacher?.trim() ?? ''
   const targetId = teacher?.teacherAssignmentTeacherId?.trim() ?? ''
-  // 削除記録は表示名か講師 ID、テンプレ机は表示名（＋ID が無いことがある）なので、同じ講師の呼び名をすべて並べて重なりを見る。
-  const deletedKeys = new Set(resolveAliases(deleted))
-  const targetKeys = [...resolveAliases(target), ...(targetId ? resolveAliases(targetId) : [])]
+  if (!target && !targetId) return false
+  const deletedKeys = new Set(resolveAliases(deletedKey))
+  const targetKeys = [...(target ? resolveAliases(target) : []), ...(targetId ? resolveAliases(targetId) : [])]
   return targetKeys.some((key) => deletedKeys.has(key))
+}
+
+/**
+ * 削除記録を消して（別の講師で上書きして）よいか。削除記録はそのコマで「消した講師 B を再付与しない」唯一の記憶
+ * （再マージの deletedTeacherNameSet はこの記録から毎回作り直す）なので、**B がそのコマのテンプレのどこか（別の机）に居る間は消さない**
+ * （消すと次の再マージで B が戻る＝2026-07-10 の本番不具合の再発・regression-reviewer H-1）。B がテンプレのどこにも居なければ記憶は不要なので消してよい。
+ * 講習 ID つき・ID 無しは消さない（doesDeletedTeacherTombstoneBlock と同じ安全側）。
+ */
+export function canClearDeletedTeacherTombstone(
+  tombstone: TemplateDeskTeacherFields,
+  cellTemplateTeachers: ReadonlyArray<Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>>,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): boolean {
+  if (!isTemplateDiffTeacherTombstone(tombstone)) return false
+  if (tombstone.teacherAssignmentSessionId) return false
+  const deleted = tombstone.teacherAssignmentTeacherId?.trim() ?? ''
+  if (!deleted) return false
+  return !cellTemplateTeachers.some((teacher) => isSameTeacherKey(deleted, teacher, resolveAliases))
 }
 
 /** 講師の呼び名（講師 ID・登録名・表示名）を同じ講師としてまとめる。無ければそのキーだけ。 */
@@ -287,7 +312,9 @@ function isUserPlacedTeacher(desk: TemplateDeskTeacherFields) {
 /**
  * 机の講師を決める（Q21-9・オーナー確定 2026-09-29）。講師は突き合わせに使わない。
  *  - 例外 2：講師の削除記録（tombstone）の机 → **削除した講師と同じ講師なら**講師欄は削除のまま（記録も保持）。
- *    テンプレ机の講師が削除した講師と**別人**なら、その講師を置く（オーナー決定 2026-10-14・doesDeletedTeacherTombstoneBlock）。
+ *    テンプレ机の講師が削除した講師と**別人**で、削除した講師がそのコマのテンプレのどこにも居なければ、その講師を置く
+ *    （オーナー決定 2026-10-14・doesDeletedTeacherTombstoneBlock ＋ canClearDeletedTeacherTombstone）。削除した講師がテンプレの別の机に居るときは
+ *    記録を残す（kept-deleted）＝別人の講師は差分反映後の再マージが空き机へ置く（削除記録の机は塞がない）。
  *  - 例外 1：QR 提出の自動割振り講師（schedule-registration＋講習期間 ID）→ そのまま残す（由来・講習期間 ID も保持）。
  *    置き換えると起動時の自己修復（reconcileSubmittedTeacherPlacements）が別の空き机へ置き直して二重化する。
  *  - テンプレ机に講師がいる → その講師（手置きの印〔manualTeacher・由来・講習期間 ID〕は外れ、テンプレ足場の講師として扱う）。
@@ -297,12 +324,16 @@ export function resolveTemplateDeskTeacher(
   templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined,
   existingDesk: TemplateDeskTeacherFields,
   resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+  /** そのコマのテンプレの全机（削除した講師が別の机に居れば記録を残す）。省略時はこの机だけで判定。 */
+  cellTemplateTeachers: ReadonlyArray<Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>> = templateDesk ? [templateDesk] : [],
 ): {
   teacherFields: TemplateDeskTeacherFields
   reason: TemplateDeskTeacherReason
 } {
   const tombstone = isTemplateDiffTeacherTombstone(existingDesk)
-  if (tombstone && doesDeletedTeacherTombstoneBlock(existingDesk, templateDesk, resolveAliases)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-deleted' }
+  if (tombstone && (doesDeletedTeacherTombstoneBlock(existingDesk, templateDesk, resolveAliases) || !canClearDeletedTeacherTombstone(existingDesk, cellTemplateTeachers, resolveAliases))) {
+    return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-deleted' }
+  }
   if (isTemplateDiffQrTeacher(existingDesk)) return { teacherFields: pickTeacherFields(existingDesk), reason: 'kept-qr' }
   const templateTeacher = templateDesk?.teacher?.trim() ? templateDesk.teacher : ''
   if (templateTeacher) {
@@ -1366,7 +1397,8 @@ function applyTemplateDiffToCell(context: {
       )
     const teacher = keepsWholeDayTeacher
       ? { teacherFields: pickTeacherFields(desk), reason: 'kept-user' as const }
-      : resolveTemplateDeskTeacher(templateDesk, desk, context.teacherAliases)
+      // 削除した講師が「そのコマのテンプレのどこかに居るか」は抑止・strip 前の素のテンプレ(raw)で見る(別の机に居れば記録を残す・H-1)。
+      : resolveTemplateDeskTeacher(templateDesk, desk, context.teacherAliases, context.templateCell.raw.desks)
     if (teacher.reason === 'kept-qr' && templateDesk.teacher.trim()) summary.qrTeacherKept += 1
     if (teacher.reason === 'template-over-deleted') summary.deletedTeacherDeskReassigned += 1
     const withTeacher = applyTeacherFields(desk, teacher.teacherFields)

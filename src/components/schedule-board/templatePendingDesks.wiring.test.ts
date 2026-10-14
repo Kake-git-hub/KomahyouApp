@@ -298,7 +298,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     const importBody = sliceBody(BOARD_TSX, 'const applyTemplateImport = (', 'const handleTemplateImportWithDate = (')
     expect(importBody).toContain('findTemplateDuplicateStudents(importedCells,')
     expect(importBody.indexOf('findTemplateDuplicateStudents(')).toBeLessThan(importBody.indexOf('setTemplateCells(importedCells)'))
-    expect(importBody).toContain('Excel を取り込めません。')
+    expect(importBody).toContain(", 'import'))")
     expect(request).toContain('buildTemplateDuplicateStudentsMessage(duplicates,')
   })
 
