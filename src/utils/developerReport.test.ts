@@ -17,6 +17,11 @@ import {
   DEVELOPER_REPORT_TRACE_LIMIT,
   SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE,
   buildDeveloperReportRequestBody,
+  DEVELOPER_REPORT_ATTACHMENT_LIMIT,
+  DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES,
+  DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES,
+  normalizeDeveloperReportAttachments,
+  parseImageDataUrl,
   formatDeveloperReportResultMessage,
   normalizeDeveloperReportNote,
   normalizeDeveloperReportScheduleContext,
@@ -228,5 +233,53 @@ describe('developerReport: 送信本文の組み立て', () => {
     // 2026-10-10 文言見直し(#470): 「開発者への課題登録は行いません。」は出さない(開発側の用語)。
     expect(formatDeveloperReportResultMessage({ ok: true, reportId: 'r', isTest: true })).toBe('テストとして受け付けました（受付番号 r）。')
     expect(formatDeveloperReportResultMessage({ ok: false, error: 'network' })).toContain('network')
+  })
+})
+
+describe('developerReport: 添付画像(確認リストのスクショ・2026-10-14)', () => {
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 1).toString('base64')}`
+
+  it('画像の data URL だけ受け付け、デコード後のバイト数を数える', () => {
+    expect(parseImageDataUrl(dataUrlOfBytes(10))).toEqual({ mimeType: 'image/jpeg', byteLength: 10 })
+    expect(parseImageDataUrl(dataUrlOfBytes(11, 'image/png'))).toEqual({ mimeType: 'image/png', byteLength: 11 })
+    expect(parseImageDataUrl(dataUrlOfBytes(12, 'image/webp'))).toEqual({ mimeType: 'image/webp', byteLength: 12 })
+    expect(parseImageDataUrl(dataUrlOfBytes(10, 'image/gif'))).toBeNull()
+    expect(parseImageDataUrl('data:text/plain;base64,QUJD')).toBeNull()
+    expect(parseImageDataUrl('data:image/jpeg;base64,')).toBeNull()
+    expect(parseImageDataUrl('data:image/jpeg;base64,abc')).toBeNull() // 4 の倍数でない
+    expect(parseImageDataUrl('https://example.test/a.jpg')).toBeNull()
+    expect(parseImageDataUrl(123)).toBeNull()
+  })
+
+  it('正規化: 壊れた要素は捨て、1 枚の上限・枚数・合計の上限を超えた分も捨てる。label/name は切り詰める', () => {
+    const ok = { label: ` tp-38 `, name: 'shot.png', dataUrl: dataUrlOfBytes(30) }
+    const tooBig = { label: 'x', name: 'big', dataUrl: dataUrlOfBytes(DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES + 3) }
+    const result = normalizeDeveloperReportAttachments([ok, 'junk', null, { dataUrl: 'nope' }, tooBig, { label: 'l'.repeat(100), name: '', dataUrl: dataUrlOfBytes(3, 'image/png') }])
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual({ label: 'tp-38', name: 'shot.png', mimeType: 'image/jpeg', dataUrl: ok.dataUrl })
+    expect(result[1].label).toHaveLength(40)
+    expect(result[1].name).toBe('image')
+    expect(result[1].mimeType).toBe('image/png')
+    // 枚数の上限
+    const many = Array.from({ length: DEVELOPER_REPORT_ATTACHMENT_LIMIT + 2 }, (_, index) => ({ label: `a-${index}`, name: 'a', dataUrl: dataUrlOfBytes(3) }))
+    expect(normalizeDeveloperReportAttachments(many)).toHaveLength(DEVELOPER_REPORT_ATTACHMENT_LIMIT)
+    // 合計の上限: 1 枚 1.5MB 未満でも合計 6MB を超える分は捨てる
+    const each = DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES - 3
+    const total = Array.from({ length: 5 }, () => ({ label: 'b', name: 'b', dataUrl: dataUrlOfBytes(each) }))
+    const kept = normalizeDeveloperReportAttachments(total)
+    expect(kept.length).toBe(Math.floor(DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES / each))
+    expect(normalizeDeveloperReportAttachments(undefined)).toEqual([])
+    expect(normalizeDeveloperReportAttachments({})).toEqual([])
+  })
+
+  it('送信本文: 添付があれば attachments に正規化して載せ、無ければ項目ごと付けない', () => {
+    const base = {
+      classroomId: 'c1', source: 'board' as const, category: 'request' as const, note: '[確認リスト v1]\n- tp-38 OK [画像1枚]',
+      appVersion: '1', userAgent: '', pageUrl: '', screen: 'board', boardDirty: false, lastSavedAt: '', recentOperations: [], snapshotPayload: null,
+    }
+    const withImages = buildDeveloperReportRequestBody({ ...base, attachments: [{ label: 'tp-38', name: 'a.png', dataUrl: dataUrlOfBytes(6) }, 'junk'] })
+    expect(withImages.attachments).toEqual([{ label: 'tp-38', name: 'a.png', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(6) }])
+    expect('attachments' in buildDeveloperReportRequestBody(base)).toBe(false)
+    expect('attachments' in buildDeveloperReportRequestBody({ ...base, attachments: ['junk'] })).toBe(false)
   })
 })

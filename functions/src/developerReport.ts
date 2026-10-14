@@ -197,6 +197,74 @@ export function buildDeveloperReportStoragePath(workspaceKey: string, classroomI
   return `developer-reports/${workspaceKey}/${classroomId}/${reportId}.json.gz`
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// 添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。
+// クライアント src/utils/developerReport.ts と二重管理(値・規則を揃える)。画像本体は Firestore に入れず、報告の教室データと
+// 同じ Storage フォルダ developer-reports/{workspaceKey}/{classroomId}/ に {reportId}-img{n}.{jpg|png|webp} で置く。
+// ───────────────────────────────────────────────────────────────────────────
+export const DEVELOPER_REPORT_ATTACHMENT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+export type DeveloperReportAttachmentMimeType = (typeof DEVELOPER_REPORT_ATTACHMENT_MIME_TYPES)[number]
+export const DEVELOPER_REPORT_ATTACHMENT_LIMIT = 8
+export const DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES = 1_500_000
+export const DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES = 6_000_000
+export const DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT = 40
+export const DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT = 120
+const DEVELOPER_REPORT_ATTACHMENT_EXTENSIONS: Record<DeveloperReportAttachmentMimeType, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
+
+export type NormalizedDeveloperReportAttachment = {
+  label: string
+  name: string
+  mimeType: DeveloperReportAttachmentMimeType
+  /** data URL から切り出した base64 本体(Buffer.from(base64, 'base64') で保存する)。 */
+  base64: string
+  byteLength: number
+}
+
+const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
+
+export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReportAttachmentMimeType; base64: string; byteLength: number } | null {
+  if (typeof dataUrl !== 'string') return null
+  const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl)
+  if (!match) return null
+  const base64 = match[2]
+  if (base64.length % 4 !== 0) return null
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const byteLength = (base64.length / 4) * 3 - padding
+  if (byteLength <= 0) return null
+  return { mimeType: match[1] as DeveloperReportAttachmentMimeType, base64, byteLength }
+}
+
+/** 添付画像を正規化する。壊れた要素・上限超えはその要素だけ捨てる(クライアントと同じ規則)。 */
+export function normalizeDeveloperReportAttachments(raw: unknown): NormalizedDeveloperReportAttachment[] {
+  if (!Array.isArray(raw)) return []
+  const result: NormalizedDeveloperReportAttachment[] = []
+  let total = 0
+  for (const item of raw) {
+    if (result.length >= DEVELOPER_REPORT_ATTACHMENT_LIMIT) break
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const candidate = item as { label?: unknown; name?: unknown; dataUrl?: unknown }
+    const parsed = parseImageDataUrl(candidate.dataUrl)
+    if (!parsed || parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES) continue
+    if (total + parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES) continue
+    total += parsed.byteLength
+    result.push({
+      label: readTrimmedString(candidate.label, DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT),
+      name: readTrimmedString(candidate.name, DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT) || 'image',
+      mimeType: parsed.mimeType,
+      base64: parsed.base64,
+      byteLength: parsed.byteLength,
+    })
+  }
+  return result
+}
+
+/** 添付画像の Storage パス。報告の教室データ(…/{reportId}.json.gz)と同じフォルダに {reportId}-img{n}.{ext}(n は 1 から)。 */
+export function buildDeveloperReportAttachmentStoragePath(workspaceKey: string, classroomId: string, reportId: string, index: number, mimeType: DeveloperReportAttachmentMimeType): string {
+  const base = buildDeveloperReportStoragePath(workspaceKey, classroomId, reportId).replace(/\.json\.gz$/u, '')
+  if (!Number.isInteger(index) || index < 0) throw new Error('添付画像の番号が不正です。')
+  return `${base}-img${index + 1}.${DEVELOPER_REPORT_ATTACHMENT_EXTENSIONS[mimeType]}`
+}
+
 /** Firestore 文書 1MiB の余裕を見た、操作痕跡の合計文字数上限。超えたら古い方から落とす。 */
 export const DEVELOPER_REPORT_TRACE_TOTAL_CHAR_LIMIT = 200_000
 

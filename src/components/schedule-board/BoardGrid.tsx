@@ -270,6 +270,10 @@ type BoardGridProps = {
   // 保留の下段の生徒の長押し D&D（2026-10-13・オーナー指示）。有効時のみ渡す。下段の mousedown は上段（td）の onStudentMouseDown へ伝播させない
   // （上段の生徒を掴んでしまうのを防ぐ）。長押し判定・ドロップ先の解決は ScheduleBoardScreen 側（startLongPressDragSession）。
   onTemplatePendingLowerMouseDown?: (cellId: string, deskIndex: number, lowerIndex: number, button: number, x: number, y: number) => void
+  // 長押し D&D で掴んでいる下段の席（2026-10-14 オーナー指摘「保留生徒の D&D 中、両者が白抜きになりどちらを D&D しているかわかりにくい」）。
+  // 上段を掴んだときは td の .sa-student-picked（下段は緑のまま・CSS で .sa-student-inner に限定）、下段を掴んだときはこの席の
+  // .sa-pending-lower だけに .sa-pending-lower-picked を付ける＝掴んでいる方だけ白抜き。
+  highlightedPendingLower?: { cellId: string; deskId: string; lowerIndex: number } | null
 }
 
 function BoardGridComponent({
@@ -297,6 +301,7 @@ function BoardGridComponent({
   templatePendingDesks,
   onTemplatePendingLowerClick,
   onTemplatePendingLowerMouseDown,
+  highlightedPendingLower,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -541,9 +546,16 @@ function BoardGridComponent({
         </>
       )
     }
+    const desk = cell.desks[deskIndex]
+    const isLowerPicked = Boolean(
+      highlightedPendingLower
+      && highlightedPendingLower.cellId === cell.id
+      && desk && highlightedPendingLower.deskId === desk.id
+      && highlightedPendingLower.lowerIndex === studentIndex,
+    )
     return (
       <div
-        className="sa-pending-lower"
+        className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}`}
         title="保留中の下段（既存）。押すと保留の机のメニューを開きます。"
         data-testid={`pending-lower-${cell.id}-${deskIndex}-${studentIndex}`}
         onClick={(event) => {

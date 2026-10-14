@@ -22,6 +22,7 @@ const NOW = new Date('2026-09-28T03:00:00.000Z')
 
 function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }): DeveloperReportRecord {
   return {
+    attachments: [],
     classroomId: 'c1',
     classroomName: '教室1',
     source: 'board',

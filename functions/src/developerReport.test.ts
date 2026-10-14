@@ -16,9 +16,15 @@ import {
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_KINDS,
   DEVELOPER_REPORT_TRACE_LIMIT,
+  buildDeveloperReportAttachmentStoragePath,
   buildDeveloperReportId,
   buildDeveloperReportStoragePath,
+  DEVELOPER_REPORT_ATTACHMENT_LIMIT,
+  DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES,
+  DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES,
   normalizeDeveloperReport,
+  normalizeDeveloperReportAttachments,
+  parseImageDataUrl,
   normalizeDeveloperReportTrace,
   trimDeveloperReportTraceToBudget,
 } from './developerReport'
@@ -233,5 +239,55 @@ describe('developerReport(server): 確認リストはメール・Issue の対象
     const skipIndex = trigger.indexOf('resolveDeveloperReportMailSkipReason(data)')
     expect(skipIndex).toBeGreaterThan(0)
     expect(skipIndex).toBeLessThan(trigger.indexOf('transport.sendMail'))
+  })
+})
+
+describe('developerReport(server): 添付画像(確認リストのスクショ・2026-10-14)', () => {
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 7).toString('base64')}`
+
+  it('画像の data URL だけ受け付け、base64 本体とデコード後のバイト数を返す(クライアントと同じ判定)', () => {
+    const parsed = parseImageDataUrl(dataUrlOfBytes(10))
+    expect(parsed?.mimeType).toBe('image/jpeg')
+    expect(parsed?.byteLength).toBe(10)
+    expect(Buffer.from(parsed!.base64, 'base64')).toHaveLength(10)
+    expect(parseImageDataUrl(dataUrlOfBytes(10, 'image/gif'))).toBeNull()
+    expect(parseImageDataUrl('data:image/jpeg;base64,abc')).toBeNull()
+    expect(parseImageDataUrl('')).toBeNull()
+  })
+
+  it('正規化: 壊れた要素・上限超えを捨て、枚数と合計を抑える(クライアント src/utils/developerReport.ts と同じ上限)', () => {
+    expect(DEVELOPER_REPORT_ATTACHMENT_LIMIT).toBe(8)
+    expect(DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES).toBe(1_500_000)
+    expect(DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES).toBe(6_000_000)
+    const result = normalizeDeveloperReportAttachments([
+      { label: ' tp-38 ', name: 'a.png', dataUrl: dataUrlOfBytes(9, 'image/png') },
+      { label: 'big', name: 'b', dataUrl: dataUrlOfBytes(DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES + 3) },
+      { label: 'x', name: '', dataUrl: 'data:image/jpeg;base64,' },
+      42,
+    ])
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ label: 'tp-38', name: 'a.png', mimeType: 'image/png', byteLength: 9 })
+    expect(normalizeDeveloperReportAttachments(Array.from({ length: 10 }, () => ({ label: 'a', name: 'a', dataUrl: dataUrlOfBytes(3) })))).toHaveLength(DEVELOPER_REPORT_ATTACHMENT_LIMIT)
+    const each = DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES - 3
+    expect(normalizeDeveloperReportAttachments(Array.from({ length: 5 }, () => ({ label: 'a', name: 'a', dataUrl: dataUrlOfBytes(each) })))).toHaveLength(Math.floor(DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES / each))
+    expect(normalizeDeveloperReportAttachments(null)).toEqual([])
+  })
+
+  it('Storage パスは教室データと同じフォルダに {reportId}-img{n}.{拡張子}(n は 1 から)。危険な文字は拒否', () => {
+    expect(buildDeveloperReportAttachmentStoragePath('main', 'v8OZ7zH8vONNHjjYVcR1', '20261014-062117803-c223100f', 0, 'image/jpeg')).toBe('developer-reports/main/v8OZ7zH8vONNHjjYVcR1/20261014-062117803-c223100f-img1.jpg')
+    expect(buildDeveloperReportAttachmentStoragePath('main', 'c1', 'r1', 2, 'image/png')).toBe('developer-reports/main/c1/r1-img3.png')
+    expect(buildDeveloperReportAttachmentStoragePath('main', 'c1', 'r1', 0, 'image/webp')).toBe('developer-reports/main/c1/r1-img1.webp')
+    expect(() => buildDeveloperReportAttachmentStoragePath('main/../x', 'c1', 'r1', 0, 'image/jpeg')).toThrow()
+    expect(() => buildDeveloperReportAttachmentStoragePath('main', 'c1', 'r1', -1, 'image/jpeg')).toThrow()
+  })
+
+  it('index.ts: 添付は教室データの後に 1 枚ずつ Storage へ保存し、保存できた分だけ文書 attachments[] に残す(画像本体は文書に入れない)', () => {
+    const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
+    expect(indexTs).toContain('const attachments = normalizeDeveloperReportAttachments(rawData.attachments)')
+    expect(indexTs).toContain("buildDeveloperReportAttachmentStoragePath(workspaceKey, classroomId, reportId, index, attachment.mimeType)")
+    expect(indexTs).toContain("save(Buffer.from(attachment.base64, 'base64')")
+    expect(indexTs).toContain('attachments: storedAttachments,')
+    expect(indexTs).toContain('attachmentCount: attachments.length,')
+    expect(indexTs).not.toMatch(/attachments:\s*attachments,/u)
   })
 })

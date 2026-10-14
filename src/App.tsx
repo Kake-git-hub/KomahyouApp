@@ -46,7 +46,7 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
@@ -1910,11 +1910,12 @@ function AuthenticatedApp() {
   }, [actingClassroomIdRef])
   // 開発用教室の「確認リスト」パネルの送信口。submitDeveloperReport はこの下で定義されるため、
   // ref 越しに呼ぶ(識別子は安定させ、パネルの再描画を増やさない)。本番教室ではパネル自体を描画しない。
-  const submitDeveloperReportRef = useRef<((input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => Promise<DeveloperReportSubmitResult>) | null>(null)
-  const submitVerificationChecklistNote = useCallback(async (note: string): Promise<DeveloperReportSubmitResult> => {
+  const submitDeveloperReportRef = useRef<((input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext; attachments?: DeveloperReportAttachment[] }) => Promise<DeveloperReportSubmitResult>) | null>(null)
+  const submitVerificationChecklistNote = useCallback(async (note: string, attachments?: DeveloperReportAttachment[]): Promise<DeveloperReportSubmitResult> => {
     const submit = submitDeveloperReportRef.current
     if (!submit) return { ok: false as const, error: '送信の準備ができていません。' }
-    return submit({ source: 'board', category: 'request', note })
+    // 添付画像(確認リストのスクリーンショット・2026-10-14)は本文と同じ 1 通に載せる(別の経路は作らない)。
+    return submit({ source: 'board', category: 'request', note, attachments })
   }, [])
   // 確認リストの文面の `{{student:<生徒ID>}}` を、開いている教室(開発用教室)の生徒データの名前にする
   // (2026-10-10 オーナー指示「開発用教室は名前を見ていいので、確認リストに生徒名を表示して」)。ソースに実名は置かない。
@@ -4119,7 +4120,7 @@ function AuthenticatedApp() {
   // 報告時点の教室データ(未保存の変更込み)を開発者へ送る。本番データには一切書かない(Cloud Function は
   // 別コレクション developerReports と Storage にだけ書く)。盤面ツールバーと日程表タブの両方から呼ばれる。
   const [developerReportModal, setDeveloperReportModal] = useState<{ sending: boolean; resultMessage: string | null } | null>(null)
-  const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => {
+  const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext; attachments?: DeveloperReportAttachment[] }) => {
     if (!actingClassroomId) return { ok: false as const, error: '教室が選択されていません。' }
     const currentScreen = screenRef.current
     const snapshotPayload = buildClassroomSnapshotPayload({
@@ -4152,6 +4153,7 @@ function AuthenticatedApp() {
       recentOperations: peekOperationTrace(actingClassroomId),
       scheduleContext: input.scheduleContext,
       snapshotPayload,
+      attachments: input.attachments,
     })
     try {
       const result = await submitDeveloperReportViaFunction(body)

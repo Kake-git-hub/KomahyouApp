@@ -59,7 +59,7 @@ import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from '.
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
-import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
+import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
@@ -1883,6 +1883,24 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
+  // 添付画像(確認リストのスクリーンショット・2026-10-14)。教室データと同じフォルダへ 1 枚ずつ保存し、保存できた分だけ文書に残す
+  // (1 枚の失敗で報告全体を落とさない)。画像本体は Firestore に入れない。
+  const attachments = normalizeDeveloperReportAttachments(rawData.attachments)
+  const storedAttachments: Array<{ label: string; name: string; mimeType: string; byteLength: number; storagePath: string }> = []
+  for (const [index, attachment] of attachments.entries()) {
+    try {
+      const attachmentPath = buildDeveloperReportAttachmentStoragePath(workspaceKey, classroomId, reportId, index, attachment.mimeType)
+      await storage.bucket(STORAGE_BUCKET).file(attachmentPath).save(Buffer.from(attachment.base64, 'base64'), {
+        resumable: false,
+        contentType: attachment.mimeType,
+        metadata: { cacheControl: 'private, max-age=0, no-transform' },
+      })
+      storedAttachments.push({ label: attachment.label, name: attachment.name, mimeType: attachment.mimeType, byteLength: attachment.byteLength, storagePath: attachmentPath })
+    } catch (error) {
+      logger.error(`[DeveloperReport] Failed to store attachment #${index + 1} for report=${reportId}`, error)
+    }
+  }
+
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
   const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
   const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
@@ -1914,13 +1932,15 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     recentOperationCount: report.recentOperations.length,
     snapshotStoragePath: report.hasSnapshotPayload && snapshotByteLength >= 0 ? storagePath : '',
     snapshotByteLength,
+    attachments: storedAttachments,
+    attachmentCount: attachments.length,
     // テスト扱い(#テスト)は Issue 起票をしない: 通知ワークフローは notifiedAt==null だけを拾うので、ここで埋めておく。
     // 確認リストも同様に Issue を作らない(開発者がツールで読んで修正する)。
     notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,
     notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : null,
     issueNumber: null,
   })
-  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
+  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength} attachments=${storedAttachments.length}/${attachments.length}`)
 
   // 室長側の「これまでの質問と回答」履歴(spec-developer-report §G-5・2026-09-28): 回答待ちの軽量文書を教室ごとのパスへ作る。
   // 教室データ・操作痕跡・送信者は載せない。失敗しても報告本体は成功のまま(履歴に出ないだけ・回答時に作り直される)。

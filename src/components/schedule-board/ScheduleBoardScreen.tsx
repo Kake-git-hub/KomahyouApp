@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, type SameDayMoveCopyRevert, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -63,6 +63,8 @@ import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjust
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport, resolveTemplateOverwriteReportLabels } from '../../utils/pdf'
+import { waitForNextPaint } from '../../utils/waitForNextPaint'
+import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents, findTemplateSeatDuplicate } from './templateEditorGuards'
 import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } from '../../utils/boardPrintSelection'
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { BusyOverlay } from '../common/BusyOverlay'
@@ -10157,6 +10159,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetStudent) return
 
     const newStudentRow = students.find((s) => s.id === templateEditDraft.studentId)
+    // INV-12(2026-10-14): 変更後の生徒が同じコマの別の席に既にいれば止める(移動と同じ検査。自分の席は除く)。
+    if (newStudentRow && targetCell) {
+      const candidateKey = resolveStockComparableStudentKey({ ...targetStudent, name: getStudentDisplayName(newStudentRow), managedStudentId: newStudentRow.id }, managedStudentByAnyName, resolveBoardStudentDisplayName)
+      const duplicate = findTemplateSeatDuplicate(targetCell, candidateKey, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName), [targetStudent.id])
+      if (duplicate) {
+        setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicate.name)}が組まれているため変更できません。`)
+        return
+      }
+    }
     const today = new Date()
     targetDesk!.lesson!.studentSlots[studentMenu.studentIndex] = {
       ...targetStudent,
@@ -10199,6 +10210,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!managedStudent) {
       setStatusMessage('追加対象の生徒が見つかりませんでした。')
       return
+    }
+    // INV-12(2026-10-14): 同じコマに同じ生徒が既にいれば止める(移動と同じ検査)。
+    const addTargetCell = templateCells.find((c) => c.id === studentMenu.cellId)
+    if (addTargetCell) {
+      const candidate: StudentEntry = { id: '', name: getStudentDisplayName(managedStudent), managedStudentId: managedStudent.id, grade: '中1', subject: templateAddDraft.subject, lessonType: 'regular', teacherType: 'normal' }
+      const duplicate = findTemplateSeatDuplicate(addTargetCell, resolveStockComparableStudentKey(candidate, managedStudentByAnyName, resolveBoardStudentDisplayName), (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+      if (duplicate) {
+        setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicate.name)}が組まれているため追加できません。`)
+        return
+      }
     }
 
     pushTemplateUndo(templateCells)
@@ -10369,6 +10390,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleTemplateSaveRequest = () => {
+    // INV-12(2026-10-14): 同じコマに同じ生徒が 2 か所にあるテンプレは保存しない(過去に追加・変更で作られた重複の救済。
+    // 盤面生成が重複行を講師ごと飛ばすため、机の講師がテンプレと食い違う原因になっていた)。
+    const duplicates = findTemplateDuplicateStudents(templateCells, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+    if (duplicates.length > 0) {
+      setStatusMessage(buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`))
+      return
+    }
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
       teachers,
@@ -10376,11 +10404,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       effectiveStartDate: templateEffectiveStartDate,
       deskCount: classroomSettings.deskCount,
     })
-    setTemplateSaveConfirm({
-      mode: 'overwrite',
-      template,
-      // spec-template-behavior Q32-1: 差分反映の教室だけ、保存本体と同じ関数を試し実行して確認文の件数を出す。
-      ...(templateDiffApplyEnabled ? { diffSummary: buildTemplateDiffSavePlan(template, '').diff.summary } : {}),
+    if (!templateDiffApplyEnabled) {
+      setTemplateSaveConfirm({ mode: 'overwrite', template })
+      return
+    }
+    // spec-template-behavior Q32-1: 差分反映の教室だけ、保存本体と同じ関数を試し実行して確認文の件数を出す。
+    // 試し実行は反映日以降の全週を見るので数秒かかり、その間は何も操作できない。オーナー指摘(2026-10-14 確認リスト
+    // 「ボタンを押してつぎのモーダルが出るまで操作できないのにローディングスピンがでない」)→ 先に BusyOverlay を描いてから計算する
+    // (描画を 1 フレーム待たないとスピナーが出る前に同期計算で固まる)。
+    setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)
+    void waitForNextPaint().then(() => {
+      try {
+        const diffSummary = buildTemplateDiffSavePlan(template, '').diff.summary
+        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary })
+      } catch (error) {
+        // 試し実行で例外が出たら保存の確認に進まず理由を出す(以前は同期で投げていた＝同じく保存には進まない)。
+        setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setBusyOverlayMessage(null)
+      }
     })
   }
 
@@ -14740,6 +14782,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onTeacherClick={isTemplateMode ? stableHandleTemplateSelectDesk : stableHandleSelectDesk}
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
             dragMoveActive={isDragMoveActive}
+            highlightedPendingLower={isTemplateMode ? null : templatePendingLowerMove}
             onStudentMouseDown={isTemplateMode ? undefined : stableHandleStudentMouseDown}
             onTeacherMouseDown={isTemplateMode ? undefined : stableHandleTeacherMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}

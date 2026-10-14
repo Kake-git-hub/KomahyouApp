@@ -31,6 +31,74 @@ export type DeveloperReportCategory = (typeof DEVELOPER_REPORT_CATEGORIES)[numbe
 /** 日程表タブから postMessage で届く、表示していた条件。文字列だけ（入れ子は受け付けない）。 */
 export type DeveloperReportScheduleContext = Record<string, string>
 
+// ───────────────────────────────────────────────────────────────────────────
+// 添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。
+// 開発用教室の確認リストから、項目ごとのスクリーンショットを報告に同梱する。画像は data URL(base64)で送り、
+// サーバーが Storage(developer-reports/… の報告と同じ場所)へ保存して文書に保存先を残す。Firestore 文書には画像本体を入れない。
+// 一般の「質問・要望」モーダルには(まだ)付けない＝送信経路だけ共通。サーバー functions/src/developerReport.ts と二重管理(値を揃える)。
+// ───────────────────────────────────────────────────────────────────────────
+export const DEVELOPER_REPORT_ATTACHMENT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+export type DeveloperReportAttachmentMimeType = (typeof DEVELOPER_REPORT_ATTACHMENT_MIME_TYPES)[number]
+/** 1 通に付けられる枚数。 */
+export const DEVELOPER_REPORT_ATTACHMENT_LIMIT = 8
+/** 1 枚のデコード後バイト数の上限(クライアントは 1600px・JPEG に縮めてから送る)。 */
+export const DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES = 1_500_000
+/** 1 通ぶんの合計(デコード後)。callable のリクエスト上限(10MB)に base64 の 4/3 を掛けても収まる量。 */
+export const DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES = 6_000_000
+export const DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT = 40
+export const DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT = 120
+
+export type DeveloperReportAttachment = {
+  /** 何の画像か(確認リストでは項目 id。例 tp-38)。 */
+  label: string
+  /** 元のファイル名(表示用)。 */
+  name: string
+  mimeType: DeveloperReportAttachmentMimeType
+  /** `data:image/jpeg;base64,…` の形。 */
+  dataUrl: string
+}
+
+const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
+
+/** 画像の data URL を検証して MIME とデコード後のバイト数を返す。形が違えば null。 */
+export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReportAttachmentMimeType; byteLength: number } | null {
+  if (typeof dataUrl !== 'string') return null
+  const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl)
+  if (!match) return null
+  const base64 = match[2]
+  if (base64.length % 4 !== 0) return null
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const byteLength = (base64.length / 4) * 3 - padding
+  if (byteLength <= 0) return null
+  return { mimeType: match[1] as DeveloperReportAttachmentMimeType, byteLength }
+}
+
+/**
+ * 添付画像を正規化する(純関数)。壊れた要素はその要素だけ捨て、1 枚の上限・枚数・合計の上限を超えた分も捨てる
+ * (1 枚の不正で報告全体を失敗させない)。サーバーも同じ規則で検証する。
+ */
+export function normalizeDeveloperReportAttachments(raw: unknown): DeveloperReportAttachment[] {
+  if (!Array.isArray(raw)) return []
+  const result: DeveloperReportAttachment[] = []
+  let total = 0
+  for (const item of raw) {
+    if (result.length >= DEVELOPER_REPORT_ATTACHMENT_LIMIT) break
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const candidate = item as { label?: unknown; name?: unknown; dataUrl?: unknown }
+    const parsed = parseImageDataUrl(candidate.dataUrl)
+    if (!parsed || parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES) continue
+    if (total + parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES) continue
+    total += parsed.byteLength
+    result.push({
+      label: (typeof candidate.label === 'string' ? candidate.label.trim() : '').slice(0, DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT),
+      name: (typeof candidate.name === 'string' ? candidate.name.trim() : '').slice(0, DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT) || 'image',
+      mimeType: parsed.mimeType,
+      dataUrl: candidate.dataUrl as string,
+    })
+  }
+  return result
+}
+
 export type DeveloperReportRequestBody = {
   classroomId: string
   source: DeveloperReportSource
@@ -46,6 +114,8 @@ export type DeveloperReportRequestBody = {
   recentOperations: OperationTraceEntry[]
   scheduleContext?: DeveloperReportScheduleContext
   snapshotPayload: AppSnapshotPayload | null
+  /** 添付画像(確認リストのスクリーンショット・2026-10-14)。無ければ載せない。 */
+  attachments?: DeveloperReportAttachment[]
 }
 
 /** 内容の上限。長文はここで切る（サーバーも同じ値で切る）。 */
@@ -180,12 +250,14 @@ export function buildDeveloperReportRequestBody(input: {
   recentOperations: OperationTraceEntry[]
   scheduleContext?: DeveloperReportScheduleContext
   snapshotPayload: AppSnapshotPayload | null
+  attachments?: unknown
   now?: Date
 }): DeveloperReportRequestBody {
   const recent = input.recentOperations.length > DEVELOPER_REPORT_TRACE_LIMIT
     ? input.recentOperations.slice(input.recentOperations.length - DEVELOPER_REPORT_TRACE_LIMIT)
     : [...input.recentOperations]
   const scheduleContext = normalizeDeveloperReportScheduleContext(input.scheduleContext)
+  const attachments = normalizeDeveloperReportAttachments(input.attachments)
   return {
     classroomId: input.classroomId,
     source: input.source,
@@ -201,6 +273,7 @@ export function buildDeveloperReportRequestBody(input: {
     recentOperations: recent,
     ...(scheduleContext ? { scheduleContext } : {}),
     snapshotPayload: input.snapshotPayload,
+    ...(attachments.length > 0 ? { attachments } : {}),
   }
 }
 

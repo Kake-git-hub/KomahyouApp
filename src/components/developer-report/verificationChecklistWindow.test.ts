@@ -16,8 +16,14 @@ import {
   VERIFICATION_CHECKLIST_WINDOW_BODY_CLASS,
   VERIFICATION_CHECKLIST_WINDOW_NAME,
   VERIFICATION_CHECKLIST_WINDOW_ROOT_ID,
+  VERIFICATION_CHECKLIST_WINDOW_ZOOM_DEFAULT,
+  VERIFICATION_CHECKLIST_WINDOW_ZOOM_STEPS,
+  VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY,
   openVerificationChecklistWindow,
+  parseVerificationChecklistWindowZoom,
   prepareVerificationChecklistWindowDocument,
+  stepVerificationChecklistWindowZoom,
+  verificationChecklistWindowZoomToCss,
 } from './verificationChecklistWindow'
 import { VERIFICATION_CHECKLIST, VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY, verificationChecklistStorageKey } from '../../utils/verificationChecklist'
 
@@ -71,6 +77,37 @@ describe('openVerificationChecklistWindow', () => {
   })
 })
 
+describe('別タブの拡大率(2026-10-14 オーナー指摘「別タブ時の拡大縮小は独立でできるようにして」)', () => {
+  it('保存値は一覧にある値だけ受け付け、それ以外は既定の 100%', () => {
+    expect(VERIFICATION_CHECKLIST_WINDOW_ZOOM_DEFAULT).toBe(100)
+    expect(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STEPS).toContain(100)
+    expect([...VERIFICATION_CHECKLIST_WINDOW_ZOOM_STEPS]).toEqual([...VERIFICATION_CHECKLIST_WINDOW_ZOOM_STEPS].sort((a, b) => a - b))
+    expect(parseVerificationChecklistWindowZoom('150')).toBe(150)
+    expect(parseVerificationChecklistWindowZoom(' 80 ')).toBe(80)
+    expect(parseVerificationChecklistWindowZoom(125)).toBe(125)
+    for (const bad of [null, undefined, '', 'abc', '99', '1000', '-50', NaN]) expect(parseVerificationChecklistWindowZoom(bad), String(bad)).toBe(100)
+  })
+
+  it('1 段ずつ動き、端で止まる。一覧に無い現在値は 100% を基準に動く', () => {
+    expect(stepVerificationChecklistWindowZoom(100, 1)).toBe(110)
+    expect(stepVerificationChecklistWindowZoom(100, -1)).toBe(90)
+    expect(stepVerificationChecklistWindowZoom(200, 1)).toBe(200)
+    expect(stepVerificationChecklistWindowZoom(50, -1)).toBe(50)
+    expect(stepVerificationChecklistWindowZoom(123, 1)).toBe(110)
+  })
+
+  it('CSS zoom は倍率(100% → 1・150% → 1.5)。不正値は 1', () => {
+    expect(verificationChecklistWindowZoomToCss(100)).toBe(1)
+    expect(verificationChecklistWindowZoomToCss(150)).toBe(1.5)
+    expect(verificationChecklistWindowZoomToCss(0)).toBe(1)
+  })
+
+  it('保存キーは別タブ専用(右下の浮き窓の折りたたみ・下書きのキーと別)', () => {
+    expect(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY).toBe('verification-checklist:window-zoom')
+    expect(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY).not.toBe(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY)
+  })
+})
+
 describe('VerificationChecklistPanel の別タブ表示', () => {
   const classroomId = 'v8OZ7zH8vONNHjjYVcR1'
   let container: HTMLDivElement
@@ -78,7 +115,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
   let frame: HTMLIFrameElement
   let popup: { window: Window }
   let popupClose: Mock<() => void>
-  let onSubmitNote: Mock<(note: string) => Promise<DeveloperReportSubmitResult>>
+  let onSubmitNote: Mock<(note: string, attachments?: unknown) => Promise<DeveloperReportSubmitResult>>
 
   beforeEach(() => {
     window.localStorage.clear()
@@ -92,7 +129,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     popup.window.close = popupClose
     popup.window.focus = vi.fn()
     vi.spyOn(window, 'open').mockImplementation(() => popup.window)
-    onSubmitNote = vi.fn<(note: string) => Promise<DeveloperReportSubmitResult>>(async () => ({ ok: true, reportId: 'r-1' }))
+    onSubmitNote = vi.fn<(note: string, attachments?: unknown) => Promise<DeveloperReportSubmitResult>>(async () => ({ ok: true, reportId: 'r-1' }))
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
@@ -178,6 +215,111 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
     act(() => root.render(createElement(Fragment)))
     expect(popupClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('別タブの「＋/－」はそのタブのパネルだけ CSS zoom で拡大縮小し、値は別タブ専用キーに残る。右下へ戻ると zoom は付かない', () => {
+    openWindow()
+    const popupDoc = popup.window.document
+    const panel = () => popupDoc.querySelector<HTMLElement>('[data-testid="verification-checklist-panel"]')!
+    expect(panel().style.zoom).toBe('1')
+    expect(popupDoc.querySelector('[data-testid="verification-checklist-zoom-value"]')?.textContent).toBe('100%')
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-zoom-in"]')!.click())
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-zoom-in"]')!.click())
+    expect(panel().style.zoom).toBe('1.25')
+    expect(popupDoc.querySelector('[data-testid="verification-checklist-zoom-value"]')?.textContent).toBe('125%')
+    expect(window.localStorage.getItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY)).toBe('125')
+    // 下書きには混ざらない。
+    expect(window.localStorage.getItem(verificationChecklistStorageKey(classroomId)) ?? '').not.toContain('125')
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-zoom-out"]')!.click())
+    expect(panel().style.zoom).toBe('1.1')
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-zoom-value"]')!.click())
+    expect(panel().style.zoom).toBe('1')
+    expect(window.localStorage.getItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY)).toBe('100')
+
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-zoom-in"]')!.click())
+    act(() => popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-return"]')!.click())
+    const mainPanel = container.querySelector<HTMLElement>('[data-testid="verification-checklist-panel"]')!
+    expect(mainPanel.style.zoom).toBe('')
+    expect(container.querySelector('[data-testid="verification-checklist-zoom"]')).toBeNull()
+  })
+
+  it('保存してあった拡大率で別タブが開く', () => {
+    window.localStorage.setItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, '150')
+    act(() => root.render(createElement(Fragment)))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
+    openWindow()
+    expect(popup.window.document.querySelector<HTMLElement>('[data-testid="verification-checklist-panel"]')!.style.zoom).toBe('1.5')
+  })
+
+  // 添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。縮小は差し替え(shrinkImage)で固定する。
+  it('画像の貼り付け(Ctrl+V)・ファイル選択で項目に画像が付き、下書きに残り、送信の 1 通目に label=項目 id で同梱される', async () => {
+    const dataUrl = `data:image/jpeg;base64,${Buffer.alloc(12, 1).toString('base64')}`
+    const shrinkImage = vi.fn(async (file: File) => ({ name: file.name || '貼り付け', dataUrl }))
+    act(() => root.render(createElement(Fragment)))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote, shrinkImage })))
+    const firstItem = VERIFICATION_CHECKLIST.items[0]
+    const memo = container.querySelector<HTMLTextAreaElement>(`[data-testid="verification-checklist-memo-${firstItem.id}"]`)!
+    const pasted = new File(['x'], '', { type: 'image/png' })
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as Event & { clipboardData?: unknown }
+    Object.defineProperty(pasteEvent, 'clipboardData', { value: { files: [pasted], getData: () => '' } })
+    await act(async () => {
+      memo.dispatchEvent(pasteEvent)
+    })
+    expect(shrinkImage).toHaveBeenCalledWith(pasted)
+    const attachments = () => container.querySelectorAll(`[data-testid="verification-checklist-attachments-${firstItem.id}"] img`)
+    expect(attachments()).toHaveLength(1)
+    expect(attachments()[0].getAttribute('src')).toBe(dataUrl)
+    // 未確認のまま画像を付けたので要改善になる(メモと同じ)。
+    expect(container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${firstItem.id}"][value="needs-fix"]`)?.checked).toBe(true)
+    const saved = JSON.parse(window.localStorage.getItem(verificationChecklistStorageKey(classroomId)) ?? '{}')
+    expect(saved.attachments).toHaveLength(1)
+    expect(saved.attachments[0]).toMatchObject({ itemId: firstItem.id, dataUrl })
+
+    // ファイル選択
+    const input = container.querySelector<HTMLInputElement>(`[data-testid="verification-checklist-attach-${firstItem.id}"]`)!
+    const chosen = new File(['y'], 'shot.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [chosen], configurable: true })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(attachments()).toHaveLength(2)
+    expect(container.querySelector(`[data-testid="verification-checklist-attachments-${firstItem.id}"]`)?.textContent).toContain('shot.png')
+
+    // 文字の貼り付けは画像扱いしない(shrinkImage を呼ばない)。
+    const textPaste = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(textPaste, 'clipboardData', { value: { files: [], getData: () => 'abc' } })
+    await act(async () => { memo.dispatchEvent(textPaste) })
+    expect(shrinkImage).toHaveBeenCalledTimes(2)
+    expect(textPaste.defaultPrevented).toBe(false)
+
+    // 送信: 1 通目に添付が label=項目 id で付く
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-submit"]')!.click()
+    })
+    expect(onSubmitNote).toHaveBeenCalledTimes(1)
+    const [note, sent] = onSubmitNote.mock.calls[0] as unknown as [string, Array<{ label: string; name: string; dataUrl: string }>]
+    expect(note).toContain(`${firstItem.id} 要改善: [画像2枚]`)
+    expect(sent.map((attachment) => attachment.label)).toEqual([firstItem.id, firstItem.id])
+    expect(sent[1].name).toBe('shot.png')
+    expect(container.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('画像 2 枚')
+
+    // 外すと消える
+    const removeButton = container.querySelector<HTMLButtonElement>(`[data-testid^="verification-checklist-attachment-remove-"]`)!
+    act(() => removeButton.click())
+    expect(attachments()).toHaveLength(1)
+  })
+
+  it('画像を読めなかったときは理由を出し、下書きは変えない', async () => {
+    const shrinkImage = vi.fn(async () => { throw new Error('canvas が使えません') })
+    act(() => root.render(createElement(Fragment)))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote, shrinkImage })))
+    const firstItem = VERIFICATION_CHECKLIST.items[0]
+    const input = container.querySelector<HTMLInputElement>(`[data-testid="verification-checklist-attach-${firstItem.id}"]`)!
+    Object.defineProperty(input, 'files', { value: [new File(['y'], 'bad.png', { type: 'image/png' })], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('bad.png')
+    expect(container.querySelectorAll(`[data-testid="verification-checklist-attachments-${firstItem.id}"] img`)).toHaveLength(0)
+    expect(window.localStorage.getItem(verificationChecklistStorageKey(classroomId))).toBeNull()
   })
 
   it('ポップアップを止められたら右下のまま理由を出す', () => {

@@ -44,10 +44,14 @@
 | 直近の操作痕跡 | 端末内リングバッファの最新 300 件 | `operationTrace.ts`（§D） |
 | 報告時点の教室データ | メモリ上の教室データ（**未保存の変更込み**）を gzip して Storage へ | `buildClassroomSnapshotPayload` |
 | メタ | 教室・報告元(board/schedule)・アプリ版数・UA・URL・画面・未保存有無・最終保存時刻 | App |
+| 添付画像（2026-10-14） | 確認リスト（開発用教室）の項目ごとのスクリーンショット。画面側で長辺 1600px の JPEG に縮め data URL で送る（1 通 8 枚・1 枚 1.5MB・合計 6MB まで。サーバーも同じ上限で検証し超過分は捨てる）。一般の質問・要望モーダルには付けない | `VerificationChecklistPanel` → `attachments` |
 | 実行者・受領時刻 | **サーバーが付ける**（自己申告にしない） | Cloud Function |
 
 - 保存先: Firestore `workspaces/{ws}/developerReports/{reportId}`（メタ＋操作痕跡）、
   Storage `developer-reports/{ws}/{classroomId}/{reportId}.json.gz`（教室データ）。
+  添付画像は同じフォルダに `{reportId}-img{n}.{jpg|png|webp}`（n は 1 から）で置き、文書の `attachments[]`
+  （label=項目 id・name・mimeType・byteLength・storagePath）に保存できた分だけ残す（画像本体は Firestore に入れない）。
+  開発ダッシュボードの報告詳細と確認リスト読み取りツールは保存先を表示するだけ（読むのは読み取り専用トークンで Storage から）。
 - **本番データ（classroomSnapshots 等）には一切書かない。** 権限は保存と同じ `requireClassroomAccessMember`。
 - 教室データの Storage 保存に失敗しても報告本体は残す（`snapshotStoragePath` 空・`snapshotByteLength=-1`）。
 

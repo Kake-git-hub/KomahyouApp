@@ -21,6 +21,7 @@ import type { VerificationChecklistDefinition } from './verificationChecklist'
 
 function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }): DeveloperReportRecord {
   return {
+    attachments: [],
     classroomId: 'c1',
     classroomName: '教室1',
     source: 'board',
@@ -63,6 +64,21 @@ describe('normalizeDeveloperReportRecord', () => {
     expect(normalizeDeveloperReportRecord({ resolvedAt: '2026-09-28T11:00:00.000Z' }, 'x').resolvedAt).toBe('2026-09-28T11:00:00.000Z')
     expect(normalizeDeveloperReportRecord({ resolvedAt: ' ' }, 'x').resolvedAt).toBeNull()
     expect(normalizeDeveloperReportRecord({ resolvedAt: 123 }, 'x').resolvedAt).toBeNull()
+  })
+
+  it('添付画像(2026-10-14): attachments[] は storagePath のある要素だけ読み、壊れた要素・配列でない値は捨てる', () => {
+    const record = normalizeDeveloperReportRecord({ attachments: [
+      { label: 'tp-38', name: 'a.png', mimeType: 'image/jpeg', byteLength: 1234.7, storagePath: 'developer-reports/main/c1/r1-img1.jpg' },
+      { label: 'x', storagePath: '' },
+      'junk',
+      { storagePath: 'developer-reports/main/c1/r1-img2.jpg', byteLength: -5 },
+    ] }, 'x')
+    expect(record.attachments).toEqual([
+      { label: 'tp-38', name: 'a.png', mimeType: 'image/jpeg', byteLength: 1234, storagePath: 'developer-reports/main/c1/r1-img1.jpg' },
+      { label: '', name: 'image', mimeType: '', byteLength: 0, storagePath: 'developer-reports/main/c1/r1-img2.jpg' },
+    ])
+    expect(normalizeDeveloperReportRecord({ attachments: 'x' }, 'x').attachments).toEqual([])
+    expect(normalizeDeveloperReportRecord({}, 'x').attachments).toEqual([])
   })
 
   it('確認リストの判定はサーバーのフラグが権威。フラグが無い古い文書だけ本文の先頭マーカーで補う', () => {

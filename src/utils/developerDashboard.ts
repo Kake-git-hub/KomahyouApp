@@ -46,6 +46,37 @@ export type DeveloperReportRecord = {
   answerRevision: number
   /** 開発者の「解決済み」の印(2026-09-28)。null = 未解決。developerReports だけに持ち、室長側には出さない。 */
   resolvedAt: string | null
+  /** 添付画像(確認リストのスクリーンショット・2026-10-14)。Storage の保存先だけ(画像本体は文書に無い)。 */
+  attachments: DeveloperReportAttachmentRecord[]
+}
+
+export type DeveloperReportAttachmentRecord = {
+  /** 何の画像か(確認リストの項目 id)。 */
+  label: string
+  name: string
+  mimeType: string
+  byteLength: number
+  storagePath: string
+}
+
+/** 文書の attachments[] を読む。storagePath の無い要素・配列でない値は捨てる(1 件が壊れても他は出す)。 */
+export function normalizeDeveloperReportAttachmentRecords(raw: unknown): DeveloperReportAttachmentRecord[] {
+  if (!Array.isArray(raw)) return []
+  const result: DeveloperReportAttachmentRecord[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const candidate = item as Record<string, unknown>
+    const storagePath = readString(candidate.storagePath)
+    if (!storagePath) continue
+    result.push({
+      label: readString(candidate.label),
+      name: readString(candidate.name) || 'image',
+      mimeType: readString(candidate.mimeType),
+      byteLength: typeof candidate.byteLength === 'number' && Number.isFinite(candidate.byteLength) && candidate.byteLength > 0 ? Math.trunc(candidate.byteLength) : 0,
+      storagePath,
+    })
+  }
+  return result
 }
 
 function readString(value: unknown, fallback = ''): string {
@@ -102,6 +133,7 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     answeredAt: readNullableString(data.answeredAt),
     answerRevision: typeof data.answerRevision === 'number' && Number.isFinite(data.answerRevision) && data.answerRevision > 0 ? Math.trunc(data.answerRevision) : 0,
     resolvedAt: readNullableString(data.resolvedAt),
+    attachments: normalizeDeveloperReportAttachmentRecords(data.attachments),
   }
 }
 

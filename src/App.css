@@ -2761,14 +2761,17 @@ tr.sa-group-row td {
   box-shadow: inset 0 0 22px rgba(26, 115, 232, 0.45);
 }
 
-.sa-student-picked .sa-student-name,
-.sa-student-picked .sa-student-origin-date,
-.sa-student-picked .sa-student-detail,
-.sa-student-picked .sa-student-star {
+/* 白抜き(青地・白文字)は上段 .sa-student-inner の中だけに当てる(2026-10-14 オーナー指摘「保留生徒の D&D 中、両者が白抜きになり
+   どちらを D&D しているかわかりにくい」)。同じ td にある保留の下段 .sa-pending-lower は上段と同じ文字クラスを使うので、
+   ここを .sa-student-picked .sa-student-name のまま広くすると下段の文字も白くなる。下段の白抜きは .sa-pending-lower-picked(下)。 */
+.sa-student-picked .sa-student-inner .sa-student-name,
+.sa-student-picked .sa-student-inner .sa-student-origin-date,
+.sa-student-picked .sa-student-inner .sa-student-detail,
+.sa-student-picked .sa-student-inner .sa-student-star {
   color: #fff;
 }
 
-.sa-student-picked .sa-student-detail-prefix {
+.sa-student-picked .sa-student-inner .sa-student-detail-prefix {
   color: #fff;
 }
 
@@ -2826,6 +2829,21 @@ tr.sa-group-row td {
   justify-content: center;
   width: 100%;
   gap: 1px;
+}
+
+/* 下段を長押しで掴んでいる間は、その下段だけ白抜き(上段と同じ青地・白文字)。上段の td は青くしない(BoardGrid highlightedPendingLower)。 */
+.sa-pending-lower.sa-pending-lower-picked {
+  background: #1a73e8;
+  border-top-color: #fff;
+  box-shadow: inset 0 0 0 1px #0f5fd0;
+}
+
+.sa-pending-lower-picked .sa-student-name,
+.sa-pending-lower-picked .sa-student-origin-date,
+.sa-pending-lower-picked .sa-student-detail,
+.sa-pending-lower-picked .sa-student-star,
+.sa-pending-lower-picked .sa-student-detail-prefix {
+  color: #fff;
 }
 
 .sa-pending-lower-band {
@@ -5709,6 +5727,45 @@ tr.sa-group-row td {
   background: #eef4ff;
 }
 
+/* 別タブだけの拡大率(2026-10-14 オーナー指摘「別タブ時の拡大縮小は独立でできるようにして」)。パネルの zoom と一緒に大きくなる。 */
+.verification-checklist-zoom {
+  display: inline-flex;
+  align-items: center;
+  height: 64px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.verification-checklist-zoom-button,
+.verification-checklist-zoom-value {
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: #1f3350;
+  font-size: 28px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.verification-checklist-zoom-button {
+  width: 56px;
+}
+
+.verification-checklist-zoom-button:hover,
+.verification-checklist-zoom-value:hover {
+  background: #eef4ff;
+}
+
+.verification-checklist-zoom-value {
+  min-width: 108px;
+  padding: 0 8px;
+  border-left: 1px solid #cbd5e1;
+  border-right: 1px solid #cbd5e1;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 別タブ表示: 右下の浮き窓ではなくタブ全体を使う(本文だけがスクロールする)。
    html, body の min-width: 1280px(index.css)を外す(狭いタブで右側が切れないように)。 */
 html.verification-checklist-window,
@@ -5871,6 +5928,68 @@ body.verification-checklist-window {
   margin: 4px 0 0;
   color: #b91c1c;
   font-size: 26px;
+}
+
+/* 項目の添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。 */
+.verification-checklist-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.verification-checklist-attachment {
+  margin: 0;
+  width: 240px;
+  border: 1px solid #d7e2f1;
+  border-radius: 6px;
+  padding: 4px;
+  background: #f8fafc;
+}
+
+.verification-checklist-attachment img {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.verification-checklist-attachment figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 22px;
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.verification-checklist-attachment figcaption .link-button {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.verification-checklist-attach {
+  display: inline-flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px dashed #1d4ed8;
+  border-radius: 6px;
+  color: #1d4ed8;
+  font-size: 24px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.verification-checklist-attach:hover {
+  background: #eef4ff;
+}
+
+.verification-checklist-attach input[type='file'] {
+  display: none;
 }
 
 .verification-checklist-footer {

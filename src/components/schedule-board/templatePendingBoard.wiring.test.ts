@@ -65,11 +65,12 @@ const PENDING: TemplatePendingDeskMap = {
   },
 }
 
-function renderGrid(templatePendingDesks?: TemplatePendingDeskMap) {
+function renderGrid(templatePendingDesks?: TemplatePendingDeskMap, extra?: Partial<Parameters<typeof BoardGrid>[0]>) {
   return renderToStaticMarkup(createElement(BoardGrid, {
     cells: [boardCell()],
     selectedStudentId: null,
     highlightedCell: null,
+    ...extra,
     highlightedHolidayDate: null,
     yearLabel: '2026',
     specialPeriods: [],
@@ -102,6 +103,53 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     container.innerHTML = html
     expect(container.querySelector('.sa-student-inner .sa-pending-lower')).toBeNull()
     expect(container.querySelectorAll('.sa-pending-lower')).toHaveLength(2)
+  })
+
+  // 2026-10-14 オーナー指摘(確認リスト tp-38)「保留生徒の D&D 中、両者が白抜きになりどちらを D&D しているかわかりにくいので、掴んでいる方だけ白抜きにして」。
+  describe('掴んでいる方だけ白抜き(highlightedPendingLower)', () => {
+    const toContainer = (html: string) => {
+      const container = document.createElement('div')
+      container.innerHTML = html
+      return container
+    }
+
+    it('下段を掴んでいる(highlightedPendingLower)ときは、その席の下段だけ sa-pending-lower-picked。上段の td は青(sa-student-picked)にしない', () => {
+      const container = toContainer(renderGrid(PENDING, { highlightedPendingLower: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 0 } }))
+      const lower0 = container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!
+      const lower1 = container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-1"]`)!
+      expect(lower0.className).toContain('sa-pending-lower-picked')
+      expect(lower1.className).not.toContain('sa-pending-lower-picked')
+      expect(container.querySelector('.sa-student-picked')).toBeNull()
+    })
+
+    it('机 id・席が違えば付かない(null なら誰にも付かない)', () => {
+      const other = toContainer(renderGrid(PENDING, { highlightedPendingLower: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_2`, lowerIndex: 0 } }))
+      expect(other.querySelector('.sa-pending-lower-picked')).toBeNull()
+      const otherSeat = toContainer(renderGrid(PENDING, { highlightedPendingLower: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 1 } }))
+      expect(otherSeat.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!.className).not.toContain('sa-pending-lower-picked')
+      expect(otherSeat.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-1"]`)!.className).toContain('sa-pending-lower-picked')
+      expect(toContainer(renderGrid(PENDING, { highlightedPendingLower: null })).querySelector('.sa-pending-lower-picked')).toBeNull()
+    })
+
+    it('上段の生徒を掴んでいる(selectedStudentId)ときは td が sa-student-picked になるが、下段には picked を付けない', () => {
+      const container = toContainer(renderGrid(PENDING, { selectedStudentId: 'c1' }))
+      const td = container.querySelector('.sa-student-picked')!
+      expect(td).not.toBeNull()
+      expect(td.querySelector('.sa-pending-lower')).not.toBeNull()
+      expect(container.querySelector('.sa-pending-lower-picked')).toBeNull()
+    })
+
+    it('CSS: 白抜きの白文字は上段 .sa-student-inner の中だけに当て、下段の白抜きは .sa-pending-lower-picked で描く', () => {
+      const css = readFileSync(fileURLToPath(new NodeURL('../../App.css', import.meta.url)), 'utf8')
+      // 旧ルール(td 全体の文字を白くする)が残っていると下段の文字も白くなる。
+      expect(css).not.toMatch(/^\.sa-student-picked \.sa-student-name,$/mu)
+      expect(css).not.toMatch(/^\.sa-student-picked \.sa-student-detail-prefix \{/mu)
+      for (const part of ['sa-student-name', 'sa-student-origin-date', 'sa-student-detail', 'sa-student-star', 'sa-student-detail-prefix']) {
+        expect(css).toContain(`.sa-student-picked .sa-student-inner .${part}`)
+        expect(css).toContain(`.sa-pending-lower-picked .${part}`)
+      }
+      expect(css).toContain('.sa-pending-lower.sa-pending-lower-picked {')
+    })
   })
 
   it('保留マップを渡さない（フラグ OFF・テンプレ編集中）なら従来の 1 行表示のまま（緑も下段も無い）', () => {

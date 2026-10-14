@@ -5,6 +5,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, buildTemplateTeacherSuppressionKey, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents, findTemplateSeatDuplicate } from './templateEditorGuards'
 
 // ============================================================================
 // INV-12 操作マトリクス（配置の一意性: 同一生徒を同コマに二重配置しない）
@@ -122,6 +123,52 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
   // 自動割当候補探索)は findDuplicateStudentInCell が配線済みでコードに穴は無いが、マトリクスでの
   // ロックは未整備(UIハンドラ内のためテスト不能。純関数化とあわせて上の todo と同時に固定する)。
   it.todo('配置/追加系4経路(振替配置・講習配置・手動追加・自動割当)の重複ガードをマトリクスで固定する')
+
+  // 2026-10-14(確認リスト v1.5.587 その他「テンプレの講師が追従していない日がある」の実データ調査): 開発用教室のテンプレで
+  // 金 3 限の机 4 と机 7 に同じ生徒(s017)が入っていた。テンプレ編集の「生徒追加」「生徒変更」に同コマ重複の検査が無く(移動だけ Issue #56 で配線済み)、
+  // 盤面生成(buildManagedRegularLessonsRange)が重複行を講師ごと飛ばすため、机 7 の講師が消えて 11/6 以降の金 3 限で講師がテンプレと食い違っていた。
+  describe('テンプレ編集の追加・変更・保存(templateEditorGuards)', () => {
+    const byManagedId = (student: StudentEntry) => student.managedStudentId ?? student.name
+    const fridayThird = () => mkCell('template_5_3', 'template_5', 3, [
+      { id: 't0', teacher: '絹川', manualTeacher: false, lesson: mkLesson('l0', [mkStudent('e1', 'A', { managedStudentId: 's017' }), null]) },
+      { id: 't1', teacher: '本宮', manualTeacher: false, lesson: mkLesson('l1', [null, mkStudent('e2', 'B', { managedStudentId: 's020' })]) },
+      { id: 't2', teacher: '村上', manualTeacher: false, lesson: undefined },
+    ])
+
+    it('追加: 同じコマに同じ生徒(managedStudentId が同じ・エントリ id は別)が既にいれば見つかる(別の生徒なら null)', () => {
+      const cell = fridayThird()
+      expect(findTemplateSeatDuplicate(cell, 's017', byManagedId)?.id).toBe('e1')
+      expect(findTemplateSeatDuplicate(cell, 's999', byManagedId)).toBeNull()
+    })
+
+    it('変更: 自分の席(除外 id)は数えず、別の席の同じ生徒だけ見つかる', () => {
+      const cell = fridayThird()
+      // e2 の席を s020 のまま変更(科目だけ)→ 自分自身は重複にしない。
+      expect(findTemplateSeatDuplicate(cell, 's020', byManagedId, ['e2'])).toBeNull()
+      // e2 の席を s017 に変える → 机 0 の e1 とぶつかる。
+      expect(findTemplateSeatDuplicate(cell, 's017', byManagedId, ['e2'])?.id).toBe('e1')
+    })
+
+    it('保存前の検査: 同じコマに同じ生徒が 2 机にあるテンプレを列挙し、文言にコマと生徒を出す(重複が無ければ空)', () => {
+      const clean = fridayThird()
+      expect(findTemplateDuplicateStudents([clean], byManagedId)).toEqual([])
+      const broken = fridayThird()
+      broken.desks[1].lesson = mkLesson('l1', [mkStudent('e3', 'A', { managedStudentId: 's017' }), mkStudent('e2', 'B', { managedStudentId: 's020' })])
+      const duplicates = findTemplateDuplicateStudents([broken, fridayThird()], byManagedId)
+      expect(duplicates).toHaveLength(1)
+      expect(duplicates[0].cell.id).toBe('template_5_3')
+      expect(duplicates[0].students.map((student) => student.id)).toEqual(['e1', 'e3'])
+      const message = buildTemplateDuplicateStudentsMessage(duplicates, (name) => `${name}さん`, (cell) => `金曜 ${cell.slotLabel}`)
+      expect(message).toContain('金曜 3限: Aさん')
+      expect(message).toContain('保存できません')
+    })
+
+    it('保存前の検査: 比較キーが空の生徒は比べない(止めない)', () => {
+      const cell = fridayThird()
+      cell.desks[2].lesson = mkLesson('l2', [mkStudent('e4', '', { managedStudentId: undefined }), mkStudent('e5', '', { managedStudentId: undefined })])
+      expect(findTemplateDuplicateStudents([cell], byManagedId)).toEqual([])
+    })
+  })
 })
 
 // ============================================================================

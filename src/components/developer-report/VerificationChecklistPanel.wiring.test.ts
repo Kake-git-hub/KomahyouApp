@@ -35,7 +35,7 @@ describe('確認リストパネルの配線(App.tsx)', () => {
   })
 
   it('送信は既存の「要望・報告」経路(source: board / category: request)を使う', () => {
-    expect(APP_TSX).toContain("return submit({ source: 'board', category: 'request', note })")
+    expect(APP_TSX).toContain("return submit({ source: 'board', category: 'request', note, attachments })")
     expect(APP_TSX).toContain('submitDeveloperReportRef.current = submitDeveloperReport')
   })
 })

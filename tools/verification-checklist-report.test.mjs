@@ -68,7 +68,17 @@ describe('toChecklistReport', () => {
       body: '- item-a OK\n- item-b 要改善: ずれる',
       recordedAt: '2026-09-12T00:00:00.000Z',
       reportedAt: '',
+      attachments: [],
     })
+  })
+
+  it('添付画像(2026-10-14): 文書の attachments[] から storagePath のある要素だけ読む', () => {
+    const report = toChecklistReport({ reportId: 'r1', note: '[確認リスト v1.5.596]\n- tp-38 OK [画像1枚]', attachments: [
+      { label: 'tp-38', name: 'a.png', storagePath: 'developer-reports/main/c1/r1-img1.jpg', byteLength: 100 },
+      { label: 'x', storagePath: '' },
+      'junk',
+    ] })
+    expect(report.attachments).toEqual([{ label: 'tp-38', name: 'a.png', storagePath: 'developer-reports/main/c1/r1-img1.jpg', byteLength: 100, reportId: 'r1' }])
   })
 
   it('マーカーが無ければ null(通常の要望・報告は確認リストとして扱わない)', () => {
@@ -223,5 +233,26 @@ describe('buildChecklistMarkdown', () => {
     const markdown = buildChecklistMarkdown({ items: [], otherNotes: [{ version: '1.5.502', recordedAt: '2026-09-12T00:00:00.000Z', note: '配色が見づらい' }] })
     expect(markdown).toContain('## その他の気づき')
     expect(markdown).toContain('配色が見づらい')
+  })
+})
+
+describe('添付画像の読み出し(2026-10-14)', () => {
+  it('項目ごとに label の一致する画像を付け、Markdown に「添付画像」節で保存先を出す', () => {
+    const merged = mergeChecklistReports([
+      toChecklistReport({ reportId: 'r1', note: '[確認リスト v1.5.596]\n- tp-38 要改善: 白抜き [画像2枚]\n- c-4 OK', recordedAt: '2026-10-14T06:00:00.000Z', attachments: [
+        { label: 'tp-38', name: '1.png', storagePath: 'developer-reports/main/c1/r1-img1.jpg', byteLength: 1 },
+        { label: 'tp-38', name: '2.png', storagePath: 'developer-reports/main/c1/r1-img2.jpg', byteLength: 1 },
+      ] }),
+    ])
+    const summary = summarizeChecklistResults(merged)
+    const tp38 = summary.items.find((item) => item.itemId === 'tp-38')
+    expect(tp38.attachments.map((attachment) => attachment.storagePath)).toEqual(['developer-reports/main/c1/r1-img1.jpg', 'developer-reports/main/c1/r1-img2.jpg'])
+    expect(summary.items.find((item) => item.itemId === 'c-4').attachments).toEqual([])
+    const markdown = buildChecklistMarkdown(summary)
+    expect(markdown).toContain('## 添付画像')
+    expect(markdown).toContain('- tp-38: 1.png → developer-reports/main/c1/r1-img1.jpg')
+    expect(markdown).toContain('- tp-38: 2.png → developer-reports/main/c1/r1-img2.jpg')
+    // 画像の無い結果には節を出さない
+    expect(buildChecklistMarkdown(summarizeChecklistResults(mergeChecklistReports([toChecklistReport({ reportId: 'r2', note: '[確認リスト v1.5.596]\n- c-4 OK' })])))).not.toContain('添付画像')
   })
 })

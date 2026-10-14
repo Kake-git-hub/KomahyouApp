@@ -1536,6 +1536,12 @@ function collectMemoItems(slots: MemoPair | undefined) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 保存前の確認文（Q32-1・懸案 3 案 2）。「すべてのデータが消去され」は出さない。 */
+/**
+ * 「反映開始日以降をこのテンプレで上書き保存」を押してから確認モーダルが出るまでの「処理中」文言(2026-10-14 オーナー指摘)。
+ * 確認文の件数(Q32-1)は保存本体と同じ計画関数を試し実行して出すため数秒かかる。その間 BusyOverlay にこの文言を出す。
+ */
+export const TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE = 'テンプレの差分を確認しています…'
+
 export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary) {
   return [
     `${effectiveStartDate} 以降のコマ表にテンプレートを反映します。`,

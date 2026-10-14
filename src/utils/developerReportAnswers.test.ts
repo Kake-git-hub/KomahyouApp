@@ -18,6 +18,7 @@ import {
 } from './developerReportAnswers'
 
 const record = (overrides: Partial<DeveloperReportRecord> = {}): DeveloperReportRecord => ({
+  attachments: [],
   reportId: 'r',
   classroomId: 'C1',
   classroomName: '教室1',

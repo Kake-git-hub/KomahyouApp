@@ -17,15 +17,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import type { DeveloperReportSubmitResult } from '../../utils/developerReport'
+import type { DeveloperReportAttachment, DeveloperReportSubmitResult } from '../../utils/developerReport'
 import {
   VERIFICATION_CHECKLIST,
+  VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
   VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY,
+  addVerificationChecklistAttachment,
   buildVerificationChecklistMarkdown,
+  buildVerificationChecklistReportAttachments,
   buildVerificationChecklistReportNotes,
   countVerificationChecklistProgress,
+  getVerificationChecklistAttachments,
   getVerificationChecklistEntry,
   parseVerificationChecklistDraft,
+  removeVerificationChecklistAttachment,
   resolveVerificationChecklistText,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
@@ -35,13 +40,27 @@ import {
   type VerificationChecklistDraft,
   type VerificationChecklistStatus,
 } from '../../utils/verificationChecklist'
-import { openVerificationChecklistWindow, prepareVerificationChecklistWindowDocument } from './verificationChecklistWindow'
+import { createChecklistAttachmentId, pickChecklistImageFiles, shrinkChecklistImageToDataUrl } from './checklistImage'
+import {
+  VERIFICATION_CHECKLIST_WINDOW_ZOOM_DEFAULT,
+  VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY,
+  openVerificationChecklistWindow,
+  parseVerificationChecklistWindowZoom,
+  prepareVerificationChecklistWindowDocument,
+  stepVerificationChecklistWindowZoom,
+  verificationChecklistWindowZoomToCss,
+} from './verificationChecklistWindow'
 
 export type VerificationChecklistPanelProps = {
   classroomId: string | null
   classroomName?: string
-  /** 1通ぶんの本文を送る。App 側の submitDeveloperReport(source: 'board', category: 'request')へ委譲。 */
-  onSubmitNote: (note: string) => Promise<DeveloperReportSubmitResult>
+  /**
+   * 1通ぶんの本文を送る。App 側の submitDeveloperReport(source: 'board', category: 'request')へ委譲。
+   * attachments は項目に貼ったスクリーンショット(2026-10-14)。複数通に分かれるときは 1 通目にだけ付ける。
+   */
+  onSubmitNote: (note: string, attachments?: DeveloperReportAttachment[]) => Promise<DeveloperReportSubmitResult>
+  /** 画像の縮小(既定は canvas で長辺 1600px の JPEG)。テストで差し替える。 */
+  shrinkImage?: (file: File) => Promise<{ name: string; dataUrl: string }>
   /**
    * 文面の `{{student:<生徒ID>}}` を名前にする(2026-10-10 オーナー指示「開発用教室は名前を見ていい」)。
    * App が開いている教室(開発用教室)の生徒データから引く。送信本文(id と結果だけ)には使わない。
@@ -73,7 +92,7 @@ function writeStorage(key: string, value: string) {
 
 // 教室を切り替えたときは App 側が key={classroomId} で作り直すため、下書きは初期化時に読み直される
 // (他教室の入力を持ち越さない)。ここで effect を使って state を書き戻さない。
-export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
   const [draft, setDraft] = useState<VerificationChecklistDraft>(() => parseVerificationChecklistDraft(readStorage(storageKey)))
@@ -82,10 +101,61 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
   const [resultMessage, setResultMessage] = useState<string | null>(null)
   /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
   const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
+  /**
+   * 別タブだけの拡大率(%)(2026-10-14 オーナー指摘「別タブ時の拡大縮小は独立でできるようにして」)。ブラウザの拡大は同じサイトの
+   * タブ全部に効くので、別タブのパネルに CSS zoom を当てる自前の拡大率を持つ。右下の浮き窓には当てない。
+   */
+  const [windowZoom, setWindowZoom] = useState<number>(() => parseVerificationChecklistWindowZoom(readStorage(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY)))
+  const changeWindowZoom = useCallback((direction: 1 | -1) => {
+    setWindowZoom((current) => {
+      const next = stepVerificationChecklistWindowZoom(current, direction)
+      writeStorage(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, String(next))
+      return next
+    })
+  }, [])
+  const resetWindowZoom = useCallback(() => {
+    setWindowZoom(VERIFICATION_CHECKLIST_WINDOW_ZOOM_DEFAULT)
+    writeStorage(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, String(VERIFICATION_CHECKLIST_WINDOW_ZOOM_DEFAULT))
+  }, [])
 
   const updateDraft = useCallback((next: VerificationChecklistDraft) => {
     setDraft(next)
     writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(next))
+  }, [classroomId])
+
+  /**
+   * 項目に画像を足す(貼り付け・ファイル選択の両方からここへ)。縮小 → 純関数で上限を見て下書きへ。
+   * 断られた理由は結果欄に出す(1 枚ずつ・途中で止めない)。state の更新は関数形式で重ねる(連続貼り付けで前の分を失わない)。
+   */
+  const addImages = useCallback(async (itemId: string, files: ArrayLike<File> | null | undefined) => {
+    const images = pickChecklistImageFiles(files)
+    if (images.length === 0) return
+    for (const file of images) {
+      let shrunk: { name: string; dataUrl: string }
+      try {
+        shrunk = await shrinkImage(file)
+      } catch (error) {
+        setResultMessage(`画像を読めませんでした(${file.name || '貼り付け'}): ${error instanceof Error ? error.message : String(error)}`)
+        continue
+      }
+      let failure: string | null = null
+      setDraft((current) => {
+        const result = addVerificationChecklistAttachment(current, { itemId, name: shrunk.name, dataUrl: shrunk.dataUrl }, createChecklistAttachmentId())
+        failure = result.error
+        if (!result.error) writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(result.draft))
+        return result.draft
+      })
+      // setDraft の更新関数は同期に走る(React 18/19 とも)。ここで failure を読んで理由を出す。
+      setResultMessage(failure ? `画像を付けられませんでした(${itemId}): ${failure}` : null)
+    }
+  }, [classroomId, shrinkImage])
+
+  const removeImage = useCallback((attachmentId: string) => {
+    setDraft((current) => {
+      const next = removeVerificationChecklistAttachment(current, attachmentId)
+      writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(next))
+      return next
+    })
   }, [classroomId])
 
   const toggleCollapsed = useCallback(() => {
@@ -167,11 +237,13 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     }
     setSending(true)
     setResultMessage(null)
+    // 添付画像は 1 通目にだけ載せる(分割されても画像は 1 回・label=項目 id で何の画像か分かる)。
+    const attachments = buildVerificationChecklistReportAttachments(draft)
     const reportIds: string[] = []
     let failure: string | null = null
-    for (const note of notes) {
+    for (const [index, note] of notes.entries()) {
       // 送信は逐次(受付番号を順番に並べる・サーバー側の連投を避ける)。
-      const result = await onSubmitNote(note)
+      const result = await onSubmitNote(note, index === 0 && attachments.length > 0 ? attachments : undefined)
       if (result.ok) reportIds.push(result.reportId)
       else {
         failure = result.error
@@ -183,7 +255,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       setResultMessage(`送れませんでした: ${failure}${reportIds.length > 0 ? `(送信済み ${reportIds.length}通: ${reportIds.join(', ')})` : ''}`)
       return
     }
-    setResultMessage(`送りました(${reportIds.length}通・受付番号 ${reportIds.join(', ')})。下書きはこのまま残ります。`)
+    setResultMessage(`送りました(${reportIds.length}通${attachments.length > 0 ? `・画像 ${attachments.length} 枚` : ''}・受付番号 ${reportIds.join(', ')})。下書きはこのまま残ります。`)
   }, [draft, onSubmitNote])
 
   const handleCopy = useCallback(async () => {
@@ -216,6 +288,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       className={`verification-checklist-panel${detached ? ' is-detached' : ''}`}
       aria-label="確認事項チェックリスト"
       data-testid="verification-checklist-panel"
+      // 別タブだけ自前の拡大率(CSS zoom)。右下の浮き窓には付けない(ブラウザの拡大と二重にならない)。
+      style={detached ? { zoom: verificationChecklistWindowZoomToCss(windowZoom) } : undefined}
     >
       <header className="verification-checklist-header">
         <div>
@@ -225,9 +299,16 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
           </div>
         </div>
         {detached ? (
-          <button type="button" className="verification-checklist-window-button" onClick={handleReturnFromWindow} data-testid="verification-checklist-return">
-            元の画面に戻す
-          </button>
+          <div className="verification-checklist-header-actions">
+            <div className="verification-checklist-zoom" role="group" aria-label="別タブの拡大率" data-testid="verification-checklist-zoom">
+              <button type="button" className="verification-checklist-zoom-button" onClick={() => changeWindowZoom(-1)} aria-label="縮小" data-testid="verification-checklist-zoom-out">－</button>
+              <button type="button" className="verification-checklist-zoom-value" onClick={resetWindowZoom} title="押すと 100% に戻す" data-testid="verification-checklist-zoom-value">{windowZoom}%</button>
+              <button type="button" className="verification-checklist-zoom-button" onClick={() => changeWindowZoom(1)} aria-label="拡大" data-testid="verification-checklist-zoom-in">＋</button>
+            </div>
+            <button type="button" className="verification-checklist-window-button" onClick={handleReturnFromWindow} data-testid="verification-checklist-return">
+              元の画面に戻す
+            </button>
+          </div>
         ) : (
           <div className="verification-checklist-header-actions">
             <button type="button" className="verification-checklist-window-button" onClick={handleOpenWindow} data-testid="verification-checklist-open-window">
@@ -246,6 +327,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
             <div className="verification-checklist-area">{area}</div>
             {items.map((item) => {
               const entry = getVerificationChecklistEntry(draft, item.id)
+              const attachments = getVerificationChecklistAttachments(draft, item.id)
               return (
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>
                   <div className="verification-checklist-item-title">
@@ -285,10 +367,45 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
                     className="verification-checklist-memo"
                     value={entry.memo}
                     rows={2}
-                    placeholder={entry.status === 'needs-fix' ? 'どう直してほしいか(必須ではないが書いてほしい)' : 'メモ(任意)'}
+                    placeholder={entry.status === 'needs-fix' ? 'どう直してほしいか(必須ではないが書いてほしい)。スクショは Ctrl+V で貼れます' : 'メモ(任意)。スクショは Ctrl+V で貼れます'}
                     onChange={(event) => updateDraft(setVerificationChecklistMemo(draft, item.id, event.target.value))}
+                    onPaste={(event) => {
+                      // クリップボードの画像(Win+Shift+S などのスクショ)をこの項目に添付する。文字の貼り付けは従来どおり。
+                      const files = pickChecklistImageFiles(event.clipboardData?.files)
+                      if (files.length === 0) return
+                      event.preventDefault()
+                      void addImages(item.id, files)
+                    }}
                     data-testid={`verification-checklist-memo-${item.id}`}
                   />
+                  {/* 添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。貼り付けかファイル選択。 */}
+                  <div className="verification-checklist-attachments" data-testid={`verification-checklist-attachments-${item.id}`}>
+                    {attachments.map((attachment) => (
+                      <figure key={attachment.id} className="verification-checklist-attachment">
+                        <img src={attachment.dataUrl} alt={`${item.id} の画像 ${attachment.name}`} />
+                        <figcaption>
+                          <span>{attachment.name}({Math.max(1, Math.round(attachment.byteLength / 1024))}KB)</span>
+                          <button type="button" className="link-button" onClick={() => removeImage(attachment.id)} data-testid={`verification-checklist-attachment-remove-${attachment.id}`}>外す</button>
+                        </figcaption>
+                      </figure>
+                    ))}
+                    {attachments.length < VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM ? (
+                      <label className="verification-checklist-attach">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(event) => {
+                            const files = event.target.files
+                            void addImages(item.id, files)
+                            event.target.value = ''
+                          }}
+                          data-testid={`verification-checklist-attach-${item.id}`}
+                        />
+                        画像を追加(スクショ)
+                      </label>
+                    ) : null}
+                  </div>
                   {entry.status === 'needs-fix' && !entry.memo.trim() ? (
                     <p className="verification-checklist-memo-hint">改善内容を書くと、そのまま修正に取りかかれます。</p>
                   ) : null}

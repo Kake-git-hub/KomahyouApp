@@ -158,6 +158,7 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
                   {entry.hasAiAnswer ? <span className="status-chip secondary">AI 回答あり</span> : null}
                   {entry.aiAnswerError ? <span className="status-chip danger">AI 失敗</span> : null}
                   {entry.mailError ? <span className="status-chip danger">メール失敗</span> : null}
+                  {entry.attachments.length > 0 ? <span className="status-chip secondary" data-testid={`developer-dashboard-report-attachments-${entry.reportId}`}>画像 {entry.attachments.length}</span> : null}
                 </div>
                 <button type="button" className="developer-dashboard-report-note" onClick={() => setExpandedReportId(expanded ? null : entry.reportId)} aria-expanded={expanded}>
                   {expanded ? entry.note : summarizeDeveloperReportNote(entry.note)}
@@ -167,6 +168,14 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
                     受付 {entry.reportId} / 報告元 {entry.source || '—'} / 版 {entry.appVersion || '—'} / 権限 {entry.reporterRole || '—'}
                     {entry.notifySkipped ? ` / 通知省略: ${entry.notifySkipped}` : ''}
                     {entry.mailSentAt ? ` / メール送信 ${formatDashboardDateTime(entry.mailSentAt)}` : ''}
+                    {entry.attachments.length > 0 ? (
+                      // 添付画像(2026-10-14)は Storage の保存先だけ出す(画像本体はクライアントから読めない・読み取り専用トークンで取る)。
+                      <ul className="developer-dashboard-report-attachments">
+                        {entry.attachments.map((attachment) => (
+                          <li key={attachment.storagePath}>画像 {attachment.label ? `${attachment.label}: ` : ''}{attachment.name}({Math.max(1, Math.round(attachment.byteLength / 1024))}KB) → {attachment.storagePath}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 ) : null}
               </article>

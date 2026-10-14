@@ -275,8 +275,33 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(byDiff).not.toContain('setScheduleCountAdjustments([])')
   })
 
+  it('INV-12(2026-10-14): テンプレ編集の追加・変更は同コマ重複を止め、保存は重複のあるテンプレを受け付けない（templateEditorGuards を配線）', () => {
+    expect(BOARD_TSX).toContain("import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents, findTemplateSeatDuplicate } from './templateEditorGuards'")
+    const add = sliceBody(BOARD_TSX, 'const handleTemplateConfirmAdd = () => {', 'const handleTemplateSelectDesk = (')
+    expect(add).toContain('findTemplateSeatDuplicate(addTargetCell,')
+    expect(add.indexOf('findTemplateSeatDuplicate(')).toBeLessThan(add.indexOf('pushTemplateUndo(templateCells)'))
+    expect(add).toContain('が組まれているため追加できません。')
+    const edit = sliceBody(BOARD_TSX, 'const handleTemplateConfirmEdit = () => {', 'const handleTemplateOpenAdd = () => {')
+    expect(edit).toContain('findTemplateSeatDuplicate(targetCell, candidateKey,')
+    expect(edit).toContain('[targetStudent.id])')
+    expect(edit).toContain('が組まれているため変更できません。')
+    const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
+    expect(request).toContain('findTemplateDuplicateStudents(templateCells,')
+    expect(request.indexOf('findTemplateDuplicateStudents(')).toBeLessThan(request.indexOf('convertTemplateCellsToTemplate({'))
+    expect(request).toContain('buildTemplateDuplicateStudentsMessage(duplicates,')
+  })
+
   it('確認文の件数（試し実行）は保存本体と同じ計画関数から出す（Q32-1）', () => {
-    expect(BOARD_TSX).toContain("...(templateDiffApplyEnabled ? { diffSummary: buildTemplateDiffSavePlan(template, '').diff.summary } : {}),")
+    expect(BOARD_TSX).toContain("const diffSummary = buildTemplateDiffSavePlan(template, '').diff.summary")
+    expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary })")
+    // 試し実行は数秒かかる同期計算。先に BusyOverlay を描いて 1 フレーム待ってから計算する(2026-10-14 オーナー指摘「ボタンを押して
+    // つぎのモーダルが出るまで操作できないのにローディングスピンがでない」)。差分反映 OFF の教室は従来どおり即モーダル。
+    const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
+    expect(request).toContain('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')
+    expect(request).toContain('void waitForNextPaint().then(() => {')
+    expect(request.indexOf('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '')"))
+    expect(request).toContain('setBusyOverlayMessage(null)')
+    expect(request).toContain("if (!templateDiffApplyEnabled) {\n      setTemplateSaveConfirm({ mode: 'overwrite', template })")
     const byDiff = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
     expect(byDiff).toContain('const plan = buildTemplateDiffSavePlan(template, new Date().toISOString())')
     const plan = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')

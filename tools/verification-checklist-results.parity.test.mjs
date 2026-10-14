@@ -26,6 +26,8 @@ const FIXTURE_REPORTS = FIXTURE_NOTES.map((note, index) => ({
   note,
   recordedAt: `2026-09-2${index}T00:00:00.000Z`,
   reportedAt: `2026-09-2${index}T00:00:00.000Z`,
+  // 添付画像(2026-10-14): 1 件目だけ b-2 の画像と壊れた要素を持たせ、両実装が同じく読む(壊れた要素は捨てる)ことを固定する。
+  ...(index === 0 ? { attachments: [{ label: 'b-2', name: 'a.png', storagePath: 'developer-reports/main/c1/r0-img1.jpg', byteLength: 10 }, { label: 'x', storagePath: '' }, 'junk'] } : {}),
 }))
 
 describe('確認リスト結果の読み取り: .mjs と TS の一致', () => {

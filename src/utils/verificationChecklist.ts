@@ -9,7 +9,12 @@
 // このファイルは純データ＋純関数のみ。localStorage / DOM / ネットワークには触らない
 // (テストしやすさのため。呼び出し側が入出力を担う)。
 
-import { DEVELOPER_REPORT_NOTE_LIMIT } from './developerReport'
+import {
+  DEVELOPER_REPORT_NOTE_LIMIT,
+  parseImageDataUrl,
+  type DeveloperReportAttachment,
+  type DeveloperReportAttachmentMimeType,
+} from './developerReport'
 
 /** 1項目の確認状態。未確認は送信対象から外す(省略)。 */
 export const VERIFICATION_CHECKLIST_STATUSES = ['unchecked', 'ok', 'needs-fix'] as const
@@ -53,7 +58,7 @@ export type VerificationChecklistDefinition = {
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.587'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.596'
 
 /**
  * 確認項目の正本(2026-09-12 初版・v1.5.504 で第2版・v1.5.506 で第3版・v1.5.508 で第4版・v1.5.509 で第5版)。
@@ -203,6 +208,12 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.587'
  *   ★版は v1.5.587 据え置き(確認中の版の文面を直しただけ・第42版の結果はまだ無い＝第43版と同じ扱い)。
  * 第48版(v1.5.595・2026-10-14): オーナー指示「確認リストを別タブでひらけるようにして」→ 見出しの「別タブで開く」の確認 c-4 を追加。
  *   ★版は v1.5.587 据え置き(項目を足しただけ・第42版の結果はまだ無い＝第14版の決まり)。
+ * 第49版(v1.5.596・2026-10-14): 第42〜48版の結果(受付 20261014-062117803-c223100f)で tp-32・tp-33・tp-36・tp-37・tp-38・pm-1・c-4 が OK → 外す。
+ *   同じ受付の要望 4 件と質問 1 件の対応を確認項目に: tp-38 メモ「保留生徒の D&D 中、両者が白抜きになり…掴んでいる方だけ白抜きにして」→ tp-39。
+ *   c-4 メモ「確認リストにスクショで画像毎保存できるようにしたい」→ c-6(画像の貼り付け・添付送信)、「別タブ時の拡大縮小は独立で」→ c-5(別タブだけの拡大率)。
+ *   その他欄「テンプレの反映ボタンを押してモーダルが出るまでスピナーが出ない」→ tp-40。質問「テンプレの講師が追従していない日がある」の実データ調査で
+ *   見つかったテンプレ編集の同コマ重複(INV-12 の穴・金 3限の机 4 と机 7 に同じ生徒)の修正と救済 → tp-41(tp-40 より先に行う＝重複が残っていると保存が止まる)。
+ *   q-1〜q-6・tp-15 は結果待ちのまま残す。版は v1.5.596 へ(OK 済みを外したので上げる)。
  */
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
   version: VERIFICATION_CHECKLIST_VERSION,
@@ -327,140 +338,98 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
     },
     // 第38版(v1.5.578・2026-10-03): オーナー報告の重大バグ「テンプレで生徒を一つ早い時限に移して反映したら移動元・移動先の両方に表示された」
     // ＝盤面で同じ日の中で動かした通常授業の写し(moved_ 授業・同日移動)が「手入力の印」として残っていた → 写しはテンプレに合わせる(docs/spec-template-behavior.md §H Q36)。
-    // 第42版(v1.5.587・2026-10-10): 要改善「開発用教室の実データでどのコマの誰をどこのコマに移してどんなテンプレにすればいいか、詳細に明示して」→ 実データの机で指す手順に書き換えた。
-    // 第47版(2026-10-14・オーナー指示「確認リストの生徒名などの表示内容が古いので、今の盤面に合うようになおして」): 10/13 23:27 のテンプレ保存で
-    // 10/16(金) 4限が組み替わり、旧手順の机 9 の写しが無くなった → 2026-10-13 23:40 保存の盤面(読み取り)で机替えの写しが残る机 8 の生徒 2 を使う手順へ。
-    // 期待結果は同じデータに保存本体と同じ関数(computeTemplateDiffApplyForBoard)を当てて確かめた(保留の数は変わらない)。開発用教室限定(機能フラグ templateDiffApply)。
+    // 第49版(2026-10-14・受付 20261014-062117803-c223100f の tp-38 メモ「保留生徒の D&D 中、両者が白抜きになりどちらを D&D しているかわかりにくいので、
+    // 掴んでいる方だけ白抜きにして」): 上段を掴んだときの白文字を上段(.sa-student-inner)の中だけにし、下段を掴んだときはその下段だけ白抜き(.sa-pending-lower-picked)。
     {
-      id: 'tp-32',
+      id: 'tp-39',
       area: '盤面(テンプレ保留)',
-      title: '机替えした通常授業の席にテンプレで別の生徒を入れても緑(保留)にならず、動かしていた生徒はテンプレの机に戻る(通常同士は保留にしない)',
-      prep: '10/12 の週を開き、10/16(金) 4限の机 8 の生徒 2 に{{student:s105}}(中3・英)が机替えしてきた通常授業(緑でない)で入っているのを見る。テンプレではこの生徒は机 4 の生徒 2 で、机 8 の生徒 2 は空席',
+      title: '保留(緑)の机で長押し D&D 中は、掴んでいる方の席だけが白抜き(青地・白文字)になる',
+      prep: '緑の机ならどれでもよい。例: 10/26(月) 5限の机 5(上段 {{student:s055}}・国／下段 同じ生徒の数)',
       steps: [
-        '通常授業テンプレ作成 → 金曜 4限の机 7 の生徒 2({{student:s069}}・中2・社)を押して「移動」→ 机 8 の生徒 2(空席)を押す(机 7 は生徒 1 の{{student:s044}}だけになる)',
-        '反映開始日は 10/13 のまま「反映開始日以降をこのテンプレで上書き保存」を押す → 確認文(見出し「テンプレート保存」)を読んで「保存を実行」',
+        '机 5 の上段の{{student:s055}}(国)を約 0.3 秒長押しして掴む → 動かさずに Esc で取りやめる',
+        '次に下段の{{student:s055}}(数)を長押しして掴む → Esc で取りやめる',
       ],
       check: [
-        '確認文に「同じ日の中で手で動かしていた通常授業1名はテンプレの位置に合わせます」が出て、保留(緑)の机数は保存前と同じ',
-        '10/16(金) 4限の机 8 は生徒 2 に{{student:s069}}(中2・社)が 1 行で出て緑でない。机替えしていた{{student:s105}}(中3・英)は机 4 の生徒 2 に 1 行で出て、その日に 2 か所に出ない',
-        '10/23 以降の金曜 4限も机 8 の生徒 2 が{{student:s069}}、机 7 は{{student:s044}}だけ。10/9 以前の金曜は変わらない',
-        '振替・講習・手動追加の席がぶつかった場合は従来どおり緑の 2 行のまま(保存前から緑だった机はそのまま)',
+        '上段を掴んでいる間は上段だけが青地・白文字で、下段は緑のまま黒い文字',
+        '下段を掴んでいる間は下段だけが青地・白文字で、上段は白いまま',
+        'Esc で取りやめると両方とも元の色に戻る',
       ],
-      introducedIn: 'v1.5.578',
+      introducedIn: 'v1.5.596',
     },
-    // オーナー指示(2026-10-03)「休みにした生徒 1 の席に振替を入力していた形跡なので、休みデータは保持したまま手入力データを自動採用したい。休みと振無休みは空白と同じ扱い(実績は保持)」(§H Q37)。
-    // 第47版(2026-10-14): 旧手順の 10/15(木) 3限の机 2・10/13(火) 5限の机 8 がテンプレ保存で組み替わった/過ぎた → 来週の 10/22(木) 5限の机 10 を使う手順へ。
-    // 休み＋振替の配置を盤面データに当てて保存本体と同じ関数で確かめた(机 10 は 1 行のまま・休みの記録は同じ席に残る・保留の数は変わらない)。
-    // 旧 check 4(緑の机の上段を休み→下段が席に戻る)は tp-15 の 2 つ目と同じ確認なのでそちらに任せた。
+    // 第49版(2026-10-14・受付 20261014-062117803-c223100f の質問「テンプレの講師が追従していない日がある」の実データ調査): テンプレの金 3限で机 4 と机 7 に同じ生徒が
+    // 入っていて(テンプレ編集の追加・変更に同コマ重複の検査が無かった＝INV-12 の穴)、盤面生成が重複行を講師ごと飛ばすため 11/6 以降の金 3限で講師が食い違っていた。
+    // 追加・変更・保存に検査を配線(templateEditorGuards.ts)。tp-40 より先に行う(重複が残っていると保存が止まる)。
     {
-      id: 'tp-33',
-      area: '盤面(テンプレ保留)',
-      title: '休み(振無休)にした席に置いた振替は、テンプレ保存で緑にならず 1 行で残り、休みの記録も残る',
-      prep: '10/19 の週を開き、10/22(木) 5限の机 10 の生徒 1({{student:s089}}・中3・英)を押して「休み」→「未消化振替」を開いて別の生徒(その日の 5限にいない生徒)を選び、空いた机 10 の生徒 1 の席を押して置く',
+      id: 'tp-41',
+      area: 'テンプレ作成',
+      title: 'テンプレで同じコマに同じ生徒が 2 か所あると、追加・変更・保存が止まる(今のテンプレの金 3限の重複を直すと 11/6 以降の講師が揃う)',
+      prep: '通常授業テンプレ作成を開き、金曜 3限の机 4(生徒 1)と机 7(生徒 1)に{{student:s017}}(算)が 2 か所入っているのを見る。tp-40 より先に行う',
       steps: [
-        '通常授業テンプレ作成 → 木曜 5限の机 10 の生徒 2({{student:s098}}・中3・理)を押して「移動」→ 机 12 の生徒 2(空席)を押す → 反映開始日 10/13 のまま「反映開始日以降をこのテンプレで上書き保存」→「保存を実行」',
+        '何も変えずに「反映開始日以降をこのテンプレで上書き保存」を押す → 止まったら、机 7 の{{student:s017}}を押して「削除」(机 4 の方を残す)',
+        '机 7 の空いた生徒 1 の席を押して「生徒追加」→{{student:s017}}を選んで確定してみる → 止まるのを見たら、改めて「反映開始日以降をこのテンプレで上書き保存」→「保存を実行」',
       ],
       check: [
-        '保存後、10/22(木) 5限の机 10 は緑にならず、生徒 1 の席に振替の生徒が 1 行で出る(生徒 2 は空く)。{{student:s098}}は机 12 の生徒 2({{student:s053}}の隣)に出る',
-        '休みにした{{student:s089}}の生徒日程表に 10/22 の「休」と振替欄の行が残り、未消化振替の残数も変わらない',
-        '保留(緑)の机数は保存前と同じ',
-        '10/15・10/29 以降の木曜 5限も机 10 は{{student:s089}}だけ、机 12 は「{{student:s053}} ＋ {{student:s098}}」',
+        '最初の保存は「同じコマに同じ生徒が 2 か所に入っているため保存できません(金曜 3限: …)」で止まり、確認モーダルは出ない',
+        '生徒追加は「同コマにすでに…が組まれているため追加できません」で止まる(別の席の「生徒変更」で同じ生徒を選んでも「変更できません」)',
+        '保存後、11/6 以降の金曜 3限は机 7・机 8 の講師がテンプレ作成画面の金曜 3限と同じ並びになる(それまでは机 7 の講師が机 8 の講師で、机 8 が空だった)',
+        '10/31 までの金曜 3限は変わらない(講習期間の QR 自動割振りの講師のまま)',
       ],
-      introducedIn: 'v1.5.578',
+      introducedIn: 'v1.5.596',
     },
-    // オーナー報告(2026-10-13)「通常生徒の重なりは緑にしたくない。同じ講師の組み合わせでも机が異なると違う場所と見なされ緑色に重複表示されている。
-    // 大事なのはそのコマ(曜日・時限)に生徒が配置されていること」→ 壁打ちの回答「手動追加の中身がテンプレと同じ場合はテンプレを自動採用。中身が違う場合は重複表示のまま」
-    // 「通常授業だけ」「科目違いは緑のまま」(§H Q38)。
-    // 第47版(2026-10-14): オーナーが 10/13 23:27 にこの保存(テンプレ保存)を済ませ、2026-10-13 23:40 保存の盤面で 11 件中 4 件の緑が消えて
-    // 期待どおりの机に 1 か所で出ているのを読み取りで確かめた → 保存の操作を外し、盤面を見るだけの項目にした(確認文・保存後メッセージは保存時にしか出ないので外す)。
+    // 第49版(2026-10-14・受付 20261014-062117803-c223100f その他「テンプレの反映ボタンを押してつぎのモーダルが出るまで操作できないのにローディングスピンがでない」):
+    // 確認文の件数の試し実行(数秒の同期計算)の前に BusyOverlay を描いて 1 フレーム待つ(waitForNextPaint)。
     {
-      id: 'tp-36',
-      area: '盤面(テンプレ保留)',
-      title: '手動追加の通常授業がテンプレで同じコマの別の机に同じ生徒×科目で置かれているなら、テンプレ保存で緑が消えてテンプレの机に 1 か所で出る',
-      prep: '保存は 10/13 23:27 のテンプレ保存で済んでいる(盤面を見るだけ)。10/12 の週を開く',
+      id: 'tp-40',
+      area: 'テンプレ作成',
+      title: '「反映開始日以降をこのテンプレで上書き保存」を押すと、確認モーダルが出るまで「テンプレの差分を確認しています…」のスピナーが出る',
+      prep: 'tp-41 を済ませてから(重複が残っていると保存が止まってスピナーまで進まない)。通常授業テンプレ作成を開く',
       steps: [
-        '10/15(木) 4限・10/14(水) 4限・10/19(月) 5限・10/28(水) 4限を順に見る',
-        '{{student:s095}}の生徒日程表を開いて 10/15 を見る',
+        '何も変えずに「反映開始日以降をこのテンプレで上書き保存」を押す',
+        '確認モーダルが出たら「キャンセル」',
       ],
       check: [
-        '10/15(木) 4限の机 3 は「{{student:s051}}(中1・数) ＋ {{student:s122}}(小4・算国)」の 1 行で緑でない。{{student:s095}}(国)は机 13 の生徒 1 だけに出る(2 か所に出ない)',
-        '10/14(水)・10/28(水) 4限は緑の机が無く、{{student:s073}}(理)は机 3 の生徒 2 の 1 か所だけ',
-        '10/19(月) 5限は緑の机が無く、{{student:s072}}(英)は机 8 の生徒 1 の 1 か所だけ',
-        '{{student:s095}}の生徒日程表で 10/15 の通常授業は 1 コマだけ',
+        '押した直後に画面中央にスピナーと「テンプレの差分を確認しています…」が出て、モーダルが出ると消える(固まって見えない)',
+        'モーダルの内容(件数の確認文)は以前と同じ',
+        'キャンセルすれば何も変わらない',
       ],
-      introducedIn: 'v1.5.592',
+      introducedIn: 'v1.5.596',
     },
-    // 第47版(2026-10-14): 10/13 23:40 保存の盤面で緑が残る机へ差し替え(10/19(月) 5限の机 5・10/19(月) 4限の机 2 などは既に片づいている)。
-    // tp-15・tp-38 がこの中の机を片づけるので、先に見る。
+    // 第49版(2026-10-14・受付 20261014-062117803-c223100f の c-4 メモ「確認リストの別タブ時の拡大縮小は独立でできるようにして」): ブラウザの拡大は同じサイトの
+    // タブ全部に効くので、別タブのパネルにだけ CSS zoom を当てる「－／＋」を見出しに置いた(値は別タブ専用のキーで保存)。
     {
-      id: 'tp-37',
-      area: '盤面(テンプレ保留)',
-      title: '同じ生徒でも科目が違う手動追加の通常授業と、振替・講習の下段は、従来どおり緑(保留)のまま残る',
-      prep: 'tp-36 の保存のあと(済み)。tp-15・tp-38 より先に見る(どちらも下の緑の机を片づけるため)',
-      steps: [
-        '10/26(月) 5限の机 5・10/14(水) 5限の机 2・10/15(木) 4限の机 10・10/16(金) 5限の机 2 を順に見る',
-        '10/26(月) 5限の机 5 の下段の席を押す(メニューは何も選ばずに閉じる)',
-      ],
-      check: [
-        '10/26(月) 5限の机 5 は緑のまま(上段 生徒 1={{student:s055}}・国〔テンプレ〕／下段=同じ生徒の数〔手動追加〕)。科目が違うので中身が違う扱い',
-        '下段が振替・講習の 3 机(10/14 5限 机 2 の{{student:s115}}〔振替〕・10/15 4限 机 10 の{{student:s015}}〔講習〕・10/16 5限 机 2 の{{student:s079}}〔振替〕)も緑のまま',
-        '下段の席を押すと従来どおりの 4 択(テンプレ授業を採用／手入力データを採用／手入力データを削除／手入力データを移動)が出る',
-      ],
-      introducedIn: 'v1.5.592',
-    },
-    // オーナー指示(2026-10-13)「保留の生徒(テンプレも既存もどちらも)の移動をD&Dでできるようにして」(§H Q26-8 追記)。上段は従来の生徒 D&D、下段を新設。
-    // 第47版(2026-10-14): 机はそのまま(10/13 23:40 の盤面でも緑)。離す先の机・上段の生徒・別のコマを名指しにした。
-    {
-      id: 'tp-38',
-      area: '盤面(テンプレ保留)',
-      title: '保留(緑)の机の下段の生徒を長押し D&D で空いている席へ動かせる(上段は従来どおり D&D できる)',
-      prep: 'tp-37 を見てから。10/14(水) 5限の机 2(緑・上段={{student:s081}}・英 ＋ {{student:s117}}・英／下段 生徒 2={{student:s115}}・高1・数〔振替〕)を使う。同じコマの机 7 は生徒 2 の席が空いている',
-      steps: [
-        '机 2 の下段の{{student:s115}}を約 0.3 秒長押しして掴む(画面の周りに青い枠・追従ラベル「◯◯ / 保留の下段（手入力データ） の移動先を選択中」)→ 机 7 の生徒 2(空席)に離す',
-        '「戻す」で元に戻し、もう一度下段を長押しして掴んで机 6 の生徒 1({{student:s096}})に離す → さらにもう一度掴んで Esc キー(または盤面の外で離す)→ 最後に机 2 の上段 生徒 2 の{{student:s117}}を長押しして掴み、同じ日の 4限の机 9 の生徒 2(空席)に離す',
-      ],
-      check: [
-        '1 で{{student:s115}}が机 7 の生徒 2 に 1 行で入り、机 2 は下段が無くなって緑が消える(保留の数が 1 減る)。メニューの「手入力データを移動」で動かしたときと同じ結果',
-        '2 では「空いている席」を求めるメッセージが出て何も動かず、掴んだ状態も解除される(もう一度押しても配置されない)',
-        '3 では「移動をキャンセルしました。」が出て何も変わらない',
-        '4 は従来どおり{{student:s117}}が 4限へ移動し、机 2 は{{student:s115}}が生徒 2 の席に戻って 1 行になる(v1.5.592 以前と同じ)',
-      ],
-      introducedIn: 'v1.5.593',
-    },
-    // 盤面PDFのメモ(手入力)の文字サイズ(2026-10-13 オーナー報告「印刷するとメモの文字が小さい」)。
-    // 游ゴシック・メイリオ等では収まっていても「はみ出し」と判定され、約 10px 以下まで縮んでいた(src/utils/pdf.ts pdfMemoTextOverflows)。
-    {
-      id: 'pm-1',
-      area: '盤面PDF',
-      title: 'PDF出力したコマ表のメモが、同じ文字数・改行の生徒セルと同じくらいの大きさで出る',
-      prep: '開発用教室の盤面で、生徒が 4 文字前後の名前で入っているコマの隣の空いた生徒欄を押して「メモ」→ 1 行目「保護者会」・改行・2 行目「欠席連絡」と入れて保存。別の空いた生徒欄にも 1 行「面談」のメモを入れる',
-      steps: [
-        'ツールバーの「PDF出力」を押す(コマを選ぶ画面が出たら全選択のまま出力)',
-        'PDFで、メモのセルと隣の生徒セル(名前・学年科目の 2 行)を見比べる',
-      ],
-      check: [
-        '「保護者会/欠席連絡」の文字が、隣の生徒セルの名前・学年科目とほぼ同じ大きさ(以前は極端に小さかった)',
-        '1 行の「面談」は生徒セルと同じくらい大きく出る',
-        'メモの文字が欠けたり、3 行目にはみ出したりしていない',
-      ],
-      introducedIn: 'v1.5.591',
-    },
-    // 確認リストの別タブ表示(2026-10-14 オーナー指示「確認リストを別タブでひらけるようにして」・VerificationChecklistPanel / verificationChecklistWindow.ts)。
-    {
-      id: 'c-4',
+      id: 'c-5',
       area: '確認リスト',
-      title: '確認リストを別タブで開いて記入・送信でき、閉じると右下へ戻る',
-      prep: 'ブラウザがポップアップを止めたら、アドレスバー右の表示からこのサイトを許可する',
+      title: '別タブの確認リストは見出しの「－／＋」で別タブだけ拡大縮小でき、元のタブの大きさは変わらない',
       steps: [
-        '確認リストの見出し右の「別タブで開く」を押し、開いたタブでこの c-4 を「OK」にする',
-        '元のタブへ戻って様子を見たあと、別タブの「元の画面に戻す」を押す(またはタブを閉じる)',
+        '「別タブで開く」→ 別タブの見出し右の「＋」を 2 回押す(125%)→「－」を 1 回押す(110%)',
+        '元のタブへ戻って盤面と右下の表示を見る → 別タブで「110%」の表示を押す(100% に戻る)→ 別タブを閉じてもう一度「別タブで開く」',
       ],
       check: [
-        '別タブに確認リストが画面いっぱいに出て、元のタブの右下は「確認リスト 別タブで表示中」だけになる',
-        '別タブで選んだ OK が、右下へ戻ったあとも残っている',
-        '別タブで「保存して送信」を押しても送れる(受付番号が出る)',
+        '別タブの文字と項目が段階的に大きく／小さくなり、値の表示が 125% → 110% と変わる',
+        '元のタブの盤面・右下の表示の大きさは変わらない',
+        '別タブを開き直しても前回の拡大率で開く(100% に戻した後なら 100%)',
       ],
-      introducedIn: 'v1.5.595',
+      introducedIn: 'v1.5.596',
+    },
+    // 第49版(2026-10-14・受付 20261014-062117803-c223100f の c-4 メモ「確認リストにスクショで画像毎保存できるようにしたい」): 項目のメモ欄に Ctrl+V で貼る／
+    // 「画像を追加(スクショ)」で選ぶ → 長辺 1600px の JPEG に縮めて下書きに残し、送信の 1 通目に添付(label=項目 id)。サーバーが Storage へ保存し文書に保存先を残す。
+    // ★Cloud Functions(submitDeveloperReport)のデプロイが緑になってから確認する(Hosting が先に出た数分間は画像が保存されず文書に残らない)。
+    {
+      id: 'c-6',
+      area: '確認リスト',
+      title: '確認リストの項目にスクショを貼って送ると、画像が報告と一緒に保存される',
+      prep: 'Win+Shift+S などで画面の一部を切り取ってクリップボードに入れておく。Cloud Functions のデプロイが緑になってから',
+      steps: [
+        'この c-6 のメモ欄を押して Ctrl+V で貼る → 同じ項目の「画像を追加(スクショ)」からも画像ファイルを 1 枚選ぶ',
+        'c-6 を OK にして「保存して送信」→ 開発者画面 → 開発ダッシュボード → 「詳細」でこの受付を開く',
+      ],
+      check: [
+        '貼った画像と選んだ画像が項目の下に小さく出て「外す」で消せる。再読み込みしても残っている',
+        '同じ項目に 4 枚目を付けようとすると「3 枚まで」と断られる',
+        '送信後の表示に「画像 2 枚」と受付番号が出る',
+        'ダッシュボードの詳細でこの受付の行に「画像 2」が出て、開くと保存先(developer-reports/…-img1.jpg など)が 2 行出る',
+      ],
+      introducedIn: 'v1.5.596',
     },
   ],
 }
@@ -470,12 +439,38 @@ export type VerificationChecklistEntry = {
   memo: string
 }
 
+/**
+ * 項目に添えるスクリーンショット(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。
+ * 画面側が貼り付け/ファイル選択した画像を 1600px・JPEG に縮めて data URL で持ち、下書き(localStorage)にも残す。
+ * 送信時は報告の添付(DeveloperReportAttachment・label=項目 id)として同梱し、サーバーが Storage へ保存する。
+ */
+export type VerificationChecklistAttachment = {
+  /** 下書き内で一意(削除の指定に使う)。 */
+  id: string
+  itemId: string
+  /** 元のファイル名(表示用。貼り付けは「貼り付け」)。 */
+  name: string
+  mimeType: DeveloperReportAttachmentMimeType
+  dataUrl: string
+  /** デコード後のバイト数(上限の判定・表示用)。 */
+  byteLength: number
+}
+
 export type VerificationChecklistDraft = {
   version: string
   entries: Record<string, VerificationChecklistEntry>
   /** 項目に紐づかない自由記入(その他の気づき)。 */
   otherNotes: string
+  /** 項目ごとの添付画像(2026-10-14)。 */
+  attachments: VerificationChecklistAttachment[]
 }
+
+/** 1 項目に付けられる枚数。 */
+export const VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM = 3
+/** 1 枚の上限(デコード後バイト数)。画面側が縮めてもこれを超える画像は断る(サーバーの 1 枚上限 1.5MB より小さく)。 */
+export const VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES = 1_200_000
+/** 下書き全体の合計上限(localStorage 約 5MB の中に base64 で収める・サーバーの 1 通上限 6MB 以内)。 */
+export const VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES = 3_500_000
 
 /** 下書きの localStorage キー接頭辞。教室別・版別に分ける(他教室の下書きが混ざらない)。 */
 export const VERIFICATION_CHECKLIST_STORAGE_PREFIX = 'verification-checklist'
@@ -492,7 +487,7 @@ export function verificationChecklistStorageKey(
 export function createEmptyVerificationChecklistDraft(
   version: string = VERIFICATION_CHECKLIST.version,
 ): VerificationChecklistDraft {
-  return { version, entries: {}, otherNotes: '' }
+  return { version, entries: {}, otherNotes: '', attachments: [] }
 }
 
 function normalizeStatus(raw: unknown): VerificationChecklistStatus {
@@ -506,7 +501,26 @@ export function serializeVerificationChecklistDraft(draft: VerificationChecklist
     version: draft.version,
     entries: draft.entries,
     otherNotes: draft.otherNotes,
+    attachments: draft.attachments,
   })
+}
+
+/** 保存値の添付 1 件を検証する(壊れていれば null・data URL は形とバイト数を検証)。 */
+function normalizeStoredAttachment(raw: unknown): VerificationChecklistAttachment | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const candidate = raw as { id?: unknown; itemId?: unknown; name?: unknown; dataUrl?: unknown }
+  if (typeof candidate.id !== 'string' || !candidate.id.trim()) return null
+  if (typeof candidate.itemId !== 'string' || !candidate.itemId.trim()) return null
+  const parsed = parseImageDataUrl(candidate.dataUrl)
+  if (!parsed || parsed.byteLength > VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES) return null
+  return {
+    id: candidate.id,
+    itemId: candidate.itemId,
+    name: typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name : 'image',
+    mimeType: parsed.mimeType,
+    dataUrl: candidate.dataUrl as string,
+    byteLength: parsed.byteLength,
+  }
 }
 
 /**
@@ -526,7 +540,7 @@ export function parseVerificationChecklistDraft(
     return empty
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty
-  const candidate = parsed as { version?: unknown; entries?: unknown; otherNotes?: unknown }
+  const candidate = parsed as { version?: unknown; entries?: unknown; otherNotes?: unknown; attachments?: unknown }
   if (typeof candidate.version === 'string' && candidate.version !== version) return empty
   const entries: Record<string, VerificationChecklistEntry> = {}
   if (candidate.entries && typeof candidate.entries === 'object' && !Array.isArray(candidate.entries)) {
@@ -539,10 +553,21 @@ export function parseVerificationChecklistDraft(
       entries[id] = { status, memo }
     }
   }
+  const attachments: VerificationChecklistAttachment[] = []
+  if (Array.isArray(candidate.attachments)) {
+    const seen = new Set<string>()
+    for (const raw of candidate.attachments) {
+      const attachment = normalizeStoredAttachment(raw)
+      if (!attachment || seen.has(attachment.id)) continue
+      seen.add(attachment.id)
+      attachments.push(attachment)
+    }
+  }
   return {
     version,
     entries,
     otherNotes: typeof candidate.otherNotes === 'string' ? candidate.otherNotes : '',
+    attachments,
   }
 }
 
@@ -588,6 +613,87 @@ export function getVerificationChecklistEntry(
   return draft.entries[id] ?? { status: 'unchecked', memo: '' }
 }
 
+/** 項目の添付画像(下書き内の順)。 */
+export function getVerificationChecklistAttachments(draft: VerificationChecklistDraft, itemId: string): VerificationChecklistAttachment[] {
+  return draft.attachments.filter((attachment) => attachment.itemId === itemId)
+}
+
+export function sumVerificationChecklistAttachmentBytes(draft: VerificationChecklistDraft): number {
+  return draft.attachments.reduce((total, attachment) => total + attachment.byteLength, 0)
+}
+
+export type VerificationChecklistAttachmentInput = {
+  itemId: string
+  name: string
+  /** `data:image/(jpeg|png|webp);base64,…`(画面側で縮めた後のもの)。 */
+  dataUrl: string
+}
+
+/**
+ * 項目に画像を 1 枚足す(純関数)。断る理由があれば error を返し下書きは変えない:
+ * 形が画像の data URL でない／1 枚の上限超え／項目の枚数上限／下書き全体の合計上限。
+ * **未確認のまま画像だけ付けたら要改善に切り替える**(メモと同じ理由＝未確認の行は送信本文に載らず、画像が黙って捨てられる)。
+ */
+export function addVerificationChecklistAttachment(
+  draft: VerificationChecklistDraft,
+  input: VerificationChecklistAttachmentInput,
+  id: string,
+): { draft: VerificationChecklistDraft; error: string | null } {
+  const parsed = parseImageDataUrl(input.dataUrl)
+  if (!parsed) return { draft, error: '画像(JPEG / PNG / WebP)として読めませんでした。' }
+  if (parsed.byteLength > VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES) {
+    return { draft, error: `画像が大きすぎます(上限 ${Math.round(VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES / 100_000) / 10}MB)。` }
+  }
+  if (getVerificationChecklistAttachments(draft, input.itemId).length >= VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM) {
+    return { draft, error: `この項目に付けられる画像は ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM} 枚までです。` }
+  }
+  if (sumVerificationChecklistAttachmentBytes(draft) + parsed.byteLength > VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES) {
+    return { draft, error: '画像の合計が上限を超えます。先に送信するか、ほかの画像を外してください。' }
+  }
+  if (draft.attachments.some((attachment) => attachment.id === id)) return { draft, error: '同じ画像が既に付いています。' }
+  const attachment: VerificationChecklistAttachment = {
+    id,
+    itemId: input.itemId,
+    name: input.name.trim() || 'image',
+    mimeType: parsed.mimeType,
+    dataUrl: input.dataUrl,
+    byteLength: parsed.byteLength,
+  }
+  const current = getVerificationChecklistEntry(draft, input.itemId)
+  const status: VerificationChecklistStatus = current.status === 'unchecked' ? 'needs-fix' : current.status
+  const next = setVerificationChecklistEntry(draft, input.itemId, { status })
+  return { draft: { ...next, attachments: [...next.attachments, attachment] }, error: null }
+}
+
+/** 画像を 1 枚外す(純関数)。無い id なら同じ内容の下書きを返す。 */
+export function removeVerificationChecklistAttachment(draft: VerificationChecklistDraft, attachmentId: string): VerificationChecklistDraft {
+  if (!draft.attachments.some((attachment) => attachment.id === attachmentId)) return draft
+  return { ...draft, attachments: draft.attachments.filter((attachment) => attachment.id !== attachmentId) }
+}
+
+/**
+ * 送信に同梱する添付(項目の並び順・label=項目 id)。未確認の項目の画像は送らない(本文に載らない項目と揃える＝
+ * ただし addVerificationChecklistAttachment が未確認→要改善に切り替えるので、普通は全部送られる)。
+ */
+export function buildVerificationChecklistReportAttachments(
+  draft: VerificationChecklistDraft,
+  items: readonly VerificationChecklistItem[] = VERIFICATION_CHECKLIST.items,
+): DeveloperReportAttachment[] {
+  const result: DeveloperReportAttachment[] = []
+  for (const item of items) {
+    if (getVerificationChecklistEntry(draft, item.id).status === 'unchecked') continue
+    for (const attachment of getVerificationChecklistAttachments(draft, item.id)) {
+      result.push({ label: item.id, name: attachment.name, mimeType: attachment.mimeType, dataUrl: attachment.dataUrl })
+    }
+  }
+  return result
+}
+
+/** 送信本文・Markdown に添える画像枚数の印(`[画像2枚]`)。無ければ空文字。 */
+export function formatVerificationChecklistAttachmentMark(count: number): string {
+  return count > 0 ? `[画像${count}枚]` : ''
+}
+
 export type VerificationChecklistProgress = {
   total: number
   checked: number
@@ -631,8 +737,11 @@ function buildVerificationChecklistLines(
     const entry = getVerificationChecklistEntry(draft, item.id)
     if (entry.status === 'unchecked') continue
     const memo = singleLineMemo(entry.memo)
-    if (entry.status === 'ok') lines.push(memo ? `- ${item.id} OK: ${memo}` : `- ${item.id} OK`)
-    else lines.push(memo ? `- ${item.id} 要改善: ${memo}` : `- ${item.id} 要改善`)
+    // 画像の枚数はメモの末尾に印として残す(画像本体は添付として別に届く・読み取りツールは印を無視してもメモが読める)。
+    const mark = formatVerificationChecklistAttachmentMark(getVerificationChecklistAttachments(draft, item.id).length)
+    const tail = [memo, mark].filter(Boolean).join(' ')
+    if (entry.status === 'ok') lines.push(tail ? `- ${item.id} OK: ${tail}` : `- ${item.id} OK`)
+    else lines.push(tail ? `- ${item.id} 要改善: ${tail}` : `- ${item.id} 要改善`)
   }
   const other = singleLineMemo(draft.otherNotes)
   if (other) lines.push(`- その他: ${other}`)
@@ -726,6 +835,8 @@ export function buildVerificationChecklistMarkdown(
     lines.push(`- [${box}] ${item.id} ${item.title} — ${verificationChecklistStatusLabel(entry.status)}`)
     const memo = singleLineMemo(entry.memo)
     if (memo) lines.push(`  - メモ: ${memo}`)
+    const attachments = getVerificationChecklistAttachments(draft, item.id)
+    if (attachments.length > 0) lines.push(`  - 画像: ${attachments.length} 枚(${attachments.map((attachment) => attachment.name).join(', ')})`)
   }
   const other = singleLineMemo(draft.otherNotes)
   if (other) {

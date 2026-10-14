@@ -40,9 +40,9 @@ describe('toChecklistReport / mergeChecklistReports', () => {
 
   it('同じ part の再送は受付が新しい方を採用し、版違いは別グループで受付が早い順に並ぶ', () => {
     const merged = mergeChecklistReports([
-      { reportId: 'new', version: '1.5.502', part: 1, total: 1, body: '- p-1 要改善: 直後', recordedAt: '2026-09-12T03:00:00.000Z', reportedAt: '' },
-      { reportId: 'old', version: '1.5.502', part: 1, total: 1, body: '- p-1 OK', recordedAt: '2026-09-12T01:00:00.000Z', reportedAt: '' },
-      { reportId: 'v2', version: '1.5.504', part: 1, total: 1, body: '- p-2 OK', recordedAt: '2026-09-12T02:00:00.000Z', reportedAt: '' },
+      { reportId: 'new', version: '1.5.502', part: 1, total: 1, body: '- p-1 要改善: 直後', recordedAt: '2026-09-12T03:00:00.000Z', reportedAt: '', attachments: [] },
+      { reportId: 'old', version: '1.5.502', part: 1, total: 1, body: '- p-1 OK', recordedAt: '2026-09-12T01:00:00.000Z', reportedAt: '', attachments: [] },
+      { reportId: 'v2', version: '1.5.504', part: 1, total: 1, body: '- p-2 OK', recordedAt: '2026-09-12T02:00:00.000Z', reportedAt: '', attachments: [] },
     ])
     // 再送を採用した v1.5.502 の受付は 03:00 になるので、02:00 受付の v1.5.504 が先に並ぶ(グループの最も早い受付順)。
     expect(merged.map((entry) => entry.version)).toEqual(['1.5.504', '1.5.502'])
@@ -73,7 +73,7 @@ describe('parseChecklistBody', () => {
     const notes = buildVerificationChecklistReportNotes(draft, { items: [item] })
     expect(notes).toHaveLength(1)
     const summary = summarizeChecklistReports([{ reportId: 'r1', note: notes[0], recordedAt: '2026-09-25T00:00:00.000Z' }])
-    expect(summary.items).toEqual([{ itemId: 'x-1', result: 'ok', memo: '', version: '1.5.0', recordedAt: '2026-09-25T00:00:00.000Z', reportIds: ['r1'] }])
+    expect(summary.items).toEqual([{ itemId: 'x-1', result: 'ok', memo: '', version: '1.5.0', recordedAt: '2026-09-25T00:00:00.000Z', reportIds: ['r1'], attachments: [] }])
     expect(summary.otherNotes).toEqual([{ version: '1.5.0', recordedAt: '2026-09-25T00:00:00.000Z', note: 'ボタンの位置を左へ' }])
   })
 })
@@ -81,8 +81,8 @@ describe('parseChecklistBody', () => {
 describe('summarizeChecklistResults / summarizeChecklistReports', () => {
   it('項目 id ごとに最新結果だけを残し(後勝ち)、未確認は表に現れない', () => {
     const summary = summarizeChecklistResults([
-      { version: '1.5.502', total: 1, receivedParts: [1], body: '- p-1 要改善: 高い\n- p-2 OK', reportIds: ['a'], firstRecordedAt: '2026-09-12T01:00:00.000Z', lastRecordedAt: '2026-09-12T01:00:00.000Z' },
-      { version: '1.5.504', total: 1, receivedParts: [1], body: '- p-1 OK\nその他の気づき:\n次は文字を大きく', reportIds: ['b'], firstRecordedAt: '2026-09-12T02:00:00.000Z', lastRecordedAt: '2026-09-12T02:00:00.000Z' },
+      { version: '1.5.502', total: 1, receivedParts: [1], body: '- p-1 要改善: 高い\n- p-2 OK', reportIds: ['a'], attachments: [], firstRecordedAt: '2026-09-12T01:00:00.000Z', lastRecordedAt: '2026-09-12T01:00:00.000Z' },
+      { version: '1.5.504', total: 1, receivedParts: [1], body: '- p-1 OK\nその他の気づき:\n次は文字を大きく', reportIds: ['b'], attachments: [], firstRecordedAt: '2026-09-12T02:00:00.000Z', lastRecordedAt: '2026-09-12T02:00:00.000Z' },
     ])
     const p1 = summary.items.find((item) => item.itemId === 'p-1')
     expect(p1).toMatchObject({ result: 'ok', version: '1.5.504', reportIds: ['b'] })
@@ -95,6 +95,6 @@ describe('summarizeChecklistResults / summarizeChecklistReports', () => {
       { reportId: 'q', note: '休みにした生徒の振替先を後から変えるには？', recordedAt: '2026-09-20T00:00:00.000Z' },
       { reportId: 'c', note: '[確認リスト v1.5.556]\n- t-1 OK', recordedAt: '2026-09-22T00:00:00.000Z' },
     ])
-    expect(summary.items).toEqual([{ itemId: 't-1', result: 'ok', memo: '', version: '1.5.556', recordedAt: '2026-09-22T00:00:00.000Z', reportIds: ['c'] }])
+    expect(summary.items).toEqual([{ itemId: 't-1', result: 'ok', memo: '', version: '1.5.556', recordedAt: '2026-09-22T00:00:00.000Z', reportIds: ['c'], attachments: [] }])
   })
 })

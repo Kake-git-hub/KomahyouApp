@@ -20,6 +20,13 @@ import {
   setVerificationChecklistMemo,
   setVerificationChecklistOtherNotes,
   verificationChecklistStorageKey,
+  VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES,
+  VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
+  VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES,
+  addVerificationChecklistAttachment,
+  buildVerificationChecklistReportAttachments,
+  getVerificationChecklistAttachments,
+  removeVerificationChecklistAttachment,
   type VerificationChecklistItem,
 } from './verificationChecklist'
 
@@ -61,9 +68,11 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第42版(v1.5.587): 第41版で OK だった項目を外し、要改善の tp-32・tp-33 を開発用教室の実データで指す手順に書き換えた', () => {
+  it('第49版(v1.5.596): 第42〜48版で OK だった項目を外し、受付 20261014-062117803-c223100f の要望・質問の対応を確認項目にした', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-32', 'tp-33', 'tp-36', 'tp-37', 'tp-38', 'pm-1', 'c-4'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-39', 'tp-41', 'tp-40', 'c-5', 'c-6'])
+    // 第49版の結果(2026-10-14・受付 20261014-062117803-c223100f)で OK → 外す。
+    for (const okId of ['tp-32', 'tp-33', 'tp-36', 'tp-37', 'tp-38', 'pm-1', 'c-4']) expect(ids, okId).not.toContain(okId)
     // 第41版の結果(2026-10-10・受付 20261010-144912762-45a17afb)で OK → 外す(タブ名 mc-1・請求画面 bl-1〜bl-4・テンプレ保留 tp-31/tp-34/tp-35・講習の重複 tp-30)。
     for (const okId of ['tp-31', 'tp-34', 'tp-35', 'tp-30', 'mc-1', 'bl-1', 'bl-2', 'bl-3', 'bl-4']) expect(ids, okId).not.toContain(okId)
     // 第39版の結果(2026-10-07・受付 20261007-114407125-114ac7b6)で hm-1〜hm-4 がすべて OK。
@@ -79,16 +88,9 @@ describe('確認リストの項目定義', () => {
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
-    // 第38版(2026-10-03): 次にデプロイされる版 v1.5.578 へ上げた(OK 済みを外したので上げる)。
-    // 第39版(2026-10-07): hm-1〜hm-4 を足しただけなので版は据え置き(v1.5.578)。
-    // 第40版(2026-10-07): hm-1〜hm-4 が OK → 外したので v1.5.580 へ上げる。
-    // 第41版(2026-10-10): 2 社目準備 P-2(タブ名)の mc-1 を足したので v1.5.582 へ上げる。
-    // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ上げる(tp-32・tp-33 は同じ id で書き換え＝introducedIn は据え置き)。
-    // 第44版(2026-10-13): PDF のメモ文字サイズ pm-1 を足しただけなので版は据え置き(v1.5.587)。
-    // 第45版(2026-10-13): テンプレ保留 Q38 の tp-36・tp-37 を足しただけなので版は据え置き(v1.5.587)。
-    // 第46版(2026-10-13): 保留の下段の D&D tp-38 を足しただけなので版は据え置き(v1.5.587)。
-    // 第47版(2026-10-14): 今の盤面に合わせて tp-15・tp-32・tp-33・tp-36・tp-37・tp-38 の文面を直しただけなので版は据え置き(v1.5.587)。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.587')
+    // 第42版(2026-10-10): 第41版の OK 済みを外したので v1.5.587 へ。第44〜48版は項目を足しただけで据え置き。
+    // 第49版(2026-10-14): OK 済み 7 件を外したので次にデプロイされる版 v1.5.596 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.596')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
@@ -99,62 +101,30 @@ describe('確認リストの項目定義', () => {
     // 第47版: 今の緑の机(10/16(金) 5限の机 2)を名指し。上段を先に休みにすると机が 1 行に戻って下段でなくなるので、下段→上段の順。
     expect(byId.get('tp-15')!.prep).toContain('10/16(金) 5限の机 2')
     expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下段の\{\{student:s079\}\}.*次に上段の\{\{student:s085\}\}/u)
-    // 第38版: オーナー報告 2026-10-03(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る)・指示(休み＝空白扱い・日程表の休みに日付不要)・
-    // 確認リスト v1.5.577 その他欄(通常同士なのに保留・生徒 1 の操作で生徒 2 が動く)。
-    // 第44版: オーナー報告 2026-10-13「コマ表を PDF 印刷するとメモ入力の文字が小さい」。
-    expect(byId.get('pm-1')!.introducedIn).toBe('v1.5.591')
-    // 第48版(2026-10-14): 確認リストの別タブ表示 c-4 を足した(版は据え置き)。
-    expect(byId.get('c-4')!.introducedIn).toBe('v1.5.595')
-    expect(byId.get('pm-1')!.area).toBe('盤面PDF')
-    for (const id of ['tp-32', 'tp-33']) {
-      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.578')
-      expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
-    }
-    // 第45版: オーナー報告 2026-10-13「通常生徒の重なりは緑にしたくない。机が異なると違う場所と見なされ緑色に重複表示」→ §H Q38(手動追加の通常授業はテンプレと同じ内容なら自動採用)。
-    for (const id of ['tp-36', 'tp-37']) {
-      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.592')
-      expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
-    }
-    // 第47版(2026-10-14): tp-36 の保存はオーナーが 10/13 23:27 に済ませた → 盤面を見るだけ(確認文の件数は保存時にしか出ないので外した)。
-    expect(byId.get('tp-36')!.prep).toContain('済んでいる(盤面を見るだけ)')
-    expect(byId.get('tp-36')!.check!.join(' / ')).toContain('机 3 は「{{student:s051}}(中1・数) ＋ {{student:s122}}(小4・算国)」の 1 行で緑でない')
-    expect(byId.get('tp-36')!.check!.join(' / ')).not.toContain('手動追加の通常授業4名')
-    expect(byId.get('tp-37')!.check!.join(' / ')).toContain('緑のまま')
-    // 第47版: 10/19(月) 5限の机 5 は片づいている → 今も緑の 10/26(月) 5限の机 5 と、下段が振替・講習の 3 机。
-    expect(byId.get('tp-37')!.steps[0]).toContain('10/26(月) 5限の机 5')
-    expect(byId.get('tp-37')!.steps.join(' / ')).not.toContain('10/19(月) 5限の机 5')
-    expect(byId.get('tp-38')!.introducedIn).toBe('v1.5.593')
-    expect(byId.get('tp-38')!.area).toBe('盤面(テンプレ保留)')
-    expect(byId.get('tp-38')!.steps.join(' / ')).toContain('長押し')
-    expect(byId.get('tp-38')!.steps[0]).toContain('机 7 の生徒 2(空席)に離す')
-    // 第42版(2026-10-10・受付 20261010-144912762-45a17afb 要改善「開発用教室の実データでどのコマの誰をどこのコマに移してどんなテンプレにすればいいか、詳細に明示して」):
-    // 手順は日付・時限・机番号・席(生徒 1／生徒 2)・学年・科目で対象を指す。生徒名(個人情報)は書かない。
-    const tp32 = byId.get('tp-32')!
-    expect(tp32.title).toContain('通常同士は保留にしない')
-    // 第47版(2026-10-14): 10/13 23:27 のテンプレ保存で机 9 の写しが無くなった → 今の盤面で写しが残る机 8 の生徒 2 を使う。
-    expect(tp32.prep).toContain('10/16(金) 4限の机 8 の生徒 2 に{{student:s105}}(中3・英)が机替えしてきた')
-    expect(tp32.steps.join(' / ')).toContain('机 7 の生徒 2({{student:s069}}・中2・社)を押して「移動」→ 机 8 の生徒 2(空席)')
-    expect(tp32.steps.join(' / ')).toContain('反映開始日は 10/13 のまま')
-    expect(tp32.check!.join(' / ')).toContain('同じ日の中で手で動かしていた通常授業1名はテンプレの位置に合わせます')
-    expect(tp32.check!.join(' / ')).toContain('机 4 の生徒 2 に 1 行で出て')
-    expect(tp32.check!.join(' / ')).toContain('振替・講習・手動追加の席がぶつかった場合は従来どおり緑')
-    const tp33 = byId.get('tp-33')!
-    // 第47版(2026-10-14): 旧手順の 10/15(木) 3限・10/13(火) 5限は組み替わった/過ぎた → 来週の 10/22(木) 5限の机 10。
-    expect(tp33.prep).toContain('10/22(木) 5限の机 10 の生徒 1({{student:s089}}・中3・英)を押して「休み」')
-    expect(tp33.steps.join(' / ')).toContain('机 10 の生徒 2({{student:s098}}・中3・理)を押して「移動」→ 机 12 の生徒 2(空席)')
-    expect(tp33.check!.join(' / ')).toContain('「休」と振替欄の行が残り')
-    expect(tp33.check!.join(' / ')).toContain('未消化振替の残数も変わらない')
+    // 第49版(2026-10-14): 受付 20261014-062117803-c223100f の対応。
+    for (const id of ['tp-39', 'tp-40', 'tp-41', 'c-5', 'c-6']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.596')
+    // tp-38 メモ「掴んでいる方だけ白抜きにして」: 上段・下段を順に掴んで色を見る。
+    expect(byId.get('tp-39')!.area).toBe('盤面(テンプレ保留)')
+    expect(byId.get('tp-39')!.check!.join(' / ')).toContain('上段だけが青地・白文字')
+    expect(byId.get('tp-39')!.check!.join(' / ')).toContain('下段だけが青地・白文字')
+    // 質問「テンプレの講師が追従していない日がある」→ テンプレ編集の同コマ重複(INV-12)。tp-40(スピナー)より先に行う(重複が残ると保存が止まる)。
+    expect(ids.indexOf('tp-41')).toBeLessThan(ids.indexOf('tp-40'))
+    expect(byId.get('tp-41')!.prep).toContain('{{student:s017}}')
+    expect(byId.get('tp-41')!.check!.join(' / ')).toContain('保存できません')
+    expect(byId.get('tp-41')!.check!.join(' / ')).toContain('追加できません')
+    expect(byId.get('tp-40')!.prep).toContain('tp-41 を済ませてから')
+    expect(byId.get('tp-40')!.check!.join(' / ')).toContain('テンプレの差分を確認しています…')
+    // c-4 メモ: 別タブだけの拡大率・スクショの添付。
+    expect(byId.get('c-5')!.steps.join(' / ')).toContain('125%')
+    expect(byId.get('c-5')!.check!.join(' / ')).toContain('元のタブの盤面・右下の表示の大きさは変わらない')
+    expect(byId.get('c-6')!.steps.join(' / ')).toContain('Ctrl+V')
+    expect(byId.get('c-6')!.check!.join(' / ')).toContain('3 枚まで')
+    expect(byId.get('c-6')!.prep).toContain('Cloud Functions のデプロイが緑になってから')
     // 生徒名はソースに載せない(スナップショットの実名は「姓 + 全角スペース + 名」の形)。第43版(2026-10-10 オーナー指示「開発用教室は名前を見ていい」):
     // 代わりに {{student:<生徒ID>}} を書き、画面が開いている教室の生徒データから名前を差し込む。
     for (const item of VERIFICATION_CHECKLIST.items) {
       for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) expect(line, item.id).not.toMatch(/[一-龠ぁ-んァ-ヶ]+\u3000[一-龠ぁ-んァ-ヶ]+/u)
     }
-    expect(tp32.prep).toContain('{{student:s105}}')
-    expect(tp32.steps[0]).toContain('{{student:s069}}')
-    expect(tp32.check!.join(' / ')).toContain('{{student:s069}}')
-    expect(tp33.prep).toContain('{{student:s089}}')
-    expect(tp33.steps.join(' / ')).toContain('{{student:s098}}')
-    expect(tp33.check!.join(' / ')).toContain('{{student:s053}}')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
@@ -220,8 +190,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.587')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.587')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.596')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.596')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -293,7 +263,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.587]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.596]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
@@ -381,5 +351,90 @@ describe('メモ欄の入力(常時表示・2026-09-13)', () => {
   it('空白だけのメモでは未確認のまま(入力途中で勝手に要改善にしない)', () => {
     const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), itemId, '  ')
     expect(draft.entries[itemId]?.status).toBe('unchecked')
+  })
+})
+
+describe('添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)', () => {
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 1).toString('base64')}`
+
+  it('項目に画像を足すと下書きに残り、未確認なら要改善に切り替わる。OK のままなら OK のまま', () => {
+    const base = createEmptyVerificationChecklistDraft()
+    const added = addVerificationChecklistAttachment(base, { itemId: 'p-2', name: 'shot.png', dataUrl: dataUrlOfBytes(30) }, 'att-1')
+    expect(added.error).toBeNull()
+    expect(base.attachments).toEqual([]) // 純関数
+    expect(getVerificationChecklistAttachments(added.draft, 'p-2')).toEqual([{ id: 'att-1', itemId: 'p-2', name: 'shot.png', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(30), byteLength: 30 }])
+    expect(getVerificationChecklistEntry(added.draft, 'p-2').status).toBe('needs-fix')
+    const okDraft = setVerificationChecklistEntry(base, 'c-1', { status: 'ok' })
+    const okAdded = addVerificationChecklistAttachment(okDraft, { itemId: 'c-1', name: '', dataUrl: dataUrlOfBytes(3, 'image/png') }, 'att-2')
+    expect(getVerificationChecklistEntry(okAdded.draft, 'c-1').status).toBe('ok')
+    expect(getVerificationChecklistAttachments(okAdded.draft, 'c-1')[0].name).toBe('image')
+  })
+
+  it('断る理由: 画像でない・1 枚の上限・項目の枚数上限・合計上限・同じ id', () => {
+    const base = createEmptyVerificationChecklistDraft()
+    expect(addVerificationChecklistAttachment(base, { itemId: 'p-2', name: 'a', dataUrl: 'data:text/plain;base64,QUJD' }, 'a').error).toContain('画像')
+    expect(addVerificationChecklistAttachment(base, { itemId: 'p-2', name: 'a', dataUrl: dataUrlOfBytes(VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES + 3) }, 'a').error).toContain('大きすぎます')
+    let draft = base
+    for (let index = 0; index < VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM; index += 1) {
+      const result = addVerificationChecklistAttachment(draft, { itemId: 'p-2', name: `${index}`, dataUrl: dataUrlOfBytes(3) }, `att-${index}`)
+      expect(result.error).toBeNull()
+      draft = result.draft
+    }
+    expect(addVerificationChecklistAttachment(draft, { itemId: 'p-2', name: 'x', dataUrl: dataUrlOfBytes(3) }, 'att-x').error).toContain(`${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM} 枚まで`)
+    // 別の項目には足せる
+    expect(addVerificationChecklistAttachment(draft, { itemId: 'p-3', name: 'x', dataUrl: dataUrlOfBytes(3) }, 'att-y').error).toBeNull()
+    expect(addVerificationChecklistAttachment(draft, { itemId: 'p-3', name: 'x', dataUrl: dataUrlOfBytes(3) }, 'att-0').error).toContain('既に')
+    // 合計上限: 1 枚ずつは上限内でも合計で止まる
+    const big = VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES - 3
+    let total = base
+    let stopped: string | null = null
+    for (let index = 0; index < 10 && !stopped; index += 1) {
+      const result = addVerificationChecklistAttachment(total, { itemId: `h-${index}`, name: 'b', dataUrl: dataUrlOfBytes(big) }, `big-${index}`)
+      stopped = result.error
+      total = result.draft
+    }
+    expect(stopped).toContain('合計')
+    expect(total.attachments.length).toBe(Math.floor(VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES / big))
+  })
+
+  it('外すと消える(無い id なら同じ内容)。serialize → parse で画像も戻り、壊れた画像だけ落ちる', () => {
+    const added = addVerificationChecklistAttachment(createEmptyVerificationChecklistDraft(), { itemId: 'p-2', name: 'a', dataUrl: dataUrlOfBytes(6) }, 'att-1').draft
+    expect(removeVerificationChecklistAttachment(added, 'nope')).toEqual(added)
+    expect(removeVerificationChecklistAttachment(added, 'att-1').attachments).toEqual([])
+    expect(parseVerificationChecklistDraft(serializeVerificationChecklistDraft(added))).toEqual(added)
+    const restored = parseVerificationChecklistDraft(JSON.stringify({
+      version: VERIFICATION_CHECKLIST.version,
+      entries: {},
+      otherNotes: '',
+      attachments: [
+        { id: 'ok', itemId: 'p-2', name: 'a', dataUrl: dataUrlOfBytes(6) },
+        { id: 'ok', itemId: 'p-2', name: 'dup', dataUrl: dataUrlOfBytes(6) },
+        { id: 'bad', itemId: 'p-2', name: 'a', dataUrl: 'data:text/plain;base64,QUJD' },
+        { id: 'huge', itemId: 'p-2', name: 'a', dataUrl: dataUrlOfBytes(VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES + 3) },
+        { id: '', itemId: 'p-2', dataUrl: dataUrlOfBytes(6) },
+        'junk',
+      ],
+    }))
+    expect(restored.attachments.map((attachment) => attachment.id)).toEqual(['ok'])
+    expect(restored.attachments[0].byteLength).toBe(6)
+    // 古い下書き(attachments 無し)も読める
+    expect(parseVerificationChecklistDraft(JSON.stringify({ version: VERIFICATION_CHECKLIST.version, entries: {}, otherNotes: 'x' })).attachments).toEqual([])
+  })
+
+  it('送信本文には枚数の印 [画像n枚] が付き、添付は項目順・label=項目 id で組み立てる(未確認の項目は送らない)', () => {
+    let draft = draftWith([['c-1', 'ok'], ['p-2', 'needs-fix', '白抜き']])
+    draft = addVerificationChecklistAttachment(draft, { itemId: 'p-2', name: '2.png', dataUrl: dataUrlOfBytes(6) }, 'a').draft
+    draft = addVerificationChecklistAttachment(draft, { itemId: 'c-1', name: '1.png', dataUrl: dataUrlOfBytes(3, 'image/png') }, 'b').draft
+    draft = addVerificationChecklistAttachment(draft, { itemId: 'p-2', name: '3.png', dataUrl: dataUrlOfBytes(9) }, 'c').draft
+    const notes = buildVerificationChecklistReportNotes(draft, { items: FIXTURE_ITEMS })
+    expect(notes[0].split('\n')).toEqual([buildVerificationChecklistMarker(), '- c-1 OK: [画像1枚]', '- p-2 要改善: 白抜き [画像2枚]'])
+    const attachments = buildVerificationChecklistReportAttachments(draft, FIXTURE_ITEMS)
+    expect(attachments.map((attachment) => `${attachment.label}:${attachment.name}:${attachment.mimeType}`)).toEqual(['c-1:1.png:image/png', 'p-2:2.png:image/jpeg', 'p-2:3.png:image/jpeg'])
+    // 未確認へ戻した項目の画像は送らない(本文にも載らない)
+    const unchecked = setVerificationChecklistEntry(draft, 'c-1', { status: 'unchecked' })
+    expect(buildVerificationChecklistReportAttachments(unchecked, FIXTURE_ITEMS).map((attachment) => attachment.label)).toEqual(['p-2', 'p-2'])
+    expect(buildVerificationChecklistReportNotes(unchecked, { items: FIXTURE_ITEMS })[0]).not.toContain('c-1')
+    // Markdown にも枚数と名前
+    expect(buildVerificationChecklistMarkdown(draft, FIXTURE_ITEMS)).toContain('  - 画像: 2 枚(2.png, 3.png)')
   })
 })

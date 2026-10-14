@@ -33,6 +33,15 @@ export type ChecklistMarker = {
   total: number
 }
 
+/** 添付画像(2026-10-14): 文書 attachments[] の 1 件(label=項目 id・Storage の保存先)。.mjs と同じ形。 */
+export type ChecklistReportAttachment = {
+  label: string
+  name: string
+  storagePath: string
+  byteLength: number
+  reportId: string
+}
+
 export type ChecklistReportPart = {
   reportId: string
   version: string
@@ -42,6 +51,7 @@ export type ChecklistReportPart = {
   body: string
   recordedAt: string
   reportedAt: string
+  attachments: ChecklistReportAttachment[]
 }
 
 export type MergedChecklistReport = {
@@ -50,6 +60,7 @@ export type MergedChecklistReport = {
   receivedParts: number[]
   body: string
   reportIds: string[]
+  attachments: ChecklistReportAttachment[]
   firstRecordedAt: string
   lastRecordedAt: string
 }
@@ -66,6 +77,8 @@ export type ChecklistLatestItemResult = ChecklistItemResult & {
   version: string
   recordedAt: string
   reportIds: string[]
+  /** この項目に貼られた画像(label=項目 id・2026-10-14)。 */
+  attachments: ChecklistReportAttachment[]
 }
 
 export type ChecklistOtherNote = {
@@ -95,11 +108,19 @@ export function parseChecklistMarker(note: string | null | undefined): Checklist
 }
 
 /** 1 件の報告(developerReports のフィールド)からマーカー付きの本文だけ抽出する。マーカーが無ければ null。 */
+function readChecklistReportAttachments(raw: unknown, reportId: string): ChecklistReportAttachment[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && typeof (item as Record<string, unknown>).storagePath === 'string' && Boolean((item as Record<string, unknown>).storagePath))
+    .map((item) => ({ label: String(item.label ?? ''), name: String(item.name ?? 'image'), storagePath: item.storagePath as string, byteLength: Number(item.byteLength ?? 0) || 0, reportId }))
+}
+
 export function toChecklistReport(raw: {
   reportId?: string | null
   note?: string | null
   recordedAt?: string | null
   reportedAt?: string | null
+  attachments?: unknown
 } | null | undefined): ChecklistReportPart | null {
   const note = String(raw?.note ?? '')
   const marker = parseChecklistMarker(note)
@@ -113,6 +134,7 @@ export function toChecklistReport(raw: {
     body: bodyLines.join('\n'),
     recordedAt: raw?.recordedAt ?? raw?.reportedAt ?? '',
     reportedAt: raw?.reportedAt ?? '',
+    attachments: readChecklistReportAttachments(raw?.attachments, raw?.reportId ?? ''),
   }
 }
 
@@ -145,6 +167,7 @@ export function mergeChecklistReports(reports: readonly ChecklistReportPart[]): 
       receivedParts: ordered.map((part) => part.part),
       body,
       reportIds: ordered.map((part) => part.reportId),
+      attachments: ordered.flatMap((part) => part.attachments ?? []),
       firstRecordedAt: recordedAtList[0] ?? '',
       lastRecordedAt: recordedAtList[recordedAtList.length - 1] ?? '',
     })
@@ -200,6 +223,7 @@ export function summarizeChecklistResults(mergedReports: readonly MergedChecklis
         version: report.version,
         recordedAt: report.lastRecordedAt,
         reportIds: report.reportIds,
+        attachments: (report.attachments ?? []).filter((attachment) => attachment.label === item.itemId),
       })
     }
     if (notes.trim()) {
