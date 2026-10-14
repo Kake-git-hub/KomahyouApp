@@ -50,6 +50,13 @@ export function resolveVerificationChecklistText(text: string, resolveStudentNam
 export type VerificationChecklistDefinition = {
   version: string
   items: readonly VerificationChecklistItem[]
+  /**
+   * 見出し下に出す対象の説明(省略時は「開発用教室のみ」)。テスト教室の確認リスト(verificationChecklistTestClassroom.ts・2026-10-14)が
+   * 「テスト教室(全校展開前の最終テスト)」を出すために追加。
+   */
+  scopeLabel?: string
+  /** 項目の前に出す前書き(1 要素 1 段落)。第三者の担当者向けに目的と数の控え方を書く。省略時は出さない。 */
+  intro?: readonly string[]
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
@@ -203,6 +210,9 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.587'
  *   ★版は v1.5.587 据え置き(確認中の版の文面を直しただけ・第42版の結果はまだ無い＝第43版と同じ扱い)。
  * 第48版(v1.5.595・2026-10-14): オーナー指示「確認リストを別タブでひらけるようにして」→ 見出しの「別タブで開く」の確認 c-4 を追加。
  *   ★版は v1.5.587 据え置き(項目を足しただけ・第42版の結果はまだ無い＝第14版の決まり)。
+ * 第49版(v1.5.596・2026-10-14): オーナー指示「テスト教室にも確認リストを設けて」→ テスト教室(test_classroom_20260507_dai)には
+ *   **別の定義** `TEST_CLASSROOM_VERIFICATION_CHECKLIST`(verificationChecklistTestClassroom.ts・id は tc- 始まり)を出す。
+ *   開いている教室で定義を選ぶのは resolveVerificationChecklistDefinition。この定義(開発用教室)の項目・版は変えない(v1.5.587 据え置き)。
  */
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
   version: VERIFICATION_CHECKLIST_VERSION,

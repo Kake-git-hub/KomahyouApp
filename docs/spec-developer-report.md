@@ -102,6 +102,16 @@
   複数通に分け、各通の先頭に同じ目印と `(i/n)` を付ける。**送信本文に生徒名は入れない**（項目 id とメモだけ）。
 - 送信できないときの保険として「Markdown をコピー」も用意する。送信後も下書きは残る（再送できる）。
 
+- **テスト教室には別の確認リストを出す（2026-10-14 オーナー指示「テスト教室にも確認リストを設けて」）**: 検証用教室のうち
+  テスト教室（`test_classroom_20260507_dai`・workspace `main`）には、開発用教室の定義ではなく
+  `src/utils/verificationChecklistTestClassroom.ts` の `TEST_CLASSROOM_VERIFICATION_CHECKLIST`（項目 id は `tc-` 始まり・版は別・
+  前書き `intro` と対象ラベル `scopeLabel` つき）を出す。選ぶのは `resolveVerificationChecklistDefinition`（workspaceKey と classroomId の
+  完全一致。台帳の kind では選ばない・`docs/spec-multi-tenant.md` §4-2-11）。用途は、テンプレ保存の差分反映＋保留（2 行）を全校へ広げる前に
+  オーナーではない第三者の開発テスト担当者が行う最終テストで、教室データに依存しない手順で保証（INV-02/03/04/05/06/10/12/13）を手作業で確かめる。
+  実名・`{{student:…}}` は使わない。送信経路・本文の書式・マーカーは開発用教室と同じ（教室 ID と項目 id で読み分ける）。結果は
+  `tools/verification-checklist-report.mjs --classroom test_classroom_20260507_dai` と、開発ダッシュボードの「テスト教室の確認リスト」
+  （`summarizeVerificationChecklistStatus` を教室 ID で絞って集計・要改善は未対応一覧に「[テスト教室]」の印つきで載る）で読む。
+
 ## E-3. 開発ダッシュボード（開発者画面のサブページ・2026-09-25 オーナー指示）
 
 - 目的: 開発者が **会社（workspace）・教室ごとの質問・要望の状況／開発の段階／確認リストの確認済み・未確認** を

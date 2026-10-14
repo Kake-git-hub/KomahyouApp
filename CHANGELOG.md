@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.596 (2026-10-14)
+
+- feat: **テスト教室(test_classroom_20260507_dai)に専用の確認リストを設けた**(オーナー指示「テンプレ保存の差分反映＋保留 2 行表示を全校展開する前の最終テストを、第三者の開発テスト担当者がテスト教室で行う。テスト教室にも確認リストを設けて、保証〔未消化の数が意図せず変わらない・日程表とコマ表の数が一致する など〕が守られているかを手作業で確かめる手順・項目を記入して」)。定義 `TEST_CLASSROOM_VERIFICATION_CHECKLIST`(`verificationChecklistTestClassroom.ts`・版 v1.5.596・id は tc- 始まり・前書きつき)は教室データに依存しない 23 項目: 準備 tc-00／保存で在庫・回数が変わらない tc-s1〜s4(INV-06・INV-03・INV-10)／保留(緑・2 行)の表示と片づけ tc-p1〜p7(INV-06・INV-12・INV-13・INV-02)／テンプレと同じ内容は保留にしない tc-m1〜m3(Q35・Q36・Q38)／日程表・PDF・共有との一致 tc-v1〜v3(INV-01・INV-04・INV-05・INV-13)／室長の日常操作の回帰 tc-r1〜r5。開いている教室で定義を選ぶ `resolveVerificationChecklistDefinition`(workspaceKey と classroomId の完全一致・台帳の kind では選ばない)を App が `VerificationChecklistPanel` の新しい props `definition` に渡し、パネルは definition だけを見る(開発用教室の定義・版 v1.5.587 は不変)。定義型に `scopeLabel`(見出し下の対象)と `intro`(前書き)を追加。結果は `tools/verification-checklist-report.mjs --classroom test_classroom_20260507_dai` で読め、開発ダッシュボードは `summarizeVerificationChecklistStatus` を教室 ID で絞って「5-2. テスト教室の確認リスト」を出し、要改善は未対応一覧に「[テスト教室]」の印つきで載る。進行中テーマ台帳(template-diff-apply)の次の一手を最終テストへ更新。テスト: `verificationChecklistTestClassroom.test.ts`(id の接頭辞・一意・手順の上限・実名なし・台帳との一致・定義の選び分け)／`VerificationChecklistPanel.definition.test.ts`(jsdom でテスト教室の定義を描き、前書き・版別の下書き・送信本文を固定)／配線・ダッシュボードのテストを追随 (verificationChecklistTestClassroom.ts / verificationChecklist.ts / VerificationChecklistPanel.tsx / App.tsx / App.css / developerDashboard.ts / developerDashboardActions.ts / DeveloperDashboardScreen.tsx / DeveloperDashboardDetail.tsx / developmentStatusLedger.ts / docs/spec-developer-report.md §E-2 / tools/verification-checklist-report.mjs)
+
 ## v1.5.595 (2026-10-14)
 
 - feat: **確認リストを別タブで開けるようにした**(オーナー指示「確認リストを別タブでひらけるようにして」)。見出し右の「別タブで開く」で空のタブを開き、アプリのスタイルを写して同じパネルを `createPortal` で描く。下書き・送信・生徒名の解決は元のタブのパネルが持ったまま(新しい保存先・送信経路・教室データの再読み込みを作らない)。元のタブの右下は「確認リスト 別タブで表示中」になり、別タブの「元の画面に戻す」かタブを閉じると右下へ戻る。元のタブを閉じる/再読み込み/教室を切り替えると別タブも閉じる。ポップアップを止められたら右下のまま理由を出す。確認項目 c-4 を追加(版は v1.5.587 据え置き)。jsdom の 2 つ目の文書で別タブを再現するテストを追加 (VerificationChecklistPanel.tsx / verificationChecklistWindow.ts / verificationChecklistWindow.test.ts / App.css / verificationChecklist.ts)

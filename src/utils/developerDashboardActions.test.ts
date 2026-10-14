@@ -115,6 +115,51 @@ function build(input: { reports?: DeveloperReportRecord[]; issues?: GitHubIssueR
   })
 }
 
+describe('テスト教室の確認リスト(tc- 系・2026-10-14)', () => {
+  const TEST_DEFINITION: VerificationChecklistDefinition = {
+    version: 'v1.5.596',
+    items: [
+      { id: 'tc-s1', area: '1. 保存で数が変わらない', title: '講師交代で残数が変わらない', steps: ['操作'], introducedIn: 'v1.5.596' },
+      { id: 'tc-p1', area: '2. 保留', title: '緑の 2 行', steps: ['操作'], introducedIn: 'v1.5.596' },
+    ],
+  }
+  const reports = [
+    checklistReport('dev', '- t-1 要改善: 日付がずれる', '2026-10-14T01:00:00.000Z'),
+    report({
+      reportId: 'test', classroomId: 'test_classroom_20260507_dai', classroomName: 'テスト教室', isVerificationChecklist: true,
+      note: '[確認リスト v1.5.596]\n- tc-s1 要改善: 未消化振替が 1 増えた\n- tc-p1 OK', recordedAt: '2026-10-14T02:00:00.000Z', reportedAt: '2026-10-14T02:00:00.000Z',
+    }),
+  ]
+  const checklist = summarizeVerificationChecklistStatus(reports, CHECKLIST, { classroomId: 'v8OZ7zH8vONNHjjYVcR1' })
+  const testClassroomChecklist = summarizeVerificationChecklistStatus(reports, TEST_DEFINITION, { classroomId: 'test_classroom_20260507_dai' })
+
+  it('テスト教室の要改善も 1 項目 1 行で Claude の番に載り、題名と Claude への指示に「テスト教室」の印が付く', () => {
+    const result = buildDashboardActions({ reports, issues: [], issueStates: new Map(), checklist, testClassroomChecklist, ledger: [], now: NOW })
+    expect([...result.active.map((item) => item.id)].sort()).toEqual(['checklist-t-1', 'checklist-tc-s1'])
+    const dev = result.active.find((item) => item.id === 'checklist-t-1')!
+    expect(dev.title).toBe('t-1 再移動で日付が追いつく')
+    expect(dev.prompt).toContain('オーナーのメモ: 日付がずれる')
+    const test = result.active.find((item) => item.id === 'checklist-tc-s1')!
+    expect(test.kind).toBe('checklist-needs-improvement')
+    expect(test.turn).toBe('claude')
+    expect(test.title).toBe('[テスト教室] tc-s1 講師交代で残数が変わらない')
+    expect(test.detail).toContain('未消化振替が 1 増えた')
+    expect(test.facts.join('\n')).toContain('確認リスト v1.5.596 / テスト教室')
+    expect(test.prompt).toBe('テスト教室の確認リスト v1.5.596 の tc-s1 が要改善です。テスト教室の担当者のメモ: 未消化振替が 1 増えた')
+    // OK(tc-p1)はどこにも出さない(d-4 と同じ)。
+    expect([...result.active, ...result.waiting].some((item) => item.id === 'checklist-tc-p1')).toBe(false)
+  })
+
+  it('testClassroomChecklist が無い(null / 省略)なら従来どおり開発用教室の行だけ。読み込み前はどちらも出さない', () => {
+    for (const absent of [null, undefined]) {
+      const result = buildDashboardActions({ reports, issues: [], issueStates: new Map(), checklist, testClassroomChecklist: absent, ledger: [], now: NOW })
+      expect(result.active.map((item) => item.id)).toEqual(['checklist-t-1'])
+    }
+    const notReady = buildDashboardActions({ reports, issues: [], issueStates: new Map(), checklist, testClassroomChecklist, ledger: [], now: NOW, reportsReady: false })
+    expect(notReady.active.filter((item) => item.kind === 'checklist-needs-improvement')).toEqual([])
+  })
+})
+
 describe('buildDashboardActions — 何を未対応として出すか', () => {
   it('材料が空なら未対応 0 件(済んだものを出さない)。確認リストの未確認は出さない(確認リストパネルが正本・d-4)', () => {
     const result = build({})

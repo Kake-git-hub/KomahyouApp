@@ -414,9 +414,17 @@ function stripVersionPrefix(version: string): string {
 export function summarizeVerificationChecklistStatus(
   reports: readonly DeveloperReportRecord[],
   definition: VerificationChecklistDefinition = VERIFICATION_CHECKLIST,
+  options: {
+    /**
+     * この教室から送られた結果だけを数える(2026-10-14)。テスト教室の確認リスト(tc- 系・別の定義)と開発用教室の確認リストは
+     * 同じ developerReports に載るので、教室 ID で読み分ける。省略(null)なら従来どおり全教室の結果を数える。
+     */
+    classroomId?: string | null
+  } = {},
 ): VerificationChecklistStatusSummary {
   const currentVersion = stripVersionPrefix(definition.version)
-  const checklistReports = reports.filter((report) => report.isVerificationChecklist)
+  const classroomId = typeof options.classroomId === 'string' && options.classroomId.trim() ? options.classroomId.trim() : null
+  const checklistReports = reports.filter((report) => report.isVerificationChecklist && (classroomId === null || report.classroomId === classroomId))
   const summary = summarizeChecklistReports(checklistReports)
   const currentById = new Map<string, ChecklistLatestItemResult>()
   const previousById = new Map<string, ChecklistLatestItemResult>()

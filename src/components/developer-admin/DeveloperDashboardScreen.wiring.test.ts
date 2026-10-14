@@ -57,6 +57,16 @@ describe('開発ダッシュボード本体(未対応面＋詳細面)', () => {
     }
   })
 
+  it('確認リストの結果は教室 ID で読み分け、テスト教室の定義(tc- 系)は別に集計して詳細面と未対応一覧へ渡す(2026-10-14)', () => {
+    expect(DASHBOARD_TSX).toContain("from '../../utils/verificationChecklistTestClassroom'")
+    expect(DASHBOARD_TSX).toContain('summarizeVerificationChecklistStatus(reports, VERIFICATION_CHECKLIST, { classroomId: developmentClassroomId })')
+    expect(DASHBOARD_TSX).toContain('summarizeVerificationChecklistStatus(reports, TEST_CLASSROOM_VERIFICATION_CHECKLIST, { classroomId: TEST_CLASSROOM_VERIFICATION_CHECKLIST_TARGET.classroomId })')
+    expect(DASHBOARD_TSX).toContain('testClassroomChecklist={testClassroomChecklist}')
+    expect(DASHBOARD_TSX).toMatch(/buildDashboardActions\(\{[^}]*testClassroomChecklist[^}]*\}\)/u)
+    expect(DETAIL_TSX).toContain('id="dashboard-checklist-test-classroom"')
+    expect(DETAIL_TSX).toContain('テスト教室の確認リスト')
+  })
+
   it('既定は未対応面(initialView = todo)で、詳細面への切替ボタンと Claude Code へ投げる導線を持つ', () => {
     expect(DASHBOARD_TSX).toContain("initialView = 'todo'")
     expect(DASHBOARD_TSX).toContain('data-testid="developer-dashboard-view-toggle"')

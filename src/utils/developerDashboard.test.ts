@@ -190,6 +190,28 @@ describe('確認リストの確認済み/未確認', () => {
     expect(summary.counts).toEqual({ ok: 0, needsImprovement: 0, unanswered: 3 })
     expect(summary.latestSubmissionAt).toBe('')
   })
+
+  it('classroomId を渡すとその教室の結果だけを数える(テスト教室の tc- 系と開発用教室を読み分ける・2026-10-14)', () => {
+    const reports = [
+      report({ reportId: 'dev', classroomId: 'v8OZ7zH8vONNHjjYVcR1', isVerificationChecklist: true, note: '[確認リスト v1.5.557]\n- t-1 OK\n- その他: 開発用教室から', recordedAt: '2026-10-14T01:00:00.000Z' }),
+      report({ reportId: 'test', classroomId: 'test_classroom_20260507_dai', isVerificationChecklist: true, note: '[確認リスト v1.5.557]\n- t-1 要改善: 未消化が 1 増えた\n- tc-s1 OK\n- その他: テスト教室から', recordedAt: '2026-10-14T02:00:00.000Z' }),
+    ]
+    const dev = summarizeVerificationChecklistStatus(reports, definition, { classroomId: 'v8OZ7zH8vONNHjjYVcR1' })
+    expect(dev.rows.find((row) => row.id === 't-1')).toMatchObject({ status: 'ok', reportIds: ['dev'] })
+    expect(dev.otherNotes.map((note) => note.note)).toEqual(['開発用教室から'])
+    expect(dev.resultsOutsideDefinition).toBe(0)
+    const test = summarizeVerificationChecklistStatus(reports, definition, { classroomId: 'test_classroom_20260507_dai' })
+    expect(test.rows.find((row) => row.id === 't-1')).toMatchObject({ status: 'needs-improvement', memo: '未消化が 1 増えた', reportIds: ['test'] })
+    expect(test.otherNotes.map((note) => note.note)).toEqual(['テスト教室から'])
+    expect(test.resultsOutsideDefinition).toBe(1)
+    // 省略・空・null は従来どおり全教室をまとめて読む。同じ版の 2 通は分割の同じ部分とみなされて**受付が新しい方だけ**が残る
+    // (mergeChecklistReports の規則)＝開発用教室の結果がテスト教室の結果に隠れる。教室 ID で絞る理由。
+    for (const options of [undefined, {}, { classroomId: '' }, { classroomId: null }, { classroomId: '  ' }]) {
+      const all = summarizeVerificationChecklistStatus(reports, definition, options)
+      expect(all.rows.find((row) => row.id === 't-1')).toMatchObject({ status: 'needs-improvement', reportIds: ['test'] })
+      expect(all.otherNotes.map((note) => note.note)).toEqual(['テスト教室から'])
+    }
+  })
 })
 
 describe('期間と日時の表示', () => {

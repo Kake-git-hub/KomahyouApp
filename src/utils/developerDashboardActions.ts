@@ -102,6 +102,9 @@ export type DashboardActionSummary = {
 // 優先度(小さいほど上)。「Claude に投げればすぐ進む不具合系」→「オーナー判断」→「計画」→「待ち」。
 // ───────────────────────────────────────────────────────────────────────────
 
+/** テスト教室の確認リストから来た要改善の行に付ける印(題名・Claude への指示)。 */
+export const TEST_CLASSROOM_CHECKLIST_SCOPE_LABEL = 'テスト教室'
+
 const PRIORITY = {
   deliveryFailed: 10,
   awaitingIssueStale: 11,
@@ -248,26 +251,32 @@ function buildReportItems(reports: readonly DeveloperReportRecord[], issueStates
  * 確認リストから出すのは【要改善】だけ(1 項目 1 行・Claude の番)。未確認・OK は出さない
  * (どれを確かめるかは開発用教室の確認リストパネルが正本。役割の重複を避ける・オーナー指示 2026-09-28 d-4)。
  */
-function buildChecklistItems(checklist: VerificationChecklistStatusSummary): DashboardActionItem[] {
-  return checklist.rows.filter((row) => row.status === 'needs-improvement').map((row) => buildChecklistNeedsImprovementItem(row, checklist.version))
+function buildChecklistItems(checklist: VerificationChecklistStatusSummary, scopeLabel?: string): DashboardActionItem[] {
+  return checklist.rows.filter((row) => row.status === 'needs-improvement').map((row) => buildChecklistNeedsImprovementItem(row, checklist.version, scopeLabel))
 }
 
-function buildChecklistNeedsImprovementItem(row: ChecklistStatusRow, version: string): DashboardActionItem {
+/**
+ * scopeLabel は「テスト教室」など、開発用教室以外の確認リストから来た行の印(2026-10-14)。id は項目 id(tc- 系)で既に区別されるので
+ * そのまま。題名と Claude への指示に教室名を添える(オーナーのメモではなくテスト担当者のメモである点も分かるように)。
+ */
+function buildChecklistNeedsImprovementItem(row: ChecklistStatusRow, version: string, scopeLabel?: string): DashboardActionItem {
+  const scopePrefix = scopeLabel ? `[${scopeLabel}] ` : ''
+  const memoOwner = scopeLabel ? `${scopeLabel}の担当者のメモ` : 'オーナーのメモ'
   return {
     id: `checklist-${row.id}`,
     kind: 'checklist-needs-improvement',
     kindLabel: DASHBOARD_ACTION_KIND_LABELS['checklist-needs-improvement'],
     turn: 'claude',
-    title: `${row.id} ${row.title}`,
+    title: `${scopePrefix}${row.id} ${row.title}`,
     detail: row.memo ? `${row.memo}(${formatTimeShort(row.recordedAt)})` : `受付 ${formatTimeShort(row.recordedAt)}`,
     facts: [
       `項目: ${row.id}「${row.title}」`,
-      `分類: ${row.area} / 追加 ${row.introducedIn} / 確認リスト ${version}`,
+      `分類: ${row.area} / 追加 ${row.introducedIn} / 確認リスト ${version}${scopeLabel ? ` / ${scopeLabel}` : ''}`,
       `メモ: ${row.memo || '(メモなし)'}`,
       `受付: ${formatTimeShort(row.recordedAt)}`,
     ],
     href: null,
-    prompt: `確認リスト ${version} の ${row.id} が要改善です。オーナーのメモ: ${row.memo || '(メモなし)'}`,
+    prompt: `${scopeLabel ? `${scopeLabel}の` : ''}確認リスト ${version} の ${row.id} が要改善です。${memoOwner}: ${row.memo || '(メモなし)'}`,
     count: 1,
     priority: PRIORITY.checklistNeedsImprovement,
   }
@@ -378,6 +387,8 @@ export type BuildDashboardActionsInput = {
   issues: readonly GitHubIssueRecord[]
   issueStates: IssueStateMap
   checklist: VerificationChecklistStatusSummary
+  /** テスト教室の確認リスト(tc- 系・2026-10-14)の集計。無い(別会社・未読)なら null/省略。 */
+  testClassroomChecklist?: VerificationChecklistStatusSummary | null
   ledger?: readonly DevelopmentStatusEntry[]
   now?: Date
 }
@@ -393,7 +404,10 @@ export function buildDashboardActions(input: BuildDashboardActionsInput): Dashbo
   const coveredIssueNumbers = new Set<number>()
   const items: DashboardActionItem[] = []
   items.push(...buildReportItems(input.reports, input.issueStates, now))
-  if (input.reportsReady ?? true) items.push(...buildChecklistItems(input.checklist))
+  if (input.reportsReady ?? true) {
+    items.push(...buildChecklistItems(input.checklist))
+    if (input.testClassroomChecklist) items.push(...buildChecklistItems(input.testClassroomChecklist, TEST_CLASSROOM_CHECKLIST_SCOPE_LABEL))
+  }
   for (const entry of ledger) {
     for (const number of extractLedgerIssueNumbers(entry)) coveredIssueNumbers.add(number)
     items.push(buildLedgerItem(entry, issuesByNumber))

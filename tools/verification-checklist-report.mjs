@@ -13,6 +13,8 @@
 //   - --workspace は必須（会社＝workspace のキー。既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 //   - --since 省略時は 14 日前から。
 //   - --classroom 省略時は開発用教室 v8OZ7zH8vONNHjjYVcR1。
+//     テスト教室の確認リスト(tc- 系・src/utils/verificationChecklistTestClassroom.ts・2026-10-14)の結果は
+//     `--classroom test_classroom_20260507_dai` で読む(本文の書式・マーカーは同じ。教室 ID と項目 id で読み分ける)。
 //   - --version でマーカーの版を絞る（例: v1.5.502。先頭の v は付けても付けなくてもよい）。
 //   - --json で集約結果をそのまま出す（他ツールへ渡す用）。
 import { execFileSync, execSync } from 'node:child_process'

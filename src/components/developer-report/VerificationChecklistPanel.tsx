@@ -13,6 +13,10 @@
 // 別タブ表示(2026-10-14 オーナー指示「確認リストを別タブでひらけるようにして」): 見出しの「別タブで開く」で
 // 空のタブを開き、同じパネルを createPortal でそのタブへ描く(状態・送信・生徒名の解決はこのコンポーネントのまま)。
 // 別タブを閉じるか「元の画面に戻す」で右下へ戻る。元のタブを閉じる/再読み込み/教室を切り替えると別タブも閉じる。
+//
+// 項目の定義は props の `definition` で受ける(2026-10-14 オーナー指示「テスト教室にも確認リストを設けて」)。既定は開発用教室の
+// VERIFICATION_CHECKLIST。テスト教室では App が resolveVerificationChecklistDefinition で別の定義(tc- 系・前書きつき)を渡す。
+// このコンポーネントは VERIFICATION_CHECKLIST の中身を直接読まない(definition だけを見る・配線テストで固定)。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -32,7 +36,9 @@ import {
   setVerificationChecklistMemo,
   setVerificationChecklistOtherNotes,
   verificationChecklistStorageKey,
+  type VerificationChecklistDefinition,
   type VerificationChecklistDraft,
+  type VerificationChecklistItem,
   type VerificationChecklistStatus,
 } from '../../utils/verificationChecklist'
 import { openVerificationChecklistWindow, prepareVerificationChecklistWindowDocument } from './verificationChecklistWindow'
@@ -47,6 +53,8 @@ export type VerificationChecklistPanelProps = {
    * App が開いている教室(開発用教室)の生徒データから引く。送信本文(id と結果だけ)には使わない。
    */
   resolveStudentName?: (studentId: string) => string | null | undefined
+  /** 出す項目の定義。既定は開発用教室の VERIFICATION_CHECKLIST(テスト教室では App が別の定義を渡す・2026-10-14)。 */
+  definition?: VerificationChecklistDefinition
 }
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: VerificationChecklistStatus; label: string }> = [
@@ -73,10 +81,11 @@ function writeStorage(key: string, value: string) {
 
 // 教室を切り替えたときは App 側が key={classroomId} で作り直すため、下書きは初期化時に読み直される
 // (他教室の入力を持ち越さない)。ここで effect を使って state を書き戻さない。
-export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName, definition = VERIFICATION_CHECKLIST }: VerificationChecklistPanelProps) {
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
-  const storageKey = verificationChecklistStorageKey(classroomId)
-  const [draft, setDraft] = useState<VerificationChecklistDraft>(() => parseVerificationChecklistDraft(readStorage(storageKey)))
+  const { version, items } = definition
+  const storageKey = verificationChecklistStorageKey(classroomId, version)
+  const [draft, setDraft] = useState<VerificationChecklistDraft>(() => parseVerificationChecklistDraft(readStorage(storageKey), version))
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
   const [sending, setSending] = useState(false)
   const [resultMessage, setResultMessage] = useState<string | null>(null)
@@ -85,8 +94,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
 
   const updateDraft = useCallback((next: VerificationChecklistDraft) => {
     setDraft(next)
-    writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(next))
-  }, [classroomId])
+    writeStorage(verificationChecklistStorageKey(classroomId, version), serializeVerificationChecklistDraft(next))
+  }, [classroomId, version])
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((current) => {
@@ -103,7 +112,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       return
     }
     try {
-      const root = prepareVerificationChecklistWindowDocument(document, win.document, `確認リスト ${VERIFICATION_CHECKLIST.version}`)
+      const root = prepareVerificationChecklistWindowDocument(document, win.document, `確認リスト ${version}`)
       setResultMessage(null)
       setDetached({ win, root })
       win.focus()
@@ -111,7 +120,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       try { win.close() } catch { /* 閉じられなくても右下の表示は続く */ }
       setResultMessage('別タブを開けませんでした。この画面のまま使ってください。')
     }
-  }, [])
+  }, [version])
 
   const handleReturnFromWindow = useCallback(() => {
     setDetached(null)
@@ -148,19 +157,19 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     }
   }, [detached])
 
-  const progress = useMemo(() => countVerificationChecklistProgress(draft), [draft])
+  const progress = useMemo(() => countVerificationChecklistProgress(draft, items), [draft, items])
   const groups = useMemo(() => {
-    const map = new Map<string, typeof VERIFICATION_CHECKLIST.items[number][]>()
-    for (const item of VERIFICATION_CHECKLIST.items) {
+    const map = new Map<string, VerificationChecklistItem[]>()
+    for (const item of items) {
       const list = map.get(item.area) ?? []
       list.push(item)
       map.set(item.area, list)
     }
     return [...map.entries()]
-  }, [])
+  }, [items])
 
   const handleSubmit = useCallback(async () => {
-    const notes = buildVerificationChecklistReportNotes(draft)
+    const notes = buildVerificationChecklistReportNotes(draft, { items })
     if (notes.length === 0) {
       setResultMessage('まだ何も記録されていません。OK か要改善を付けてから送信してください。')
       return
@@ -184,10 +193,10 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       return
     }
     setResultMessage(`送りました(${reportIds.length}通・受付番号 ${reportIds.join(', ')})。下書きはこのまま残ります。`)
-  }, [draft, onSubmitNote])
+  }, [draft, items, onSubmitNote])
 
   const handleCopy = useCallback(async () => {
-    const markdown = buildVerificationChecklistMarkdown(draft)
+    const markdown = buildVerificationChecklistMarkdown(draft, items)
     try {
       // 別タブで押したときは別タブの navigator を使う(元のタブはフォーカスが無くコピーを断られる)。
       await (detached?.win ?? window).navigator.clipboard.writeText(markdown)
@@ -195,7 +204,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     } catch {
       setResultMessage('コピーできませんでした(ブラウザの権限)。文面は送信ボタンから送れます。')
     }
-  }, [draft, detached])
+  }, [draft, items, detached])
 
   if (!detached && collapsed) {
     return (
@@ -219,9 +228,9 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     >
       <header className="verification-checklist-header">
         <div>
-          <div className="verification-checklist-title">確認リスト {VERIFICATION_CHECKLIST.version}</div>
+          <div className="verification-checklist-title">確認リスト {version}</div>
           <div className="verification-checklist-subtitle">
-            開発用教室のみ{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
+            {definition.scopeLabel ?? '開発用教室のみ'}{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
           </div>
         </div>
         {detached ? (
@@ -241,10 +250,15 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       </header>
 
       <div className="verification-checklist-body">
-        {groups.map(([area, items]) => (
+        {definition.intro && definition.intro.length > 0 ? (
+          <div className="verification-checklist-intro" data-testid="verification-checklist-intro">
+            {definition.intro.map((line) => <p key={line}>{line}</p>)}
+          </div>
+        ) : null}
+        {groups.map(([area, areaItems]) => (
           <div key={area} className="verification-checklist-group">
             <div className="verification-checklist-area">{area}</div>
-            {items.map((item) => {
+            {areaItems.map((item) => {
               const entry = getVerificationChecklistEntry(draft, item.id)
               return (
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>

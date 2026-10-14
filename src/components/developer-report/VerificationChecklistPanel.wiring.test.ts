@@ -34,6 +34,19 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(references.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('項目の定義は教室で選ぶ(テスト教室には tc- 系の別定義・2026-10-14)。選ぶのは純関数 resolveVerificationChecklistDefinition', () => {
+    expect(APP_TSX).toContain("import { resolveVerificationChecklistDefinition } from './utils/verificationChecklistTestClassroom'")
+    expect(APP_TSX).toContain('definition={resolveVerificationChecklistDefinition(actingClassroomId)}')
+    // パネルは definition だけを見る(開発用教室の定義の中身を直接読まない。既定値としてだけ使う)。
+    expect(PANEL_TSX).toContain('definition = VERIFICATION_CHECKLIST }')
+    expect(PANEL_TSX).not.toContain('VERIFICATION_CHECKLIST.items')
+    expect(PANEL_TSX).not.toContain('VERIFICATION_CHECKLIST.version')
+    expect(PANEL_TSX).toContain('verificationChecklistStorageKey(classroomId, version)')
+    expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes(draft, { items })')
+    expect(PANEL_TSX).toContain('data-testid="verification-checklist-intro"')
+    expect(PANEL_TSX).toContain("definition.scopeLabel ?? '開発用教室のみ'")
+  })
+
   it('送信は既存の「要望・報告」経路(source: board / category: request)を使う', () => {
     expect(APP_TSX).toContain("return submit({ source: 'board', category: 'request', note })")
     expect(APP_TSX).toContain('submitDeveloperReportRef.current = submitDeveloperReport')

@@ -40,6 +40,9 @@ import {
   type DashboardActionItem,
   type DashboardActionTurn,
 } from '../../utils/developerDashboardActions'
+import { resolveDevelopmentClassroomId } from '../../utils/developmentClassroomRegistry'
+import { VERIFICATION_CHECKLIST } from '../../utils/verificationChecklist'
+import { TEST_CLASSROOM_VERIFICATION_CHECKLIST, TEST_CLASSROOM_VERIFICATION_CHECKLIST_TARGET } from '../../utils/verificationChecklistTestClassroom'
 import { DeveloperDashboardDetail } from './DeveloperDashboardDetail'
 
 export type DeveloperDashboardView = 'todo' | 'detail'
@@ -139,8 +142,17 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const loadedAt = [reportsCurrent?.loadedAt ?? '', issuesCurrent?.loadedAt ?? ''].sort().reverse()[0] ?? ''
 
   const issueStates = useMemo(() => buildIssueStateMap(issues), [issues])
-  const checklist = useMemo(() => summarizeVerificationChecklistStatus(reports), [reports])
-  const actions = useMemo(() => buildDashboardActions({ reports, issues, issueStates, checklist, reportsReady }), [reports, issues, issueStates, checklist, reportsReady])
+  // 確認リストの結果は教室 ID で読み分ける(2026-10-14): 開発用教室の定義には開発用教室の結果だけ、テスト教室の定義(tc- 系)には
+  // テスト教室の結果だけを重ねる(同じ developerReports に載るため)。テスト教室の集計はその会社(workspace)のときだけ。
+  const developmentClassroomId = useMemo(() => resolveDevelopmentClassroomId(workspaceKey), [workspaceKey])
+  const checklist = useMemo(() => summarizeVerificationChecklistStatus(reports, VERIFICATION_CHECKLIST, { classroomId: developmentClassroomId }), [reports, developmentClassroomId])
+  const testClassroomChecklist = useMemo(
+    () => (workspaceKey === TEST_CLASSROOM_VERIFICATION_CHECKLIST_TARGET.workspaceKey
+      ? summarizeVerificationChecklistStatus(reports, TEST_CLASSROOM_VERIFICATION_CHECKLIST, { classroomId: TEST_CLASSROOM_VERIFICATION_CHECKLIST_TARGET.classroomId })
+      : null),
+    [reports, workspaceKey],
+  )
+  const actions = useMemo(() => buildDashboardActions({ reports, issues, issueStates, checklist, testClassroomChecklist, reportsReady }), [reports, issues, issueStates, checklist, testClassroomChecklist, reportsReady])
 
   const selectableIds = useMemo(() => new Set([...actions.active, ...actions.waiting].filter((item) => item.prompt !== null).map((item) => item.id)), [actions])
   const selectedItems = useMemo(
@@ -253,6 +265,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
             issuesError={issuesError}
             issueStates={issueStates}
             checklist={checklist}
+            testClassroomChecklist={testClassroomChecklist}
           />
         ) : (
           <section className="developer-dashboard-todo" id="dashboard-todo" aria-label="未対応の一覧">

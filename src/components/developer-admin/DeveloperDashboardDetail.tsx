@@ -48,6 +48,8 @@ export type DeveloperDashboardDetailProps = {
   issuesError: string
   issueStates: IssueStateMap
   checklist: VerificationChecklistStatusSummary
+  /** テスト教室の確認リスト(tc- 系・2026-10-14)の集計。別会社(workspace)など対象外なら null。 */
+  testClassroomChecklist: VerificationChecklistStatusSummary | null
 }
 
 const RECENT_REPORT_LIMIT = 40
@@ -72,7 +74,7 @@ const STAGE_CHIP_CLASS: Readonly<Record<DevelopmentStatusEntry['stage'], string>
   'on-hold': 'secondary',
 }
 
-export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, reports, reportsLoading, reportsReady, reportsError, issues, issuesLoading, issuesReady, issuesError, issueStates, checklist }: DeveloperDashboardDetailProps) {
+export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, reports, reportsLoading, reportsReady, reportsError, issues, issuesLoading, issuesReady, issuesError, issueStates, checklist, testClassroomChecklist }: DeveloperDashboardDetailProps) {
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null)
   const classroomRows = useMemo(
     () => summarizeDeveloperReportsByClassroom(reports, classrooms, { issueStates, isDevelopmentClassroom: (id) => isDevelopmentClassroom({ id }, workspaceKey) }),
@@ -83,7 +85,6 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
   const openIssues = useMemo(() => issues.filter((issue) => issue.state === 'open'), [issues])
   const openUserReportIssues = useMemo(() => openIssues.filter((issue) => issue.isUserReport), [openIssues])
   const openOtherIssues = useMemo(() => openIssues.filter((issue) => !issue.isUserReport), [openIssues])
-  const needsImprovementRows = useMemo(() => checklist.rows.filter((row) => row.status === 'needs-improvement'), [checklist])
   const recentlyClosedIssues = useMemo(() => issues.filter((issue) => issue.state === 'closed').slice(0, CLOSED_ISSUE_DISPLAY_LIMIT), [issues])
   const ledgerByStage = useMemo(
     () => DEVELOPMENT_STATUS_STAGES.map((stage) => ({ stage, entries: DEVELOPMENT_STATUS_LEDGER.filter((entry) => entry.stage === stage) })).filter((group) => group.entries.length > 0),
@@ -255,57 +256,83 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
       </section>
 
       {/* ── 5. 確認リスト ─────────────────────────────────────────────── */}
-      <section className="basic-data-section-card developer-backup-panel" id="dashboard-checklist">
-        <div className="basic-data-card-head">
-          <h3>5. 確認リスト({checklist.version})の要改善</h3>
-          <p>確認リストパネル(開発用教室)から送られた結果のうち、直す必要がある「要改善」だけを出します。項目ごとの確認・未確認は確認リストパネルが正本です(役割の重複を避ける・2026-09-28 オーナー指示)。</p>
-        </div>
-        <div className="developer-dashboard-checklist-counts">
-          <span className="status-chip secondary">OK {checklist.counts.ok}</span>
-          <span className="status-chip warning">要改善 {checklist.counts.needsImprovement}</span>
-          <span className="status-chip">未確認 {checklist.counts.unanswered}</span>
-          <span className="basic-data-subcopy">最終受付 {formatDashboardDateTime(checklist.latestSubmissionAt)}</span>
-        </div>
-        {needsImprovementRows.length === 0 ? <div className="toolbar-status">要改善の項目はありません。</div> : null}
-        {needsImprovementRows.length > 0 ? (
-        <div className="developer-dashboard-table-wrap">
-          <table className="developer-billing-table developer-dashboard-table">
-            <thead>
-              <tr>
-                <th>id</th>
-                <th>分類</th>
-                <th>項目</th>
-                <th>メモ</th>
-                <th>受付</th>
-              </tr>
-            </thead>
-            <tbody>
-              {needsImprovementRows.map((row) => (
-                <tr key={row.id} className={`is-${row.status}`}>
-                  <td><code>{row.id}</code></td>
-                  <td>{row.area}</td>
-                  <td>{row.title}<span className="basic-data-subcopy">追加 {row.introducedIn}</span></td>
-                  <td className="developer-dashboard-description">
-                    {row.memo}
-                    {row.previousVersionResult ? <span className="basic-data-subcopy">前の版(v{row.previousVersionResult.version})では {row.previousVersionResult.result === 'ok' ? 'OK' : '要改善'}{row.previousVersionResult.memo ? `: ${row.previousVersionResult.memo}` : ''}</span> : null}
-                  </td>
-                  <td>{formatDashboardDateTime(row.recordedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        ) : null}
-        <h4 className="developer-dashboard-subheading">その他の気づき(新しい順)</h4>
-        {checklist.otherNotes.length === 0 ? <div className="toolbar-status">この期間に「その他」の記入はありません。</div> : null}
-        {checklist.otherNotes.map((note) => (
-          <div key={`${note.version}-${note.recordedAt}`} className="developer-dashboard-other-note">
-            <span className="basic-data-subcopy">v{note.version} / {formatDashboardDateTime(note.recordedAt)}</span>
-            <p>{note.note}</p>
-          </div>
-        ))}
-      </section>
+      <ChecklistResultSection
+        id="dashboard-checklist"
+        heading={`5. 確認リスト(${checklist.version})の要改善`}
+        description="確認リストパネル(開発用教室)から送られた結果のうち、直す必要がある「要改善」だけを出します。項目ごとの確認・未確認は確認リストパネルが正本です(役割の重複を避ける・2026-09-28 オーナー指示)。"
+        checklist={checklist}
+      />
+
+      {/* ── 5-2. テスト教室の確認リスト(2026-10-14) ─────────────────────── */}
+      {testClassroomChecklist ? (
+        <ChecklistResultSection
+          id="dashboard-checklist-test-classroom"
+          heading={`5-2. テスト教室の確認リスト(${testClassroomChecklist.version})の要改善`}
+          description="テスト教室(全校展開前の最終テスト・第三者の開発テスト担当者)から送られた結果のうち「要改善」だけを出します。項目は開発用教室とは別の定義(tc- 系)で、結果は教室 ID で読み分けています。"
+          checklist={testClassroomChecklist}
+        />
+      ) : null}
     </>
+  )
+}
+
+/**
+ * 確認リストの集計 1 つぶんの節(開発用教室とテスト教室で同じ見た目・2026-10-14 に共通化)。
+ * 要改善の行だけを表に出し、「その他の気づき」を新しい順に並べる(内容・文言は従来どおり)。
+ */
+function ChecklistResultSection({ id, heading, description, checklist }: { id: string; heading: string; description: string; checklist: VerificationChecklistStatusSummary }) {
+  const needsImprovementRows = useMemo(() => checklist.rows.filter((row) => row.status === 'needs-improvement'), [checklist])
+  return (
+    <section className="basic-data-section-card developer-backup-panel" id={id}>
+      <div className="basic-data-card-head">
+        <h3>{heading}</h3>
+        <p>{description}</p>
+      </div>
+      <div className="developer-dashboard-checklist-counts">
+        <span className="status-chip secondary">OK {checklist.counts.ok}</span>
+        <span className="status-chip warning">要改善 {checklist.counts.needsImprovement}</span>
+        <span className="status-chip">未確認 {checklist.counts.unanswered}</span>
+        <span className="basic-data-subcopy">最終受付 {formatDashboardDateTime(checklist.latestSubmissionAt)}</span>
+      </div>
+      {needsImprovementRows.length === 0 ? <div className="toolbar-status">要改善の項目はありません。</div> : null}
+      {needsImprovementRows.length > 0 ? (
+      <div className="developer-dashboard-table-wrap">
+        <table className="developer-billing-table developer-dashboard-table">
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>分類</th>
+              <th>項目</th>
+              <th>メモ</th>
+              <th>受付</th>
+            </tr>
+          </thead>
+          <tbody>
+            {needsImprovementRows.map((row) => (
+              <tr key={row.id} className={`is-${row.status}`}>
+                <td><code>{row.id}</code></td>
+                <td>{row.area}</td>
+                <td>{row.title}<span className="basic-data-subcopy">追加 {row.introducedIn}</span></td>
+                <td className="developer-dashboard-description">
+                  {row.memo}
+                  {row.previousVersionResult ? <span className="basic-data-subcopy">前の版(v{row.previousVersionResult.version})では {row.previousVersionResult.result === 'ok' ? 'OK' : '要改善'}{row.previousVersionResult.memo ? `: ${row.previousVersionResult.memo}` : ''}</span> : null}
+                </td>
+                <td>{formatDashboardDateTime(row.recordedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      ) : null}
+      <h4 className="developer-dashboard-subheading">その他の気づき(新しい順)</h4>
+      {checklist.otherNotes.length === 0 ? <div className="toolbar-status">この期間に「その他」の記入はありません。</div> : null}
+      {checklist.otherNotes.map((note) => (
+        <div key={`${note.version}-${note.recordedAt}`} className="developer-dashboard-other-note">
+          <span className="basic-data-subcopy">v{note.version} / {formatDashboardDateTime(note.recordedAt)}</span>
+          <p>{note.note}</p>
+        </div>
+      ))}
+    </section>
   )
 }
 

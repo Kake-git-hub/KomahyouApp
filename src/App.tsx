@@ -49,6 +49,7 @@ import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, se
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
+import { resolveVerificationChecklistDefinition } from './utils/verificationChecklistTestClassroom'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
 import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
 import { markReportAnswersReadViaFunction, subscribeReportAnswers } from './integrations/firebase/reportAnswersStore'
@@ -1947,6 +1948,7 @@ function AuthenticatedApp() {
     // 開発用教室だけの確認リスト(2026-09-12)。本番教室では isActingDevelopmentClassroom が false なので
     // VerificationChecklistPanel を一切マウントしない(source-scan テストで固定)。画面分岐の外側に置き、
     // 盤面・基本データ・開発者画面など全画面の最前面に出す。
+    // 項目の定義は教室で選ぶ(2026-10-14): テスト教室には全校展開前の最終テスト用の別の定義(tc- 系)、開発用教室には従来の定義。
     const verificationChecklistPanel = isActingDevelopmentClassroom ? (
       <VerificationChecklistPanel
         key={actingClassroomId ?? 'none'}
@@ -1954,6 +1956,7 @@ function AuthenticatedApp() {
         classroomName={actingClassroom?.name}
         onSubmitNote={submitVerificationChecklistNote}
         resolveStudentName={resolveVerificationChecklistStudentName}
+        definition={resolveVerificationChecklistDefinition(actingClassroomId)}
       />
     ) : null
 
