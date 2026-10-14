@@ -55,6 +55,14 @@ describe('確認リストパネル本体', () => {
     expect(PANEL_TSX).not.toContain('firebase')
   })
 
+  it('別タブ表示は同じパネルを createPortal で描くだけ(状態・送信経路を別タブ用に作らない・2026-10-14)', () => {
+    expect(PANEL_TSX).toContain("import { createPortal } from 'react-dom'")
+    expect(PANEL_TSX).toContain('createPortal(panel, detached.root)')
+    expect(PANEL_TSX).toContain("from './verificationChecklistWindow'")
+    // 元のタブが閉じる/再読み込みするときは別タブも閉じる(取り残された別タブの入力は届かない)。
+    expect(PANEL_TSX).toContain("window.addEventListener('pagehide', closeWindow)")
+  })
+
   it('書式・下書き・進捗の計算は純関数モジュールへ委譲している', () => {
     expect(PANEL_TSX).toContain("from '../../utils/verificationChecklist'")
     expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes')

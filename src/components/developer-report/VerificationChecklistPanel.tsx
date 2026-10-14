@@ -9,8 +9,13 @@
 // ⚠️ 本番教室では**一切マウントしない**(App.tsx の isActingDevelopmentClassroom で条件付け)。
 // 書式・下書きの入出力・進捗計算はすべて src/utils/verificationChecklist.ts の純関数に委譲する
 // (このコンポーネントは入出力と見た目だけを担う)。
+//
+// 別タブ表示(2026-10-14 オーナー指示「確認リストを別タブでひらけるようにして」): 見出しの「別タブで開く」で
+// 空のタブを開き、同じパネルを createPortal でそのタブへ描く(状態・送信・生徒名の解決はこのコンポーネントのまま)。
+// 別タブを閉じるか「元の画面に戻す」で右下へ戻る。元のタブを閉じる/再読み込み/教室を切り替えると別タブも閉じる。
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import type { DeveloperReportSubmitResult } from '../../utils/developerReport'
 import {
@@ -30,6 +35,7 @@ import {
   type VerificationChecklistDraft,
   type VerificationChecklistStatus,
 } from '../../utils/verificationChecklist'
+import { openVerificationChecklistWindow, prepareVerificationChecklistWindowDocument } from './verificationChecklistWindow'
 
 export type VerificationChecklistPanelProps = {
   classroomId: string | null
@@ -74,6 +80,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
   const [sending, setSending] = useState(false)
   const [resultMessage, setResultMessage] = useState<string | null>(null)
+  /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
+  const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
 
   const updateDraft = useCallback((next: VerificationChecklistDraft) => {
     setDraft(next)
@@ -87,6 +95,58 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       return next
     })
   }, [])
+
+  const handleOpenWindow = useCallback(() => {
+    const win = openVerificationChecklistWindow(window)
+    if (!win) {
+      setResultMessage('別タブを開けませんでした。ブラウザのポップアップの許可を確認してください。')
+      return
+    }
+    try {
+      const root = prepareVerificationChecklistWindowDocument(document, win.document, `確認リスト ${VERIFICATION_CHECKLIST.version}`)
+      setResultMessage(null)
+      setDetached({ win, root })
+      win.focus()
+    } catch {
+      try { win.close() } catch { /* 閉じられなくても右下の表示は続く */ }
+      setResultMessage('別タブを開けませんでした。この画面のまま使ってください。')
+    }
+  }, [])
+
+  const handleReturnFromWindow = useCallback(() => {
+    setDetached(null)
+  }, [])
+
+  // 別タブの後始末: 別タブが閉じられたら右下へ戻す。元のタブが閉じる/再読み込み/このパネルが外れる(教室切り替え)
+  // ときは別タブも閉じる(取り残された別タブで入力しても、下書きにも送信にも届かないため)。
+  useEffect(() => {
+    if (!detached) return undefined
+    const { win } = detached
+    const handleWindowGone = () => setDetached((current) => (current?.win === win ? null : current))
+    const closeWindow = () => {
+      try {
+        if (!win.closed) win.close()
+      } catch {
+        // 既に閉じている等は無視する。
+      }
+    }
+    win.addEventListener('pagehide', handleWindowGone)
+    // pagehide を取りこぼすブラウザ向けの保険(閉じたかを 1 秒ごとに見る)。
+    const timer = window.setInterval(() => {
+      if (win.closed) handleWindowGone()
+    }, 1000)
+    window.addEventListener('pagehide', closeWindow)
+    return () => {
+      try {
+        win.removeEventListener('pagehide', handleWindowGone)
+      } catch {
+        // 閉じたタブの window は触れないことがある。
+      }
+      window.clearInterval(timer)
+      window.removeEventListener('pagehide', closeWindow)
+      closeWindow()
+    }
+  }, [detached])
 
   const progress = useMemo(() => countVerificationChecklistProgress(draft), [draft])
   const groups = useMemo(() => {
@@ -129,14 +189,15 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
   const handleCopy = useCallback(async () => {
     const markdown = buildVerificationChecklistMarkdown(draft)
     try {
-      await navigator.clipboard.writeText(markdown)
+      // 別タブで押したときは別タブの navigator を使う(元のタブはフォーカスが無くコピーを断られる)。
+      await (detached?.win ?? window).navigator.clipboard.writeText(markdown)
       setResultMessage('Markdown をコピーしました。')
     } catch {
       setResultMessage('コピーできませんでした(ブラウザの権限)。文面は送信ボタンから送れます。')
     }
-  }, [draft])
+  }, [draft, detached])
 
-  if (collapsed) {
+  if (!detached && collapsed) {
     return (
       <button
         type="button"
@@ -150,8 +211,12 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     )
   }
 
-  return (
-    <section className="verification-checklist-panel" aria-label="確認事項チェックリスト" data-testid="verification-checklist-panel">
+  const panel = (
+    <section
+      className={`verification-checklist-panel${detached ? ' is-detached' : ''}`}
+      aria-label="確認事項チェックリスト"
+      data-testid="verification-checklist-panel"
+    >
       <header className="verification-checklist-header">
         <div>
           <div className="verification-checklist-title">確認リスト {VERIFICATION_CHECKLIST.version}</div>
@@ -159,9 +224,20 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
             開発用教室のみ{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
           </div>
         </div>
-        <button type="button" className="verification-checklist-collapse" onClick={toggleCollapsed} aria-label="確認リストを閉じる">
-          －
-        </button>
+        {detached ? (
+          <button type="button" className="verification-checklist-window-button" onClick={handleReturnFromWindow} data-testid="verification-checklist-return">
+            元の画面に戻す
+          </button>
+        ) : (
+          <div className="verification-checklist-header-actions">
+            <button type="button" className="verification-checklist-window-button" onClick={handleOpenWindow} data-testid="verification-checklist-open-window">
+              別タブで開く
+            </button>
+            <button type="button" className="verification-checklist-collapse" onClick={toggleCollapsed} aria-label="確認リストを閉じる">
+              －
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="verification-checklist-body">
@@ -248,6 +324,24 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       </footer>
     </section>
   )
+
+  if (detached) {
+    return (
+      <>
+        <button
+          type="button"
+          className="verification-checklist-toggle"
+          onClick={() => detached.win.focus()}
+          data-testid="verification-checklist-detached-toggle"
+        >
+          確認リスト 別タブで表示中 {progress.checked}/{progress.total}
+        </button>
+        {createPortal(panel, detached.root)}
+      </>
+    )
+  }
+
+  return panel
 }
 
 export default VerificationChecklistPanel

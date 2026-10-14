@@ -5682,6 +5682,54 @@ tr.sa-group-row td {
   cursor: pointer;
 }
 
+/* 見出し右の「別タブで開く」「－」/ 別タブ側の「元の画面に戻す」(2026-10-14 オーナー指示「確認リストを別タブでひらけるようにして」)。
+   文字は確認リストの 2 倍サイズ(v1.5.556)に揃える。 */
+.verification-checklist-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.verification-checklist-window-button {
+  flex-shrink: 0;
+  height: 64px;
+  padding: 0 16px;
+  border: 1px solid #1d4ed8;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 28px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.verification-checklist-window-button:hover {
+  background: #eef4ff;
+}
+
+/* 別タブ表示: 右下の浮き窓ではなくタブ全体を使う(本文だけがスクロールする)。
+   html, body の min-width: 1280px(index.css)を外す(狭いタブで右側が切れないように)。 */
+html.verification-checklist-window,
+body.verification-checklist-window {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.verification-checklist-panel.is-detached {
+  position: static;
+  width: auto;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .verification-checklist-body {
   flex: 1;
   min-height: 0;
