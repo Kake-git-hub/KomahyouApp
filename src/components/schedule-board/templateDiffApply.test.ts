@@ -49,6 +49,7 @@ import {
   canClearDeletedTeacherTombstone,
   doesDeletedTeacherTombstoneBlock,
   createEmptyTemplateDiffApplySummary,
+  expandTemplateDiffSlotFilterForSameDayMoves,
 } from './templateDiffApply'
 import { buildTemplateSlotKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -2011,7 +2012,7 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
 
   it('確認文・保存後メッセージに範囲（変えたコマだけ／すべて）と過去日の警告が出る', () => {
     const summary = createEmptyTemplateDiffApplySummary()
-    const changed = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['月 5限', '水 5限'] }, todayKey: '2026-10-01' })
+    const changed = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['月 5限', '水 5限'], extraSlotLabels: [] }, todayKey: '2026-10-01' })
     expect(changed).toContain('テンプレで変えたコマ（月 5限・水 5限）だけを突き合わせます。変えていないコマは変わりません。')
     expect(changed).not.toContain('今日より前')
     const noChange = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'no-change' }, todayKey: '2026-10-14' })
@@ -2022,7 +2023,84 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
     expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'user' } })).toContain('すべてのコマを突き合わせます。')
     // 従来の呼び出し（context 無し）は従来の文のまま
     expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary)).not.toContain('突き合わせます')
-    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary, { scope: 'changed-slots', slotLabels: ['月 5限'] })).toContain('対象はテンプレで変えたコマ（月 5限）だけ。')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary, { scope: 'changed-slots', slotLabels: ['月 5限'], extraSlotLabels: [] })).toContain('対象はテンプレで変えたコマ（月 5限）だけ。')
     expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary, { scope: 'all', reason: 'user' })).not.toContain('対象はテンプレで変えたコマ')
+    // H-2b: 盤面の行との差は「加えて」の別枠。年度違いの理由も出る
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['月 5限'], extraSlotLabels: ['水 2限'] } })).toContain('加えて、盤面の通常授業の行が今のテンプレと食い違うコマ（水 2限）も突き合わせます（退塾した講師の整理など）。')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'school-year' } })).toContain('年度が変わるため、すべてのコマを突き合わせます。')
+  })
+
+  // ── Q39-9（regression-reviewer H-1・2026-10-14）: 同日移動の写しが範囲の外の時限に居る日は全コマ ──
+  const KEY_A_SLOT5 = buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)
+  const SLOT3_CELL_ID = `${DATE}_3`
+  const SLOT4_CELL_ID = `${DATE}_4`
+  const liveOnDate = (weeks: SlotCell[][], studentId: string, dateKey = DATE) => weeks.flat().filter((cell) => cell.dateKey === dateKey)
+    .reduce((sum, cell) => sum + cell.desks.reduce((inner, desk) => inner + liveNames(desk).filter((id) => id === studentId).length, 0), 0)
+  // 室長が保存する盤面は読み込み時の再マージを通った正規形（空机に manualTeacher:false など）。同日移動の実データの形＝5 限の A は抑止で消え、3 限に写し。
+  const loadedWeek = (suppressed: string[] = []) => remerge([buildWeek(OLD_ROWS)], OLD_ROWS, suppressed)[0]
+  const weekWithCopyAtSlot3 = () => mutateDesk(loadedWeek([KEY_A_SLOT5]), 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_3', studentSlots: [entry('sA', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }), null] } }), SLOT3_CELL_ID)
+  const runScoped = (week: SlotCell[], newRows: RegularLessonRow[], slotFilter: TemplateDiffSlotFilter | undefined, pending: TemplatePendingDeskMap = {}) => computeTemplateDiffApplyForBoard({
+    weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: newRows, effectiveStartDate: EFFECTIVE,
+    suppressedRegularLessonOccurrences: [KEY_A_SLOT5], templatePendingDesks: pending, createdAt: 'x', slotFilter,
+  })
+
+  it('Q39-9 superseded: 範囲 {水4, 水5} の外（3 限）に A の写しがあっても、A が関わる変更なのでその日は全コマ→ 写しは外れ A は 4 限の 1 か所。再マージ 2 回でも不動点', () => {
+    const week = weekWithCopyAtSlot3()
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    const filter: TemplateDiffSlotFilter = { slotKeys: new Set([buildTemplateSlotKey(3, 4), buildTemplateSlotKey(3, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) }
+    const result = runScoped(week, newRows, filter)
+    expect(liveOnDate(result.nextWeeks, 'sA')).toBe(1)
+    expect(countLiveInCell(result.nextWeeks, 'sA', SLOT4_CELL_ID)).toBe(1)
+    expect(countLiveInCell(result.nextWeeks, 'sA', SLOT3_CELL_ID)).toBe(0)
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect(result.removedSuppressedRegularLessonOccurrences).toEqual([KEY_A_SLOT5])
+    const suppressedAfter = [...result.addedSuppressedRegularLessonOccurrences]
+    const once = remerge(result.nextWeeks, newRows, suppressedAfter)
+    expect(byCellId(remerge(once, newRows, suppressedAfter))).toEqual(byCellId(result.nextWeeks))
+    expect(byCellId(once)).toEqual(byCellId(result.nextWeeks))
+    // 関わる生徒を渡さない絞り込み（入口が必ず渡す理由）では写しが残り、同じ日に 2 か所になる（修正なしで落ちる形の固定）
+    const naive = runScoped(week, newRows, { slotKeys: filter.slotKeys })
+    expect(liveOnDate(naive.nextWeeks, 'sA')).toBe(2)
+  })
+
+  it('Q39-9 stale: テンプレで A を水から木へ移す（範囲 {水5, 木5}）→ 水 3 限の写しは残骸として外れ、A は木 5 限だけ', () => {
+    const week = weekWithCopyAtSlot3()
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 4, 5), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    const filter: TemplateDiffSlotFilter = { slotKeys: new Set([buildTemplateSlotKey(3, 5), buildTemplateSlotKey(4, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])], [4, new Set(['sA'])]]) }
+    const result = runScoped(week, newRows, filter)
+    expect(liveOnDate(result.nextWeeks, 'sA')).toBe(0)
+    expect(liveOnDate(result.nextWeeks, 'sA', '2026-10-08')).toBe(1)
+    expect(result.summary.sameDayMoveCopiesReverted).toBe(1)
+  })
+
+  it('Q39-9: 関わらない生徒（B）の写しだけの日は広げない＝範囲の外のコマは参照ごと不変。保留の下段に居る写しも日を広げる対象', () => {
+    const copyOfB = entry('sB', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' })
+    const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, lesson: { id: 'moved_sB_3', studentSlots: [copyOfB, null] } }), SLOT3_CELL_ID)
+    const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    const target = cellOf([week], SLOT3_CELL_ID)
+    const result = runScoped(week, newRows, { slotKeys: new Set([buildTemplateSlotKey(3, 4), buildTemplateSlotKey(3, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) })
+    expect(cellOf(result.nextWeeks, SLOT3_CELL_ID)).toBe(target)
+    // 下段の写し（A）: 保留マップの下段に A の写しがあれば、その日は全コマ対象になる（純関数の判定）
+    const pending: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(SLOT3_CELL_ID, target.desks[2].id)]: { lower: { lesson: { id: 'moved_sA_lower', studentSlots: [entry('sA', { sameDayMoveSourceDate: DATE }), null] } }, effectiveStartDate: EFFECTIVE, createdAt: 'x' },
+    }
+    const expanded = expandTemplateDiffSlotFilterForSameDayMoves({ weeks: [week], pendingDesks: pending, effectiveStartDate: EFFECTIVE, filter: { slotKeys: new Set([buildTemplateSlotKey(3, 4)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) } })
+    expect(expanded?.fullDates).toEqual(new Set([DATE]))
+    // 反映日より前の日の写しは数えない
+    const earlier = expandTemplateDiffSlotFilterForSameDayMoves({ weeks: [week], pendingDesks: pending, effectiveStartDate: '2026-10-08', filter: { slotKeys: new Set([buildTemplateSlotKey(3, 4)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) } })
+    expect(earlier?.fullDates).toBeUndefined()
+  })
+
+  it('Q39 不動点: 絞り込み付きの保存結果に再マージを 2 回通しても、範囲の内も外も変わらない（L-7 兄弟 2 の範囲版・INV-03）', () => {
+    const week = loadedWeek([KEY_A_SLOT5])
+    // 水 5限 机 0 を C に（A は抑止済み）。範囲 {水5}＝変えたコマ、範囲 {木5}＝変えたコマの外だけ（盤面の行は計画関数が範囲に足す前提なので、ここでは行が同じ机 1・2 の不動点を見る）
+    const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    for (const filter of [{ slotKeys: new Set([buildTemplateSlotKey(3, 5)]) }, { slotKeys: new Set([buildTemplateSlotKey(3, 5), buildTemplateSlotKey(4, 5)]) }]) {
+      const result = runScoped(week, newRows, filter)
+      const suppressedAfter = [KEY_A_SLOT5, ...result.addedSuppressedRegularLessonOccurrences]
+      const once = remerge(result.nextWeeks, newRows, suppressedAfter)
+      expect(byCellId(once)).toEqual(byCellId(result.nextWeeks))
+      expect(byCellId(remerge(once, newRows, suppressedAfter))).toEqual(byCellId(result.nextWeeks))
+    }
   })
 })

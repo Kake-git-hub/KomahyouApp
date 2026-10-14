@@ -37,8 +37,8 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
-import { buildTemplateDefinitionDiffLines, describeTemplateDiffScope, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { buildTemplateDefinitionDiffLines, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -162,11 +162,11 @@ type TemplateSaveConfirmState = {
   // 保存本体と同じ関数（computeTemplateDiffApplyForBoard）・同じ入力で数える＝確認文と保存結果が食い違わない。
   diffSummary?: TemplateDiffApplySummary
   // Q39（オーナー案 2026-10-14・Issue #75）: 前回保存したテンプレとの差（変更点一覧）と、突き合わせる範囲（変えたコマだけ／すべて）。
-  // slotFilter は試し実行と保存本体に同じものを渡す（Q32-1 と同じ流儀）。todayKey は過去日の警告用（Q39-5）。
+  // 絞り込み（slotFilter）そのものは持たず、試し実行も保存本体も同じ計画関数（buildTemplateDiffSavePlan）が applyScope から作り直す
+  // （Q32-1 と同じ流儀＝確認文と保存結果が食い違わない）。todayKey は過去日の警告用（Q39-5）。
   definitionDiff?: TemplateDefinitionDiff
   applyScope?: TemplateDiffApplyScope
   scopeNote?: TemplateDiffScopeNote
-  slotFilter?: TemplateDiffSlotFilter
   todayKey?: string
 }
 
@@ -2570,7 +2570,7 @@ export function buildTemplateDiffTemplateCells(params: {
 
 // テンプレ差分反映の入口（保存本体と保存前の確認文の件数＝試し実行の両方がこれを呼ぶ・Q32-1）。
 // classroomSettings には**保存後の**教室設定（新テンプレ・反映日・休日は消さない）を渡す。
-export function computeTemplateDiffApplyForBoard(params: {
+export function computeTemplateDiffApplyForBoard(input: {
   weeks: SlotCell[][]
   classroomSettings: ClassroomSettings
   teachers: TeacherRow[]
@@ -2583,6 +2583,9 @@ export function computeTemplateDiffApplyForBoard(params: {
   /** Q39: テンプレで変えたコマだけ突き合わせる絞り込み（無ければ全コマ）。本体と保存直後の再マージの重ね合わせの両方に効く。 */
   slotFilter?: TemplateDiffSlotFilter | null
 }) {
+  // Q39-9（regression-reviewer H-1）: 変えた机に関わる生徒の同日移動の写しが範囲の外の時限に居る日は、その日を全コマにする（Q36 は日単位の規則）。
+  // 入口で 1 回だけ盤面（保存前の上段・下段）を見て決め、Q36 の反復・保存直後の再マージの重ね合わせの両方に同じ絞り込みを渡す。
+  const params = { ...input, slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter }) }
   // Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写し（同日移動・元の日付へ戻した）が、新テンプレの同じ生徒×科目と
   // 重複する／テンプレに無い／席で新テンプレの別の生徒とぶつかるときは、写しを外して**その日のその生徒×科目の抑止キーも外し**、
   // テンプレの授業が元の位置へ戻った形でもう一度突き合わせる（外したキーで抑止前の管理セルが変わるので、管理セルを作り直して反復する。
@@ -7107,8 +7110,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const isTemplateModeRef = useRef(isTemplateMode)
   isTemplateModeRef.current = isTemplateMode
   const templateSavePreviewSeqRef = useRef(0)
-  // Q39: テンプレ編集を開いたときに読み込んだ保存済みテンプレ（同じ在籍フィルタ済み）。保存時に「変えたコマ」を出す基準。
-  const templateBaselineRef = useRef<RegularLessonTemplate | null>(null)
   // テンプレモードに入ったら丸ごと振替の選択モードは解除する(戻ったとき古い振替元で突然復活させない)。
   useEffect(() => {
     if (isTemplateMode) setWholeDayTransferSourceDate(null)
@@ -7194,7 +7195,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       ? buildTemplateBoardCells({ template: filteredTemplate, teachers, students, deskCount: classroomSettings.deskCount })
       : copyBoardCellsForTemplate(cells)
     setTemplateCells(templateBoardCells)
-    templateBaselineRef.current = filteredTemplate
     // Q39-5（オーナー確定 2026-10-14）: 差分反映の教室では反映開始日の既定を「来週の月曜」に（保存済みテンプレの反映日がそれより先ならその日）。
     // 旧方式（上書き）の教室は従来どおり「保存済みテンプレの反映日 or 今日」。
     setTemplateEffectiveStartDate(templateDiffApplyEnabled
@@ -7255,12 +7255,26 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 保存本体（handleSaveRegularLessonTemplateByDiff）と保存前の確認文の件数（試し実行）の両方がこれを呼ぶ（Q32-1）。
   // ★旧方式との違い: 反映日以降の休日を消さない（Q2 改定）・抑止/希望回数補正/手動振替調整をクリアしない（Q10 改定）・
   //   在庫台帳を触らない（Q7〜Q9 改定・INV-06 拡張）。履歴・preTemplateRegularLessons・反映日の扱いは旧方式と同じ。
-  const buildTemplateDiffSavePlan = useCallback((template: RegularLessonTemplate, createdAt: string, options?: { slotFilter?: TemplateDiffSlotFilter | null }) => {
+  // Q39: 「どのコマを突き合わせるか」の権威はこの 1 か所（試し実行と保存本体が同じ入力で同じ結果を得る・Q32-1）。
+  //   基準＝保存時点の保存済みテンプレを編集画面と同じ在籍フィルタに通したもの（編集中に別の端末が保存しても、盤面が従う今のテンプレと比べる）。
+  //   範囲＝テンプレ定義の差 ∪ 盤面の通常授業の行（regularLessons＝保存済みテンプレから作った行）と新しい行の差（regression-reviewer H-2b。
+  //   退塾した講師が保存済みテンプレに残るコマなど、定義の差では見えないのに行が変わるコマを保存直後の再マージに任せない＝INV-03）。
+  //   年度が違えば全コマ（H-2a・diffTemplateDefinitions の school-year）。
+  const buildTemplateDiffSavePlan = useCallback((template: RegularLessonTemplate, createdAt: string, options?: { applyScope?: TemplateDiffApplyScope }) => {
     const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
       template,
       teachers,
       students,
     })
+    const baselineTemplate = classroomSettings.regularLessonTemplate
+      ? filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })
+      : null
+    const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)
+    const applyScope = options?.applyScope ?? resolveDefaultTemplateDiffApplyScope(definitionDiff)
+    const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))
+    const previousEffectiveStartDate = [baselineTemplate?.effectiveStartDate ?? '', classroomSettings.templateFreezeBeforeDate ?? ''].sort().pop() || null
+    const slotFilter = resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })
+    const scopeNote = describeTemplateDiffScope(definitionDiff, applyScope, extraSlotKeys)
     // spec-template-behavior Q16/Q18: 履歴は「新反映日以上の旧履歴を捨て新テンプレを追加」・最新3件まで（旧方式と同じ）。
     const prevHistory = classroomSettings.regularLessonTemplateHistory ?? []
     const nextHistory = [
@@ -7289,20 +7303,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       templatePendingDesks,
       createdAt,
       // Q39: 変えたコマだけ突き合わせる（試し実行と保存本体に同じ絞り込みを渡す）。
-      slotFilter: options?.slotFilter,
+      slotFilter,
     })
-    return { normalizedTemplateRegularLessons, nextClassroomSettings, diff }
+    return { normalizedTemplateRegularLessons, nextClassroomSettings, diff, definitionDiff, applyScope, scopeNote, slotFilter }
   }, [classroomSettings, regularLessons, students, suppressedRegularLessonOccurrences, teachers, templatePendingDesks, weeks])
 
   // テンプレ保存（差分反映＋保留・機能フラグ templateDiffApply ON の教室だけ・Issue #72）。
   // 反映日以降の机ごとに突き合わせ（印の無い机だけ置き換え・印のある机は残す／採用／保留）、講師はテンプレに揃える。
   // 在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）は触らない。抑止は Q21-11 / Q35 の追加だけ、希望回数は Q35-8 の −1 だけ。
-  const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate, options?: { slotFilter?: TemplateDiffSlotFilter | null; scopeNote?: TemplateDiffScopeNote }) => {
+  const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate, options?: { applyScope?: TemplateDiffApplyScope }) => {
     // テンプレ保存前にバックアップを保存（非同期、完了を待たない）。旧方式と同じ（Q32-2）。
     if (onPreTemplateSaveBackup) {
       void onPreTemplateSaveBackup()
     }
-    const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { slotFilter: options?.slotFilter })
+    const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })
     onUpdateClassroomSettings(plan.nextClassroomSettings)
     onReplaceRegularLessons?.(plan.normalizedTemplateRegularLessons)
 
@@ -7332,7 +7346,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (nextScheduleCountAdjustments !== scheduleCountAdjustments) {
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
     }
-    recordOperationTrace('board-rebuild', `通常授業テンプレ保存・差分反映${options?.scopeNote?.scope === 'changed-slots' ? `（変えたコマだけ: ${options.scopeNote.slotLabels.join('・')}）` : ''}: ${summarizeWeeksDiff(weeks, nextWeeks) || '机の変化なし'}`)
+    recordOperationTrace('board-rebuild', `通常授業テンプレ保存・差分反映${plan.scopeNote.scope === 'changed-slots' ? `（変えたコマだけ: ${[...plan.scopeNote.slotLabels, ...plan.scopeNote.extraSlotLabels].join('・')}）` : ''}: ${summarizeWeeksDiff(weeks, nextWeeks) || '机の変化なし'}`)
     committedBoardChangeVersionRef.current += 1
     onBoardStateChange?.({
       weeks: cloneWeeksForPublish(applyClassroomAvailability(nextWeeks, plan.nextClassroomSettings)),
@@ -7354,7 +7368,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentScheduleRange,
       teacherScheduleRange,
     }, { userInitiated: true })
-    setStatusMessage(buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary, options?.scopeNote))
+    setStatusMessage(buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary, plan.scopeNote))
 
     setIsTemplateMode(false)
     setTemplateCells([])
@@ -10490,11 +10504,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       try {
         // Q39（オーナー案 2026-10-14）: 前回保存したテンプレ（編集を開いたときに読み込んだもの）と比べ、変えたコマだけを突き合わせるのを既定にする。
         // 変えたコマが 0（何も変えずに保存）・比べる前回が無い・机の数が違うときは従来どおり全コマ。
-        const definitionDiff = diffTemplateDefinitions(templateBaselineRef.current, template)
-        const applyScope = resolveDefaultTemplateDiffApplyScope(definitionDiff)
-        const slotFilter = resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate: templateBaselineRef.current?.effectiveStartDate })
-        const diffSummary = buildTemplateDiffSavePlan(template, '', { slotFilter }).diff.summary
-        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary, definitionDiff, applyScope, scopeNote: describeTemplateDiffScope(definitionDiff, applyScope), slotFilter, todayKey: toDateKey(new Date()) })
+        const plan = buildTemplateDiffSavePlan(template, '')
+        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, todayKey: toDateKey(new Date()) })
       } catch (error) {
         // 試し実行で例外が出たら保存の確認に進まず理由を出す(以前は同期で投げていた＝同じく保存には進まない)。
         setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
@@ -10507,14 +10518,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // Q39-3: 確認モーダルで「変えたコマだけ」⇄「すべてのコマ」を切り替える（件数は同じ関数の試し実行で出し直す）。
   const handleTemplateSaveScopeChange = (applyScope: TemplateDiffApplyScope) => {
     if (!templateSaveConfirm?.definitionDiff || templateSaveConfirm.applyScope === applyScope) return
-    const { template, definitionDiff } = templateSaveConfirm
+    const { template } = templateSaveConfirm
     setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)
+    const previewSeq = templateSavePreviewSeqRef.current + 1
+    templateSavePreviewSeqRef.current = previewSeq
     void waitForNextPaint().then(() => {
+      // 連打・画面離脱の間に古い結果を当てない（保存要求の試し実行と同じ連番）。
+      if (templateSavePreviewSeqRef.current !== previewSeq || !isTemplateModeRef.current) {
+        if (templateSavePreviewSeqRef.current === previewSeq) setBusyOverlayMessage(null)
+        return
+      }
       try {
-        const slotFilter = resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate: templateBaselineRef.current?.effectiveStartDate })
-        const diffSummary = buildTemplateDiffSavePlan(template, '', { slotFilter }).diff.summary
+        const plan = buildTemplateDiffSavePlan(template, '', { applyScope })
         setTemplateSaveConfirm((current) => (current && current.template === template
-          ? { ...current, diffSummary, applyScope, scopeNote: describeTemplateDiffScope(definitionDiff, applyScope), slotFilter }
+          ? { ...current, diffSummary: plan.diff.summary, applyScope: plan.applyScope, scopeNote: plan.scopeNote }
           : current))
       } catch (error) {
         setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
@@ -10543,7 +10560,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     // spec-template-behavior §H: 差分反映の教室（機能フラグ templateDiffApply）は新経路。それ以外は旧方式（上書き）のまま。
     if (templateDiffApplyEnabled) {
-      handleSaveRegularLessonTemplateByDiff(templateSaveConfirm.template, { slotFilter: templateSaveConfirm.slotFilter, scopeNote: templateSaveConfirm.scopeNote })
+      handleSaveRegularLessonTemplateByDiff(templateSaveConfirm.template, { applyScope: templateSaveConfirm.applyScope })
       return
     }
     handleSaveRegularLessonTemplate(templateSaveConfirm.template, true)
@@ -15317,11 +15334,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   // Q39: 変更点一覧と突き合わせる範囲の選択（既定は「変えたコマだけ」）。
                   <div className="student-menu-section" data-testid="template-save-scope">
                     <label style={{ display: 'block', marginBottom: 4 }}>
-                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'changed-slots'} onChange={() => handleTemplateSaveScopeChange('changed-slots')} data-testid="template-save-scope-changed" />
+                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'changed-slots'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('changed-slots')} data-testid="template-save-scope-changed" />
                       {` 変えたコマだけ反映（${templateSaveConfirm.definitionDiff.changedSlotKeys.length} コマ）`}
                     </label>
                     <label style={{ display: 'block', marginBottom: 6 }}>
-                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'all'} onChange={() => handleTemplateSaveScopeChange('all')} data-testid="template-save-scope-all" />
+                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'all'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('all')} data-testid="template-save-scope-all" />
                       {' すべてのコマを突き合わせる'}
                     </label>
                     <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }} data-testid="template-save-changed-desks">
@@ -15333,7 +15350,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   </div>
                 ) : null}
                 <div className="student-menu-section student-menu-actions">
-                  <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} data-testid="template-save-confirm-execute-button">
+                  <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} disabled={busyOverlayMessage !== null} data-testid="template-save-confirm-execute-button">
                     {templateSaveConfirm.diffSummary ? '保存を実行' : '上書き保存を実行'}
                   </button>
                   <button type="button" className="secondary-button" onClick={() => setTemplateSaveConfirm(null)} data-testid="template-save-confirm-cancel-button">キャンセル</button>

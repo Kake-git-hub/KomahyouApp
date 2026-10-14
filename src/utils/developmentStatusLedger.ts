@@ -100,7 +100,7 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     checklistItemIds: ['tp-15', 'tp-30', 'tp-31', 'tp-32', 'tp-33', 'tp-34', 'tp-35', 'tp-36', 'tp-37', 'tp-38', 'tp-44', 'tp-45', 'tp-46', 'tp-47'],
     nextAction: '緑が丘校の #75(2026-10-14)が本機能の昇格を前提にする(計画 docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md §3: Q33-1・N-1・穴 8・tp-* の OK・INV 監査の後に scope を all-classrooms へ)。段 1-0(Q39・v1.5.598)の tp-44〜47 を開発用教室で確認。開発用教室で第 46 版(v1.5.587 据え置き・v1.5.593 配信)の tp-38(保留の下段の長押し D&D)と、第 45 版(v1.5.592 配信)の tp-36(手動追加の通常授業がテンプレと同じ内容ならテンプレの机に合わせて緑が消える・同じテンプレの再保存で今ある緑 4 件が片づく)・tp-37(科目違い・振替・講習は緑のまま)を確認。残る判断: ぶつからない形(Q21-11 前段で手置きの机に残っていた形)もテンプレの机へ寄せる線引き(Q38・決定記録 33)に異議が無いか。以下は第 38 版からの持ち越し: 開発用教室で第 38 版(v1.5.578)を試用: 同日移動の写しがテンプレに合う tp-31/tp-32(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る、の修正。§H Q36)・休みの席の手入力データを自動採用 tp-33(§H Q37)・日程表の「休」に振替先日付を出さない tp-34・採用の 2 択を席ごとに tp-35(§H Q26-10)。tp-30(講習の重複)と tp-15 も結果待ち。残るオーナー判断: 同日移動の写しのうち「テンプレがその日に持つが抑止で置かれず、席もぶつからない」写しだけ残す線引き(Q36-2)に異議が無いか。全 OK・Q33-1 のすき間(旧版タブの保存で保留が落ちる)の塞ぎ方の決定と実装・regression-reviewer の INV 監査の後、全教室へ広げるかをオーナーが判断。第 2 段(保留一覧・一括採用・孤児キーの整合チェック)は未着手。',
     references: ['docs/spec-template-behavior.md §H', 'Issue #72', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templatePendingResolution.ts', 'src/components/schedule-board/inv13-template-pending-scope.matrix.test.ts'],
-    updatedOn: '2026-10-13',
+    updatedOn: '2026-10-14',
   },
   {
     id: 'question-ai-answer',

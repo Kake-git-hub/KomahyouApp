@@ -1,10 +1,13 @@
 // Q39（オーナー案 2026-10-14・Issue #75）: テンプレで変えたコマだけ突き合わせるための純関数のテスト。
 import { describe, expect, it } from 'vitest'
 import { createRegularLessonTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import {
   buildTemplateDefinitionDiffLines,
   buildTemplateSlotKey,
+  collectTemplateDiffStudentIdsByWeekday,
   describeTemplateDiffScope,
+  diffRegularLessonRowsBySlot,
   diffTemplateDefinitions,
   formatTemplateDefinitionDeskDiff,
   formatTemplateSlotLabel,
@@ -122,8 +125,10 @@ describe('範囲の既定と絞り込み（Q39-3）', () => {
     const diff = diffTemplateDefinitions(prev, next)
     expect(resolveDefaultTemplateDiffApplyScope(diff)).toBe('changed-slots')
     const filter = resolveTemplateDiffSlotFilter({ diff, scope: 'changed-slots', previousEffectiveStartDate: prev.effectiveStartDate })
-    expect(filter).toEqual({ slotKeys: new Set([buildTemplateSlotKey(1, 5)]), fullBeforeDate: '2026-10-05' })
-    expect(describeTemplateDiffScope(diff, 'changed-slots')).toEqual({ scope: 'changed-slots', slotLabels: ['月 5限'] })
+    expect(filter?.slotKeys).toEqual(new Set([buildTemplateSlotKey(1, 5)]))
+    expect(filter?.fullBeforeDate).toBe('2026-10-05')
+    expect(describeTemplateDiffScope(diff, 'changed-slots')).toEqual({ scope: 'changed-slots', slotLabels: ['月 5限'], extraSlotLabels: [] })
+    expect(filter?.sameDayMoveStudentIdsByWeekday).toEqual(new Map([[1, new Set(['sA'])]]))
     expect(describeTemplateDiffScope(diff, 'all')).toEqual({ scope: 'all', reason: 'user' })
     expect(resolveTemplateDiffSlotFilter({ diff, scope: 'all', previousEffectiveStartDate: prev.effectiveStartDate })).toBeUndefined()
   })
@@ -158,5 +163,62 @@ describe('反映開始日の既定と過去日（Q39-5）', () => {
     expect(isTemplateEffectiveStartDateInPast('2026-10-14', '2026-10-14')).toBe(false)
     expect(isTemplateEffectiveStartDateInPast('', '2026-10-14')).toBe(false)
     expect(formatTemplateSlotLabel(6, 1)).toBe('土 1限')
+  })
+})
+
+describe('年度・盤面の行との差・写しのある日（regression-reviewer H-1/H-2・2026-10-14）', () => {
+  function rowOf(id: string, dayOfWeek: number, slotNumber: number, teacherId: string, student1Id = '', subject1 = '', student2Id = '', subject2 = '', schoolYear = 2026, extra: Partial<RegularLessonRow> = {}): RegularLessonRow {
+    return { id, schoolYear, teacherId, student1Id, subject1, startDate: '2026-04-01', endDate: '2027-03-31', student2Id, subject2, student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek, slotNumber, ...extra }
+  }
+
+  it('年度が違えば全コマ（school-year）: 2026 年度のテンプレと 2027-04-05 反映のテンプレは中身が同じでも比べない', () => {
+    const prev = setDesk(template(), 1, 5, 3, { teacherId: 't1', student1: { studentId: 'sA', subject: '数' } })
+    const next = { ...prev, effectiveStartDate: '2027-04-05' }
+    const diff = diffTemplateDefinitions(prev, next)
+    expect(diff).toMatchObject({ allSlots: true, reason: 'school-year' })
+    expect(resolveDefaultTemplateDiffApplyScope(diff)).toBe('all')
+    expect(describeTemplateDiffScope(diff, 'changed-slots')).toEqual({ scope: 'all', reason: 'school-year' })
+    // 同じ年度の中で反映日が動くだけなら比べる（2026-10-05 → 2027-03-01）
+    expect(diffTemplateDefinitions(prev, { ...prev, effectiveStartDate: '2027-03-01' }).allSlots).toBe(false)
+  })
+
+  it('盤面の行との差: ID・開始日・終了日が違っても中身が同じなら差なし、講師・生徒・科目・備考が違うコマだけ返す（別年度の行は見ない）', () => {
+    const current = [
+      rowOf('template_2026_1_5_1', 1, 5, 't1', 'sA', '数'),
+      rowOf('template_2026_3_2_1', 3, 2, 't3'),
+      rowOf('template_2026_3_2_2', 3, 2, 't2', 'sB', '英', 'sC', '英'),
+      rowOf('old_2025', 5, 1, 't9', 'sZ', '数', '', '', 2025),
+    ]
+    const next = [
+      rowOf('n1', 1, 5, 't1', 'sA', '数', '', '', 2026, { startDate: '2026-11-02' }),
+      rowOf('n2', 3, 2, 't2', 'sB', '英', 'sC', '英'),
+      rowOf('n3', 3, 2, '', '', '', '', ''),
+    ]
+    expect(diffRegularLessonRowsBySlot(current, next, 2026)).toEqual([buildTemplateSlotKey(3, 2)])
+    // 退塾した講師が保存済みテンプレに残っているコマ: 盤面の行は t3、新しい行は講師なし → そのコマが返る
+    expect(diffRegularLessonRowsBySlot(current, next.filter((row) => row.id !== 'n3'), 2026)).toEqual([buildTemplateSlotKey(3, 2)])
+    // 中身が同じ行の並び順・ID が違っても差なし
+    expect(diffRegularLessonRowsBySlot([current[0]], [rowOf('x', 1, 5, 't1', 'sA', '数', '', '', 2026, { student1Note: '' })], 2026)).toEqual([])
+    expect(diffRegularLessonRowsBySlot([current[0]], [rowOf('x', 1, 5, 't1', 'sA', '数', '', '', 2026, { student1Note: '90分' })], 2026)).toEqual([buildTemplateSlotKey(1, 5)])
+  })
+
+  it('盤面の行との差は絞り込みに足され、確認文では「加えて」の別枠に出る（テンプレで変えたコマに重なる分は出さない）', () => {
+    const prev = setDesk(template(), 1, 5, 3, { teacherId: 't1', student1: { studentId: 'sA', subject: '数' } })
+    const next = setDesk(prev, 1, 5, 3, { student1: null })
+    const diff = diffTemplateDefinitions(prev, next)
+    const extra = [buildTemplateSlotKey(3, 2), buildTemplateSlotKey(1, 5)]
+    const filter = resolveTemplateDiffSlotFilter({ diff, scope: 'changed-slots', previousEffectiveStartDate: '2026-10-05', extraSlotKeys: extra })
+    expect(filter?.slotKeys).toEqual(new Set([buildTemplateSlotKey(1, 5), buildTemplateSlotKey(3, 2)]))
+    expect(describeTemplateDiffScope(diff, 'changed-slots', extra)).toEqual({ scope: 'changed-slots', slotLabels: ['月 5限'], extraSlotLabels: ['水 2限'] })
+    expect(isCellInTemplateDiffScope({ dateKey: '2026-10-07', slotNumber: 2 }, filter)).toBe(true)
+  })
+
+  it('変えた机に関わる生徒は曜日ごとに集まり（before と after の両方）、fullDates の日は全コマ対象', () => {
+    const prev = setDesk(template(), 3, 5, 1, { teacherId: 't1', student1: { studentId: 'sA', subject: '数' } })
+    const next = setDesk(prev, 3, 5, 1, { student1: { studentId: 'sB', subject: '数' } })
+    expect(collectTemplateDiffStudentIdsByWeekday(diffTemplateDefinitions(prev, next))).toEqual(new Map([[3, new Set(['sA', 'sB'])]]))
+    const filter = { slotKeys: new Set([buildTemplateSlotKey(3, 5)]), fullDates: new Set(['2026-10-07']) }
+    expect(isCellInTemplateDiffScope({ dateKey: '2026-10-07', slotNumber: 3 }, filter)).toBe(true)
+    expect(isCellInTemplateDiffScope({ dateKey: '2026-10-14', slotNumber: 3 }, filter)).toBe(false)
   })
 })

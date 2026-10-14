@@ -16,7 +16,7 @@
 // ★在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）・希望回数補正・抑止は**この関数では触らない**
 //   （Q7〜Q10 改定・INV-06 拡張「テンプレ保存そのものでは在庫が増減しない」）。Q21-11 の抑止キーの追加だけを返す。
 
-import { isCellInTemplateDiffScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
+import { isCellInTemplateDiffScope, isTemplateEffectiveStartDateInPast, resolveDayOfWeekFromDateKey, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import type { DeskCell, DeskLesson, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
 import {
   buildTemplatePendingDeskKey,
@@ -448,6 +448,45 @@ export function isTemplateDiffMarkedStudent(student: StudentEntry) {
 export function isSameDayMovedTemplateCopy(student: StudentEntry, dateKey: string) {
   if (student.lessonType !== 'regular' || student.manualAdded) return false
   return student.sameDayMoveSourceDate === dateKey || student.makeupSourceDate === dateKey
+}
+
+/**
+ * Q39-9（regression-reviewer H-1・2026-10-14）: 「変えたコマだけ」の絞り込みに、**その日を全コマにする日**を足す。
+ * Q36 の写しの判定（superseded／stale／collided）は日単位で、写しの検出は突き合わせるセルの中でしか動かない。写しが範囲の外の時限に居ると
+ * 「テンプレで時限を移した生徒が移動元・移動先の両方に出る」（2026-10-03 の重大バグ）が再発するので、変えた机に関わる生徒
+ * （sameDayMoveStudentIdsByWeekday）の写しが上段か保留の下段に居る日は、その日のセルを全部突き合わせる（写しを外したときに
+ * その日のその生徒×科目の抑止キーを全時限ぶん外す resolveSameDayMoveCopyKeysToRemove の副作用も同じ日の中で収まる）。
+ * 絞り込みが無い・関わる生徒が無い・写しが無いときは入力をそのまま返す。
+ */
+export function expandTemplateDiffSlotFilterForSameDayMoves(params: {
+  weeks: SlotCell[][]
+  pendingDesks: TemplatePendingDeskMap
+  effectiveStartDate: string
+  filter: TemplateDiffSlotFilter | null | undefined
+}): TemplateDiffSlotFilter | null | undefined {
+  const filter = params.filter
+  const byWeekday = filter?.sameDayMoveStudentIdsByWeekday
+  if (!filter || !byWeekday || byWeekday.size === 0) return filter
+  const fullDates = new Set(filter.fullDates ?? [])
+  const consider = (student: StudentEntry | null | undefined, dateKey: string) => {
+    if (!student || dateKey < params.effectiveStartDate || fullDates.has(dateKey)) return
+    if (!isSameDayMovedTemplateCopy(student, dateKey)) return
+    const id = student.managedStudentId
+    if (id && byWeekday.get(resolveDayOfWeekFromDateKey(dateKey))?.has(id)) fullDates.add(dateKey)
+  }
+  const dateKeyByCellId = new Map<string, string>()
+  for (const week of params.weeks) for (const cell of week) {
+    dateKeyByCellId.set(cell.id, cell.dateKey)
+    for (const desk of cell.desks) for (const student of desk.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
+  }
+  for (const [key, entry] of Object.entries(params.pendingDesks)) {
+    const parsed = parseTemplatePendingDeskKey(key)
+    const dateKey = parsed ? dateKeyByCellId.get(parsed.cellId) : undefined
+    if (!dateKey) continue
+    for (const student of entry.lower.lesson?.studentSlots ?? []) consider(student, dateKey)
+  }
+  if (fullDates.size === (filter.fullDates?.size ?? 0)) return filter
+  return { ...filter, fullDates }
 }
 
 /**
@@ -1646,10 +1685,18 @@ export type TemplateDiffConfirmContext = {
 /** Q39: 範囲の説明（確認文・保存後メッセージ共通）。 */
 export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | undefined) {
   if (!note) return ''
-  if (note.scope === 'changed-slots') return `テンプレで変えたコマ（${note.slotLabels.join('・')}）だけを突き合わせます。変えていないコマは変わりません。`
+  if (note.scope === 'changed-slots') {
+    const base = `テンプレで変えたコマ（${note.slotLabels.join('・')}）だけを突き合わせます。変えていないコマは変わりません。`
+    // Q39-2（regression-reviewer H-2b）: 盤面の通常授業の行が今のテンプレと食い違うコマ（退塾した講師が保存済みテンプレに残っているなど）は
+    // テンプレで変えていなくても突き合わせる（保存直後の再マージで黙って変わるのを防ぐ）。
+    return note.extraSlotLabels.length > 0
+      ? `${base}\n加えて、盤面の通常授業の行が今のテンプレと食い違うコマ（${note.extraSlotLabels.join('・')}）も突き合わせます（退塾した講師の整理など）。`
+      : base
+  }
   switch (note.reason) {
     case 'no-change': return 'テンプレの中身に変更はありません。すべてのコマを突き合わせます（講師の揃え・保留の片づけ）。'
     case 'no-previous': return '比べられる前回のテンプレが無いため、すべてのコマを突き合わせます。'
+    case 'school-year': return '年度が変わるため、すべてのコマを突き合わせます。'
     case 'desk-count': return '机の数が変わったため、すべてのコマを突き合わせます。'
     default: return 'すべてのコマを突き合わせます。'
   }
@@ -1657,7 +1704,7 @@ export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | unde
 
 export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: TemplateDiffConfirmContext) {
   const scopeLine = describeTemplateDiffScopeNote(context?.scopeNote)
-  const pastWarning = context?.todayKey && effectiveStartDate < context.todayKey
+  const pastWarning = context?.todayKey && isTemplateEffectiveStartDateInPast(effectiveStartDate, context.todayKey)
     ? `⚠ 反映開始日（${effectiveStartDate}）が今日より前です。過去の週も突き合わせます（出欠のある机は残ります）。`
     : ''
   return [

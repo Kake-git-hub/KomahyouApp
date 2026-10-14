@@ -43,6 +43,8 @@ const dayLabelByValue: Record<number, string> = {
   5: '金',
   6: '土',
 }
+/** 曜日番号 → 表示（テンプレの変更点一覧などが同じ表を使う・2026-10-14）。 */
+export const regularTemplateDayLabelByValue: Readonly<Record<number, string>> = dayLabelByValue
 
 function toDateKey(date: Date) {
   const year = date.getFullYear()

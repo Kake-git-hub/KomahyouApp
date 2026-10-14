@@ -264,7 +264,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain("const templateDiffApplyEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })")
     const confirm = sliceBody(BOARD_TSX, 'const handleTemplateSaveConfirm = async () => {', 'const handleTemplateClear = () => {')
     // Q39（2026-10-14）: 差分反映には確認モーダルで決めた絞り込み（slotFilter）と範囲の説明を渡す。旧方式の呼び出しは不変。
-    expect(confirm).toMatch(/if \(templateDiffApplyEnabled\) \{\n\s+handleSaveRegularLessonTemplateByDiff\(templateSaveConfirm\.template, \{ slotFilter: templateSaveConfirm\.slotFilter, scopeNote: templateSaveConfirm\.scopeNote \}\)\n\s+return\n\s+\}\n\s+handleSaveRegularLessonTemplate\(templateSaveConfirm\.template, true\)/)
+    expect(confirm).toMatch(/if \(templateDiffApplyEnabled\) \{\n\s+handleSaveRegularLessonTemplateByDiff\(templateSaveConfirm\.template, \{ applyScope: templateSaveConfirm\.applyScope \}\)\n\s+return\n\s+\}\n\s+handleSaveRegularLessonTemplate\(templateSaveConfirm\.template, true\)/)
     // 保存前の自動バックアップは差分反映でも呼ぶ（Q32-2）
     const byDiff = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
     expect(byDiff).toContain('void onPreTemplateSaveBackup()')
@@ -304,26 +304,38 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
   })
 
   it('確認文の件数（試し実行）は保存本体と同じ計画関数から出す（Q32-1）', () => {
-    // Q39（2026-10-14）: 試し実行は「変えたコマだけ」の絞り込み（slotFilter）付きで、保存本体へ同じ slotFilter を渡す（確認文と保存結果が食い違わない）。
-    expect(BOARD_TSX).toContain("const diffSummary = buildTemplateDiffSavePlan(template, '', { slotFilter }).diff.summary")
-    expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary, definitionDiff, applyScope, scopeNote: describeTemplateDiffScope(definitionDiff, applyScope), slotFilter, todayKey: toDateKey(new Date()) })")
-    expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { slotFilter: options?.slotFilter })")
+    // Q39（2026-10-14）: 試し実行も保存本体も同じ計画関数（buildTemplateDiffSavePlan）が applyScope から絞り込みを作り直す（確認文と保存結果が食い違わない）。
+    expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '')")
+    expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, todayKey: toDateKey(new Date()) })")
+    expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })")
+    expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '', { applyScope })")
     // 絞り込みは差分反映の本体と保存直後の再マージの重ね合わせの両方に効く（絞り込みの外は参照ごと不変）。
     expect(BOARD_TSX).toContain('slotFilter: params.slotFilter,')
     expect(BOARD_TSX).toContain('if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell')
+    // 入口は同日移動の写しがある日を全コマにしてから本体・重ね合わせへ渡す（Q39-9・regression-reviewer H-1）。
+    expect(BOARD_TSX).toContain('slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter })')
+    // 範囲の権威は計画関数 1 か所: 基準は保存時点の保存済みテンプレ（編集画面と同じ在籍フィルタ）、範囲は定義の差 ∪ 盤面の行との差（regression-reviewer H-2）。
+    const planFn = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
+    expect(planFn).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })')
+    expect(planFn).toContain('const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)')
+    expect(planFn).toContain('const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))')
+    expect(planFn).toContain('resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })')
+    // 旧方式（フラグ OFF）の既定日と保存ボタンの文言は不変（差分反映の教室だけ来週の月曜・「反映（変えたコマだけ）」）。
+    expect(BOARD_TSX).toContain("      : (filteredTemplate?.effectiveStartDate || today))")
+    expect(BOARD_TSX).toContain("templateSaveButtonLabel={templateDiffApplyEnabled ? '反映開始日以降にこのテンプレを反映（変えたコマだけ）' : undefined}")
     // 試し実行は数秒かかる同期計算。先に BusyOverlay を描いて 1 フレーム待ってから計算する(2026-10-14 オーナー指摘「ボタンを押して
     // つぎのモーダルが出るまで操作できないのにローディングスピンがでない」)。差分反映 OFF の教室は従来どおり即モーダル。
     const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
     expect(request).toContain('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')
     expect(request).toContain('void waitForNextPaint().then(() => {')
-    expect(request.indexOf('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '', { slotFilter })"))
+    expect(request.indexOf('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '')"))
     expect(request).toContain('setBusyOverlayMessage(null)')
     expect(request).toContain("if (!templateDiffApplyEnabled) {\n      setTemplateSaveConfirm({ mode: 'overwrite', template })")
     // 待っている間にテンプレ画面を離れた／連打されたら、その回の確認モーダルは開かない(古いテンプレの保存に進ませない)。
     expect(request).toContain('if (templateSavePreviewSeqRef.current !== previewSeq || !isTemplateModeRef.current) {')
-    expect(request.indexOf('templateSavePreviewSeqRef.current !== previewSeq')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '', { slotFilter })"))
+    expect(request.indexOf('templateSavePreviewSeqRef.current !== previewSeq')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '')"))
     const byDiff = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
-    expect(byDiff).toContain('const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { slotFilter: options?.slotFilter })')
+    expect(byDiff).toContain('const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })')
     const plan = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
     expect(plan).toContain('computeTemplateDiffApplyForBoard({')
     expect(plan).not.toMatch(/filterTemplateOverwriteHolidayDates\(/)
