@@ -22,8 +22,10 @@ import {
   verificationChecklistStorageKey,
   VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES,
   VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
+  VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL,
   VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES,
   addVerificationChecklistAttachment,
+  collectStaleVerificationChecklistDraftKeys,
   buildVerificationChecklistReportAttachments,
   getVerificationChecklistAttachments,
   removeVerificationChecklistAttachment,
@@ -395,6 +397,38 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
     }
     expect(stopped).toContain('合計')
     expect(total.attachments.length).toBe(Math.floor(VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES / big))
+  })
+
+  it('下書き全体の枚数は 1 通に付けられる枚数(8)で止める＝送信時に黙って切られない(regression-reviewer 指摘)', () => {
+    expect(VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL).toBe(8)
+    let draft = createEmptyVerificationChecklistDraft()
+    for (let index = 0; index < VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL; index += 1) {
+      const result = addVerificationChecklistAttachment(draft, { itemId: `h-${index}`, name: 'a', dataUrl: dataUrlOfBytes(3) }, `n-${index}`)
+      expect(result.error, `${index}`).toBeNull()
+      draft = result.draft
+    }
+    const ninth = addVerificationChecklistAttachment(draft, { itemId: 'h-9', name: 'a', dataUrl: dataUrlOfBytes(3) }, 'n-9')
+    expect(ninth.error).toContain('8 枚まで')
+    expect(ninth.draft).toBe(draft)
+    // 送信に同梱する枚数と下書きの枚数が一致する(未確認の項目は無い＝全部要改善に切り替わっている)。
+    const items = Array.from({ length: VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL }, (_, index) => ({ id: `h-${index}`, area: 'A', title: 't', steps: ['s'], introducedIn: 'v1.5.0' }))
+    expect(buildVerificationChecklistReportAttachments(draft, items)).toHaveLength(VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL)
+  })
+
+  it('同じ教室の別の版の下書きキーだけを列挙する(今の版・他の教室・折りたたみ・別タブの拡大率は触らない)', () => {
+    const keys = [
+      'verification-checklist:c1:v1.5.590',
+      'verification-checklist:c1:v1.5.596',
+      'verification-checklist:c1:v1.5.587',
+      'verification-checklist:c2:v1.5.587',
+      'verification-checklist:collapsed',
+      'verification-checklist:window-zoom',
+      'verification-checklist:c1:draft',
+      'operation-trace:c1',
+    ]
+    expect(collectStaleVerificationChecklistDraftKeys(keys, 'c1', 'v1.5.596')).toEqual(['verification-checklist:c1:v1.5.590', 'verification-checklist:c1:v1.5.587'])
+    expect(collectStaleVerificationChecklistDraftKeys(keys, 'c2', 'v1.5.596')).toEqual(['verification-checklist:c2:v1.5.587'])
+    expect(collectStaleVerificationChecklistDraftKeys(keys, null, 'v1.5.596')).toEqual([])
   })
 
   it('外すと消える(無い id なら同じ内容)。serialize → parse で画像も戻り、壊れた画像だけ落ちる', () => {

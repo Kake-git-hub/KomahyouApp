@@ -64,7 +64,7 @@ import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport, resolveTemplateOverwriteReportLabels } from '../../utils/pdf'
 import { waitForNextPaint } from '../../utils/waitForNextPaint'
-import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents, findTemplateSeatDuplicate } from './templateEditorGuards'
+import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } from '../../utils/boardPrintSelection'
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { BusyOverlay } from '../common/BusyOverlay'
@@ -7056,6 +7056,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [isBoardPrintSelectionOpen, setIsBoardPrintSelectionOpen] = useState(false)
   const [distributionQrModal, setDistributionQrModal] = useState<{ url: string; svg: string; isLoading: boolean } | null>(null)
   const [isTemplateMode, setIsTemplateMode] = useState(false)
+  // テンプレ保存の確認(試し実行)の非同期待ちで「まだテンプレ画面か」「最新の要求か」を見る(2026-10-14)。
+  const isTemplateModeRef = useRef(isTemplateMode)
+  isTemplateModeRef.current = isTemplateMode
+  const templateSavePreviewSeqRef = useRef(0)
   // テンプレモードに入ったら丸ごと振替の選択モードは解除する(戻ったとき古い振替元で突然復活させない)。
   useEffect(() => {
     if (isTemplateMode) setWholeDayTransferSourceDate(null)
@@ -10151,6 +10155,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateConfirmEdit = () => {
     if (!studentMenu || !templateEditDraft || !templateMenuStudent) return
+    const newStudentRow = students.find((s) => s.id === templateEditDraft.studentId)
+    // INV-12(2026-10-14): 変更後の生徒が同じコマの別の席に既にいれば止める(移動と同じ権威関数 findDuplicateStudentInCell・自分の席は除く)。
+    // undo を積む前に検査する(止めたときに中身の変わらない undo を残さない・regression-reviewer 指摘)。
+    const editTargetCell = templateCells.find((c) => c.id === studentMenu.cellId)
+    const editTargetStudent = editTargetCell?.desks[studentMenu.deskIndex]?.lesson?.studentSlots[studentMenu.studentIndex] ?? null
+    if (newStudentRow && editTargetCell && editTargetStudent) {
+      const candidateKey = resolveStockComparableStudentKey({ ...editTargetStudent, name: getStudentDisplayName(newStudentRow), managedStudentId: newStudentRow.id }, managedStudentByAnyName, resolveBoardStudentDisplayName)
+      const duplicate = findDuplicateStudentInCell(editTargetCell, candidateKey, [editTargetStudent.id])
+      if (duplicate) {
+        setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicate.name)}が組まれているため変更できません。`)
+        return
+      }
+    }
     pushTemplateUndo(templateCells)
     const next = cloneTemplateCells(templateCells)
     const targetCell = next.find((c) => c.id === studentMenu.cellId)
@@ -10158,16 +10175,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetStudent = targetDesk?.lesson?.studentSlots[studentMenu.studentIndex]
     if (!targetStudent) return
 
-    const newStudentRow = students.find((s) => s.id === templateEditDraft.studentId)
-    // INV-12(2026-10-14): 変更後の生徒が同じコマの別の席に既にいれば止める(移動と同じ検査。自分の席は除く)。
-    if (newStudentRow && targetCell) {
-      const candidateKey = resolveStockComparableStudentKey({ ...targetStudent, name: getStudentDisplayName(newStudentRow), managedStudentId: newStudentRow.id }, managedStudentByAnyName, resolveBoardStudentDisplayName)
-      const duplicate = findTemplateSeatDuplicate(targetCell, candidateKey, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName), [targetStudent.id])
-      if (duplicate) {
-        setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicate.name)}が組まれているため変更できません。`)
-        return
-      }
-    }
     const today = new Date()
     targetDesk!.lesson!.studentSlots[studentMenu.studentIndex] = {
       ...targetStudent,
@@ -10211,11 +10218,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage('追加対象の生徒が見つかりませんでした。')
       return
     }
-    // INV-12(2026-10-14): 同じコマに同じ生徒が既にいれば止める(移動と同じ検査)。
+    // INV-12(2026-10-14): 同じコマに同じ生徒が既にいれば止める(移動と同じ権威関数 findDuplicateStudentInCell)。
     const addTargetCell = templateCells.find((c) => c.id === studentMenu.cellId)
     if (addTargetCell) {
       const candidate: StudentEntry = { id: '', name: getStudentDisplayName(managedStudent), managedStudentId: managedStudent.id, grade: '中1', subject: templateAddDraft.subject, lessonType: 'regular', teacherType: 'normal' }
-      const duplicate = findTemplateSeatDuplicate(addTargetCell, resolveStockComparableStudentKey(candidate, managedStudentByAnyName, resolveBoardStudentDisplayName), (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+      const duplicate = findDuplicateStudentInCell(addTargetCell, resolveStockComparableStudentKey(candidate, managedStudentByAnyName, resolveBoardStudentDisplayName))
       if (duplicate) {
         setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicate.name)}が組まれているため追加できません。`)
         return
@@ -10413,7 +10420,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 「ボタンを押してつぎのモーダルが出るまで操作できないのにローディングスピンがでない」)→ 先に BusyOverlay を描いてから計算する
     // (描画を 1 フレーム待たないとスピナーが出る前に同期計算で固まる)。
     setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)
+    const previewSeq = templateSavePreviewSeqRef.current + 1
+    templateSavePreviewSeqRef.current = previewSeq
     void waitForNextPaint().then(() => {
+      // 待っている間にテンプレ画面を離れた／もう一度押された(連打)なら、この回の結果は捨てる(古いテンプレの確認モーダルを
+      // 通常の盤面の上に開かない・regression-reviewer 指摘)。
+      if (templateSavePreviewSeqRef.current !== previewSeq || !isTemplateModeRef.current) {
+        if (templateSavePreviewSeqRef.current === previewSeq) setBusyOverlayMessage(null)
+        return
+      }
       try {
         const diffSummary = buildTemplateDiffSavePlan(template, '').diff.summary
         setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary })

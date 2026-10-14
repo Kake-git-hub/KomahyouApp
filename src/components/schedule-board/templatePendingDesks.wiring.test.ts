@@ -276,14 +276,17 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
   })
 
   it('INV-12(2026-10-14): テンプレ編集の追加・変更は同コマ重複を止め、保存は重複のあるテンプレを受け付けない（templateEditorGuards を配線）', () => {
-    expect(BOARD_TSX).toContain("import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents, findTemplateSeatDuplicate } from './templateEditorGuards'")
+    expect(BOARD_TSX).toContain("import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'")
+    // 1 席ぶんの検査は移動(Issue #56)と同じ findDuplicateStudentInCell(= findDuplicateStudentInCellByKey の包み)を使う(写しを作らない)。
+    expect(BOARD_TSX).not.toContain('findTemplateSeatDuplicate')
     const add = sliceBody(BOARD_TSX, 'const handleTemplateConfirmAdd = () => {', 'const handleTemplateSelectDesk = (')
-    expect(add).toContain('findTemplateSeatDuplicate(addTargetCell,')
-    expect(add.indexOf('findTemplateSeatDuplicate(')).toBeLessThan(add.indexOf('pushTemplateUndo(templateCells)'))
+    expect(add).toContain('findDuplicateStudentInCell(addTargetCell,')
+    expect(add.indexOf('findDuplicateStudentInCell(')).toBeLessThan(add.indexOf('pushTemplateUndo(templateCells)'))
     expect(add).toContain('が組まれているため追加できません。')
     const edit = sliceBody(BOARD_TSX, 'const handleTemplateConfirmEdit = () => {', 'const handleTemplateOpenAdd = () => {')
-    expect(edit).toContain('findTemplateSeatDuplicate(targetCell, candidateKey,')
-    expect(edit).toContain('[targetStudent.id])')
+    expect(edit).toContain('findDuplicateStudentInCell(editTargetCell, candidateKey, [editTargetStudent.id])')
+    // 止めたときに中身の変わらない undo を残さない(検査は undo を積む前)。
+    expect(edit.indexOf('findDuplicateStudentInCell(')).toBeLessThan(edit.indexOf('pushTemplateUndo(templateCells)'))
     expect(edit).toContain('が組まれているため変更できません。')
     const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
     expect(request).toContain('findTemplateDuplicateStudents(templateCells,')
@@ -302,6 +305,9 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(request.indexOf('setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '')"))
     expect(request).toContain('setBusyOverlayMessage(null)')
     expect(request).toContain("if (!templateDiffApplyEnabled) {\n      setTemplateSaveConfirm({ mode: 'overwrite', template })")
+    // 待っている間にテンプレ画面を離れた／連打されたら、その回の確認モーダルは開かない(古いテンプレの保存に進ませない)。
+    expect(request).toContain('if (templateSavePreviewSeqRef.current !== previewSeq || !isTemplateModeRef.current) {')
+    expect(request.indexOf('templateSavePreviewSeqRef.current !== previewSeq')).toBeLessThan(request.indexOf("buildTemplateDiffSavePlan(template, '')"))
     const byDiff = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
     expect(byDiff).toContain('const plan = buildTemplateDiffSavePlan(template, new Date().toISOString())')
     const plan = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')

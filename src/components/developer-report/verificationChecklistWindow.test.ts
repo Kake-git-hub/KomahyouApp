@@ -309,6 +309,20 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     expect(attachments()).toHaveLength(1)
   })
 
+  it('パネルを開くと、同じ教室の別の版の下書き(画像つきで数 MB になりうる)を消して容量を空ける。今の版・他教室・拡大率は残る', () => {
+    window.localStorage.setItem(`verification-checklist:${classroomId}:v0.0.1`, '{"version":"v0.0.1","entries":{}}')
+    window.localStorage.setItem('verification-checklist:other:v0.0.1', '{}')
+    window.localStorage.setItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, '125')
+    window.localStorage.setItem(verificationChecklistStorageKey(classroomId), JSON.stringify({ version: VERIFICATION_CHECKLIST.version, entries: { [VERIFICATION_CHECKLIST.items[0].id]: { status: 'ok', memo: '' } }, otherNotes: '' }))
+    act(() => root.render(createElement(Fragment)))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
+    expect(window.localStorage.getItem(`verification-checklist:${classroomId}:v0.0.1`)).toBeNull()
+    expect(window.localStorage.getItem('verification-checklist:other:v0.0.1')).toBe('{}')
+    expect(window.localStorage.getItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY)).toBe('125')
+    expect(window.localStorage.getItem(verificationChecklistStorageKey(classroomId))).not.toBeNull()
+    expect(container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${VERIFICATION_CHECKLIST.items[0].id}"][value="ok"]`)?.checked).toBe(true)
+  })
+
   it('画像を読めなかったときは理由を出し、下書きは変えない', async () => {
     const shrinkImage = vi.fn(async () => { throw new Error('canvas が使えません') })
     act(() => root.render(createElement(Fragment)))

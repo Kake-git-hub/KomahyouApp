@@ -23,6 +23,7 @@ import {
   VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
   VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY,
   addVerificationChecklistAttachment,
+  collectStaleVerificationChecklistDraftKeys,
   buildVerificationChecklistMarkdown,
   buildVerificationChecklistReportAttachments,
   buildVerificationChecklistReportNotes,
@@ -82,11 +83,25 @@ function readStorage(key: string): string | null {
   }
 }
 
-function writeStorage(key: string, value: string) {
+/** 保存できたら true。容量超過・プライベートモード等は false(下書きが残らないだけで操作は続けられる)。 */
+function writeStorage(key: string, value: string): boolean {
   try {
-    if (typeof window !== 'undefined') window.localStorage.setItem(key, value)
+    if (typeof window === 'undefined') return false
+    window.localStorage.setItem(key, value)
+    return true
   } catch {
-    // 容量超過・プライベートモード等は無視する(下書きが残らないだけで操作は続けられる)。
+    return false
+  }
+}
+
+/** 同じ教室の別の版の下書き(画像つきだと数 MB)を消して、localStorage の容量を空ける(2026-10-14)。 */
+function pruneStaleDrafts(classroomId: string | null) {
+  try {
+    if (typeof window === 'undefined') return
+    const keys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index) ?? '')
+    for (const key of collectStaleVerificationChecklistDraftKeys(keys, classroomId)) window.localStorage.removeItem(key)
+  } catch {
+    // 読めない・消せない環境では何もしない。
   }
 }
 
@@ -95,7 +110,10 @@ function writeStorage(key: string, value: string) {
 export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
-  const [draft, setDraft] = useState<VerificationChecklistDraft>(() => parseVerificationChecklistDraft(readStorage(storageKey)))
+  const [draft, setDraft] = useState<VerificationChecklistDraft>(() => {
+    pruneStaleDrafts(classroomId)
+    return parseVerificationChecklistDraft(readStorage(storageKey))
+  })
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
   const [sending, setSending] = useState(false)
   const [resultMessage, setResultMessage] = useState<string | null>(null)
@@ -139,14 +157,17 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
         continue
       }
       let failure: string | null = null
+      let stored = true
       setDraft((current) => {
         const result = addVerificationChecklistAttachment(current, { itemId, name: shrunk.name, dataUrl: shrunk.dataUrl }, createChecklistAttachmentId())
         failure = result.error
-        if (!result.error) writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(result.draft))
+        if (!result.error) stored = writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(result.draft))
         return result.draft
       })
       // setDraft の更新関数は同期に走る(React 18/19 とも)。ここで failure を読んで理由を出す。
-      setResultMessage(failure ? `画像を付けられませんでした(${itemId}): ${failure}` : null)
+      if (failure) setResultMessage(`画像を付けられませんでした(${itemId}): ${failure}`)
+      else if (!stored) setResultMessage('画像は付きましたが、この端末の保存領域がいっぱいで下書きに残せません(再読み込みすると消えます)。先に送信するか、ほかの画像を外してください。')
+      else setResultMessage(null)
     }
   }, [classroomId, shrinkImage])
 

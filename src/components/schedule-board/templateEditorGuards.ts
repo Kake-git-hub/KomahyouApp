@@ -7,7 +7,9 @@
 // テンプレ編集の「移動」(handleTemplateMoveStudent)は Issue #56 で同コマ重複の検査が配線済みだったが、
 // 「生徒追加」(handleTemplateConfirmAdd)と「生徒変更」(handleTemplateConfirmEdit)には検査が無かった(INV-12 の穴)。
 //
-// ここは純関数だけ(テストで固定: inv12-placement-uniqueness.matrix.test.ts)。生徒の同一性は盤面と同じ
+// 1 席ぶんの検査(追加・変更)は、移動と同じ権威関数 `findDuplicateStudentInCellByKey`(ScheduleBoardScreen.tsx・Issue #56)を
+// そのまま使う(regression-reviewer 指摘: 写しを作ると 6793374 型のずれの温床になる)。ここは保存前の**テンプレ全体**の検査だけ。
+// 純関数だけ(テストで固定: inv12-placement-uniqueness.matrix.test.ts)。生徒の同一性は盤面と同じ
 // 比較キー(resolveStockComparableStudentKey ＝ managedStudentId 優先)を呼び出し側から受け取る。
 
 import type { SlotCell, StudentEntry } from './types'
@@ -16,26 +18,6 @@ export type TemplateDuplicateStudent = {
   cell: SlotCell
   /** 同じキーで同じコマに生きている生徒(2 人以上・机の順)。 */
   students: StudentEntry[]
-}
-
-/**
- * 同じコマに、候補と同じ生徒(比較キーが同じ)が既にいればそのエントリを返す(無ければ null)。
- * excludedEntryIds は「自分自身」(変更中の席の生徒)を除く用。
- */
-export function findTemplateSeatDuplicate(
-  cell: SlotCell,
-  candidateKey: string,
-  resolveComparableKey: (student: StudentEntry) => string,
-  excludedEntryIds: ReadonlyArray<string | undefined> = [],
-): StudentEntry | null {
-  const excluded = new Set(excludedEntryIds.filter((id): id is string => Boolean(id)))
-  for (const desk of cell.desks) {
-    for (const student of desk.lesson?.studentSlots ?? []) {
-      if (!student || excluded.has(student.id)) continue
-      if (resolveComparableKey(student) === candidateKey) return student
-    }
-  }
-  return null
 }
 
 /**

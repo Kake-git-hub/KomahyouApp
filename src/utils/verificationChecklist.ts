@@ -10,6 +10,7 @@
 // (テストしやすさのため。呼び出し側が入出力を担う)。
 
 import {
+  DEVELOPER_REPORT_ATTACHMENT_LIMIT,
   DEVELOPER_REPORT_NOTE_LIMIT,
   parseImageDataUrl,
   type DeveloperReportAttachment,
@@ -471,6 +472,8 @@ export const VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM = 3
 export const VERIFICATION_CHECKLIST_ATTACHMENT_MAX_BYTES = 1_200_000
 /** 下書き全体の合計上限(localStorage 約 5MB の中に base64 で収める・サーバーの 1 通上限 6MB 以内)。 */
 export const VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES = 3_500_000
+/** 下書き全体の枚数上限 = 1 通に付けられる枚数(送信時に黙って切られないように、貼る時点で止める・regression-reviewer 指摘)。 */
+export const VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL = DEVELOPER_REPORT_ATTACHMENT_LIMIT
 
 /** 下書きの localStorage キー接頭辞。教室別・版別に分ける(他教室の下書きが混ざらない)。 */
 export const VERIFICATION_CHECKLIST_STORAGE_PREFIX = 'verification-checklist'
@@ -482,6 +485,22 @@ export function verificationChecklistStorageKey(
   version: string = VERIFICATION_CHECKLIST.version,
 ): string {
   return `${VERIFICATION_CHECKLIST_STORAGE_PREFIX}:${classroomId ?? 'unknown'}:${version}`
+}
+
+/**
+ * 同じ教室の**別の版**の下書きキーを列挙する(純関数・消すのは呼び出し側)。画像つきの下書きは 1 版で数 MB になり、
+ * 版が上がるたびに残すと localStorage(約 5MB)が溢れて、下書きだけでなく盤面と日程表タブの排他など同じ origin の保存が
+ * 黙って効かなくなる(regression-reviewer 指摘 2026-10-14)。版が上がった下書きはパネルから見えないので消してよい。
+ * 他の教室の下書き・折りたたみ・別タブの拡大率のキーは触らない。
+ */
+export function collectStaleVerificationChecklistDraftKeys(
+  keys: readonly string[],
+  classroomId: string | null | undefined,
+  version: string = VERIFICATION_CHECKLIST.version,
+): string[] {
+  const prefix = `${VERIFICATION_CHECKLIST_STORAGE_PREFIX}:${classroomId ?? 'unknown'}:`
+  const current = verificationChecklistStorageKey(classroomId, version)
+  return keys.filter((key) => key.startsWith(prefix) && key !== current && /^v\d+\.\d+\.\d+$/u.test(key.slice(prefix.length)))
 }
 
 export function createEmptyVerificationChecklistDraft(
@@ -646,6 +665,9 @@ export function addVerificationChecklistAttachment(
   }
   if (getVerificationChecklistAttachments(draft, input.itemId).length >= VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM) {
     return { draft, error: `この項目に付けられる画像は ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM} 枚までです。` }
+  }
+  if (draft.attachments.length >= VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL) {
+    return { draft, error: `1 回の送信に付けられる画像は全部で ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL} 枚までです。先に送信してください。` }
   }
   if (sumVerificationChecklistAttachmentBytes(draft) + parsed.byteLength > VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES) {
     return { draft, error: '画像の合計が上限を超えます。先に送信するか、ほかの画像を外してください。' }

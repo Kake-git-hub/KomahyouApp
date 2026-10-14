@@ -283,7 +283,9 @@ describe('developerReport(server): 添付画像(確認リストのスクショ�
 
   it('index.ts: 添付は教室データの後に 1 枚ずつ Storage へ保存し、保存できた分だけ文書 attachments[] に残す(画像本体は文書に入れない)', () => {
     const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
-    expect(indexTs).toContain('const attachments = normalizeDeveloperReportAttachments(rawData.attachments)')
+    // 受け付けるのは開発用教室(確認リストの送信元)だけ。本番教室の報告の attachments は捨てる(既存の isDevelopmentClassroom を使う)。
+    expect(indexTs).toContain('const attachments = isDevelopmentClassroom ? normalizeDeveloperReportAttachments(rawData.attachments) : []')
+    expect(indexTs.indexOf('const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })')).toBeLessThan(indexTs.indexOf('const attachments = isDevelopmentClassroom ?'))
     expect(indexTs).toContain("buildDeveloperReportAttachmentStoragePath(workspaceKey, classroomId, reportId, index, attachment.mimeType)")
     expect(indexTs).toContain("save(Buffer.from(attachment.base64, 'base64')")
     expect(indexTs).toContain('attachments: storedAttachments,')

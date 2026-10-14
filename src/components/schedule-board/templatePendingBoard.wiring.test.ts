@@ -145,7 +145,9 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       expect(css).not.toMatch(/^\.sa-student-picked \.sa-student-name,$/mu)
       expect(css).not.toMatch(/^\.sa-student-picked \.sa-student-detail-prefix \{/mu)
       for (const part of ['sa-student-name', 'sa-student-origin-date', 'sa-student-detail', 'sa-student-star', 'sa-student-detail-prefix']) {
-        expect(css).toContain(`.sa-student-picked .sa-student-inner .${part}`)
+        // :where() で詳細度を従来の (0,2,0) のままにする(体験の赤い印・外部講師の紫★など後ろのルールとの勝ち負けを変えない)。
+        expect(css).toContain(`.sa-student-picked :where(.sa-student-inner) .${part}`)
+        expect(css).not.toContain(`.sa-student-picked .sa-student-inner .${part}`)
         expect(css).toContain(`.sa-pending-lower-picked .${part}`)
       }
       expect(css).toContain('.sa-pending-lower.sa-pending-lower-picked {')

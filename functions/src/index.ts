@@ -1883,9 +1883,15 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
+  // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
+  const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
+
   // 添付画像(確認リストのスクリーンショット・2026-10-14)。教室データと同じフォルダへ 1 枚ずつ保存し、保存できた分だけ文書に残す
   // (1 枚の失敗で報告全体を落とさない)。画像本体は Firestore に入れない。
-  const attachments = normalizeDeveloperReportAttachments(rawData.attachments)
+  // ★受け付けるのは開発用教室(確認リストの送信元)だけ。一般の質問・要望モーダルには画像の入口が無い(spec §C)ので、本番教室から
+  //   届いた attachments は捨てる(Storage に最大 6MB を置かせない・regression-reviewer 指摘)。
+  const attachments = isDevelopmentClassroom ? normalizeDeveloperReportAttachments(rawData.attachments) : []
   const storedAttachments: Array<{ label: string; name: string; mimeType: string; byteLength: number; storagePath: string }> = []
   for (const [index, attachment] of attachments.entries()) {
     try {
@@ -1901,9 +1907,6 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
-  // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
-  const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
-  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,

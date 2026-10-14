@@ -2763,15 +2763,16 @@ tr.sa-group-row td {
 
 /* 白抜き(青地・白文字)は上段 .sa-student-inner の中だけに当てる(2026-10-14 オーナー指摘「保留生徒の D&D 中、両者が白抜きになり
    どちらを D&D しているかわかりにくい」)。同じ td にある保留の下段 .sa-pending-lower は上段と同じ文字クラスを使うので、
-   ここを .sa-student-picked .sa-student-name のまま広くすると下段の文字も白くなる。下段の白抜きは .sa-pending-lower-picked(下)。 */
-.sa-student-picked .sa-student-inner .sa-student-name,
-.sa-student-picked .sa-student-inner .sa-student-origin-date,
-.sa-student-picked .sa-student-inner .sa-student-detail,
-.sa-student-picked .sa-student-inner .sa-student-star {
+   ここを .sa-student-picked .sa-student-name のまま広くすると下段の文字も白くなる。下段の白抜きは .sa-pending-lower-picked(下)。
+   :where() で詳細度を従来(0,2,0)のままにする＝体験の赤い印・外部講師の紫★・休みの灰色など後ろのルールの勝ち負けを変えない。 */
+.sa-student-picked :where(.sa-student-inner) .sa-student-name,
+.sa-student-picked :where(.sa-student-inner) .sa-student-origin-date,
+.sa-student-picked :where(.sa-student-inner) .sa-student-detail,
+.sa-student-picked :where(.sa-student-inner) .sa-student-star {
   color: #fff;
 }
 
-.sa-student-picked .sa-student-inner .sa-student-detail-prefix {
+.sa-student-picked :where(.sa-student-inner) .sa-student-detail-prefix {
   color: #fff;
 }
 
