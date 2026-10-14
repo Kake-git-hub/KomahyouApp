@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- docs: **緑が丘校の質問 #75(実質は要望: テンプレをコマ単位で直したい・祝日/丸ごと振替の日にも追従してほしい)の改修計画** `docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md`。「1 コマ用テンプレ」は作らず、差分反映(§H・Issue #72)の全教室昇格(段 1)＋変更点一覧などの見え方(段 1b)＋根拠を失った振替の処理と丸ごと振替先への配置(段 2・新規仕様)の 3 段で答える案。判断点 A〜E をオーナーへ提示(壁打ち中・コードは未着手)。進行中テーマ台帳に行を追加 (docs/ / developmentStatusLedger.ts)
+
 ## v1.5.597 (2026-10-14)
 
 - feat: **講師の削除記録が塞ぐのは「削除した講師」だけにした**(オーナー指示 2026-10-14「削除した講師以外も塞いでいるなら塞がないようにして。別講師はそこに割り振ることがある」・spec-template-behavior Q21-9 例外 2 の改定・INV-02 台帳に記録)。盤面で講師を削除した記録(teacher='' ∧ source='deleted')は、これまで机単位で**どの講師も**塞いでいた(報告の盤面では 103 机・うち 94 机は削除した講師と今のテンプレの講師が別人)。改定後は削除した講師(表示名または講師 ID)と同じ講師だけを塞ぎ、テンプレ机の講師が別人ならその講師をその机に置く(削除記録は上書き・非 manual のテンプレ足場扱い。保存後のメッセージに「講師を削除した机に別の講師をテンプレから置いた机: ○机」)。差分反映(`resolveTemplateDeskTeacher`)と再マージ(`mergeManagedWeek`・読み込み時にも効く)の両方を権威関数 `doesDeletedTeacherTombstoneBlock`(塞ぐか)＋`canClearDeletedTeacherTombstone`(記録を外してよいか)で判定し、表示名↔講師 ID の対応は `buildTeacherAliasResolver`(teachers)で吸収。regression-reviewer H-1 の指摘で、削除した講師がそのコマのテンプレの**別の机に居る間は削除記録を残す**(記録は再付与を止める唯一の記憶。上書きすると次の再マージで戻る＝2026-07-10 の本番不具合の再発)。その場合も別人の講師は再マージが空き机へ置くので、削除記録の机は塞がない。報告の盤面では 92 机が対象(うち 32 机は記録が外れてその机に、60 机は記録を残して空き机に講師が入る)。INV-01(講師帰属)・INV-02 のマトリクスの既存行は入力を同じ講師の形に差し替え、別の講師の期待は新しい行で反転(台帳に明記)。安全側で従来どおり誰でも塞ぐ: テンプレ机に講師なし／誰を消したか分からない旧データ(ID なし)／**講習 ID つきの削除記録(QR 登録机の削除)**＝上書きすると起動時の自己修復が消した QR 講師を別の空き机へ置き直す(2026-09-14 の再発)ため。テスト: `templateDiffApply.test.ts`(判定 3 件・条件 6(e') 2 件・不動点)、`inv01-teacher-attribution.matrix.test.ts`((e)(e')(f) 同じ講師は戻らない／別の講師は同じ机に置かれ生徒はその講師のページ)、`inv02-manual-edit-persistence.matrix.test.ts`(保存→再マージ・overlay の別講師・講習 ID つきは塞ぐ)。確認リスト tp-42 (templateDiffApply.ts / ScheduleBoardScreen.tsx / docs/spec-template-behavior.md / docs/spec-invariants.md)
