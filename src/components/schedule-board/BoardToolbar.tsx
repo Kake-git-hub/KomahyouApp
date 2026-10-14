@@ -79,6 +79,8 @@ type BoardToolbarProps = {
   templateEffectiveStartDate?: string
   onTemplateEffectiveStartDateChange?: (value: string) => void
   onTemplateSaveOverwrite?: () => void
+  /** 保存ボタンの文言。差分反映の教室（Q39・2026-10-14）は「反映（変えたコマだけ）」、旧方式は「上書き保存」のまま。 */
+  templateSaveButtonLabel?: string
   onTemplateClear?: () => void
   onTemplateClose?: () => void
   onSaveBoard?: () => void
@@ -144,6 +146,7 @@ function BoardToolbarComponent({
   templateEffectiveStartDate,
   onTemplateEffectiveStartDateChange,
   onTemplateSaveOverwrite,
+  templateSaveButtonLabel,
   onTemplateClear,
   onTemplateClose,
   onSaveBoard,
@@ -309,7 +312,7 @@ function BoardToolbarComponent({
                 <span>反映開始日</span>
                 <input type="date" value={templateEffectiveStartDate ?? ''} onChange={(event) => onTemplateEffectiveStartDateChange?.(event.target.value)} data-testid="template-effective-start-date" />
               </label>
-              <button className="primary-button danger" type="button" onClick={onTemplateSaveOverwrite} data-testid="template-save-overwrite-button">反映開始日以降をこのテンプレで上書き保存</button>
+              <button className="primary-button danger" type="button" onClick={onTemplateSaveOverwrite} data-testid="template-save-overwrite-button">{templateSaveButtonLabel ?? '反映開始日以降をこのテンプレで上書き保存'}</button>
             </>
           ) : (
             <>

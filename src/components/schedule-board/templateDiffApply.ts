@@ -16,6 +16,7 @@
 // ★在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）・希望回数補正・抑止は**この関数では触らない**
 //   （Q7〜Q10 改定・INV-06 拡張「テンプレ保存そのものでは在庫が増減しない」）。Q21-11 の抑止キーの追加だけを返す。
 
+import { isCellInTemplateDiffScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import type { DeskCell, DeskLesson, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
 import {
   buildTemplatePendingDeskKey,
@@ -900,6 +901,11 @@ export type ComputeTemplateDiffApplyParams = {
   protectedSameDayMoveCopies?: ReadonlySet<string>
   /** 講師の呼び名（ID・登録名・表示名）を同じ講師にまとめる（削除記録と同じ講師かの判定・2026-10-14）。無ければ文字列一致だけ。 */
   teacherAliases?: TeacherAliasResolver
+  /**
+   * Q39（オーナー案 2026-10-14・Issue #75）: テンプレで変えたコマ（曜日×時限）だけ突き合わせる絞り込み。無ければ従来どおり全コマ。
+   * 絞り込みの外のセルは反映日より前のセルと同じく**参照ごと**返す（＝保存しなかったのと同じ。件数にも出ない）。
+   */
+  slotFilter?: TemplateDiffSlotFilter | null
 }
 
 export type ComputeTemplateDiffApplyResult = {
@@ -1135,6 +1141,8 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
     return week.map((cell) => {
       // 禁忌: テンプレ反映日より前のコマ表は不変（INV-10・Q1）。
       if (cell.dateKey < params.effectiveStartDate) return cell
+      // Q39: テンプレで変えたコマだけ突き合わせる（絞り込みの外は参照ごと不変）。
+      if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell
       const templateCell = templateById.get(cell.id) ?? templateByDateSlot.get(buildDateSlotKey(cell))
       if (!templateCell) return cell
       return applyTemplateDiffToCell({
@@ -1628,9 +1636,34 @@ function collectMemoItems(slots: MemoPair | undefined) {
  */
 export const TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE = 'テンプレの差分を確認しています…'
 
-export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary) {
+export type TemplateDiffConfirmContext = {
+  /** Q39: どの範囲を突き合わせるか（変えたコマだけ／すべて）。無ければ範囲の行を出さない（従来の文）。 */
+  scopeNote?: TemplateDiffScopeNote
+  /** Q39-5: 反映開始日が今日より前なら警告を出す（保存は止めない）。 */
+  todayKey?: string
+}
+
+/** Q39: 範囲の説明（確認文・保存後メッセージ共通）。 */
+export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | undefined) {
+  if (!note) return ''
+  if (note.scope === 'changed-slots') return `テンプレで変えたコマ（${note.slotLabels.join('・')}）だけを突き合わせます。変えていないコマは変わりません。`
+  switch (note.reason) {
+    case 'no-change': return 'テンプレの中身に変更はありません。すべてのコマを突き合わせます（講師の揃え・保留の片づけ）。'
+    case 'no-previous': return '比べられる前回のテンプレが無いため、すべてのコマを突き合わせます。'
+    case 'desk-count': return '机の数が変わったため、すべてのコマを突き合わせます。'
+    default: return 'すべてのコマを突き合わせます。'
+  }
+}
+
+export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: TemplateDiffConfirmContext) {
+  const scopeLine = describeTemplateDiffScopeNote(context?.scopeNote)
+  const pastWarning = context?.todayKey && effectiveStartDate < context.todayKey
+    ? `⚠ 反映開始日（${effectiveStartDate}）が今日より前です。過去の週も突き合わせます（出欠のある机は残ります）。`
+    : ''
   return [
     `${effectiveStartDate} 以降のコマ表にテンプレートを反映します。`,
+    ...(scopeLine ? [scopeLine] : []),
+    ...(pastWarning ? [pastWarning] : []),
     '',
     `${summary.replaced}机を置き換え、${summary.pending}机が保留（緑）になります。`,
     `そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
@@ -1646,10 +1679,11 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
 }
 
 /** 保存後のメッセージ（Q32-1）。確認文の 4 件数に、即時合流・QR 講師・講師を削除した机・上段に置かなかった生徒を足す。 */
-export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary) {
+export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary, scopeNote?: TemplateDiffScopeNote) {
   const parts = [
     `通常授業テンプレートを保存しました。${effectiveStartDate} 以降: ${summary.replaced}机を置き換え・${summary.pending}机が保留・そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
   ]
+  if (scopeNote?.scope === 'changed-slots') parts.push(`対象はテンプレで変えたコマ（${scopeNote.slotLabels.join('・')}）だけ。`)
   if (summary.seatMerged > 0) parts.push(`テンプレの空いた席に既存の生徒を残して 1 行にした机: ${summary.seatMerged}机。`)
   if (summary.collapsedOnCreate > 0) parts.push(`${summary.collapsedOnCreate}机は既存のメモ・記録を残してテンプレの生徒を置きました。`)
   if (summary.qrTeacherKept > 0) parts.push(`QR 自動割振りの講師を残した机: ${summary.qrTeacherKept}机。`)

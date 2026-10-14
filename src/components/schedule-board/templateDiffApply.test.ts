@@ -48,7 +48,9 @@ import {
   buildTeacherAliasResolver,
   canClearDeletedTeacherTombstone,
   doesDeletedTeacherTombstoneBlock,
+  createEmptyTemplateDiffApplySummary,
 } from './templateDiffApply'
+import { buildTemplateSlotKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
 
@@ -1942,5 +1944,85 @@ describe('Q38: 手動追加の通常授業とテンプレの同じ生徒×科目
     expect(isManualRegularAdoptedByTemplateInCell(entry('sC'), templateDesks, 2)).toBe(false)
     expect(isManualRegularAdoptedByTemplateInCell(handC({ sameDayMoveSourceDate: DATE }), templateDesks, 2)).toBe(true)
     expect(isManualRegularAdoptedByTemplateInCell(entry('sD', { manualAdded: true }), templateDesks, 2)).toBe(false)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q39：テンプレで変えたコマだけ突き合わせる（オーナー案 2026-10-14・Issue #75）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合わせる', () => {
+  // 新テンプレ: 机0=鈴木(C)（水 5限の中身が変わる）
+  const NEW_ROWS = [row('r0', 't2', 'sC', '数')]
+  const applyWithFilter = (week: SlotCell[], slotFilter: TemplateDiffSlotFilter | undefined) => computeTemplateDiffApplyForBoard({
+    weeks: [week],
+    classroomSettings: newSettings(),
+    teachers,
+    students,
+    regularLessons: NEW_ROWS,
+    effectiveStartDate: EFFECTIVE,
+    suppressedRegularLessonOccurrences: [],
+    templatePendingDesks: {},
+    createdAt: 'x',
+    slotFilter,
+  })
+
+  it('絞り込みの外のコマは反映日以降でも参照ごと不変で、件数にも出ない（保存しなかったのと同じ）', () => {
+    const week = buildWeek(OLD_ROWS)
+    const target = cellOf([week])
+    // 木 5限だけ突き合わせる → 水 5限（中身が変わるコマ）は触らない
+    const result = applyWithFilter(week, { slotKeys: new Set([buildTemplateSlotKey(4, 5)]) })
+    expect(cellOf(result.nextWeeks)).toBe(target)
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA'])
+    expect(result.summary.replaced).toBe(0)
+    expect(result.summary.pending).toBe(0)
+    expect(result.nextPendingDesks).toEqual({})
+    // 反映日より前のセルも従来どおり参照ごと不変（INV-10）
+    for (const cell of week.filter((entry) => entry.dateKey < EFFECTIVE)) expect(result.nextWeeks[0].find((next) => next.id === cell.id)).toBe(cell)
+  })
+
+  it('絞り込みに入るコマは、絞り込み無しと同じ結果になる（同じ純関数・同じ規則）', () => {
+    const week = buildWeek(OLD_ROWS)
+    const filtered = applyWithFilter(week, { slotKeys: new Set([buildTemplateSlotKey(3, 5)]) })
+    const full = applyWithFilter(week, undefined)
+    expect(cellOf(filtered.nextWeeks)).toEqual(cellOf(full.nextWeeks))
+    expect(filtered.summary).toEqual(full.summary)
+    expect(liveNames(deskOf(filtered.nextWeeks, 0))).toEqual(['sC'])
+    expect(deskOf(filtered.nextWeeks, 0).teacher).toBe('鈴木')
+  })
+
+  it('印のある机が絞り込みの外にあれば保留（緑）にならない。絞り込みに入れば従来どおり保留', () => {
+    let week = buildWeek(OLD_ROWS)
+    // 机0 に手置きの振替 M（印あり）→ 新テンプレの C とぶつかる
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }))
+    const outside = applyWithFilter(week, { slotKeys: new Set([buildTemplateSlotKey(4, 5)]) })
+    expect(outside.summary.pending).toBe(0)
+    expect(cellOf(outside.nextWeeks)).toBe(cellOf([week]))
+    const inside = applyWithFilter(week, { slotKeys: new Set([buildTemplateSlotKey(3, 5)]) })
+    expect(inside.summary.pending).toBe(1)
+  })
+
+  it('fullBeforeDate（前回テンプレの反映日）より前の日は、絞り込みの外のコマも突き合わせる（Q39-2）', () => {
+    const week = buildWeek(OLD_ROWS)
+    const result = applyWithFilter(week, { slotKeys: new Set([buildTemplateSlotKey(4, 5)]), fullBeforeDate: '2026-10-08' })
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sC'])
+    expect(result.summary.replaced).toBeGreaterThanOrEqual(1)
+  })
+
+  it('確認文・保存後メッセージに範囲（変えたコマだけ／すべて）と過去日の警告が出る', () => {
+    const summary = createEmptyTemplateDiffApplySummary()
+    const changed = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'changed-slots', slotLabels: ['月 5限', '水 5限'] }, todayKey: '2026-10-01' })
+    expect(changed).toContain('テンプレで変えたコマ（月 5限・水 5限）だけを突き合わせます。変えていないコマは変わりません。')
+    expect(changed).not.toContain('今日より前')
+    const noChange = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'no-change' }, todayKey: '2026-10-14' })
+    expect(noChange).toContain('テンプレの中身に変更はありません。すべてのコマを突き合わせます（講師の揃え・保留の片づけ）。')
+    expect(noChange).toContain(`⚠ 反映開始日（${EFFECTIVE}）が今日より前です。過去の週も突き合わせます（出欠のある机は残ります）。`)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'no-previous' } })).toContain('比べられる前回のテンプレが無いため')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'desk-count' } })).toContain('机の数が変わったため')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { scopeNote: { scope: 'all', reason: 'user' } })).toContain('すべてのコマを突き合わせます。')
+    // 従来の呼び出し（context 無し）は従来の文のまま
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary)).not.toContain('突き合わせます')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary, { scope: 'changed-slots', slotLabels: ['月 5限'] })).toContain('対象はテンプレで変えたコマ（月 5限）だけ。')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary, { scope: 'all', reason: 'user' })).not.toContain('対象はテンプレで変えたコマ')
   })
 })
