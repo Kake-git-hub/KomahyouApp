@@ -73,9 +73,11 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第54版(v1.5.602・2026-10-15): 受付 20261015-133308495-046ae8de で OK だった項目を外し、要改善(c-5・tp-47)とメモ(tp-44/46・その他)の対応、基本仕様の確認(tp-55〜57)を確認項目にした', () => {
+  it('第55版(v1.5.604・2026-10-15): 受付 20261015-151056959-a8890098 で OK だった c-5・tp-47・tp-53・tp-54 を外し、結果待ちの q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 を残す', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'c-5', 'tp-47', 'tp-53', 'tp-54', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57'])
+    // 第54版の結果(2026-10-15・受付 20261015-151056959-a8890098)で OK → 外す。
+    for (const okId of ['c-5', 'tp-47', 'tp-53', 'tp-54']) expect(ids, okId).not.toContain(okId)
     // 第54版の結果(2026-10-15・受付 20261015-133308495-046ae8de)で OK → 外す。
     for (const okId of ['tp-39', 'tp-41', 'tp-40', 'c-6', 'tp-42', 'tp-43', 'tp-44', 'tp-45', 'tp-46', 'tp-52']) expect(ids, okId).not.toContain(okId)
     // 第49版の結果(2026-10-14・受付 20261014-062117803-c223100f)で OK → 外す。
@@ -96,8 +98,8 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
     // 第49版(2026-10-14): OK 済み 7 件を外したので v1.5.596 へ。第50〜53版は項目を足しただけで据え置き。
-    // 第54版(2026-10-15): OK 済み 10 件を外したので次にデプロイされる版 v1.5.602 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.602')
+    // 第54版(2026-10-15): OK 済み 10 件を外したので v1.5.602 へ。第55版(同日): OK 済み 4 件を外したので次にデプロイされる版 v1.5.604 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.604')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
@@ -108,26 +110,8 @@ describe('確認リストの項目定義', () => {
     // 第47版: 今の緑の机(10/16(金) 5限の机 2)を名指し。上段を先に休みにすると机が 1 行に戻って下段でなくなるので、下段→上段の順。
     expect(byId.get('tp-15')!.prep).toContain('10/16(金) 5限の机 2')
     expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下段の\{\{student:s079\}\}.*次に上段の\{\{student:s085\}\}/u)
-    // 第54版(2026-10-15): 受付 20261015-133308495-046ae8de の対応。新しい項目・差し替えた項目は v1.5.602。
-    for (const id of ['c-5', 'tp-47', 'tp-53', 'tp-54', 'tp-55', 'tp-56', 'tp-57']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.602')
-    // c-5 要改善「表示できる縦幅も小さくなってしまい意味がない。内容だけ小さくなるように」: 縮めてもパネルはタブいっぱい・広げても下が切れない。
-    expect(byId.get('c-5')!.steps.join(' / ')).toContain('125%')
-    expect(byId.get('c-5')!.check!.join(' / ')).toContain('パネルの下端はタブの下端のまま')
-    expect(byId.get('c-5')!.check!.join(' / ')).toContain('「保存して送信」まで押せる')
-    expect(byId.get('c-5')!.check!.join(' / ')).toContain('元のタブの盤面・右下の表示の大きさは変わらない')
-    // tp-47 要改善「そもそも今日より前の日を選択できないようにして」: カレンダー・直接入力・Excel のどれでも過去日にならない。
-    expect(byId.get('tp-47')!.check!.join(' / ')).toContain('来週の月曜')
-    expect(byId.get('tp-47')!.check!.join(' / ')).toContain('今日より前の日が選べない')
-    expect(byId.get('tp-47')!.check!.join(' / ')).toContain('昨日を打ち込むと今日の日付に戻る')
-    expect(byId.get('tp-47')!.check!.join(' / ')).not.toContain('警告')
-    // tp-44/tp-46 メモ「選択肢は不要で自動的に変更のあったコマだけ反映。何も変更なかったときだけ全コマ」: ラジオが無いことを確かめる。
-    expect(byId.get('tp-53')!.check!.join(' / ')).toContain('ラジオボタン(選択肢)は無い')
-    expect(byId.get('tp-53')!.check!.join(' / ')).toContain('テンプレの中身に変更はありません。すべてのコマを突き合わせます')
-    // その他欄「一コマに同じ講師が 2 人いる。日程表からの講師追加はテンプレが入っていたら消えて良い」: 開発用教室だけ(QR 提出が要る)。
-    expect(byId.get('tp-54')!.area).toBe('テンプレ作成')
-    expect(byId.get('tp-54')!.check!.join(' / ')).toContain('日程表登録の講師を外した机: 1机')
-    expect(byId.get('tp-54')!.check!.join(' / ')).toContain('開き直しても同じ講師が 2 机に戻らない')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('tp-54')
+    // 第54版(2026-10-15): 基本仕様の確認 tp-55〜57 は v1.5.602 で追加。
+    for (const id of ['tp-55', 'tp-56', 'tp-57']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.602')
     // オーナー指示「未消化数が変化しないこと・日程表とコマ表に差異がないこと・コマ表から意図してない変更が発生してないこと(基本仕様のデバッグ)」: テスト教室にも出す。
     for (const id of ['tp-55', 'tp-56', 'tp-57']) {
       expect(byId.get(id)!.title, id).toContain('【基本仕様】')
@@ -211,8 +195,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.602')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.602')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.604')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.604')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -284,7 +268,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.602]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.604]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
@@ -495,7 +479,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-47', 'tp-53', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {

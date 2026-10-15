@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.604 (2026-10-15)
+
+- docs: **確認リスト第55版(v1.5.604)**: 受付 20261015-151056959-a8890098 で OK の c-5・tp-47・tp-53・tp-54 を外した(tp-47・tp-53 はテスト教室の表示からも消える)。q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 は結果待ちのまま。進行中テーマ台帳(template-diff-apply / user-request-issue-75)と spec-developer-report E-2 を追随 (verificationChecklist.ts / verificationChecklist.test.ts / developmentStatusLedger.ts / docs/spec-developer-report.md)
+
 ## v1.5.603 (2026-10-15)
 
 - docs: **QR 重複解消(再マージ側・全教室)をオーナー確定として記録**(2026-10-15「QR 重複解消を全教室に効かせたままでよい」)。決定記録 40・INV-01 台帳・進行中テーマ台帳の「主セッション判断(異議があれば戻す)」をオーナー確定に改めた。コードの変更なし (docs/spec-template-behavior.md / docs/spec-invariants.md / developmentStatusLedger.ts)
