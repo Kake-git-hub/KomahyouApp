@@ -87,9 +87,15 @@
 
 ## E-2. 開発用教室の確認リスト（2026-09-12 オーナー指示）
 
-- 開発用教室（`isActingDevelopmentClassroom` が真の教室）でだけ、画面最前面に確認事項チェックリストの
-  パネルを出す。**本番教室には一切出さない**（`src/App.tsx` で条件付けし、source-scan テスト
+- 開発用教室（`isActingDevelopmentClassroom` が真の教室＝登録台帳の検証用教室。**テスト教室 `test_classroom_20260507_dai` も含む**）でだけ、
+  画面最前面に確認事項チェックリストのパネルを出す。**本番教室には一切出さない**（`src/App.tsx` で条件付けし、source-scan テスト
   `VerificationChecklistPanel.wiring.test.ts` で固定）。
+- **テスト教室でも同じ一覧（`VERIFICATION_CHECKLIST`）が出る（2026-10-15 オーナー指示「テスト教室でテスト担当にもチェックさせる」）**。
+  下書き（localStorage）と送信結果（developerReports の `classroomId`）は教室ごとに分かれるので、オーナー（開発用教室）とテスト担当
+  （テスト教室）が同じ版を別々に確認できる。項目の文面は「開発用教室で」と書かず、どちらの教室でも成り立つ書き方にする。
+  テスト教室の結果は `node tools/verification-checklist-report.mjs --workspace main --classroom test_classroom_20260507_dai` で読む
+  （`--classroom` 省略時は開発用教室）。先行機能のフラグ（scope `development-only`）は登録台帳の検証用教室すべてで有効なので、
+  テスト教室でも同じ機能が触れる。
 - 項目の正本は `src/utils/verificationChecklist.ts`（`VERIFICATION_CHECKLIST`）。各項目は 未確認／OK／要改善 の
   3 択とメモを持ち、入力のたびに localStorage（`verification-checklist:<教室ID>:<版>`）へ下書き保存する。
 - **「保存して送信」は同じ経路で送る**: 既存の `submitDeveloperReport`（`source: board` / `category: request`）を

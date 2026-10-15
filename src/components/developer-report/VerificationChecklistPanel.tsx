@@ -316,7 +316,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
         <div>
           <div className="verification-checklist-title">確認リスト {VERIFICATION_CHECKLIST.version}</div>
           <div className="verification-checklist-subtitle">
-            開発用教室のみ{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
+            検証用教室のみ{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
           </div>
         </div>
         {detached ? (
