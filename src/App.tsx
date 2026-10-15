@@ -37,7 +37,7 @@ import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubjec
 import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
-import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, resolveVerificationChecklistAudience, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { appDocumentTitle, appName, roleLabel } from '@company/profile'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
@@ -1639,6 +1639,8 @@ function AuthenticatedApp() {
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
+  // 確認リストを見る相手(2026-10-15): 開発用教室=全項目・テスト教室=テンプレ関係だけ。検証用教室でなければ null。
+  const verificationChecklistAudience = useMemo(() => resolveVerificationChecklistAudience(actingClassroom), [actingClassroom])
   // 操作ログ: 記録先の教室を登録する。未登録の間に起きた操作は記録しない(別教室へ混入させない)。
   // ★useLayoutEffect にする: 盤面(子)の起動時自動処理は useEffect で走り、親の useEffect より先に実行される。
   //   親が useEffect だと最初の自動処理(講師の自己修復など)が教室未登録で捨てられる。layout effect は
@@ -1953,6 +1955,7 @@ function AuthenticatedApp() {
         key={actingClassroomId ?? 'none'}
         classroomId={actingClassroomId}
         classroomName={actingClassroom?.name}
+        audience={verificationChecklistAudience ?? 'sandbox'}
         onSubmitNote={submitVerificationChecklistNote}
         resolveStudentName={resolveVerificationChecklistStudentName}
       />

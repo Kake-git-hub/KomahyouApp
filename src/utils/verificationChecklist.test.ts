@@ -30,6 +30,9 @@ import {
   getVerificationChecklistAttachments,
   removeVerificationChecklistAttachment,
   type VerificationChecklistItem,
+  selectVerificationChecklistItems,
+  VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS,
+  VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER,
 } from './verificationChecklist'
 
 // 書式・進捗のテストは版ごとに変わる実項目に依存させない(第4版で項目が p-2/p-3 だけになり壊れたため固定の項目一覧を使う)。
@@ -477,5 +480,25 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
     expect(buildVerificationChecklistReportNotes(unchecked, { items: FIXTURE_ITEMS })[0]).not.toContain('c-1')
     // Markdown にも枚数と名前
     expect(buildVerificationChecklistMarkdown(draft, FIXTURE_ITEMS)).toContain('  - 画像: 2 枚(2.png, 3.png)')
+  })
+})
+
+describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
+  it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
+    expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-44', 'tp-45', 'tp-46', 'tp-47', 'tp-48', 'tp-49', 'tp-50', 'tp-51'])
+  })
+
+  it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    for (const id of VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS) {
+      const item = byId.get(id)
+      expect(item, id).toBeDefined()
+      expect(item!.area, id).toBe('テンプレ作成')
+      const text = [item!.title, item!.prep ?? '', ...item!.steps, ...(item!.check ?? [])].join('\n')
+      expect(text, id).not.toMatch(VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER)
+      expect(text, id).not.toContain('tp-41')
+      expect(text, id).not.toContain('開発用教室で')
+    }
   })
 })

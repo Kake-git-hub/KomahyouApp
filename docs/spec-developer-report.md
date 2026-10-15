@@ -90,7 +90,12 @@
 - 開発用教室（`isActingDevelopmentClassroom` が真の教室＝登録台帳の検証用教室。**テスト教室 `test_classroom_20260507_dai` も含む**）でだけ、
   画面最前面に確認事項チェックリストのパネルを出す。**本番教室には一切出さない**（`src/App.tsx` で条件付けし、source-scan テスト
   `VerificationChecklistPanel.wiring.test.ts` で固定）。
-- **テスト教室でも同じ一覧（`VERIFICATION_CHECKLIST`）が出る（2026-10-15 オーナー指示「テスト教室でテスト担当にもチェックさせる」）**。
+- **テスト教室にはテンプレ関係の項目だけ出す（2026-10-15 オーナー指示「テスト教室には、テンプレ関係の確認リストだけ残して。開発用教室はすべて残して」）**:
+  App が `resolveVerificationChecklistAudience`（開発用教室＝development・テスト教室＝sandbox）を決めてパネルに渡し、パネルは
+  `selectVerificationChecklistItems` で絞る。sandbox に出すのは `VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS`（tp-44〜51）＝特定の教室のデータに依らない
+  テンプレ関係の項目だけ（生徒プレースホルダを使う項目・開発用教室の盤面を前提にする項目は載せない。テスト教室の生徒は開発用教室と違うので、
+  名前の差し込みが「名前不明(ID)」になるため）。進捗・送信本文・Markdown も絞った項目で数える。
+- **テスト教室でも同じ定義（`VERIFICATION_CHECKLIST`）から出る**（2026-10-15 オーナー指示「テスト教室でテスト担当にもチェックさせる」）。
   下書き（localStorage）と送信結果（developerReports の `classroomId`）は教室ごとに分かれるので、オーナー（開発用教室）とテスト担当
   （テスト教室）が同じ版を別々に確認できる。項目の文面は「開発用教室で」と書かず、どちらの教室でも成り立つ書き方にする。
   テスト教室の結果は `node tools/verification-checklist-report.mjs --workspace main --classroom test_classroom_20260507_dai` で読む

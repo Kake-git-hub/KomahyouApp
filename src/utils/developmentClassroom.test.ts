@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
-import { isDevelopmentClassroom, isParentPortalTokenOwnedByClassroom, isSubmissionTokenOwnedByClassroom, stripForeignParentPortalToken, stripForeignParentPortalTokensFromStudents, stripForeignSubmissionToken, stripForeignSubmissionTokensFromInputs, stripParentPortalToken, stripParentPortalTokensFromStudents, stripSubmissionToken, stripSubmissionTokensFromInputs } from './developmentClassroom'
+import { isDevelopmentClassroom, isParentPortalTokenOwnedByClassroom, resolveVerificationChecklistAudience, isSubmissionTokenOwnedByClassroom, stripForeignParentPortalToken, stripForeignParentPortalTokensFromStudents, stripForeignSubmissionToken, stripForeignSubmissionTokensFromInputs, stripParentPortalToken, stripParentPortalTokensFromStudents, stripSubmissionToken, stripSubmissionTokensFromInputs } from './developmentClassroom'
 
 // 【2026-09-16 仕様変更】検証用教室の判定は登録台帳 src/utils/developmentClassroomRegistry.ts の
 // (workspaceKey, classroomId) 完全一致だけになった(docs/spec-multi-tenant.md)。
@@ -285,5 +285,15 @@ describe('stripForeignParentPortalTokensFromStudents (配列単位・開発用�
     expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
     expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
     expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+  })
+})
+
+describe('resolveVerificationChecklistAudience(2026-10-15)', () => {
+  it('開発用教室は development・テスト教室は sandbox・本番教室と別会社は null(パネルを出さない)', () => {
+    expect(resolveVerificationChecklistAudience({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe('development')
+    expect(resolveVerificationChecklistAudience({ id: 'test_classroom_20260507_dai' }, 'main')).toBe('sandbox')
+    expect(resolveVerificationChecklistAudience({ id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBeNull()
+    expect(resolveVerificationChecklistAudience({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'other')).toBeNull()
+    expect(resolveVerificationChecklistAudience(null, 'main')).toBeNull()
   })
 })

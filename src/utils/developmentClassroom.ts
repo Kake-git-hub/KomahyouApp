@@ -1,5 +1,5 @@
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
-import { isRegisteredDevelopmentClassroom } from './developmentClassroomRegistry'
+import { isRegisteredDevelopmentClassroom, resolveDevelopmentClassroomId } from './developmentClassroomRegistry'
 
 /**
  * 検証用教室の判定に渡す教室の識別情報。**教室ID だけ**を持つ(2026-09-16・docs/spec-multi-tenant.md)。
@@ -32,6 +32,20 @@ export function isDevelopmentClassroom(
   workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
 ) {
   return isRegisteredDevelopmentClassroom(workspaceKey, classroom?.id)
+}
+
+/**
+ * 確認リストを見る相手（2026-10-15 オーナー指示）。検証用教室のうち、その会社の「開発用教室」なら development（全項目）、
+ * それ以外の検証用教室（テスト教室＝sandbox）なら sandbox（テンプレ関係だけ）。検証用教室でなければ null（パネルを出さない）。
+ * ★機能の解放・混入防止ガードは kind で分けない（docs/spec-multi-tenant.md §4-2-11）。ここは**表示する項目の範囲**だけの判定で、
+ *   許されている resolveDevelopmentClassroomId（会社に 1 つの宛先）との一致で見る。
+ */
+export function resolveVerificationChecklistAudience(
+  classroom: DevelopmentClassroomIdentity | null | undefined,
+  workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
+): 'development' | 'sandbox' | null {
+  if (!isDevelopmentClassroom(classroom, workspaceKey)) return null
+  return classroom?.id === resolveDevelopmentClassroomId(workspaceKey) ? 'development' : 'sandbox'
 }
 
 type SubmissionTokenBearer = {

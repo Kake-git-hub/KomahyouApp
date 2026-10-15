@@ -134,7 +134,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     document.body.append(container)
     root = createRoot(container)
     act(() => {
-      root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote }))
+      root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote }))
     })
   })
 
@@ -212,7 +212,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
 
     popupClose.mockClear()
     Object.defineProperty(popup.window, 'closed', { value: false, configurable: true })
-    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote })))
     act(() => root.render(createElement(Fragment)))
     expect(popupClose).toHaveBeenCalledTimes(1)
   })
@@ -246,7 +246,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
   it('保存してあった拡大率で別タブが開く', () => {
     window.localStorage.setItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, '150')
     act(() => root.render(createElement(Fragment)))
-    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote })))
     openWindow()
     expect(popup.window.document.querySelector<HTMLElement>('[data-testid="verification-checklist-panel"]')!.style.zoom).toBe('1.5')
   })
@@ -256,7 +256,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     const dataUrl = `data:image/jpeg;base64,${Buffer.alloc(12, 1).toString('base64')}`
     const shrinkImage = vi.fn(async (file: File) => ({ name: file.name || '貼り付け', dataUrl }))
     act(() => root.render(createElement(Fragment)))
-    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote, shrinkImage })))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote, shrinkImage })))
     const firstItem = VERIFICATION_CHECKLIST.items[0]
     const memo = container.querySelector<HTMLTextAreaElement>(`[data-testid="verification-checklist-memo-${firstItem.id}"]`)!
     const pasted = new File(['x'], '', { type: 'image/png' })
@@ -315,7 +315,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     window.localStorage.setItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY, '125')
     window.localStorage.setItem(verificationChecklistStorageKey(classroomId), JSON.stringify({ version: VERIFICATION_CHECKLIST.version, entries: { [VERIFICATION_CHECKLIST.items[0].id]: { status: 'ok', memo: '' } }, otherNotes: '' }))
     act(() => root.render(createElement(Fragment)))
-    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote })))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote })))
     expect(window.localStorage.getItem(`verification-checklist:${classroomId}:v0.0.1`)).toBeNull()
     expect(window.localStorage.getItem('verification-checklist:other:v0.0.1')).toBe('{}')
     expect(window.localStorage.getItem(VERIFICATION_CHECKLIST_WINDOW_ZOOM_STORAGE_KEY)).toBe('125')
@@ -326,7 +326,7 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
   it('画像を読めなかったときは理由を出し、下書きは変えない', async () => {
     const shrinkImage = vi.fn(async () => { throw new Error('canvas が使えません') })
     act(() => root.render(createElement(Fragment)))
-    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, onSubmitNote, shrinkImage })))
+    act(() => root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote, shrinkImage })))
     const firstItem = VERIFICATION_CHECKLIST.items[0]
     const input = container.querySelector<HTMLInputElement>(`[data-testid="verification-checklist-attach-${firstItem.id}"]`)!
     Object.defineProperty(input, 'files', { value: [new File(['y'], 'bad.png', { type: 'image/png' })], configurable: true })

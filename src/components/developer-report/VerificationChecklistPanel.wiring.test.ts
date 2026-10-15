@@ -43,6 +43,13 @@ describe('確認リストパネルの配線(App.tsx)', () => {
 describe('確認リストパネル本体', () => {
   it('生徒名は App が開いている教室の生徒データから差し込む(ソースに実名を置かない・2026-10-10)', () => {
     expect(APP_TSX).toContain('resolveStudentName={resolveVerificationChecklistStudentName}')
+    // 2026-10-15: 見る相手(開発用教室=全項目・テスト教室=テンプレ関係だけ)は App が台帳から決めて渡し、パネルは selectVerificationChecklistItems で絞る。
+    expect(APP_TSX).toContain("audience={verificationChecklistAudience ?? 'sandbox'}")
+    expect(APP_TSX).toContain('const verificationChecklistAudience = useMemo(() => resolveVerificationChecklistAudience(actingClassroom), [actingClassroom])')
+    expect(PANEL_TSX).toContain('const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])')
+    expect(PANEL_TSX).toContain('countVerificationChecklistProgress(draft, items)')
+    expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes(draft, { items })')
+    expect(PANEL_TSX).toContain('buildVerificationChecklistMarkdown(draft, items)')
     expect(APP_TSX).toContain('const student = students.find((row) => row.id === studentId)')
     expect(PANEL_TSX).toContain('resolveVerificationChecklistText')
     expect(PANEL_TSX).toContain('resolveStudentName')

@@ -58,6 +58,30 @@ export type VerificationChecklistDefinition = {
   items: readonly VerificationChecklistItem[]
 }
 
+/**
+ * 確認リストを見る相手（2026-10-15 オーナー指示「テスト教室には、テンプレ関係の確認リストだけ残して。開発用教室はすべて残して」）。
+ * - development … 開発用教室（オーナー）。全項目。
+ * - sandbox … テスト教室（テスト担当）。`VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS` の項目だけ。
+ */
+export type VerificationChecklistAudience = 'development' | 'sandbox'
+
+/**
+ * テスト教室（sandbox）に出す項目の id。**特定の教室のデータに依らないテンプレ関係の項目だけ**を載せる
+ * （生徒プレースホルダ `{{student:…}}` を使う項目や、開発用教室の盤面（tp-41 の重複など）を前提にする項目は載せない。
+ * テスト教室の生徒は開発用教室と違うので、名前の差し込みが「名前不明(ID)」になる）。テストが各 id の存在・分類・プレースホルダ無しを固定する。
+ */
+export const VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS: readonly string[] = ['tp-44', 'tp-45', 'tp-46', 'tp-47', 'tp-48', 'tp-49', 'tp-50', 'tp-51']
+
+/** 見る相手に応じた項目の並び（順序は正本どおり）。 */
+export function selectVerificationChecklistItems(
+  audience: VerificationChecklistAudience,
+  items: readonly VerificationChecklistItem[] = VERIFICATION_CHECKLIST.items,
+): readonly VerificationChecklistItem[] {
+  if (audience === 'development') return items
+  const allowed = new Set(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS)
+  return items.filter((item) => allowed.has(item.id))
+}
+
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
 export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.596'
 

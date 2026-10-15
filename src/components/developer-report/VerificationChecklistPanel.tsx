@@ -20,6 +20,8 @@ import { createPortal } from 'react-dom'
 import type { DeveloperReportAttachment, DeveloperReportSubmitResult } from '../../utils/developerReport'
 import {
   VERIFICATION_CHECKLIST,
+  selectVerificationChecklistItems,
+  type VerificationChecklistAudience,
   VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
   VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY,
   addVerificationChecklistAttachment,
@@ -55,6 +57,8 @@ import {
 export type VerificationChecklistPanelProps = {
   classroomId: string | null
   classroomName?: string
+  /** 見る相手(2026-10-15): development=全項目(開発用教室)・sandbox=テンプレ関係だけ(テスト教室)。 */
+  audience: VerificationChecklistAudience
   /**
    * 1通ぶんの本文を送る。App 側の submitDeveloperReport(source: 'board', category: 'request')へ委譲。
    * attachments は項目に貼ったスクリーンショット(2026-10-14)。複数通に分かれるときは 1 通目にだけ付ける。
@@ -107,7 +111,8 @@ function pruneStaleDrafts(classroomId: string | null) {
 
 // 教室を切り替えたときは App 側が key={classroomId} で作り直すため、下書きは初期化時に読み直される
 // (他教室の入力を持ち越さない)。ここで effect を使って state を書き戻さない。
-export function VerificationChecklistPanel({ classroomId, classroomName, onSubmitNote, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+  const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
   const [draft, setDraft] = useState<VerificationChecklistDraft>(() => {
@@ -239,19 +244,19 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     }
   }, [detached])
 
-  const progress = useMemo(() => countVerificationChecklistProgress(draft), [draft])
+  const progress = useMemo(() => countVerificationChecklistProgress(draft, items), [draft, items])
   const groups = useMemo(() => {
     const map = new Map<string, typeof VERIFICATION_CHECKLIST.items[number][]>()
-    for (const item of VERIFICATION_CHECKLIST.items) {
+    for (const item of items) {
       const list = map.get(item.area) ?? []
       list.push(item)
       map.set(item.area, list)
     }
     return [...map.entries()]
-  }, [])
+  }, [items])
 
   const handleSubmit = useCallback(async () => {
-    const notes = buildVerificationChecklistReportNotes(draft)
+    const notes = buildVerificationChecklistReportNotes(draft, { items })
     if (notes.length === 0) {
       setResultMessage('まだ何も記録されていません。OK か要改善を付けてから送信してください。')
       return
@@ -277,10 +282,10 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
       return
     }
     setResultMessage(`送りました(${reportIds.length}通${attachments.length > 0 ? `・画像 ${attachments.length} 枚` : ''}・受付番号 ${reportIds.join(', ')})。下書きはこのまま残ります。`)
-  }, [draft, onSubmitNote])
+  }, [draft, items, onSubmitNote])
 
   const handleCopy = useCallback(async () => {
-    const markdown = buildVerificationChecklistMarkdown(draft)
+    const markdown = buildVerificationChecklistMarkdown(draft, items)
     try {
       // 別タブで押したときは別タブの navigator を使う(元のタブはフォーカスが無くコピーを断られる)。
       await (detached?.win ?? window).navigator.clipboard.writeText(markdown)
@@ -288,7 +293,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
     } catch {
       setResultMessage('コピーできませんでした(ブラウザの権限)。文面は送信ボタンから送れます。')
     }
-  }, [draft, detached])
+  }, [draft, detached, items])
 
   if (!detached && collapsed) {
     return (
@@ -316,7 +321,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
         <div>
           <div className="verification-checklist-title">確認リスト {VERIFICATION_CHECKLIST.version}</div>
           <div className="verification-checklist-subtitle">
-            検証用教室のみ{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
+            {audience === 'sandbox' ? 'テスト教室(テンプレ関係のみ)' : '開発用教室(全項目)'}{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
           </div>
         </div>
         {detached ? (
