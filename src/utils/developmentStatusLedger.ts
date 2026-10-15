@@ -174,6 +174,15 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-10-14',
   },
   {
+    id: 'user-report-issue-76',
+    title: '緑が丘校の報告 #76: 生徒を削除して並べ替えると講師の名前が消える(テンプレ再マージの机番号ベースの消費判定)',
+    stage: 'awaiting-owner',
+    summary: 'Issue #76(2026-10-15・source:user-report・type:bug)。triage 済み(2026-10-15): 想定外(バグ)。生徒を削除して講師だけになった机(テンプレ由来の非 manual 講師)を並べ替えで下へ動かすと、次のテンプレ再マージ(教室の開き直し・次の生徒削除・基本データ/教室設定の変更の effect)が、テンプレの講師だけの机を「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず、机の講師を消す(mergeManagedWeek の consumedManagedTeacherIndexes)。削除は必要条件でなく、テンプレに元々ある講師だけの机が埋まった机より上にあるコマの並べ替えでも同じ(pack / seat とも再現。再現テストは Issue のコメントに掲載・未コミット)。全教室・データ破損なし・回避策は講師を手で置き直す(manual の講師は消えない)。既知の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)と同根。操作痕跡はこのセッションに読み取り専用鍵が無く未読。',
+    nextAction: 'オーナーが Issue #76 の triage を確認し、修正着手の可否を判断(利用者報告はオーナー許可後に dev-fix)。修正の方向: 消費判定を机番号でなく講師の同一性(表示名／講師 ID)で行い、並べ替え後の位置の講師だけの机を残す(spec-curator で「並べ替え後の足場講師は盤面の並びが正」を確定)。回帰テストは inv02 マトリクスの列「詰め直し／並べ替え × 再マージ」へ。室長への回避策(講師を手で置き直す)はオーナーから伝える。',
+    references: ['Issue #76', 'docs/spec-invariants.md INV-02 L-7 ②', 'src/components/schedule-board/ScheduleBoardScreen.tsx mergeManagedWeek', 'src/components/schedule-board/deskSort.ts'],
+    updatedOn: '2026-10-15',
+  },
+  {
     id: 'checklist-issues-cleanup',
     title: '確認リスト由来の Issue #62〜#66 のクローズ',
     stage: 'awaiting-owner',

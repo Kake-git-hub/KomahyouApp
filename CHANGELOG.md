@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- docs: **緑が丘校の利用者報告 #76(生徒を削除して並べ替えると講師の名前が消える)を triage**(2026-10-15・修正は未着手＝オーナー許可待ち)。想定外と判定: 並べ替えで下へ動いたテンプレ由来の講師だけの机を、次のテンプレ再マージ(`mergeManagedWeek`)が「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず講師を消す(`consumedManagedTeacherIndexes`・pack / seat とも・削除は必要条件でない・全教室)。再現テストは Issue のコメントに掲載(未コミット)。進行中テーマ台帳に `user-report-issue-76`(オーナー判断待ち)を追加 (developmentStatusLedger.ts)
+
 ## v1.5.599 (2026-10-14)
 
 - docs: **テスト教室(テスト担当)でも #75 の確認項目 tp-44〜51 を確認する**(オーナー指示 2026-10-15)。確認リストは登録台帳の検証用教室(開発用教室・テスト教室)に同じ一覧が出て、下書き・送信結果は教室ごとに分かれる(既存の仕組み)。tp-48 の前提を「開発用教室で」から「この教室で」へ、パネルの見出しを「検証用教室のみ」へ。台帳 user-request-issue-75 と仕様 E-2 にテスト教室の読み方(`--classroom test_classroom_20260507_dai`)を記載 (verificationChecklist.ts / VerificationChecklistPanel.tsx / developmentStatusLedger.ts / docs/spec-developer-report.md)
