@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.600 (2026-10-15)
+
 - feat: **テスト教室の確認リストはテンプレ関係(tp-44〜51)だけ・開発用教室は全項目**(オーナー指示 2026-10-15)。App が検証用教室の種別(開発用=development・テスト=sandbox)を台帳から決めてパネルへ渡し(`resolveVerificationChecklistAudience`)、パネルは `selectVerificationChecklistItems` で絞る(進捗・送信本文・Markdown も絞った項目で)。テスト教室に出す項目は生徒名プレースホルダや開発用教室の盤面を前提にしないものだけ(テストで固定)。見出しを「開発用教室(全項目)」「テスト教室(テンプレ関係のみ)」に (verificationChecklist.ts / developmentClassroom.ts / VerificationChecklistPanel.tsx / App.tsx / docs/spec-developer-report.md)
 ## v1.5.599 (2026-10-14)
 
