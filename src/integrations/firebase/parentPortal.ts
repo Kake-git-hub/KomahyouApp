@@ -4,7 +4,7 @@
 //   (lectureSubmissions のような「誰でも書ける」経路を作ると 2026-07-09 型の教室越え混入が再発する)。
 // - 連絡 parentMessages は教室メンバーのみ read(write は CF のみ)。購読は自教室のパスに限定する(§E-2 1.・INV-08)。
 // ⚠️ トークン全文・本文・生徒名をログに出さない。
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { collection, getDocs, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
@@ -215,4 +215,30 @@ export function subscribeParentMessageHistory(
   }, (error) => {
     console.error('[parentMessages] history subscribe failed', error.code)
   })
+}
+
+/**
+ * 「保護者連絡」の履歴から開く**生徒ごとの全履歴**(オーナー指示 2026-10-15)。開いたときに 1 回だけ読む(購読しない)。
+ * - 条件は `where('studentId', '==', …)` の等値 1 つだけ(単一フィールドの自動索引で足りる)。orderBy を足さない
+ *   (複合インデックスが要り FAILED_PRECONDITION になる・CLAUDE.md 2026-09-12 の教訓)。並べ替えは buildParentContactHistory。
+ * - 読み取りだけ。パスで教室を分け、doc.classroomId / studentId でも二重に絞る(INV-08)。旧形式の doc は parse で捨てる。
+ */
+export async function fetchParentMessagesForStudent(classroomId: string, studentId: string): Promise<ParentMessageEntry[]> {
+  const db = getFirebaseFirestoreInstance()
+  const config = getFirebaseBackendConfig()
+  if (!db || !classroomId || !studentId || !config.workspaceKey) return []
+
+  const q = query(
+    collection(db, 'workspaces', config.workspaceKey, 'classroomSnapshots', classroomId, 'parentMessages'),
+    where('studentId', '==', studentId),
+  )
+  const snapshot = await getDocs(q)
+  const entries: ParentMessageEntry[] = []
+  for (const doc of snapshot.docs) {
+    const entry = parseParentMessageEntry(doc.id, doc.data())
+    if (!entry) continue
+    if (entry.classroomId !== classroomId || entry.studentId !== studentId) continue
+    entries.push(entry)
+  }
+  return entries
 }

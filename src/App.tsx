@@ -50,12 +50,12 @@ import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, pa
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
-import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
+import { ParentContactHistoryModal, type ParentContactStudentHistoryView } from './components/parent-portal/ParentContactHistoryModal'
 import { markReportAnswersReadViaFunction, subscribeReportAnswers } from './integrations/firebase/reportAnswersStore'
 import { countUnreadReportAnswers, selectReportAnswersForClassroom, sortReportAnswerEntries, type ReportAnswerEntry } from './utils/reportAnswers'
 import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
-import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
-import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
+import { fetchParentMessagesForStudent, issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
+import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentContactStudentOptions, buildParentStudentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
@@ -1636,6 +1636,14 @@ function AuthenticatedApp() {
   // 自動で開くモーダルは出さない(オーナー確定 2026-09-28)。ボタンの未読バッジと、同じモーダルの履歴タブに出すだけ。
   const [reportAnswerEntries, setReportAnswerEntries] = useState<ReportAnswerEntry[]>([])
   const [isParentContactHistoryOpen, setIsParentContactHistoryOpen] = useState(false)
+  // 「保護者連絡」の履歴から開く生徒ごとの全履歴(2026-10-15)。開いた時に 1 回だけ読んだ doc を持つ(購読しない)。null = 一覧表示。
+  const [parentContactStudentHistory, setParentContactStudentHistory] = useState<{
+    classroomId: string
+    studentId: string
+    studentName: string
+    status: 'loading' | 'ready' | 'error'
+    entries: ParentMessageEntry[]
+  } | null>(null)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
@@ -1728,7 +1736,45 @@ function AuthenticatedApp() {
     selectParentMessagesForClassroom(mergeParentMessageEntries(parentMessageEntries, parentMessageHistoryEntries), actingClassroomId),
     { students, pendingIds: new Set(pendingParentAbsenceFinalize.map((item) => item.messageId)), hiddenIds: new Set(hiddenParentMessageIds) },
   ), [actingClassroomId, hiddenParentMessageIds, parentMessageEntries, parentMessageHistoryEntries, pendingParentAbsenceFinalize, students])
-  const openParentContactHistory = useCallback(() => setIsParentContactHistoryOpen(true), [])
+  const openParentContactHistory = useCallback(() => {
+    setParentContactStudentHistory(null)
+    setIsParentContactHistoryOpen(true)
+  }, [])
+  // 生徒ごとの全履歴。読み込んだ doc に、ライブの 2 本の購読(処理済み化・四択の反映が早い)を重ねて状態を最新に保つ。
+  // 行の状態・除外条件は一覧と同じ(保存待ち・hidden)。教室の絞り込みも同じ(INV-08)。
+  const parentContactStudentOptions = useMemo(() => buildParentContactStudentOptions(students), [students])
+  const parentContactStudentHistoryView = useMemo<ParentContactStudentHistoryView | null>(() => {
+    const current = parentContactStudentHistory
+    if (!current || current.classroomId !== actingClassroomId) return null
+    const merged = mergeParentMessageEntries(parentMessageEntries, mergeParentMessageEntries(parentMessageHistoryEntries, current.entries))
+    return {
+      studentName: current.studentName,
+      status: current.status,
+      rows: buildParentStudentContactHistory(selectParentMessagesForClassroom(merged, actingClassroomId), {
+        students,
+        studentId: current.studentId,
+        pendingIds: new Set(pendingParentAbsenceFinalize.map((item) => item.messageId)),
+        hiddenIds: new Set(hiddenParentMessageIds),
+      }),
+    }
+  }, [actingClassroomId, hiddenParentMessageIds, parentContactStudentHistory, parentMessageEntries, parentMessageHistoryEntries, pendingParentAbsenceFinalize, students])
+  const openParentContactStudentHistory = useCallback((studentId: string, studentName: string) => {
+    const classroomId = actingClassroomId
+    if (!classroomId || !studentId) return
+    const isSameRequest = (current: typeof parentContactStudentHistory) => !!current && current.classroomId === classroomId && current.studentId === studentId
+    setParentContactStudentHistory({ classroomId, studentId, studentName, status: 'loading', entries: [] })
+    recordOperationTrace('navigation', '保護者連絡の生徒別全履歴を開く')
+    void fetchParentMessagesForStudent(classroomId, studentId)
+      .then((entries) => setParentContactStudentHistory((current) => (isSameRequest(current) ? { ...current!, status: 'ready', entries } : current)))
+      .catch((error) => {
+        console.warn('[parentMessages] student history fetch failed', error instanceof Error ? error.message : String(error))
+        setParentContactStudentHistory((current) => (isSameRequest(current) ? { ...current!, status: 'error' } : current))
+      })
+  }, [actingClassroomId])
+  const closeParentContactHistory = useCallback(() => {
+    setIsParentContactHistoryOpen(false)
+    setParentContactStudentHistory(null)
+  }, [])
   // 質問・要望の履歴(自教室だけ・新しい順)と未読の回答件数(盤面ツールバー「質問・要望」のバッジ)。教室分離は doc の classroomId でも守る(INV-08)。
   const reportAnswers = useMemo(() => sortReportAnswerEntries(selectReportAnswersForClassroom(reportAnswerEntries, actingClassroomId)), [actingClassroomId, reportAnswerEntries])
   const unreadReportAnswerCount = useMemo(() => countUnreadReportAnswers(reportAnswers), [reportAnswers])
@@ -1779,6 +1825,7 @@ function AuthenticatedApp() {
     setParentMessageEntries([])
     setParentMessageHistoryEntries([])
     setIsParentContactHistoryOpen(false)
+    setParentContactStudentHistory(null)
     setHiddenParentMessageIds([])
     setPendingParentAbsenceFinalize([])
     setParentAbsenceRequest(null)
@@ -2026,11 +2073,19 @@ function AuthenticatedApp() {
           onExpand={() => setIsParentMessagesModalCollapsed(false)}
         />
         {isParentContactHistoryOpen ? (
-          <ParentContactHistoryModal rows={parentContactHistoryRows} onOpenUnconfirmed={openParentMessagesFromHistory} onClose={() => setIsParentContactHistoryOpen(false)} />
+          <ParentContactHistoryModal
+            rows={parentContactHistoryRows}
+            studentOptions={parentContactStudentOptions}
+            studentHistory={parentContactStudentHistoryView}
+            onOpenStudentHistory={openParentContactStudentHistory}
+            onCloseStudentHistory={() => setParentContactStudentHistory(null)}
+            onOpenUnconfirmed={openParentMessagesFromHistory}
+            onClose={closeParentContactHistory}
+          />
         ) : null}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, resolveVerificationChecklistStudentName, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, resolveVerificationChecklistStudentName, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory, parentContactStudentOptions, parentContactStudentHistoryView, openParentContactStudentHistory, closeParentContactHistory])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current

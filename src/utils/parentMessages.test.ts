@@ -6,6 +6,8 @@ import type { StudentRow } from '../components/basic-data/basicDataModel'
 import {
   PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT,
   buildParentContactHistory,
+  buildParentContactStudentOptions,
+  buildParentStudentContactHistory,
   mergeParentMessageEntries,
   PARENT_ABSENCE_CHOICES,
   PARENT_MESSAGE_STUDENT_NAME_FALLBACK,
@@ -339,6 +341,53 @@ describe('buildParentContactHistory(保護者連絡の履歴)', () => {
   it('生徒名は名簿の現在名を優先する(モーダルと同じ解決)', () => {
     const rows = buildParentContactHistory([createEntry({ studentId: 's001', studentName: '旧名' })], { students: [createStudent({ id: 's001', name: '新名', displayName: '新名' })] })
     expect(rows[0]!.studentName).toBe('新名')
+  })
+})
+
+// 生徒ごとの全履歴(オーナー指示 2026-10-15): 一覧は確認済 10 件までだが、その先の詳細として生徒ごとに全件を見られる。
+describe('buildParentStudentContactHistory(生徒ごとの全履歴)', () => {
+  const at = (n: number) => `2026-09-${String(n).padStart(2, '0')}T01:00:00.000Z`
+
+  it('その生徒の連絡だけを、確認済も件数制限なしで新しい順に全部出す', () => {
+    const mine = Array.from({ length: 15 }, (_, index) => createEntry({ id: `c${index + 1}`, studentId: 's001', createdAt: at(index + 1), notifiedAt: at(index + 1), resolution: 'absent' }))
+    const others = [createEntry({ id: 'x1', studentId: 's002', createdAt: at(20), notifiedAt: at(20) })]
+    const rows = buildParentStudentContactHistory([...mine, ...others], { students: [], studentId: 's001' })
+    expect(rows).toHaveLength(15)
+    expect(rows[0]!.id).toBe('c15')
+    expect(rows[14]!.id).toBe('c1')
+    expect(rows.every((row) => row.studentId === 's001' && row.status === 'confirmed')).toBe(true)
+    // 一覧(全生徒)は従来どおり確認済 10 件まで。
+    expect(buildParentContactHistory([...mine, ...others], { students: [] })).toHaveLength(PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT)
+  })
+
+  it('状態は一覧と同じ判定(保存待ち・hidden は確認済、未処理は未確認)', () => {
+    const entries = [
+      createEntry({ id: 'u', studentId: 's001', createdAt: at(3) }),
+      createEntry({ id: 'p', studentId: 's001', createdAt: at(2), acknowledgedAt: at(2), resolution: 'absent' }),
+      createEntry({ id: 'h', studentId: 's001', createdAt: at(1) }),
+    ]
+    const context = { students: [], pendingIds: new Set(['p']), hiddenIds: new Set(['h']) }
+    const studentRows = buildParentStudentContactHistory(entries, { ...context, studentId: 's001' })
+    const listRows = buildParentContactHistory(entries, context)
+    expect(studentRows.map((row) => [row.id, row.status])).toEqual(listRows.map((row) => [row.id, row.status]))
+    expect(studentRows.map((row) => row.status)).toEqual(['unconfirmed', 'confirmed', 'confirmed'])
+  })
+
+  it('生徒 ID が空なら何も出さない(別の生徒の連絡を混ぜない)', () => {
+    expect(buildParentStudentContactHistory([createEntry({ id: 'm1', studentId: 's001' })], { students: [], studentId: '' })).toEqual([])
+  })
+
+  it('一覧の行は全履歴を開くための生徒 ID を持つ', () => {
+    expect(buildParentContactHistory([createEntry({ id: 'm1', studentId: 's009' })], { students: [] })[0]!.studentId).toBe('s009')
+  })
+
+  it('生徒の選択肢は名簿順・表示名・重複なし', () => {
+    const options = buildParentContactStudentOptions([
+      createStudent({ id: 's002', name: '佐藤 花子', displayName: '佐藤花' }),
+      createStudent({ id: 's001', name: '山田 太郎', displayName: '山田太' }),
+      createStudent({ id: 's002', name: '佐藤 花子', displayName: '佐藤花' }),
+    ])
+    expect(options).toEqual([{ studentId: 's002', studentName: '佐藤花' }, { studentId: 's001', studentName: '山田太' }])
   })
 })
 

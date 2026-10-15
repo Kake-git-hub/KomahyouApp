@@ -6292,6 +6292,52 @@ body.verification-checklist-window {
   color: #fff;
 }
 
+/* 生徒ごとの全履歴(2026-10-15)。行の右に「全履歴」ボタンを並べる。 */
+.parent-contact-history-item {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.parent-contact-history-item > .parent-contact-history-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.parent-contact-history-student-button {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border: 1px solid #b9cbe2;
+  border-radius: 12px;
+  background: #fff;
+  color: #1f5d96;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.parent-contact-history-student-button:hover {
+  background: #eef4fb;
+}
+
+.parent-contact-history-student-select {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #36506d;
+  font-size: 14px;
+}
+
+.parent-contact-history-student-select select {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 8px;
+}
+
 .parent-contact-history-empty {
   margin: 0;
   color: #4a6583;

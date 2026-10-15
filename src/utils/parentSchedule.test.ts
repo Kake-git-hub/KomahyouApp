@@ -4,6 +4,7 @@ import {
   buildManagedOccurrenceKey,
   buildParentScheduleView,
   getWeekdayFromDateKey,
+  isParentAbsenceSameDay,
   isParentLessonAbsenceReportable,
   isParentStudentActiveOnDate,
   normalizeParentDateText,
@@ -165,12 +166,24 @@ describe('resolveParentScheduleRange', () => {
 describe('isParentLessonAbsenceReportable', () => {
   const TODAY = '2026-09-14'
 
-  it('これから受ける授業(通常・振替・増コマ)は当日を含めて連絡できる(オーナー確定 3)', () => {
+  // ★オーナー指示 2026-10-15: 当日(JST 0:00 以降)のコマは連絡できない(旧「当日も可・オーナー確定 3」を改定)。
+  it('これから受ける授業(通常・振替・増コマ)は翌日以降だけ連絡できる・当日と過去は不可', () => {
     for (const kind of ['regular', 'makeup', 'extra'] as const) {
-      expect(isParentLessonAbsenceReportable(kind, TODAY, TODAY), `${kind} 当日`).toBe(true)
+      expect(isParentLessonAbsenceReportable(kind, TODAY, TODAY), `${kind} 当日`).toBe(false)
+      expect(isParentLessonAbsenceReportable(kind, '2026-09-15', TODAY), `${kind} 翌日`).toBe(true)
       expect(isParentLessonAbsenceReportable(kind, '2026-09-30', TODAY), `${kind} 先`).toBe(true)
       expect(isParentLessonAbsenceReportable(kind, '2026-09-13', TODAY), `${kind} 過去`).toBe(false)
     }
+  })
+
+  it('当日の境界は JST の日付(UTC 15:00 = JST 0:00 で翌日のコマが当日になる)', () => {
+    const before = toJstDateKey(new Date('2026-09-14T14:59:59.999Z')) // JST 9/14 23:59
+    const after = toJstDateKey(new Date('2026-09-14T15:00:00.000Z')) // JST 9/15 0:00
+    expect(isParentLessonAbsenceReportable('regular', '2026-09-15', before)).toBe(true)
+    expect(isParentLessonAbsenceReportable('regular', '2026-09-15', after)).toBe(false)
+    expect(isParentAbsenceSameDay('2026-09-15', after)).toBe(true)
+    expect(isParentAbsenceSameDay('2026-09-15', before)).toBe(false)
+    expect(isParentAbsenceSameDay('bad', 'bad')).toBe(false)
   })
 
   it('すでに結果が付いたコマ(休み・振替なし欠席・出席済み)は連絡できない', () => {

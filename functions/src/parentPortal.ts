@@ -15,7 +15,7 @@ import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 // ★休み連絡できるコマの判定は**公開ページと同じ 1 関数**を使う(判定を分散させない・2026-09-18)。
 //   複製元は src/utils/parentSchedule.ts(sync-shared がここへ写す)。
-import { isParentLessonAbsenceReportable, type ParentScheduleLessonKind } from './generated/parentSchedule'
+import { isParentAbsenceSameDay, isParentLessonAbsenceReportable, type ParentScheduleLessonKind } from './generated/parentSchedule'
 
 // ───────────────────────────────────────────────────────────────────────────
 // トークン(§B-1)
@@ -144,6 +144,11 @@ export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroo
 export const PARENT_MESSAGE_ERROR_INVALID_INPUT = '送信できませんでした。ページを開き直してお試しください。'
 /** 409。対象コマが無い・過去・表示範囲外・すでに休み/出席済みなど(保護者へは理由を出し分けない)。 */
 export const PARENT_ABSENCE_ERROR_NOT_REPORTABLE = 'この授業はお休みの連絡ができません。ページを開き直してご確認ください。'
+/**
+ * 409。当日(JST 0:00 以降)のコマ(オーナー指示 2026-10-15: 当日の欠席はアプリでは受け付けず電話で)。
+ * 公開ページの常時案内 PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE(parentPortalPageModel.ts)と同文。
+ */
+export const PARENT_ABSENCE_ERROR_SAME_DAY = '当日の欠席連絡は教室にお電話にてご連絡ください。'
 /** 409。同じコマの二重連絡(決定的 messageId の create が衝突したときも同じ文言)。 */
 export const PARENT_ABSENCE_ERROR_ALREADY_REPORTED = 'この授業はすでにお休みの連絡を受け付けています。'
 
@@ -472,7 +477,7 @@ export function buildParentMessageDoc(params: {
   }
 }
 
-/** GET の応答に載せる 1 件(保護者ページのバッジ「休み連絡済」/「教室確認済」の元)。 */
+/** GET の応答に載せる 1 件(保護者ページのバッジ「室長確認中」/「教室確認済」の元)。 */
 export type ParentAbsenceNotice = { dateKey: string; slotNumber: number; acknowledged: boolean }
 
 /**
@@ -496,7 +501,7 @@ export function readParentAbsenceNotices(docs: unknown): ParentAbsenceNotice[] {
     const key = `${dateKey}__${slotNumber}`
     if (seen.has(key)) continue
     seen.add(key)
-    // 空文字の acknowledgedAt は「未確認」として扱う(バッジを安全側=「休み連絡済」に倒す)。
+    // 空文字の acknowledgedAt は「未確認」として扱う(バッジを安全側=「室長確認中」に倒す)。
     notices.push({ dateKey, slotNumber, acknowledged: typeof data.acknowledgedAt === 'string' && data.acknowledgedAt.trim() !== '' })
   }
   return notices.sort((left, right) => (left.dateKey !== right.dateKey ? (left.dateKey < right.dateKey ? -1 : 1) : left.slotNumber - right.slotNumber))
@@ -751,7 +756,7 @@ export async function handleParentPortalGet(
  * 検証順(1 つ落ちたら以降を実行しない):
  *  (1) GET と同じ共通検証(400 / 410 / 403 / 410)
  *  (2) 入力の形 → 400
- *  (3) 対象コマ(today <= dateKey <= bounds.maxTo かつ日程計算に連絡できるコマがある) → 無ければ 409
+ *  (3) 対象コマ(当日は電話案内の 409・today < dateKey <= bounds.maxTo かつ日程計算に連絡できるコマがある) → 無ければ 409
  *  (4) 同じコマの連絡が既にある → 409(**回数枠を消費しない**)
  *  (5) 回数制限 → 429
  *  (6) 決定的 ID で create。競合(ALREADY_EXISTS)なら (4) と同じ 409
@@ -775,6 +780,10 @@ export async function handleParentPortalPost(
 
   // (3) 対象コマの検証。表示できない月(来月以降)・過去日は日程を計算するまでもなく弾く。
   //     科目・種別・予定かどうかは**ここで日程計算から引いた値**を保存する(リクエストの値は使わない)。
+  //     当日のコマは「連絡できない」の汎用文言ではなく、電話の案内を返す(古い画面のまま当日のコマを押した保護者向け)。
+  if (isParentAbsenceSameDay(dateKey, today)) {
+    return { status: 409, body: { error: PARENT_ABSENCE_ERROR_SAME_DAY } }
+  }
   const maxTo = deps.resolveRange({}, today).bounds.maxTo
   const target = (dateKey >= today && dateKey <= maxTo)
     ? findParentAbsenceTargetLesson(

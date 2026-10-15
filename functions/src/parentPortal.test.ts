@@ -36,6 +36,7 @@ import {
   normalizeRevokeRequest,
   PARENT_ABSENCE_ERROR_ALREADY_REPORTED,
   PARENT_ABSENCE_ERROR_NOT_REPORTABLE,
+  PARENT_ABSENCE_ERROR_SAME_DAY,
   PARENT_ABSENCE_MAX_SLOT_NUMBER,
   PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN,
   PARENT_MESSAGE_ERROR_INVALID_INPUT,
@@ -278,9 +279,11 @@ describe('休み連絡できるコマの判定(共有関数 isParentLessonAbsenc
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 5, '2026-09-13')).toBeNull()
   })
 
-  it('過去の日は null・当日は可(共有関数と同じ境界)', () => {
+  // オーナー指示 2026-10-15: 当日(JST 0:00 以降)は不可(旧「当日は可・オーナー確定 3」を改定)。
+  it('過去の日・当日は null・前日までは可(共有関数と同じ境界)', () => {
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-21')).toBeNull()
-    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-20')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-20')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-19')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
   })
 
   it('壊れた days は null(型ガード)', () => {
@@ -588,7 +591,7 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     }
   })
 
-  // 2026-09-18: 保護者ページのバッジ「休み連絡済」/「教室確認済」の元。
+  // 2026-09-18: 保護者ページのバッジ「室長確認中」/「教室確認済」の元。
   it('表示範囲の休み連絡を absenceKey の単一フィールド範囲で引き、日付・限・確認済みだけを返す', async () => {
     const loadAbsenceNotices = vi.fn(async () => [
       { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 1, subject: '数学', lessonKind: 'regular', isTentative: false }, acknowledgedAt: null, studentId: STUDENT_ID },
@@ -695,9 +698,20 @@ describe('handleParentPortalPost: 休み連絡の検証順(400 → 409 → 429 �
     })
   })
 
-  it('当日のコマも受け付ける(オーナー確定 3)', async () => {
+  // ★オーナー指示 2026-10-15: 当日(JST 0:00 以降)のコマは受け付けず、電話の案内を返す。枠も消費しない。
+  it('当日のコマは 409 で「当日はお電話で」を返し、枠を消費せず保存もしない', async () => {
     const deps = createDeps()
     const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-09-13', slotNumber: 1 } }, deps)
+    expect(result).toEqual({ status: 409, body: { error: PARENT_ABSENCE_ERROR_SAME_DAY } })
+    expect(PARENT_ABSENCE_ERROR_SAME_DAY).toBe('当日の欠席連絡は教室にお電話にてご連絡ください。')
+    expect(deps.hasAbsenceNotice).not.toHaveBeenCalled()
+    expect(deps.consumeMessageQuota).not.toHaveBeenCalled()
+    expect(deps.saveMessage).not.toHaveBeenCalled()
+  })
+
+  it('翌日のコマは受け付ける', async () => {
+    const deps = createDeps()
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-09-14', slotNumber: 1 } }, deps)
     expect(result.status).toBe(200)
   })
 

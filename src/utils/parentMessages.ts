@@ -281,6 +281,8 @@ export type ParentContactHistoryStatus = 'confirmed' | 'unconfirmed'
 
 export type ParentContactHistoryRow = {
   id: string
+  // 生徒ごとの全履歴を開くのに使うだけ(DOM には出さない)。
+  studentId: string
   studentName: string
   createdAt: string
   absence: ParentAbsenceDetail
@@ -323,6 +325,7 @@ export function buildParentContactHistory(
     const status: ParentContactHistoryStatus = isUnprocessedParentMessage(entry, excludedIds) ? 'unconfirmed' : 'confirmed'
     return {
       id: item.id,
+      studentId: item.studentId,
       studentName: item.studentName,
       createdAt: item.createdAt,
       absence: item.absence,
@@ -342,6 +345,37 @@ export function buildParentContactHistory(
     confirmedCount += 1
     return confirmedCount <= limit
   })
+}
+
+// 生徒ごとの全履歴(オーナー指示 2026-10-15: 一覧は確認済 10 件までだが、その先の詳細として生徒ごとに全件を見られるように)。
+// 行の状態(確認済/未確認)・並び順・生徒名の解決は buildParentContactHistory と**同じ 1 本**を使い、確認済の件数制限だけ外す
+// (一覧と全履歴で同じ連絡の状態が食い違わないように。未確認の判定を別に書かない)。
+export function buildParentStudentContactHistory(
+  entries: readonly ParentMessageEntry[],
+  context: {
+    students: readonly StudentRow[]
+    studentId: string
+    pendingIds?: ReadonlySet<string>
+    hiddenIds?: ReadonlySet<string>
+  },
+): ParentContactHistoryRow[] {
+  if (!context.studentId) return []
+  return buildParentContactHistory(
+    entries.filter((entry) => entry.studentId === context.studentId),
+    { students: context.students, pendingIds: context.pendingIds, hiddenIds: context.hiddenIds, confirmedLimit: Number.MAX_SAFE_INTEGER },
+  )
+}
+
+// 全履歴を開く生徒の選択肢(名簿の表示名・名簿順)。名簿から消えた生徒は一覧の行の「全履歴」から開く。
+export function buildParentContactStudentOptions(students: readonly StudentRow[]): Array<{ studentId: string; studentName: string }> {
+  const options: Array<{ studentId: string; studentName: string }> = []
+  const seen = new Set<string>()
+  for (const student of students) {
+    if (!student.id || seen.has(student.id)) continue
+    seen.add(student.id)
+    options.push({ studentId: student.id, studentName: getStudentDisplayName(student) || PARENT_MESSAGE_STUDENT_NAME_FALLBACK })
+  }
+  return options
 }
 
 // 購読教室と違う教室の連絡を一覧に出さない(INV-08)。教室を切り替えた直後の 1 レンダーは、前の教室の連絡(entries)と

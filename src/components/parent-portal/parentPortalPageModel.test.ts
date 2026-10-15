@@ -6,7 +6,8 @@ import {
   PARENT_ABSENCE_BADGE_REPORTED,
   PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE,
   PARENT_ABSENCE_CONFIRM_NOTE_CANCEL,
-  PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY,
+  PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE,
+  PARENT_SCHEDULE_ABSENT_NO_MAKEUP_LABEL,
   PARENT_ABSENCE_CONFIRM_QUESTION,
   PARENT_ABSENCE_CONFLICT_MESSAGE,
   PARENT_ABSENCE_LIST_HINT,
@@ -53,6 +54,7 @@ import {
 import {
   PARENT_ABSENCE_ERROR_ALREADY_REPORTED,
   PARENT_ABSENCE_ERROR_NOT_REPORTABLE,
+  PARENT_ABSENCE_ERROR_SAME_DAY,
   PARENT_MESSAGE_ERROR_INVALID_INPUT,
   PARENT_PORTAL_ERROR_DISABLED,
   PARENT_PORTAL_ERROR_GONE,
@@ -186,8 +188,8 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
     const origin = { dateKey: '2026-09-21', slotNumber: 1 }
     expect(describeParentScheduleLesson(lesson({ kind: 'makeup', subject: '英語', makeupOrigin: origin }))).toEqual({ main: '英語', sub: '9/21 1限の振替' })
     expect(describeParentScheduleLesson(lesson({ kind: 'attended', makeupOrigin: origin }))).toEqual({ main: '数学', sub: '出席（9/21 1限の振替）' })
-    // 振無休は「お休み」だけ(「◯分 振替なし」は 2026-10-10 の文言整理で廃止)。
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: 'お休み' })
+    // 振無休は「振替無し休み」(オーナー指示 2026-10-15)。振替元の補足は付けない。
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: '振替無し休み' })
     // 元コマ不明なら日付だけ。
     expect(describeParentScheduleLesson(lesson({ kind: 'makeup', makeupOrigin: { dateKey: '2026-09-21', slotNumber: null } })).sub).toBe('9/21の振替')
     // 補足は 12 文字以内(スマホ幅で日付・時限の列と並べて 1 行に収まる長さ)。
@@ -202,8 +204,10 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
   })
 
   it('振替なし欠席・出席済み', () => {
-    // 「振替なし」の補足は出さない(2026-10-10 文言整理)。
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: 'お休み' })
+    // ★振無休は「振替無し休み」と出す(オーナー指示 2026-10-15)。「お休み」(振替あり/調整中)と見分けがつくこと。
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: PARENT_SCHEDULE_ABSENT_NO_MAKEUP_LABEL })
+    expect(PARENT_SCHEDULE_ABSENT_NO_MAKEUP_LABEL).toBe('振替無し休み')
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' })).main).not.toBe(describeParentScheduleLesson(lesson({ kind: 'absent' })).main)
     expect(describeParentScheduleLesson(lesson({ kind: 'attended' }))).toEqual({ main: '数学', sub: '出席済み' })
   })
 
@@ -375,7 +379,7 @@ describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices
     ])
   })
 
-  it('連絡済みの行はタップ不可で、未確認なら「休み連絡済」・確認済みなら「教室確認済」', () => {
+  it('連絡済みの行はタップ不可で、未確認なら「室長確認中」・確認済みなら「教室確認済」', () => {
     const rows = buildParentScheduleRows(days, '2026-09-13', [
       { dateKey: '2026-09-20', slotNumber: 1, acknowledged: false },
       { dateKey: '2026-09-20', slotNumber: 2, acknowledged: true },
@@ -387,6 +391,8 @@ describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices
       [4, false, 'none'],
     ])
     expect(describeParentAbsenceBadge('reported')).toBe(PARENT_ABSENCE_BADGE_REPORTED)
+    // オーナー指示 2026-10-15: 「休み連絡済」→「室長確認中」(赤表示は ParentPortalPage の CSS)。
+    expect(PARENT_ABSENCE_BADGE_REPORTED).toBe('室長確認中')
     expect(describeParentAbsenceBadge('acknowledged')).toBe(PARENT_ABSENCE_BADGE_ACKNOWLEDGED)
     expect(describeParentAbsenceBadge('none')).toBeNull()
   })
@@ -399,8 +405,10 @@ describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices
     expect(rows.every((row) => row.absenceStatus === 'none')).toBe(true)
   })
 
-  it('当日のコマもタップできる・過去の日はできない(オーナー確定 3)', () => {
-    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(true)
+  // ★オーナー指示 2026-10-15: 当日(JST 0:00 以降)のコマはタップできない(旧「当日も可・オーナー確定 3」を改定)。
+  it('前日まではタップできる・当日と過去の日はできない', () => {
+    expect(buildParentScheduleRows(days, '2026-09-19', [])[0].canReportAbsence).toBe(true)
+    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(false)
     expect(buildParentScheduleRows(days, '2026-09-21', [])[0].canReportAbsence).toBe(false)
   })
 
@@ -444,7 +452,7 @@ describe('休み連絡の確認モーダル', () => {
   })
 
   it('確認文と注意書き(確認済み表示・取り消しは電話)を出す', () => {
-    const described = describeParentAbsenceConfirm(target, '2026-09-13')
+    const described = describeParentAbsenceConfirm(target)
     expect(described.target).toBe('9月20日(土) 3限 16:20〜 英')
     expect(described.question).toBe(PARENT_ABSENCE_CONFIRM_QUESTION)
     expect(described.notes).toEqual([PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL])
@@ -452,13 +460,9 @@ describe('休み連絡の確認モーダル', () => {
     expect(described.notes[1]).toContain('お電話')
   })
 
-  // ★当日は教室が気づくのが遅れる恐れがあるので電話併用を促す(オーナー指示 2026-09-18)。
-  it('当日のコマだけ「電話でも連絡を」の注意を足す', () => {
-    const sameDay = describeParentAbsenceConfirm(target, '2026-09-20')
-    expect(sameDay.notes).toHaveLength(3)
-    expect(sameDay.notes[2]).toBe(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)
-    expect(sameDay.notes[2]).toContain('お電話')
-    expect(describeParentAbsenceConfirm(target, '2026-09-19').notes).toHaveLength(2)
+  // 当日のコマは連絡できない(オーナー指示 2026-10-15)。ページには電話の案内を常に出す(サーバーの 409 文言と同文)。
+  it('当日の欠席は電話で、の案内文', () => {
+    expect(PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE).toBe('当日の欠席連絡は教室にお電話にてご連絡ください。')
   })
 })
 
@@ -533,7 +537,9 @@ describe('保護者ページの文言(2026-10-10 文言整理)', () => {
     expect(PARENT_SCHEDULE_CLOSED_MESSAGE).toBe('教室お休み')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).toBe('この授業をお休みしますか？')
     expect(PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE).toBe('教室が確認すると「教室確認済」と表示されます。')
-    expect(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY).toBe('当日のご連絡です。「教室確認済」にならない場合はお電話ください。')
+    expect(PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE).toBe('当日の欠席連絡は教室にお電話にてご連絡ください。')
+    // 当日の注意(確認モーダル)は当日を押せなくなったので廃止(2026-10-15)。
+    expect(MODEL_TS).not.toContain('export const PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY')
     expect(PARENT_PORTAL_LOAD_FAILED_MESSAGE).toBe('読み込めませんでした。少し待ってから開き直してください。')
     expect(PARENT_ABSENCE_CONFLICT_MESSAGE).toBe('この授業はお休みの連絡ができません。ページを開き直してご確認ください。')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).not.toContain('?')
@@ -548,6 +554,14 @@ describe('サーバーの保護者向けエラー文言(functions/src/parentPort
     expect(PARENT_PORTAL_ERROR_GONE).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
     expect(PARENT_PORTAL_ERROR_DISABLED).toBe(PARENT_PORTAL_DISABLED_MESSAGE)
     expect(PARENT_ABSENCE_ERROR_NOT_REPORTABLE).toBe(PARENT_ABSENCE_CONFLICT_MESSAGE)
+    // 当日の 409(サーバー)とページの常時案内は同文(2026-10-15)。
+    expect(PARENT_ABSENCE_ERROR_SAME_DAY).toBe(PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE)
+  })
+
+  it('ページは当日の電話案内を常に出し、「室長確認中」バッジは赤', () => {
+    const PAGE_TSX = readFileSync(fileURLToPath(new URL('./ParentPortalPage.tsx', import.meta.url)), 'utf8')
+    expect(PAGE_TSX).toContain('<p className="pp-same-day-phone" role="note">{PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE}</p>')
+    expect(PAGE_TSX).toContain('.pp-row-absence-reported { color: #fff; background: #c62828; }')
   })
 
   it('二重連絡・不正な送信・405・500 の文言', () => {

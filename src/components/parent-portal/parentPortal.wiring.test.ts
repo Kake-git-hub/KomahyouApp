@@ -240,10 +240,49 @@ describe('「保護者連絡」ボタンの配線', () => {
   })
 
   it('履歴モーダルは件数 0 の早期 return を抜けて描画され、deps に入っている', () => {
-    expect(APP_TSX).toContain('<ParentContactHistoryModal rows={parentContactHistoryRows}')
+    expect(APP_TSX).toMatch(/<ParentContactHistoryModal\r?\n\s+rows=\{parentContactHistoryRows\}/u)
     const depsIndex = APP_TSX.indexOf('}, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry')
     const deps = APP_TSX.slice(depsIndex, depsIndex + 700)
     for (const dep of ['isParentContactHistoryOpen', 'parentContactHistoryRows', 'openParentMessagesFromHistory']) expect(deps).toContain(dep)
+  })
+})
+
+// 生徒ごとの全履歴(オーナー指示 2026-10-15)。一覧は確認済 10 件のまま、その先の詳細として生徒ごとの全件を見られる。
+describe('「保護者連絡」生徒ごとの全履歴の配線', () => {
+  const HISTORY_MODAL_TSX = readFileSync(fileURLToPath(new URL('./ParentContactHistoryModal.tsx', import.meta.url)), 'utf8')
+  const STORE_TS = readFileSync(fileURLToPath(new URL('../../integrations/firebase/parentPortal.ts', import.meta.url)), 'utf8')
+
+  it('読み込みは開いた時の 1 回だけ・条件は studentId の等値 1 つ(orderBy を足すと複合インデックスが要る)', () => {
+    const start = STORE_TS.indexOf('export async function fetchParentMessagesForStudent')
+    const body = STORE_TS.slice(start)
+    expect(start).toBeGreaterThan(0)
+    expect(body).toContain("where('studentId', '==', studentId),")
+    expect(body).not.toContain('orderBy(')
+    expect(body).not.toContain('onSnapshot(')
+    // doc 側の教室・生徒でも二重に絞る(INV-08)。
+    expect(body).toContain('if (entry.classroomId !== classroomId || entry.studentId !== studentId) continue')
+  })
+
+  it('全履歴は教室切替・ログアウトの全捨てと、履歴を開き直す/閉じるときに捨てる(他教室の生徒名を残さない)', () => {
+    const resetIndex = APP_TSX.indexOf('const resetParentAbsenceNoticeState = useCallback')
+    expect(APP_TSX.slice(resetIndex, resetIndex + 800)).toContain('setParentContactStudentHistory(null)')
+    const openIndex = APP_TSX.indexOf('const openParentContactHistory = useCallback')
+    expect(APP_TSX.slice(openIndex, openIndex + 200)).toContain('setParentContactStudentHistory(null)')
+    const closeIndex = APP_TSX.indexOf('const closeParentContactHistory = useCallback')
+    expect(APP_TSX.slice(closeIndex, closeIndex + 200)).toContain('setParentContactStudentHistory(null)')
+    // 読み込み途中で別の生徒・別の教室へ移ったら、遅れて届いた結果で上書きしない。
+    expect(APP_TSX).toContain('(isSameRequest(current) ? { ...current!, status: \'ready\', entries } : current)')
+    // 開いている教室と違う教室の全履歴は出さない(INV-08)。
+    expect(APP_TSX).toContain('if (!current || current.classroomId !== actingClassroomId) return null')
+  })
+
+  it('行は一覧と同じ組み立て(状態・除外条件)で、未確認の行は既存の休み連絡モーダルを開くだけ', () => {
+    expect(APP_TSX).toContain('rows: buildParentStudentContactHistory(selectParentMessagesForClassroom(merged, actingClassroomId), {')
+    expect(APP_TSX).toContain('onOpenUnconfirmed={openParentMessagesFromHistory}')
+    expect(HISTORY_MODAL_TSX).not.toContain('markParentMessagesNotified')
+    // 生徒 ID は DOM に出さない(select の値は並び順の番号)。
+    expect(HISTORY_MODAL_TSX).toContain('<option key={option.studentId} value={String(index)}>{option.studentName}</option>')
+    expect(HISTORY_MODAL_TSX).not.toMatch(/value=\{option\.studentId\}|\{row\.studentId\}/u)
   })
 })
 

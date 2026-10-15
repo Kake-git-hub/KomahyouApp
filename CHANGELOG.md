@@ -14,6 +14,14 @@
 
 ## 未リリース
 
+## v1.5.605 (2026-10-15)
+
+- feat: **保護者QR: 当日(JST 0:00 以降)のコマは休み連絡できないようにし、ページに「当日の欠席連絡は教室にお電話にてご連絡ください。」を赤字で常時表示**(オーナー指示 2026-10-15。旧「当日も可・オーナー確定 3」を改定)。共有純関数 `isParentLessonAbsenceReportable` を `dateKey > today` に変え、ページのタップ可否とサーバー POST 検証を同じ 1 関数のまま同時に変更。古い画面から当日を送ったときはサーバーが 409 で同じ電話案内を返す(`PARENT_ABSENCE_ERROR_SAME_DAY`・回数枠を消費しない)。到達しなくなった確認モーダルの当日注意は廃止 (parentSchedule.ts / functions/src/parentPortal.ts / generated/parentSchedule.ts / ParentPortalPage.tsx / parentPortalPageModel.ts)
+- feat: **保護者QR: 振無休のコマを「振替無し休み」と表示**(オーナー指示 2026-10-15。2026-10-10 の文言整理で「お休み」だけにしていたが振替ありの休みと見分けられなかった) (parentPortalPageModel.ts)
+- feat: **保護者QR: 連絡済み・室長未確認のバッジを「休み連絡済」→ 赤の「室長確認中」に**(オーナー指示 2026-10-15。「教室確認済」は据え置き) (parentPortalPageModel.ts / ParentPortalPage.tsx)
+- feat: **「保護者連絡」の履歴に生徒ごとの全履歴**(オーナー指示 2026-10-15「表示は 10 件までだが、生徒毎の全履歴もその先の詳細として見れるように」)。各行の「全履歴」または一覧下の生徒選択から、その生徒の休み連絡を件数制限なしで表示。読み取りは開いた時に 1 回(`where('studentId','==')` のみ・複合インデックス不要)、ライブ購読を重ねて状態を最新に。行の組み立ては一覧と同じ純関数(`buildParentStudentContactHistory`)、未確認の行は既存の四択モーダルを開くだけ(INV-06)・教室切替で破棄(INV-08)。ルール変更なし (ParentContactHistoryModal.tsx / App.tsx / parentMessages.ts / integrations/firebase/parentPortal.ts / App.css)
+- docs: spec-parent-portal §0-7 を追加(§0-5/§0-6 の該当行を改定)。確認リスト第55版に q-7〜q-9 を追加し、結果待ちの q-1・q-2 を新しい挙動へ合わせた(版は据え置き)。進行中テーマ台帳 parent-portal-qr を更新 (verificationChecklist.ts / developmentStatusLedger.ts)
+
 ## v1.5.604 (2026-10-15)
 
 - docs: **確認リスト第55版(v1.5.604)**: 受付 20261015-151056959-a8890098 で OK の c-5・tp-47・tp-53・tp-54 を外した(tp-47・tp-53 はテスト教室の表示からも消える)。q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 は結果待ちのまま。進行中テーマ台帳(template-diff-apply / user-request-issue-75)と spec-developer-report E-2 を追随 (verificationChecklist.ts / verificationChecklist.test.ts / developmentStatusLedger.ts / docs/spec-developer-report.md)

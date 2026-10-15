@@ -3,6 +3,7 @@ import {
   PARENT_ABSENCE_CONFIRM_CANCEL_LABEL,
   PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL,
   PARENT_ABSENCE_LIST_HINT,
+  PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE,
   PARENT_ABSENCE_SENDING_LABEL,
   PARENT_ABSENCE_SENT_MESSAGE,
   PARENT_MESSAGE_NETWORK_ERROR_MESSAGE,
@@ -73,7 +74,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const [refreshing, setRefreshing] = useState(false)
   const [inlineError, setInlineError] = useState('')
 
-  // 送信直後に「休み連絡済」を出すための楽観的な上乗せ(次の GET で正式な値に置き換わる)。
+  // 送信直後に「室長確認中」を出すための楽観的な上乗せ(次の GET で正式な値に置き換わる)。
   const [optimisticNotices, setOptimisticNotices] = useState<ParentAbsenceNotice[]>([])
   const [absenceTarget, setAbsenceTarget] = useState<ParentAbsenceTarget | null>(null)
   const [sending, setSending] = useState(false)
@@ -207,7 +208,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const scheduleRows = buildParentScheduleRows(schedule.days, schedule.today, notices)
   const hasTentativeRow = scheduleRows.some((row) => row.isTentative)
   const hasReportableRow = scheduleRows.some((row) => row.canReportAbsence)
-  const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget, schedule.today) : null
+  const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget) : null
 
   return (
     <div className="pp-container">
@@ -219,6 +220,9 @@ export default function ParentPortalPage({ token }: { token: string }) {
       <ul className="pp-notes">
         {PARENT_PORTAL_NOTES.map((note) => <li key={note}>{note}</li>)}
       </ul>
+
+      {/* 当日(JST 0:00 以降)のコマは連絡できない。電話の案内を常に出す(オーナー指示 2026-10-15)。 */}
+      <p className="pp-same-day-phone" role="note">{PARENT_ABSENCE_SAME_DAY_PHONE_MESSAGE}</p>
 
       {sentMessage ? (
         <div className="pp-sent-banner" role="status">
@@ -358,6 +362,7 @@ const baseStyles = `
 
   .pp-notes { list-style: none; margin: 10px 12px 0; padding: 10px 12px; background: #fff8e1; border: 1px solid #f1e2a8; border-radius: 8px; font-size: 13px; color: #5a4a00; display: grid; gap: 4px; }
   .pp-notes li::before { content: '・'; }
+  .pp-same-day-phone { margin: 8px 12px 0; padding: 8px 12px; border: 1px solid #f5c2c7; background: #fdecee; color: #b00020; border-radius: 8px; font-size: 13px; font-weight: 700; }
 
   .pp-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #fee; color: #c00; font-size: 14px; border-radius: 8px; }
   .pp-sent-banner { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #e8f5e8; border: 1px solid #cfe6cf; color: #1f5d1f; font-size: 15px; font-weight: 700; border-radius: 8px; }
@@ -403,7 +408,7 @@ const baseStyles = `
   .pp-row-tentative { font-size: 11px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 0 6px; }
   /* 休み連絡のバッジ。行が折り返してもよい(バッジが付く行だけの例外・オーナー了承 2026-09-18)。 */
   .pp-row-absence { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 6px; white-space: nowrap; }
-  .pp-row-absence-reported { color: #7a3b00; background: #ffe0b2; }
+  .pp-row-absence-reported { color: #fff; background: #c62828; }
   .pp-row-absence-acknowledged { color: #fff; background: #2a7e2a; }
   .pp-row-closed, .pp-row-status { color: #666; background: #f6f6f6; }
   .pp-row-closed .pp-lesson-main, .pp-row-status .pp-lesson-main { font-weight: 400; }
