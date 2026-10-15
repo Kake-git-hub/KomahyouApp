@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -4687,18 +4687,19 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
     // 既に二重になっている週も開き直しで 1 人になる。その机の管理授業にテンプレの講師が居れば差分反映と同じくその講師(非 manual)にする。
     // 起動時の自己修復(reconcileSubmittedTeacherPlacements)は「その講師が既に居るコマ」には置き直さないので二重化に戻らない。
     // 2 回当てる: 下の配置ループの前(空いた机にテンプレの足場講師・授業が入れるように)と後(ループで新しく置かれた管理授業の講師も数える)。
+    // 外した後にその机へ置く講師は差分反映と同じ権威関数 resolveSupersededQrDeskTeacherFields(同じ机番号のテンプレの講師・無ければ講師なし。
+    // regression-reviewer M-1: 2 か所で別々に決めると差分反映と読み込み時の再マージで結果が食い違う)。戻り値は外した机の数。
+    const cellTemplateDesksForQr = managedCell.desks.map((managedDesk, idx) => ({ ...managedTeacherRef(managedDesk, idx), lesson: managedDesk.lesson }))
     const dropQrTeachersSupersededByTemplate = () => {
-      for (const index of findQrTeacherDesksSupersededByTemplate(nextDesks, managedCell.desks.map((managedDesk, idx) => ({ ...managedTeacherRef(managedDesk, idx), lesson: managedDesk.lesson })), aliasesOf)) {
+      const indexes = findQrTeacherDesksSupersededByTemplate(nextDesks, cellTemplateDesksForQr, aliasesOf)
+      for (const index of indexes) {
         const desk = nextDesks[index]
-        const managedDesk = desk.lesson && isManagedLesson(desk.lesson) ? managedDesksByLessonId.get(desk.lesson.id) : undefined
         // 自己修復が「配置済み」と数えるための記録(types.ts)。差分反映と同じ形で書く(不動点)。
         desk.scheduleRegistrationSupersededByTemplate = buildScheduleRegistrationSupersession(desk)
-        clearTeacherAssignment(desk)
-        if (managedDesk?.teacher.trim()) {
-          desk.teacher = managedDesk.teacher
-          desk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
-        }
+        Object.assign(desk, resolveSupersededQrDeskTeacherFields(cellTemplateDesksForQr[index]))
+        delete desk.teacherUnavailableWarning
       }
+      return indexes.length
     }
     dropQrTeachersSupersededByTemplate()
     // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted, manual-replaced)
@@ -4777,31 +4778,37 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       desk.teacherAssignmentTeacherId = undefined
     })
 
+    // テンプレの講師だけの机(足場)を空き机へ置く。下のループと、QR 講師の重複の 2 回目で机が空いたときの置き直し(regression-reviewer L-1・
+    // 再マージ 1 回で不動点にする)の両方から呼ぶ。
+    const placeManagedTeacherOnlyDesk = (managedDesk: DeskCell, mi: number) => {
+      if (!managedDesk.teacher.trim()) return
+      if (consumedManagedTeacherIndexes.has(mi)) return
+
+      // Skip if this teacher is already present on any desk in the cell
+      const alreadyPresent = nextDesks.some((desk) => desk.teacher === managedDesk.teacher)
+      if (alreadyPresent) return
+
+      // Skip if this teacher was explicitly deleted from any desk in the cell
+      if (isDeletedTeacher(managedDesk, mi)) return
+
+      // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
+      const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
+
+      if (!targetDesk) return
+
+      targetDesk.teacher = managedDesk.teacher
+      targetDesk.manualTeacher = false
+      targetDesk.teacherAssignmentSource = undefined
+      targetDesk.teacherAssignmentSessionId = undefined
+      targetDesk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
+      targetDesk.lesson = undefined
+    }
+
     for (let mi = 0; mi < managedCell.desks.length; mi++) {
       const managedDesk = managedCell.desks[mi]
       if (!managedDesk.lesson) {
-        if (!managedDesk.teacher.trim()) continue
-        if (consumedManagedTeacherIndexes.has(mi)) continue
-
-        // Skip if this teacher is already present on any desk in the cell
-        const alreadyPresent = nextDesks.some((desk) => desk.teacher === managedDesk.teacher)
-        if (alreadyPresent) continue
-
-        // Skip if this teacher was explicitly deleted from any desk in the cell
-        if (isDeletedTeacher(managedDesk, mi)) continue
-
-        // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
-        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
-          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
-
-        if (!targetDesk) continue
-
-        targetDesk.teacher = managedDesk.teacher
-        targetDesk.manualTeacher = false
-        targetDesk.teacherAssignmentSource = undefined
-        targetDesk.teacherAssignmentSessionId = undefined
-        targetDesk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
-        targetDesk.lesson = undefined
+        placeManagedTeacherOnlyDesk(managedDesk, mi)
         continue
       }
 
@@ -4821,8 +4828,11 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       targetDesk.lesson = cloneDeskLesson(managedDesk.lesson)
     }
 
-    // QR 講師の重複の 2 回目(配置ループで置かれた管理授業の講師も見る。上の定義を参照)。
-    dropQrTeachersSupersededByTemplate()
+    // QR 講師の重複の 2 回目(配置ループで置かれた管理授業の講師も見る。上の定義を参照)。机が空いたら足場講師の置き直しをもう一度回す
+    // (regression-reviewer L-1: 回さないと 2 回目の再マージで初めて足場が入り、1 回で不動点にならない)。
+    if (dropQrTeachersSupersededByTemplate() > 0) {
+      managedCell.desks.forEach((managedDesk, mi) => { if (!managedDesk.lesson) placeManagedTeacherOnlyDesk(managedDesk, mi) })
+    }
 
     return {
       ...cell,
@@ -5490,6 +5500,8 @@ export function reconcileSubmittedTeacherPlacements(params: {
     //   「配置済み」に数える。数えないと、その講習の QR 机が全部テンプレに寄せられた講師を「提出済みなのに未配置」と誤判定し、
     //   手で講師を替えた(manual-replaced)コマへ別の空き机で置き直す(2026-08-02 の手動編集の巻き戻しと同型・INV-02)。
     //   講師が居るコマには置かない(alreadyAssigned)ので寄せたコマ自体は二重化しないが、他のコマが対象になる。
+    //   ★数えるのは**そのコマに同じ講師がまだ居る間だけ**(regression-reviewer M-2): 後でテンプレからその講師が消えると記録だけが残り、
+    //   出勤予定として使う QR が戻らないまま講師がそのコマから消える。居なくなった記録は無視し、従来どおり自己修復が置き直す。
     const supersededTeacherKeysInSession = new Set<string>()
     for (const week of workingWeeks) {
       for (const cell of week) {
@@ -5499,8 +5511,12 @@ export function reconcileSubmittedTeacherPlacements(params: {
             && desk.teacherAssignmentTeacherId) {
             placedTeacherIds.add(desk.teacherAssignmentTeacherId)
           }
-          if (desk.scheduleRegistrationSupersededByTemplate?.sessionId === session.id && desk.scheduleRegistrationSupersededByTemplate.teacherId) {
-            supersededTeacherKeysInSession.add(desk.scheduleRegistrationSupersededByTemplate.teacherId)
+          const supersession = desk.scheduleRegistrationSupersededByTemplate
+          if (supersession?.sessionId === session.id && supersession.teacherId) {
+            const teacherRow = params.teachers.find((entry) => [entry.id, getTeacherDisplayName(entry), entry.name.trim()].includes(supersession.teacherId))
+            const keys = new Set([supersession.teacherId, ...(teacherRow ? [teacherRow.id, getTeacherDisplayName(teacherRow), teacherRow.name.trim()] : [])])
+            const stillPresent = cell.desks.some((other) => other.teacher.trim() !== '' && (keys.has(other.teacher.trim()) || (other.teacherAssignmentTeacherId ? keys.has(other.teacherAssignmentTeacherId) : false)))
+            if (stillPresent) supersededTeacherKeysInSession.add(supersession.teacherId)
           }
           if (isDeletedTeacherTombstone(desk)
             && desk.teacherAssignmentSessionId === session.id

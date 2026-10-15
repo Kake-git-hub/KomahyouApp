@@ -859,6 +859,42 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
       expect(deskOf(kept, 2)).toMatchObject({ teacher: '佐藤', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'session-1' })
       expect(cellOf(kept).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
     })
+
+    // regression-reviewer M-1（2026-10-15）: 「外した後に誰を置くか」も 1 か所（resolveSupersededQrDeskTeacherFields）。QR 机にテンプレ由来でない生徒
+    // （講習）が居る形で、読み込み時の再マージと差分反映が同じ結果（同じ机番号のテンプレの講師）になり、生徒が講師なしにならない。
+    it('再マージ: QR 机に講習生徒が居ても、外した後はテンプレの同じ机番号の講師が入る（差分反映と同じ結果・講師なしにならない）', () => {
+      const rows = [row('r0', 't1', 'sA', '数'), row('r1', 't3', 'sC', '数'), row('r2', 't2')]
+      let week = buildWeek(rows)
+      week = mutateDesk(week, 2, (desk) => ({ ...desk, ...qr('佐藤', special(`${desk.id}_special`)) }))
+      const once = remerge([week], rows, [])
+      expect(deskOf(once, 2)).toMatchObject({ teacher: '鈴木', manualTeacher: false, scheduleRegistrationSupersededByTemplate: { sessionId: 'session-1', teacherId: 't3' } })
+      expect(liveNames(deskOf(once, 2))).toEqual(['sM'])
+      expect(cellOf(once).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+      // 差分反映（旧テンプレ OLD_ROWS → rows）でも同じ机の講師は鈴木
+      let old = buildWeek(OLD_ROWS)
+      old = mutateDesk(old, 2, (desk) => ({ ...desk, ...qr('佐藤', special(`${desk.id}_special`)) }))
+      const applied = applyDiff({ week: old, newRows: rows })
+      expect(deskOf(applied.nextWeeks, 2)).toMatchObject({ teacher: '鈴木', manualTeacher: false })
+      expect(liveNames(deskOf(applied.nextWeeks, 2))).toEqual(['sM'])
+    })
+
+    // regression-reviewer L-1（2026-10-15）: 2 回目の判定で机が空いたら足場講師の置き直しをもう一度回す＝再マージ 1 回で不動点。
+    it('再マージ: テンプレの授業がまだ盤面に無く 2 回目の判定で QR 机が空く形でも、同じ再マージの中で足場講師が入り 1 回で不動点になる', () => {
+      // テンプレ: 机0=鈴木（講師だけ）・机1=佐藤(C)・机2=田中（講師だけ）。盤面: 机0=QR 佐藤（講師だけ）・机1=空・机2=空。
+      const rows = [row('r0', 't2'), row('r1', 't3', 'sC', '数'), row('r2', 't1')]
+      const week = buildWeek(OLD_ROWS).map((cell) => (cell.id !== CELL_ID ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk, index) => (index === 0
+          ? { ...desk, ...qr('佐藤'), lesson: undefined }
+          : { ...desk, teacher: '', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: undefined, lesson: undefined })),
+      }))
+      const once = remerge([week], rows, [])
+      // 机の並びはテンプレの机番号と一致しない（足場は「先頭の空き机」へ・L-4）が、3 人とも 1 机ずつ居て QR 机は同じ机番号のテンプレの講師（鈴木）になる
+      expect(cellOf(once).desks.map((desk) => desk.teacher)).toEqual(['鈴木', '田中', '佐藤'])
+      expect(cellOf(once).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+      expect(deskOf(once, 0).scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'session-1', teacherId: 't3' })
+      expect(cellOf(remerge(once, rows, []))).toEqual(cellOf(once))
+    })
   })
 
   it('条件 7：欠席で抑止された通常生徒は上段に湧かない', () => {

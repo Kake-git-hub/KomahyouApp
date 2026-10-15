@@ -30,6 +30,7 @@ import {
   computeTemplateDiffApplyForBoard,
   reconcileSubmittedTeacherPlacements,
   repackTeacherOnlyDesks,
+  remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import { buildTemplatePendingDeskKey, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -337,6 +338,24 @@ describe('QR 提出講師の起動時自己修復（reconcileSubmittedTeacherPla
     const stripped = diff.nextWeeks.map((week) => week.map((item) => ({ ...item, desks: item.desks.map((desk) => { const { scheduleRegistrationSupersededByTemplate: _omit, ...rest } = desk; return rest }) })))
     const rerun = reconcileSubmittedTeacherPlacements({ weeks: stripped, ...params })
     expect(rerun.placedCount).toBe(1)
+  })
+
+  // regression-reviewer M-2（2026-10-15）: 記録が数えられるのは「そのコマに同じ講師がまだ居る間」だけ。後でテンプレからその講師が消えたら、
+  // 記録は無視され、従来どおり自己修復が QR を置き直す（出勤予定として使う QR がそのコマから消えたままにならない）。
+  it('寄せた後にテンプレからその講師が消えたら、記録は数えず自己修復がそのコマへ QR を置き直す', () => {
+    const { diff } = pendingWithQrTeacher(NEW_ROWS)
+    // テンプレから田中を外す（机1 を佐藤(B) に）→ 再マージで田中がコマから消え、記録だけが机0 に残る
+    const rowsWithoutTanaka = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
+    const remerged = remergeBoardWeeksWithManagedData(diff.nextWeeks, { classroomSettings: settings(), teachers, students, regularLessons: rowsWithoutTanaka, suppressedRegularLessonOccurrences: diff.addedSuppressedRegularLessonOccurrences, todayKey: '2026-09-29' })
+    const cell = cellOf(remerged)
+    expect(cell.desks.some((desk) => desk.teacher === '田中')).toBe(false)
+    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: rowsWithoutTanaka, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
+    const repaired = reconcileSubmittedTeacherPlacements({ weeks: remerged, ...params })
+    expect(repaired.placedCount).toBe(1)
+    const repairedCell = cellOf(repaired.nextWeeks)
+    expect(repairedCell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+    expect(repairedCell.desks.find((desk) => desk.teacher === '田中')).toMatchObject({ teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
   })
 
   it('未配置の提出講師を置き直すときも、上段の空いた保留の机は置き先にしない（渡さないと置いてしまう＝回帰の確認）', () => {

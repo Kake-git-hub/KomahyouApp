@@ -109,6 +109,21 @@ export function buildScheduleRegistrationSupersession(desk: Pick<DeskCell, 'teac
   return { sessionId: desk.teacherAssignmentSessionId ?? '', teacherId: desk.teacherAssignmentTeacherId?.trim() || desk.teacher.trim() }
 }
 
+/**
+ * QR 机の講師を外した後にその机に置く講師（regression-reviewer M-1・2026-10-15: 「外す机」だけでなく「外した後に誰を置くか」も 1 か所で決める）。
+ * そのコマのテンプレ（抑止・strip 後）の**同じ机番号**の講師（テンプレ足場扱い・非 manual）。居なければ講師なし。差分反映と再マージの両方がこれを使う。
+ */
+export function resolveSupersededQrDeskTeacherFields(templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined): TemplateDeskTeacherFields {
+  const templateTeacher = templateDesk?.teacher?.trim() ? templateDesk.teacher : ''
+  return {
+    teacher: templateTeacher,
+    manualTeacher: false,
+    teacherAssignmentSource: undefined,
+    teacherAssignmentSessionId: undefined,
+    teacherAssignmentTeacherId: templateTeacher ? templateDesk?.teacherAssignmentTeacherId : undefined,
+  }
+}
+
 export function findQrTeacherDesksSupersededByTemplate(
   desks: ReadonlyArray<TemplateDeskTeacherFields & Pick<DeskCell, 'lesson'>>,
   templateDesks: ReadonlyArray<Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId' | 'lesson'>>,
@@ -1708,22 +1723,16 @@ function applyTemplateDiffToCell(context: {
   //    findQrTeacherDesksSupersededByTemplate＝再マージと同じ権威関数）。その机のテンプレに講師が居ればその講師（テンプレ足場扱い）、居なければ講師なし。
   for (const index of findQrTeacherDesksSupersededByTemplate(nextDesks, templateDesks, context.teacherAliases)) {
     const templateDesk = templateDesks[index]
-    const templateTeacher = templateDesk?.teacher?.trim() ? templateDesk.teacher : ''
+    const fields = resolveSupersededQrDeskTeacherFields(templateDesk)
     const supersession = buildScheduleRegistrationSupersession(nextDesks[index])
     nextDesks[index] = {
-      ...applyTeacherFields(nextDesks[index], {
-        teacher: templateTeacher,
-        manualTeacher: false,
-        teacherAssignmentSource: undefined,
-        teacherAssignmentSessionId: undefined,
-        teacherAssignmentTeacherId: templateTeacher ? templateDesk.teacherAssignmentTeacherId : undefined,
-      }),
+      ...applyTeacherFields(nextDesks[index], fields),
       // 自己修復が「配置済み」と数えるための記録（types.ts）。再マージも同じ形で書く。
       scheduleRegistrationSupersededByTemplate: supersession,
     }
     summary.qrTeacherRemoved += 1
     // 上の kept-qr の数え方（テンプレ机に講師が居るときだけ数える）と対にする。
-    if (templateTeacher) summary.qrTeacherKept -= 1
+    if (fields.teacher) summary.qrTeacherKept -= 1
   }
 
   return {
