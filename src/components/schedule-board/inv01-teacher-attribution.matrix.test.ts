@@ -876,7 +876,7 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
   function saveToSchedule(week: SlotCell[], newRows: RegularLessonRow[]) {
     const saved = computeTemplateDiffApplyForBoard({
       weeks: [week], classroomSettings: diffSettings, teachers, students, regularLessons: newRows,
-      effectiveStartDate: FRI, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-07-20T00:00:00.000Z',
+      effectiveStartDate: FRI, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-07-20T00:00:00.000Z', manualMakeupAdjustments: {},
     })
     const remerge = (weeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(weeks, {
       classroomSettings: diffSettings, teachers, students, regularLessons: newRows, suppressedRegularLessonOccurrences: saved.addedSuppressedRegularLessonOccurrences, todayKey: '2026-07-20',

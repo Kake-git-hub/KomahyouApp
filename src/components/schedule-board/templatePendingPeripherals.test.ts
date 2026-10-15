@@ -154,7 +154,7 @@ function applyDiff(week: SlotCell[], newRows: RegularLessonRow[] = NEW_ROWS) {
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [],
     templatePendingDesks: {},
-    createdAt: '2026-09-29T10:00:00.000Z',
+    createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
   })
 }
 

@@ -204,7 +204,7 @@ function buildPendingBoard(column: LowerColumn) {
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [],
     templatePendingDesks: {},
-    createdAt: '2026-09-29T10:00:00.000Z',
+    createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
   })
   const cell = diff.nextWeeks[0].find((item) => item.id === CELL_ID)!
   const deskId = cell.desks[column.pendingDeskIndex].id
@@ -508,7 +508,7 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [],
     templatePendingDesks: {},
-    createdAt: '2026-09-29T10:00:00.000Z',
+    createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
   })
   const afterState: BoardState = { weeks: diff.nextWeeks, pending: diff.nextPendingDesks }
   const desk = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
@@ -541,7 +541,7 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
     const before: BoardState = { weeks: [crowded], pending: {} }
     const saved = computeTemplateDiffApplyForBoard({
       weeks: [crowded], classroomSettings: settings(), teachers, students, regularLessons: NEW_ROWS_TWO_IN_DESK1,
-      effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z',
+      effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     const after: BoardState = { weeks: saved.nextWeeks, pending: saved.nextPendingDesks }
     const desk1 = saved.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[1]

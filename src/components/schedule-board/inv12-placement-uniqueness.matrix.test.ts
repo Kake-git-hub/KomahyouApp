@@ -354,7 +354,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
       effectiveStartDate: DATE,
       suppressedRegularLessonOccurrences: suppressed,
       templatePendingDesks: options.pendingDesks ?? {},
-      createdAt: '2026-09-29T10:00:00.000Z',
+      createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     // 保存と同じ抑止: 保存前の抑止から Q36 で外した分を除き、Q21-11 / Q35 で足した分を加える。
     const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
@@ -542,7 +542,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     const savedSettings = settings({ templateFreezeBeforeDate: DATE })
     const saved = computeTemplateDiffApplyForBoard({
       weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
-      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z',
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
     expect(liveOnDay(saved.nextWeeks).map(() => 1)).toHaveLength(1)
@@ -574,7 +574,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
     const save = (slotFilter: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']) => computeTemplateDiffApplyForBoard({
       weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
-      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-14T10:00:00.000Z', slotFilter,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-14T10:00:00.000Z', manualMakeupAdjustments: {}, slotFilter,
     })
     const scoped = save({ slotKeys: new Set([buildTemplateSlotKey(3, 4), buildTemplateSlotKey(3, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) })
     const full = save(undefined)

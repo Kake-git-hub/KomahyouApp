@@ -351,8 +351,17 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(byDiff).toContain('const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })')
     const plan = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
     expect(plan).toContain('computeTemplateDiffApplyForBoard({')
-    // Q40: 在庫台帳は計画関数に渡して読むだけ（根拠 (c)・取り下げ M-2）。書くのは保存本体だけ。
-    expect(plan).toContain('manualMakeupAdjustments,\n    })')
+    // Q40: 在庫台帳・抑止した origin は計画関数に渡して読むだけ（根拠 (b)・取り下げ M-2）。書くのは保存本体だけ。
+    expect(plan).toContain('manualMakeupAdjustments,\n      suppressedMakeupOrigins,\n    })')
     expect(plan).not.toMatch(/filterTemplateOverwriteHolidayDates\(/)
+    // Q40-1 根拠 (b) は在庫の正本 collectMakeupOriginDatesByKey を、取り下げ後の台帳・保存後の盤面（上段＋保留の下段）・同じ抑止で呼ぶ（監査 H-A/M-A・判定を在庫と分けない）。
+    const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// Q36 の反復本体')
+    expect(entry).toContain('resolveLedgerOriginDates: (ledgerAfterRemovals) => collectMakeupOriginDatesByKey({')
+    expect(entry).toContain('manualAdjustments: ledgerAfterRemovals, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(params.students),')
+    expect(entry).toContain('includeAbsentMakeupOrigins: true, templatePendingDesks: run.diff.nextPendingDesks,')
+    expect(entry).toContain('manualMakeupAdjustments: MakeupOriginMap\n')
+    // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の反復の絞り込みを書き換えない・監査 M-1）。
+    expect(entry).not.toMatch(/params\.slotFilter\s*=/)
+    expect(entry).toContain('slotFilter: settleSlotFilter,')
   })
 })

@@ -193,7 +193,7 @@ function applyDiff(params: {
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: params.suppressed ?? [],
     templatePendingDesks: params.pending ?? {},
-    createdAt: '2026-09-29T10:00:00.000Z',
+    createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
   })
   return result
 }
@@ -556,7 +556,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
       effectiveStartDate: EFFECTIVE,
       suppressedRegularLessonOccurrences: [],
       templatePendingDesks: {},
-      createdAt: 'x',
+      createdAt: 'x', manualMakeupAdjustments: {},
     })
     expect(result.nextWeeks[0]).toBe(previousWeek)
     const before = week.filter((cell) => cell.dateKey < EFFECTIVE)
@@ -1964,7 +1964,7 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
     effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [],
     templatePendingDesks: {},
-    createdAt: 'x',
+    createdAt: 'x', manualMakeupAdjustments: {},
     slotFilter,
   })
 
@@ -2041,7 +2041,7 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
   const weekWithCopyAtSlot3 = () => mutateDesk(loadedWeek([KEY_A_SLOT5]), 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_3', studentSlots: [entry('sA', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }), null] } }), SLOT3_CELL_ID)
   const runScoped = (week: SlotCell[], newRows: RegularLessonRow[], slotFilter: TemplateDiffSlotFilter | undefined, pending: TemplatePendingDeskMap = {}) => computeTemplateDiffApplyForBoard({
     weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: newRows, effectiveStartDate: EFFECTIVE,
-    suppressedRegularLessonOccurrences: [KEY_A_SLOT5], templatePendingDesks: pending, createdAt: 'x', slotFilter,
+    suppressedRegularLessonOccurrences: [KEY_A_SLOT5], templatePendingDesks: pending, createdAt: 'x', manualMakeupAdjustments: {}, slotFilter,
   })
 
   it('Q39-9 superseded: 範囲 {水4, 水5} の外（3 限）に A の写しがあっても、A が関わる変更なのでその日は全コマ→ 写しは外れ A は 4 限の 1 か所。再マージ 2 回でも不動点', () => {

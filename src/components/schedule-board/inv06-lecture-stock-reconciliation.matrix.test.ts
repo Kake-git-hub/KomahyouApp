@@ -233,7 +233,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
       effectiveStartDate: DATE,
       suppressedRegularLessonOccurrences: [],
       templatePendingDesks: {},
-      createdAt: '2026-09-29T10:00:00.000Z',
+      createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     const deskId = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0].id
     const key = buildTemplatePendingDeskKey(CELL_ID, deskId)

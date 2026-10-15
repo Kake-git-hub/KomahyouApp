@@ -7,7 +7,7 @@ import { buildMovedSourceStatusEntry, prepareStudentForMove } from './ScheduleBo
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import type { TemplateDiffTemplateCell } from './templateDiffApply'
-import { buildMakeupStockKey, type ManualMakeupOrigin } from './makeupStock'
+import { buildOriginToken, type ManualMakeupOrigin } from './makeupStock'
 import {
   collectOrphanedMakeups,
   planWholeDayTransferPlacements,
@@ -15,13 +15,15 @@ import {
   resolveWholeDayTransferDestination,
   extendTemplateDiffSlotFilterWithCells,
   TEMPLATE_TRANSFER_STOCK_REASON,
+  type MakeupOriginLedger,
 } from './templateTransferFollow'
 
 const WED = '2026-10-07'
 const THU = '2026-10-08'
 const EFFECTIVE = WED
 const settings = (extra: Partial<ClassroomSettings> = {}) => ({ closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2, ...extra }) as ClassroomSettings
-const resolveStockKey = (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject'>) => buildMakeupStockKey(student.managedStudentId ?? student.name, student.subject)
+/** 在庫の正本の代役: 渡された台帳の origin をそのままトークンにする（本物は collectMakeupOriginDatesByKey・matrix で配線を検証）。 */
+const ledgerTokens = (ledger: MakeupOriginLedger) => Object.fromEntries(Object.entries(ledger).map(([key, origins]) => [key, origins.map((origin) => buildOriginToken(origin.dateKey, origin.slotNumber))]))
 
 function student(id: string, name: string, extra: Partial<StudentEntry> = {}): StudentEntry {
   return { id, name, managedStudentId: id.replace(/_.*$/u, ''), grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', ...extra }
@@ -48,7 +50,7 @@ const labelWed5 = '2026/10/7(水) 5限'
 const rowWithA = { id: 'r', schoolYear: 2026, teacherId: 't1', student1Id: 'sA', subject1: '数', startDate: '', endDate: '', student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5 }
 
 type CollectParams = Parameters<typeof collectOrphanedMakeups>[0]
-const collect = (params: Partial<CollectParams> & Pick<CollectParams, 'weeks' | 'templateCells'>) => collectOrphanedMakeups({ regularLessons: [], manualMakeupAdjustments: {}, resolveStockKey, effectiveStartDate: EFFECTIVE, ...params })
+const collect = (params: Partial<CollectParams> & Pick<CollectParams, 'weeks' | 'templateCells'>) => collectOrphanedMakeups({ regularLessons: [], manualMakeupAdjustments: {}, resolveLedgerOriginDates: ledgerTokens, effectiveStartDate: EFFECTIVE, ...params })
 
 describe('collectOrphanedMakeups（Q40-1）', () => {
   // 盤面: 木 5限 机 1 に A の振替（振替元 水 10/7 5限）。水 5限 机 1 は空（A は移送済み）。
@@ -61,7 +63,7 @@ describe('collectOrphanedMakeups（Q40-1）', () => {
   const templateWithA = [templateCellOf(WED, 5, [desk('tw5d1', '田中', [student('sA_t', '青木'), null])])]
   const templateAtSlot3 = [templateCellOf(WED, 5, [desk('tw5d1', '田中', [null, null])]), templateCellOf(WED, 3, [desk('tw3d1', '', [student('sA_t', '青木'), null])])]
 
-  it('新テンプレが振替元の日に生徒を持たず、会計記録も台帳の origin も無ければ根拠を失った振替（時限・机・席つきで返る）。台帳の取り下げは無し', () => {
+  it('新テンプレが振替元の日に生徒を持たず、在庫の正本もその日の origin を持たなければ根拠を失った振替（時限・机・席つきで返る）。台帳の取り下げは無し', () => {
     const result = collect({ weeks: board(), templateCells: templateWithoutA })
     expect(result.removals).toHaveLength(1)
     expect(result.removals[0]).toMatchObject({ cellId: `${THU}_5`, deskId: 't5d1', seatIndex: 0, sourceDateKey: WED, sourceSlotNumber: 5 })
@@ -90,18 +92,32 @@ describe('collectOrphanedMakeups（Q40-1）', () => {
     expect(collect({ regularLessons: [{ ...rowWithA, dayOfWeek: 4 }], weeks: board(), templateCells: emptyTemplate }).removals).toHaveLength(1)
   })
 
-  it('根拠 (b): 振替元の日に会計を持つ出欠記録（欠席）があれば対象外。表示専用の記録（moved）は根拠にならない', () => {
-    const absent = board({ wedDesk1: desk('w5d1', '田中', undefined, [status(A, WED, 5, 'absent'), null]) })
-    expect(collect({ weeks: absent, templateCells: templateWithoutA }).removals).toHaveLength(0)
-    const moved = board({ wedDesk1: desk('w5d1', '田中', undefined, [status(A, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 }), null]) })
-    expect(collect({ weeks: moved, templateCells: templateWithoutA }).removals).toHaveLength(1)
-  })
-
-  it('根拠 (c)（監査 H-2）: 台帳にその生徒×科目のその日の origin があれば対象外（在庫由来の振替。消すと origin が再浮上して誤増）。別の日・別の科目の origin は根拠にならない', () => {
+  it('根拠 (b) は在庫の正本に委ねる（監査 H-2/H-A）: 正本がその生徒×科目のその日の有効な origin を返せば対象外（台帳の origin・振替の休みの記録・休日の自動発生のどれでも）。別の日・別の科目・時限つきでも同じ日なら根拠', () => {
+    // 台帳経由（通常授業の休み・手積み）
     expect(collect({ weeks: board(), templateCells: templateWithoutA, manualMakeupAdjustments: { 'sA__数': [{ dateKey: WED }] } }).removals).toHaveLength(0)
     expect(collect({ weeks: board(), templateCells: templateWithoutA, manualMakeupAdjustments: { 'sA__数': [{ dateKey: WED, slotNumber: 3 }] } }).removals).toHaveLength(0)
     expect(collect({ weeks: board(), templateCells: templateWithoutA, manualMakeupAdjustments: { 'sA__数': [{ dateKey: THU }] } }).removals).toHaveLength(1)
     expect(collect({ weeks: board(), templateCells: templateWithoutA, manualMakeupAdjustments: { 'sA__英': [{ dateKey: WED }] } }).removals).toHaveLength(1)
+    // 正本が盤面から立てる origin（振替を休んだ記録＝振替元の日に立つ・H-A）は、台帳に無くても根拠
+    expect(collect({ weeks: board(), templateCells: templateWithoutA, resolveLedgerOriginDates: () => ({ 'sA__数': [buildOriginToken(WED, 5)] }) }).removals).toHaveLength(0)
+    expect(collect({ weeks: board(), templateCells: templateWithoutA, resolveLedgerOriginDates: () => ({ 'sA__数': [buildOriginToken(THU, 5)] }) }).removals).toHaveLength(1)
+    // 表示専用の記録（moved）は正本が origin を立てないので根拠にならない（代役は台帳しか見ない＝本物と同じ結果）
+    const moved = board({ wedDesk1: desk('w5d1', '田中', undefined, [status(A, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 }), null]) })
+    expect(collect({ weeks: moved, templateCells: templateWithoutA }).removals).toHaveLength(1)
+  })
+
+  it('根拠 (b) は取り下げ後の台帳で引く（監査 M-A）: 同じ保存で取り下げる印つき origin は根拠に数えない＝その在庫から置いた振替も同じ保存で外れる', () => {
+    const tagged: ManualMakeupOrigin = { dateKey: WED, slotNumber: 5, reasonLabel: TEMPLATE_TRANSFER_STOCK_REASON }
+    const received: MakeupOriginLedger[] = []
+    const result = collect({ weeks: board(), templateCells: templateWithoutA, manualMakeupAdjustments: { 'sA__数': [tagged, { dateKey: '2026-10-14' }] }, resolveLedgerOriginDates: (ledger) => { received.push(ledger); return ledgerTokens(ledger) } })
+    expect(result.ledgerRemovals).toEqual([{ stockKey: 'sA__数', dateKey: WED, slotNumber: 5 }])
+    expect(received).toEqual([{ 'sA__数': [{ dateKey: '2026-10-14' }] }])
+    expect(result.removals).toHaveLength(1)
+  })
+
+  it('管理生徒 ID の無い振替（名前だけ・旧データ）は触らない（監査 M-B・消さない側に倒す）', () => {
+    const nameOnly = board({ makeup: { ...makeupOf('sA_mk', '青木', WED, labelWed5), managedStudentId: undefined } })
+    expect(collect({ weeks: nameOnly, templateCells: templateWithoutA }).removals).toHaveLength(0)
   })
 
   it('手動追加の振替・振替元が反映日より前の振替・範囲外のコマの振替は対象外', () => {
@@ -144,6 +160,12 @@ describe('collectOrphanedMakeups（Q40-1）', () => {
     expect(result.weeks[0].find((entry) => entry.id === `${WED}_3`)).toBe(weeks[0][0])
     // 何も無ければ参照ごと同じ
     expect(removeOrphanedMakeups(weeks, []).weeks).toBe(weeks)
+    // 触らない週は配列ごと同じ参照（反映日より前だけの週＝INV-10・監査 L-A）
+    const previousWeek = [cell('2026-09-30', 5, [desk('p5d1', '田中', [makeupOf('sA_old', '青木', '2026-09-23', undefined), null])])]
+    const twoWeeks = [previousWeek, ...weeks]
+    const twoWeekResult = removeOrphanedMakeups(twoWeeks, collect({ weeks: twoWeeks, templateCells: templateWithoutA }).removals)
+    expect(twoWeekResult.weeks[0]).toBe(previousWeek)
+    expect(twoWeekResult.weeks[1]).not.toBe(weeks[0])
   })
 })
 

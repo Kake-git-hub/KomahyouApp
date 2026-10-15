@@ -1603,7 +1603,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     const classroom = options.classroom ?? diffSettings({ templateFreezeBeforeDate: DATE })
     const saved = computeTemplateDiffApplyForBoard({
       weeks: [week], classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows,
-      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z',
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     // 保存（handleSaveRegularLessonTemplateByDiff）と同じ抑止: 保存前の抑止から Q36 で外した分を除き、Q21-11 / Q35 で足した分を加える。
     const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)

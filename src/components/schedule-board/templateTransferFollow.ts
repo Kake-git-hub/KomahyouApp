@@ -1,8 +1,9 @@
 // テンプレの生徒の増減を、丸ごと振替・休日の振替に追従させる純関数（spec-template-behavior §H Q40・Issue #75 段 2・オーナー確定 2026-10-14）。
 //
-// 1. 根拠を失った振替（外した生徒）: 振替元（makeupSourceDate × 時限）が反映日以降で、新テンプレ（抑止前）がその日×時限にその生徒×科目の
-//    通常授業を持たず、盤面にその日×時限の会計を持つ出欠記録（欠席由来の在庫）も無い振替は、保存で机から外す。振替元の移動元記録（moved）も消す。
-//    在庫台帳は触らない（発生も消化も消えるので残数は動かない・INV-06）。手動追加・出欠記録付き・保留の下段は触らない（オーナー確定 I）。
+// 1. 根拠を失った振替（外した生徒）: 振替元（makeupSourceDate）が反映日以降で、新テンプレ（抑止前）がその日（日単位）にその生徒×科目の通常授業を持たず、
+//    在庫の正本（collectMakeupOriginDatesByKey＝台帳・振替の休みの記録・テンプレ行×休日の自動発生・保留の下段）もその日の origin を持たない振替は、
+//    保存で机から外す。振替元の移動元記録（moved）も消す。在庫台帳は触らない（発生も消化も消えるので残数は動かない・INV-06）。
+//    手動追加・出欠記録付き・保留の下段・管理生徒 ID の無い振替は触らない（オーナー確定 I・監査 M-B）。
 // 2. 丸ごと振替した日に足した生徒: Q35 が「置かなかった」テンプレの生徒のうち、その日が振替元（移動元記録がある）なら、振替先の同じ時限・
 //    同じ机番号の空いた席へ振替として置く（丸ごと振替と同じ形・在庫中立）。置けなければ未消化（振替元が休日なら自動発生に任せ、
 //    休日でなければ台帳に origin を 1 件積む＝INV-06 の唯一の例外・オーナー確定 H）。どちらも Q35-8 の希望回数 −1 は積まない。
@@ -12,9 +13,9 @@
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { isAccountingStatus, studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { isCellInTemplateDiffScope, resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
-import { isClosedDate, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 type StudentPair = [StudentEntry | null, StudentEntry | null]
@@ -48,6 +49,8 @@ export type OrphanedMakeupRemoval = {
   sourceSlotNumber: number | null
 }
 
+export type MakeupOriginLedger = Record<string, ManualMakeupOrigin[]>
+
 /** Q40-2 が台帳へ積む未消化 origin の印（理由ラベル）。外した生徒の分を保存が取り下げる（M-2）ときの判別に使う。 */
 export const TEMPLATE_TRANSFER_STOCK_REASON = 'テンプレ保存（丸ごと振替で置けなかった分）'
 
@@ -56,6 +59,30 @@ export type TemplateTransferLedgerRemoval = {
   dateKey: string
   /** 積んだときの時限（Q40-2 は必ず時限つきで積む）。理由ラベルと合わせて同じ形の 1 件だけを外す。 */
   slotNumber: number
+}
+
+// Q40-2-4: テンプレ保存が積む未消化 origin（丸ごと振替で置けなかった分）。理由ラベルを付けて積む（取り下げ M-2 の判別用・在庫パネルの理由表示にも出る）。
+// 時限は丸ごと振替の振替元のコマが分かっているので必ず付ける（removeTemplateTransferMakeupOrigin が同じ形で外す）。
+export function appendTemplateTransferMakeupOrigin(originMap: MakeupOriginLedger, key: string, originDate: string, slotNumber: number): MakeupOriginLedger {
+  const nextOrigin: ManualMakeupOrigin = { dateKey: originDate, slotNumber, reasonLabel: TEMPLATE_TRANSFER_STOCK_REASON }
+  return {
+    ...originMap,
+    [key]: [...(originMap[key] ?? []), nextOrigin].sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
+  }
+}
+
+// Q40-2 M-2: テンプレ保存が積んだ印つき origin を 1 件だけ取り下げる。**理由ラベルまで同じ origin だけ**を外す（日付×時限が同じ手積みの origin が先頭に居ても
+// それを外さない＝何も変えない保存〔全コマ〕を重ねても手積みの分が減らない）。無ければ台帳は参照ごとそのまま。
+export function removeTemplateTransferMakeupOrigin(originMap: MakeupOriginLedger, key: string, originDate: string, slotNumber: number): MakeupOriginLedger {
+  const currentDates = originMap[key] ?? []
+  const targetIndex = currentDates.findIndex((entry) => entry.dateKey === originDate && entry.slotNumber === slotNumber && entry.reasonLabel === TEMPLATE_TRANSFER_STOCK_REASON)
+  if (targetIndex < 0) return originMap
+  const nextDates = currentDates.filter((_, index) => index !== targetIndex)
+  if (nextDates.length === 0) {
+    const { [key]: _removed, ...rest } = originMap
+    return rest
+  }
+  return { ...originMap, [key]: nextDates }
 }
 
 /** 振替元（日×時限）が「テンプレで変えたコマ」の範囲に入るか。時限が分からない振替元は、その曜日のどれかの時限が範囲なら入る。 */
@@ -76,12 +103,11 @@ export type OrphanedMakeupCollection = {
 }
 
 /**
- * 根拠を失った振替を集める（Q40-1）。対象は上段の生きている振替だけ（保留の下段・出欠記録・手動追加は見ない）。
- * 根拠は**日単位**で見る（在庫の消化が同じ日付へフォールバックする `consumeOriginDates` と揃える。時限だけ変えたテンプレで振替を消さない＝監査 H-1）:
+ * 根拠を失った振替を集める（Q40-1）。対象は上段の生きている振替で、管理生徒 ID を持つものだけ（保留の下段・出欠記録・手動追加・名前だけの振替は見ない）。
+ * 根拠は**日単位・生徒×科目**で見る（在庫の消化が同じ日付へフォールバックする `consumeOriginDates` と揃える。時限だけ変えたテンプレで振替を消さない＝監査 H-1/H-3）:
  *   (a) 新テンプレがその日（同じ曜日）にその生徒×科目の通常授業を持つ（管理セルの raw か、テンプレ行〔休日のコマは管理セルが空になるので行でも見る〕）
- *   (b) その日に会計を持つ出欠記録（休み・振無休・出席＝欠席由来の在庫）がある
- *   (c) 台帳（manualMakeupAdjustments）にその生徒×科目のその日の origin がある（在庫由来の振替。消すと origin が再浮上して誤増＝監査 H-2）
- * 科目は生徒×科目で見る（科目変更は「外す＋足す」＝監査 H-3。テンプレ行の科目は表示科目に解決済み）。
+ *   (b) 在庫の正本がその生徒×科目の**その日の有効な origin** を持つ（台帳の origin〔通常授業の休みはここに積まれる〕・振替の休みの記録から立つ origin〔振替元の日〕・
+ *       テンプレ行×休日の自動発生・保留の下段の記録。`collectMakeupOriginDatesByKey` を取り下げ後の台帳と保存後の盤面で呼ぶ＝判定を在庫と分けない・監査 H-2/H-A）
  */
 export function collectOrphanedMakeups(params: {
   weeks: SlotCell[][]
@@ -89,10 +115,10 @@ export function collectOrphanedMakeups(params: {
   templateCells: readonly TemplateDiffTemplateCell[]
   /** 新テンプレの通常授業の行（曜日×時限×生徒 ID×表示科目）。休日設定した日でも「テンプレがその生徒を持つ」を判定するための正本。 */
   regularLessons: readonly RegularLessonRow[]
-  /** 在庫台帳（在庫由来の振替を消さないための根拠 (c)・M-2 の取り下げ対象）。 */
-  manualMakeupAdjustments: Readonly<Record<string, readonly ManualMakeupOrigin[]>>
-  /** 生徒×科目 → 台帳の鍵（保存と同じ関数を渡す）。 */
-  resolveStockKey: (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject' | 'manualAdded'>) => string
+  /** 保存前の在庫台帳（M-2 の取り下げ対象を探す）。 */
+  manualMakeupAdjustments: MakeupOriginLedger
+  /** 取り下げ後の台帳を渡すと、生徒×科目（`${管理生徒 ID}__${科目}`）ごとの有効な origin トークンを返す（呼び出し側が在庫の正本 collectMakeupOriginDatesByKey を配線する）。 */
+  resolveLedgerOriginDates: (ledgerAfterRemovals: MakeupOriginLedger) => Record<string, string[]>
   effectiveStartDate: string
   slotFilter?: TemplateDiffSlotFilter | null
 }): OrphanedMakeupCollection {
@@ -110,39 +136,11 @@ export function collectOrphanedMakeups(params: {
     for (const desk of raw.desks) for (const student of liveStudentsOf(desk)) byDate.add(studentSubjectKey(student))
     templateByDate.set(raw.dateKey, byDate)
   }
-  const accountingByDate = new Map<string, Set<string>>()
-  for (const week of params.weeks) for (const cell of week) {
-    for (const desk of cell.desks) for (const entry of desk.statusSlots ?? []) {
-      if (!entry || !isAccountingStatus(entry.status)) continue
-      accountingByDate.set(cell.dateKey, (accountingByDate.get(cell.dateKey) ?? new Set<string>()).add(studentSubjectKey(entry)))
-    }
-  }
-  const templateHas = (student: StudentEntry, dateKey: string) => {
-    if (templateByDate.get(dateKey)?.has(studentSubjectKey(student))) return true
-    const studentId = student.managedStudentId
-    return Boolean(studentId && rowKeysByDay.get(resolveDayOfWeekFromDateKey(dateKey))?.has(`${studentId}__${student.subject}`))
-  }
-  const ledgerHas = (student: StudentEntry, dateKey: string) => (params.manualMakeupAdjustments[params.resolveStockKey(student)] ?? []).some((origin) => origin.dateKey === dateKey)
-  const hasBasis = (student: StudentEntry, dateKey: string) => templateHas(student, dateKey) || Boolean(accountingByDate.get(dateKey)?.has(studentSubjectKey(student))) || ledgerHas(student, dateKey)
-
-  const removals: OrphanedMakeupRemoval[] = []
-  for (const week of params.weeks) for (const cell of week) {
-    if (cell.dateKey < params.effectiveStartDate) continue
-    for (const desk of cell.desks) {
-      desk.lesson?.studentSlots.forEach((student, seatIndex) => {
-        if (!student || student.lessonType !== 'makeup' || student.manualAdded || !student.makeupSourceDate) return
-        const sourceDateKey = student.makeupSourceDate
-        if (sourceDateKey < params.effectiveStartDate) return
-        const sourceSlotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? null
-        if (!isSourceInScope(sourceDateKey, sourceSlotNumber, params.slotFilter)) return
-        if (hasBasis(student, sourceDateKey)) return
-        removals.push({ cellId: cell.id, deskId: desk.id, seatIndex, student, sourceDateKey, sourceSlotNumber })
-      })
-    }
-  }
 
   // M-2: Q40-2 が積んだ未消化 origin は、その生徒×科目がその曜日のテンプレから外れたら取り下げる（足す→外す、で台帳が元に戻る）。
+  // 根拠 (b) は**取り下げ後の台帳**で引く（取り下げる origin を根拠に数えると、根拠の無い振替が次の保存まで残る＝監査 M-A）。
   const ledgerRemovals: TemplateTransferLedgerRemoval[] = []
+  let ledgerAfterRemovals = params.manualMakeupAdjustments
   for (const [stockKey, origins] of Object.entries(params.manualMakeupAdjustments)) {
     const separator = stockKey.lastIndexOf('__')
     if (separator < 0) continue
@@ -153,6 +151,33 @@ export function collectOrphanedMakeups(params: {
       if (!isSourceInScope(origin.dateKey, origin.slotNumber, params.slotFilter)) continue
       if (rowKeysByDay.get(resolveDayOfWeekFromDateKey(origin.dateKey))?.has(`${studentId}__${subject}`)) continue
       ledgerRemovals.push({ stockKey, dateKey: origin.dateKey, slotNumber: origin.slotNumber })
+      ledgerAfterRemovals = removeTemplateTransferMakeupOrigin(ledgerAfterRemovals, stockKey, origin.dateKey, origin.slotNumber)
+    }
+  }
+  const originDatesByKey = params.resolveLedgerOriginDates(ledgerAfterRemovals)
+
+  const templateHas = (student: StudentEntry, dateKey: string) => {
+    if (templateByDate.get(dateKey)?.has(studentSubjectKey(student))) return true
+    return Boolean(rowKeysByDay.get(resolveDayOfWeekFromDateKey(dateKey))?.has(`${student.managedStudentId}__${student.subject}`))
+  }
+  const ledgerHas = (student: StudentEntry, dateKey: string) => (originDatesByKey[buildMakeupStockKey(student.managedStudentId ?? student.name, student.subject)] ?? []).some((token) => originTokenDateKey(token) === dateKey)
+  const hasBasis = (student: StudentEntry, dateKey: string) => templateHas(student, dateKey) || ledgerHas(student, dateKey)
+
+  const removals: OrphanedMakeupRemoval[] = []
+  for (const week of params.weeks) for (const cell of week) {
+    if (cell.dateKey < params.effectiveStartDate) continue
+    for (const desk of cell.desks) {
+      desk.lesson?.studentSlots.forEach((student, seatIndex) => {
+        if (!student || student.lessonType !== 'makeup' || student.manualAdded || !student.makeupSourceDate) return
+        // 管理生徒 ID の無い振替（名前だけ・旧データ）はテンプレの生徒と突き合わせられないので触らない（消さない側に倒す・監査 M-B）。
+        if (!student.managedStudentId) return
+        const sourceDateKey = student.makeupSourceDate
+        if (sourceDateKey < params.effectiveStartDate) return
+        const sourceSlotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? null
+        if (!isSourceInScope(sourceDateKey, sourceSlotNumber, params.slotFilter)) return
+        if (hasBasis(student, sourceDateKey)) return
+        removals.push({ cellId: cell.id, deskId: desk.id, seatIndex, student, sourceDateKey, sourceSlotNumber })
+      })
     }
   }
   return { removals, ledgerRemovals }
@@ -173,33 +198,37 @@ export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly Or
   }
   const touchedCellIds = new Set<string>()
   let removedMovedRecords = 0
-  const nextWeeks = weeks.map((week) => week.map((cell) => {
-    const movedKeys = movedTargets.get(cell.dateKey) ?? new Set<string>()
-    let changed = false
-    const desks = cell.desks.map((desk) => {
-      let next = desk
-      const deskRemovals = byDesk.get(`${cell.id}__${desk.id}`)
-      if (deskRemovals && next.lesson) {
-        const slots = [...next.lesson.studentSlots] as StudentPair
-        for (const removal of deskRemovals) slots[removal.seatIndex] = null
-        next = { ...next }
-        if (slots.some(Boolean)) next.lesson = { ...next.lesson!, studentSlots: slots }
-        else delete next.lesson
-        changed = true
-      }
-      if (movedKeys.size > 0 && next.statusSlots?.some((entry) => entry && entry.status === 'moved' && movedKeys.has(studentSubjectKey(entry)))) {
-        const statusSlots = next.statusSlots.map((entry) => (entry && entry.status === 'moved' && movedKeys.has(studentSubjectKey(entry)) ? (removedMovedRecords += 1, null) : entry)) as StatusPair
-        next = { ...next }
-        if (statusSlots.some(Boolean)) next.statusSlots = statusSlots
-        else delete next.statusSlots
-        changed = true
-      }
-      return next
+  // 変化の無い週は配列ごと同じ参照で返す（反映日より前だけの週は参照ごと不変＝INV-10・監査 L-A）。
+  const nextWeeks = weeks.map((week) => {
+    const nextWeek = week.map((cell) => {
+      const movedKeys = movedTargets.get(cell.dateKey) ?? new Set<string>()
+      let changed = false
+      const desks = cell.desks.map((desk) => {
+        let next = desk
+        const deskRemovals = byDesk.get(`${cell.id}__${desk.id}`)
+        if (deskRemovals && next.lesson) {
+          const slots = [...next.lesson.studentSlots] as StudentPair
+          for (const removal of deskRemovals) slots[removal.seatIndex] = null
+          next = { ...next }
+          if (slots.some(Boolean)) next.lesson = { ...next.lesson!, studentSlots: slots }
+          else delete next.lesson
+          changed = true
+        }
+        if (movedKeys.size > 0 && next.statusSlots?.some((entry) => entry && entry.status === 'moved' && movedKeys.has(studentSubjectKey(entry)))) {
+          const statusSlots = next.statusSlots.map((entry) => (entry && entry.status === 'moved' && movedKeys.has(studentSubjectKey(entry)) ? (removedMovedRecords += 1, null) : entry)) as StatusPair
+          next = { ...next }
+          if (statusSlots.some(Boolean)) next.statusSlots = statusSlots
+          else delete next.statusSlots
+          changed = true
+        }
+        return next
+      })
+      if (!changed) return cell
+      touchedCellIds.add(cell.id)
+      return { ...cell, desks }
     })
-    if (!changed) return cell
-    touchedCellIds.add(cell.id)
-    return { ...cell, desks }
-  }))
+    return nextWeek.some((cell, index) => cell !== week[index]) ? nextWeek : week
+  })
   return { weeks: nextWeeks, removedMovedRecords, touchedCellIds }
 }
 

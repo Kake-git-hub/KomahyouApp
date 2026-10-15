@@ -1197,7 +1197,7 @@ describe('INV-06 拡張: テンプレ差分反映の保存前後で未消化振�
       effectiveStartDate: BOARD_DATE,
       suppressedRegularLessonOccurrences: suppressed,
       templatePendingDesks: {},
-      createdAt: '2026-07-31T00:00:00.000Z',
+      createdAt: '2026-07-31T00:00:00.000Z', manualMakeupAdjustments: {},
     })
   }
 
@@ -1374,7 +1374,7 @@ describe('INV-06 拡張: 保留（2 行）の解決操作で在庫が動く量�
       effectiveStartDate: BOARD_DATE,
       suppressedRegularLessonOccurrences: params.suppressed ?? [],
       templatePendingDesks: {},
-      createdAt: '2026-07-31T00:00:00.000Z',
+      createdAt: '2026-07-31T00:00:00.000Z', manualMakeupAdjustments: {},
     })
     const key = buildTemplatePendingDeskKey(CELL, DESK1)
     expect(diff.nextPendingDesks[key], '机 1 が保留（2 行）になる前提').toBeDefined()
