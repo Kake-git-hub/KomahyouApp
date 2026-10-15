@@ -78,6 +78,8 @@ type BoardToolbarProps = {
   /** テンプレ編集モードの反映開始日（ボタン行の「エクセル取込」の右・オーナー指示 2026-10-02。見出し行は廃止・机数は出さない）。 */
   templateEffectiveStartDate?: string
   onTemplateEffectiveStartDateChange?: (value: string) => void
+  /** 反映開始日の下限(差分反映の教室は今日。2026-10-15 確認リスト tp-47「そもそも今日より前の日を選択できないようにして」)。未指定なら制限なし。 */
+  templateEffectiveStartDateMin?: string
   onTemplateSaveOverwrite?: () => void
   /** 保存ボタンの文言。差分反映の教室（Q39・2026-10-14）は「反映（変えたコマだけ）」、旧方式は「上書き保存」のまま。 */
   templateSaveButtonLabel?: string
@@ -145,6 +147,7 @@ function BoardToolbarComponent({
   onTemplateImport,
   templateEffectiveStartDate,
   onTemplateEffectiveStartDateChange,
+  templateEffectiveStartDateMin,
   onTemplateSaveOverwrite,
   templateSaveButtonLabel,
   onTemplateClear,
@@ -310,7 +313,7 @@ function BoardToolbarComponent({
               <button className="secondary-button slim" type="button" onClick={onTemplateImport} data-testid="template-import-button">エクセル取込</button>
               <label className="toolbar-template-date" data-testid="template-effective-start-date-field">
                 <span>反映開始日</span>
-                <input type="date" value={templateEffectiveStartDate ?? ''} onChange={(event) => onTemplateEffectiveStartDateChange?.(event.target.value)} data-testid="template-effective-start-date" />
+                <input type="date" value={templateEffectiveStartDate ?? ''} min={templateEffectiveStartDateMin} onChange={(event) => onTemplateEffectiveStartDateChange?.(event.target.value)} data-testid="template-effective-start-date" />
               </label>
               <button className="primary-button danger" type="button" onClick={onTemplateSaveOverwrite} data-testid="template-save-overwrite-button">{templateSaveButtonLabel ?? '反映開始日以降をこのテンプレで上書き保存'}</button>
             </>

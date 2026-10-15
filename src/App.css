@@ -5773,15 +5773,24 @@ html.verification-checklist-window,
 body.verification-checklist-window {
   min-width: 0;
   margin: 0;
+  height: 100%;
   overflow: hidden;
   background: #fff;
 }
 
+/* 別タブの土台(prepareVerificationChecklistWindowDocument が作る div)。パネルの高さ 100% を html → body → 土台で繋ぐ。 */
+#verification-checklist-window-root {
+  height: 100%;
+}
+
+/* 高さは 100vh でなく 100%(2026-10-15 確認リスト c-5 要改善「小さくなるが、表示できる縦幅も小さくなってしまい意味がない。内容だけ小さくなるように」):
+   CSS zoom はそのパネルの中の長さ(vh を含む)を倍率ぶん縮めるので、100vh だと 50% のときタブの半分しか使わず、125% のときは下がタブからはみ出て
+   押せなくなる。親(body)に対する % は zoom の影響を受けずタブいっぱいになるので、縮めると中身だけ小さくなって見える行数が増える。 */
 .verification-checklist-panel.is-detached {
   position: static;
   width: auto;
   max-width: none;
-  height: 100vh;
+  height: 100%;
   max-height: none;
   border: none;
   border-radius: 0;

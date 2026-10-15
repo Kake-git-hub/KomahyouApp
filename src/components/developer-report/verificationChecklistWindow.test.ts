@@ -5,6 +5,9 @@
 //   別タブを閉じる/「元の画面に戻す」/パネルが外れると、右下の表示へ戻り別タブは閉じる。
 // 別タブは jsdom の iframe の window(別の文書)で代用する(window.open を差し替える)。
 
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act, createElement, Fragment } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
@@ -341,5 +344,28 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     openWindow()
     expect(container.querySelector('[data-testid="verification-checklist-panel"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('別タブを開けませんでした')
+  })
+})
+
+// 2026-10-15 確認リスト v1.5.596 c-5 要改善「小さくなるが、表示できる縦幅も小さくなってしまい意味がない。内容だけ小さくなるように」:
+// CSS zoom はパネルの中の長さ(vh を含む)を倍率ぶん縮めるので、別タブのパネルの高さを 100vh にすると 50% でタブの半分しか使わず、125% で下がはみ出る。
+// 親(body)に対する % は zoom の影響を受けないので、html → body → 土台 → パネルを 100% で繋ぐ(source-scan で固定)。
+describe('別タブのパネルの高さは zoom に関係なくタブいっぱい(App.css)', () => {
+  // jsdom 環境では new URL(…, import.meta.url) が file スキームにならないので path で解決する。
+  const APP_CSS = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../App.css'), 'utf8')
+  const block = (selector: string) => {
+    const start = APP_CSS.indexOf(`${selector} {`)
+    expect(start, selector).toBeGreaterThan(-1)
+    return APP_CSS.slice(start, APP_CSS.indexOf('}', start))
+  }
+
+  it('is-detached の高さは 100%(100vh ではない)。html / body / 土台も 100% で繋ぐ', () => {
+    const detached = block('.verification-checklist-panel.is-detached')
+    expect(detached).toContain('height: 100%;')
+    expect(detached).not.toContain('100vh')
+    expect(block('html.verification-checklist-window,\nbody.verification-checklist-window')).toContain('height: 100%;')
+    expect(block('#verification-checklist-window-root')).toContain('height: 100%;')
+    // 土台の id はパネルを描く側と同じ定数
+    expect(VERIFICATION_CHECKLIST_WINDOW_ROOT_ID).toBe('verification-checklist-window-root')
   })
 })

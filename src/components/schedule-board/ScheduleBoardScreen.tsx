@@ -37,9 +37,9 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
-import { buildTemplateDefinitionDiffLines, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
+import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
@@ -4680,6 +4680,27 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       teacher: managedDesk.teacher,
       teacherAssignmentTeacherId: managedDesk.teacherAssignmentTeacherId ?? originalManagedCell.desks[idx]?.teacherAssignmentTeacherId,
     })
+
+    // 日程表登録(QR)の講師が、同じコマの別の机にテンプレの同じ講師として置かれているなら QR 机の講師を外す(オーナー指示 2026-10-15・
+    // 確認リスト v1.5.596 その他「一コマに同じ講師が 2 人いる。日程表からの講師追加はテンプレが入っていたら消えて良い」)。
+    // 判定は差分反映と同じ権威関数 findQrTeacherDesksSupersededByTemplate(templateDiffApply.ts)。読み込み時の再マージでも効くので、
+    // 既に二重になっている週も開き直しで 1 人になる。その机の管理授業にテンプレの講師が居れば差分反映と同じくその講師(非 manual)にする。
+    // 起動時の自己修復(reconcileSubmittedTeacherPlacements)は「その講師が既に居るコマ」には置き直さないので二重化に戻らない。
+    // 2 回当てる: 下の配置ループの前(空いた机にテンプレの足場講師・授業が入れるように)と後(ループで新しく置かれた管理授業の講師も数える)。
+    const dropQrTeachersSupersededByTemplate = () => {
+      for (const index of findQrTeacherDesksSupersededByTemplate(nextDesks, managedCell.desks.map((managedDesk, idx) => ({ ...managedTeacherRef(managedDesk, idx), lesson: managedDesk.lesson })), aliasesOf)) {
+        const desk = nextDesks[index]
+        const managedDesk = desk.lesson && isManagedLesson(desk.lesson) ? managedDesksByLessonId.get(desk.lesson.id) : undefined
+        // 自己修復が「配置済み」と数えるための記録(types.ts)。差分反映と同じ形で書く(不動点)。
+        desk.scheduleRegistrationSupersededByTemplate = buildScheduleRegistrationSupersession(desk)
+        clearTeacherAssignment(desk)
+        if (managedDesk?.teacher.trim()) {
+          desk.teacher = managedDesk.teacher
+          desk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
+        }
+      }
+    }
+    dropQrTeachersSupersededByTemplate()
     // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted, manual-replaced)
     // or desks where a lesson now exists (e.g. student was moved there)
     const consumedManagedTeacherIndexes = new Set<number>()
@@ -4799,6 +4820,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       targetDesk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
       targetDesk.lesson = cloneDeskLesson(managedDesk.lesson)
     }
+
+    // QR 講師の重複の 2 回目(配置ループで置かれた管理授業の講師も見る。上の定義を参照)。
+    dropQrTeachersSupersededByTemplate()
 
     return {
       ...cell,
@@ -5462,6 +5486,11 @@ export function reconcileSubmittedTeacherPlacements(params: {
     //   講習IDの無い tombstone(通常授業の机の削除・丸ごと振替・旧データ)は数えない。講師名や期間だけで数えると、
     //   期間内に同講師の通常授業机を消しただけで「揮発した提出配置の自己修復」まで止まり、提出したのに出ない状態に戻る。
     const deletedTeacherKeysInSession = new Set<string>()
+    // ★テンプレの同じ講師に寄せて外した QR 机の記録(scheduleRegistrationSupersededByTemplate・2026-10-15・Q21-9 例外 1 の絞り込み)も
+    //   「配置済み」に数える。数えないと、その講習の QR 机が全部テンプレに寄せられた講師を「提出済みなのに未配置」と誤判定し、
+    //   手で講師を替えた(manual-replaced)コマへ別の空き机で置き直す(2026-08-02 の手動編集の巻き戻しと同型・INV-02)。
+    //   講師が居るコマには置かない(alreadyAssigned)ので寄せたコマ自体は二重化しないが、他のコマが対象になる。
+    const supersededTeacherKeysInSession = new Set<string>()
     for (const week of workingWeeks) {
       for (const cell of week) {
         for (const desk of cell.desks) {
@@ -5469,6 +5498,9 @@ export function reconcileSubmittedTeacherPlacements(params: {
             && desk.teacherAssignmentSessionId === session.id
             && desk.teacherAssignmentTeacherId) {
             placedTeacherIds.add(desk.teacherAssignmentTeacherId)
+          }
+          if (desk.scheduleRegistrationSupersededByTemplate?.sessionId === session.id && desk.scheduleRegistrationSupersededByTemplate.teacherId) {
+            supersededTeacherKeysInSession.add(desk.scheduleRegistrationSupersededByTemplate.teacherId)
           }
           if (isDeletedTeacherTombstone(desk)
             && desk.teacherAssignmentSessionId === session.id
@@ -5485,6 +5517,7 @@ export function reconcileSubmittedTeacherPlacements(params: {
       const teacher = params.teachers.find((entry) => entry.id === teacherId)
       if (!teacher) continue
       if ([teacher.id, getTeacherDisplayName(teacher), teacher.name.trim()].some((key) => key && deletedTeacherKeysInSession.has(key))) continue
+      if ([teacher.id, getTeacherDisplayName(teacher), teacher.name.trim()].some((key) => key && supersededTeacherKeysInSession.has(key))) continue
 
       const result = autoAssignTeacherToSpecialSession({
         weeks: workingWeeks,
@@ -10639,30 +10672,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
   }
 
-  // Q39-3: 確認モーダルで「変えたコマだけ」⇄「すべてのコマ」を切り替える（件数は同じ関数の試し実行で出し直す）。
-  const handleTemplateSaveScopeChange = (applyScope: TemplateDiffApplyScope) => {
-    if (!templateSaveConfirm?.definitionDiff || templateSaveConfirm.applyScope === applyScope) return
-    const { template } = templateSaveConfirm
-    setBusyOverlayMessage(TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE)
-    const previewSeq = templateSavePreviewSeqRef.current + 1
-    templateSavePreviewSeqRef.current = previewSeq
-    void waitForNextPaint().then(() => {
-      // 連打・画面離脱の間に古い結果を当てない（保存要求の試し実行と同じ連番）。
-      if (templateSavePreviewSeqRef.current !== previewSeq || !isTemplateModeRef.current) {
-        if (templateSavePreviewSeqRef.current === previewSeq) setBusyOverlayMessage(null)
-        return
-      }
-      try {
-        const plan = buildTemplateDiffSavePlan(template, '', { applyScope })
-        setTemplateSaveConfirm((current) => (current && current.template === template
-          ? { ...current, diffSummary: plan.diff.summary, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount }
-          : current))
-      } catch (error) {
-        setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
-      } finally {
-        setBusyOverlayMessage(null)
-      }
-    })
+  // 反映開始日の入力（2026-10-15 確認リスト tp-47 要改善「そもそも今日より前の日を選択できないようにして」）: 差分反映の教室は今日より前を今日へ丸める
+  // （date 入力の min と二重。旧方式の教室は従来どおり自由）。
+  const handleTemplateEffectiveStartDateChange = (value: string) => {
+    setTemplateEffectiveStartDate(templateDiffApplyEnabled ? clampTemplateEffectiveStartDateToToday(value, toDateKey(new Date())) : value)
   }
 
   const handleTemplateSaveConfirm = async () => {
@@ -10769,7 +10782,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     pushTemplateUndo(templateCells)
     setTemplateCells(importedCells)
-    setTemplateEffectiveStartDate(filteredImported.effectiveStartDate)
+    // Excel の反映開始日も今日より前は今日へ（tp-47・差分反映の教室だけ。min は手入力にしか効かない）。
+    setTemplateEffectiveStartDate(templateDiffApplyEnabled ? clampTemplateEffectiveStartDateToToday(filteredImported.effectiveStartDate, toDateKey(new Date())) : filteredImported.effectiveStartDate)
     setStatusMessage(selectedStartDate ? `開始日 ${selectedStartDate} のテンプレートを Excel から取り込みました。` : '通常授業テンプレートを Excel から取り込みました。')
   }
 
@@ -14838,7 +14852,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onTemplateExport={tbOnTemplateExport}
             onTemplateImport={tbOnTemplateImport}
             templateEffectiveStartDate={isTemplateMode ? templateEffectiveStartDate : undefined}
-            onTemplateEffectiveStartDateChange={setTemplateEffectiveStartDate}
+            onTemplateEffectiveStartDateChange={handleTemplateEffectiveStartDateChange}
+            templateEffectiveStartDateMin={isTemplateMode && templateDiffApplyEnabled ? toDateKey(new Date()) : undefined}
             onTemplateSaveOverwrite={tbOnTemplateSaveOverwrite}
             templateSaveButtonLabel={templateDiffApplyEnabled ? '反映開始日以降にこのテンプレを反映（変えたコマだけ）' : undefined}
             onTemplateClear={tbOnTemplateClear}
@@ -15455,16 +15470,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
                 </div>
                 {templateSaveConfirm.definitionDiff && !templateSaveConfirm.definitionDiff.allSlots && templateSaveConfirm.definitionDiff.changedSlotKeys.length > 0 ? (
-                  // Q39: 変更点一覧と突き合わせる範囲の選択（既定は「変えたコマだけ」）。
+                  // Q39: テンプレの変更点一覧。範囲は選ばせない（オーナー指示 2026-10-15・確認リスト v1.5.596 tp-44/tp-46 メモ「選択肢は不要で、
+                  // 自動的に変更のあったコマだけ反映して。何も変更なかったときだけ自動で全コマ突き合わせにして」）: 変えたコマがあれば「変えたコマだけ」、
+                  // 0 なら全コマ（resolveDefaultTemplateDiffApplyScope）。旧「すべてのコマを突き合わせる」のラジオは v1.5.598〜601 だけ存在した。
                   <div className="student-menu-section" data-testid="template-save-scope">
-                    <label style={{ display: 'block', marginBottom: 4 }}>
-                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'changed-slots'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('changed-slots')} data-testid="template-save-scope-changed" />
-                      {` 変えたコマだけ反映（${templateSaveConfirm.scopedSlotCount ?? templateSaveConfirm.definitionDiff.changedSlotKeys.length} コマ）`}
-                    </label>
-                    <label style={{ display: 'block', marginBottom: 6 }}>
-                      <input type="radio" name="template-save-scope" checked={templateSaveConfirm.applyScope === 'all'} disabled={busyOverlayMessage !== null} onChange={() => handleTemplateSaveScopeChange('all')} data-testid="template-save-scope-all" />
-                      {' すべてのコマを突き合わせる'}
-                    </label>
                     <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }} data-testid="template-save-changed-desks">
                       {['テンプレの変更点:', ...buildTemplateDefinitionDiffLines(templateSaveConfirm.definitionDiff, {
                         studentName: (studentId) => { const row = students.find((student) => student.id === studentId); return row ? getStudentDisplayName(row) : '' },

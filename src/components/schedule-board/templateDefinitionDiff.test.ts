@@ -15,6 +15,7 @@ import {
   isTemplateEffectiveStartDateInPast,
   resolveDayOfWeekFromDateKey,
   resolveDefaultTemplateDiffApplyScope,
+  clampTemplateEffectiveStartDateToToday,
   resolveDefaultTemplateEffectiveStartDate,
   resolveNextMondayDateKey,
   resolveTemplateDiffSlotFilter,
@@ -162,6 +163,13 @@ describe('反映開始日の既定と過去日（Q39-5）', () => {
     expect(isTemplateEffectiveStartDateInPast('2026-10-13', '2026-10-14')).toBe(true)
     expect(isTemplateEffectiveStartDateInPast('2026-10-14', '2026-10-14')).toBe(false)
     expect(isTemplateEffectiveStartDateInPast('', '2026-10-14')).toBe(false)
+  })
+
+  it('今日より前は今日へ丸める（確認リスト tp-47・オーナー指示 2026-10-15「そもそも今日より前の日を選択できないように」）。今日以降と空はそのまま', () => {
+    expect(clampTemplateEffectiveStartDateToToday('2026-10-13', '2026-10-14')).toBe('2026-10-14')
+    expect(clampTemplateEffectiveStartDateToToday('2026-10-14', '2026-10-14')).toBe('2026-10-14')
+    expect(clampTemplateEffectiveStartDateToToday('2026-10-19', '2026-10-14')).toBe('2026-10-19')
+    expect(clampTemplateEffectiveStartDateToToday('', '2026-10-14')).toBe('')
     expect(formatTemplateSlotLabel(6, 1)).toBe('土 1限')
   })
 })

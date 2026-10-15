@@ -941,6 +941,24 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(pagesOf('三好')).toEqual([])
   })
 
+  // 例外 1 の絞り込み（オーナー指示 2026-10-15・確認リスト v1.5.596 その他「日程表より登録された講師が、テンプレで組まれている同じ講師がいても組まれてしまい、
+  // 一コマに同じ講師が 2 人いる。日程表からの講師追加はテンプレが入っていたら消えて良い」）: QR 講師と同じ講師をテンプレが同じコマの別の机に生徒つきで置くなら、
+  // QR 机の講師はテンプレのその机の講師に替わる（findQrTeacherDesksSupersededByTemplate・差分反映と再マージで同じ）。
+  it('(d-2) QR 講師と同じ講師をテンプレが同じコマの別の机に置く → QR 机の講師はテンプレのその机の講師に替わり、同じ講師は 1 机。生徒は実際の机の講師のページにだけ出る', () => {
+    // 机0: QR 加藤（講習 ss1）＋三好の振替。新テンプレ: 机0=山本(井上)・机1=加藤(青木・数)
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't_kato', lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_kato', 'student-aoki', '数')]
+    const { boardDesk, fri5, pagesOf, saved } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '山本', manualTeacher: false })
+    expect(boardDesk(0).teacherAssignmentSource).toBeUndefined()
+    expect(boardDesk(1)).toMatchObject({ teacher: '加藤', manualTeacher: false })
+    expect(saved.summary.qrTeacherRemoved).toBe(1)
+    expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual(['山本'])
+    expect(pagesOf('井上')).toEqual(['山本'])
+    expect(pagesOf('青木')).toEqual(['加藤'])
+    expect(pagesOf('三好')).toEqual([])
+  })
+
   // 例外 2 の改定（オーナー決定 2026-10-14「削除記録は削除した講師だけに有効に。別講師はそこに割り振ることがある」）:
   //   同じ講師（削除した本人）がテンプレに居る → 従来どおり戻らない／別の講師 → その机に置かれ、生徒はその講師のページに出る。
   it('(e) 講師の削除記録（落合を削除）の机にテンプレが**同じ講師**落合と生徒 → 講師欄は空のまま（再マージ 2 回でも戻らない）。井上はどの講師のページにも出ない', () => {
