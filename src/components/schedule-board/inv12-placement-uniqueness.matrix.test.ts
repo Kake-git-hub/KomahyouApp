@@ -594,7 +594,9 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
 
   // 再マージ（mergeManagedWeek）は講師だけの管理机を、同じコマに同じ講師名が居れば足さず（alreadyPresent）、残りを「先頭から最初の空き机」へ
   // 置き直す。差分反映はテンプレを机の位置どおりに置くので、生徒を全員外した机の講師名が別の机と重なると（講師のいない行が 2 本＝「講師未割当」が 2 つ、
-  // 同じ講師が 2 机）、その机が空き机になり後ろの講師だけの机が前へずれる（regression-reviewer 2026-09-30 の反例）。
+  // 同じ講師が 2 机）、その机が空き机になる（regression-reviewer 2026-09-30 の反例）。
+  // 2026-10-15（Issue #76・INV-02）: 再マージは足場講師（非 manual の講師だけの机）をテンプレに同じ講師の講師だけの机がある間は今の机に残すようになり、
+  // 後ろの講師だけの机（佐藤）は前へずれず元の机に残る。期待の並びをその形へ改めた（不動点の assert は不変・オーナー承認 2026-10-15「修正に進めて」）。
   const teachersAt = (weeks: SlotCell[][]) => cellOf(weeks).desks.map((desk) => desk.teacher)
 
   it('不動点（L-7 兄弟 2）: 講師のいない行が 2 本あり、Q21-11 で片方の机が空いても、保存の時点で再マージと同じ机に講師が並ぶ（保存 → 再マージ 1 回でセルは丸ごと変わらない）', () => {
@@ -603,7 +605,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(saved.summary.skippedDuplicateStudents).toBe(1)
     expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
     expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sD'])
-    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '佐藤', '講師未割当', ''])
+    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '', '講師未割当', '佐藤'])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
@@ -611,7 +613,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     const rows = [row('r0', 't1', 'sA'), row('r1', 't1', 'sB'), row('r2', 't3')]
     const { saved, remerged } = saveThenRemerge(board(makeupBAt0, rows, 4), { rows, deskCount: 4 })
     expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '佐藤', '', ''])
+    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '', '佐藤', ''])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 

@@ -175,11 +175,12 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
   {
     id: 'user-report-issue-76',
-    title: '緑が丘校の報告 #76: 生徒を削除して並べ替えると講師の名前が消える(テンプレ再マージの机番号ベースの消費判定)',
-    stage: 'awaiting-owner',
-    summary: 'Issue #76(2026-10-15・source:user-report・type:bug)。triage 済み(2026-10-15): 想定外(バグ)。生徒を削除して講師だけになった机(テンプレ由来の非 manual 講師)を並べ替えで下へ動かすと、次のテンプレ再マージ(教室の開き直し・次の生徒削除・基本データ/教室設定の変更の effect)が、テンプレの講師だけの机を「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず、机の講師を消す(mergeManagedWeek の consumedManagedTeacherIndexes)。削除は必要条件でなく、テンプレに元々ある講師だけの机が埋まった机より上にあるコマの並べ替えでも同じ(pack / seat とも再現。再現テストは Issue のコメントに掲載・未コミット)。全教室・データ破損なし・回避策は講師を手で置き直す(manual の講師は消えない)。既知の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)と同根。操作痕跡はこのセッションに読み取り専用鍵が無く未読。',
-    nextAction: 'オーナーが Issue #76 の triage を確認し、修正着手の可否を判断(利用者報告はオーナー許可後に dev-fix)。修正の方向: 消費判定を机番号でなく講師の同一性(表示名／講師 ID)で行い、並べ替え後の位置の講師だけの机を残す(spec-curator で「並べ替え後の足場講師は盤面の並びが正」を確定)。回帰テストは inv02 マトリクスの列「詰め直し／並べ替え × 再マージ」へ。室長への回避策(講師を手で置き直す)はオーナーから伝える。',
-    references: ['Issue #76', 'docs/spec-invariants.md INV-02 L-7 ②', 'src/components/schedule-board/ScheduleBoardScreen.tsx mergeManagedWeek', 'src/components/schedule-board/deskSort.ts'],
+    title: '緑が丘校の報告 #76: 生徒を削除して並べ替えると講師の名前が消える(修正済み v1.5.600・全教室)',
+    stage: 'awaiting-checklist',
+    summary: 'Issue #76(2026-10-15・source:user-report・type:bug)。triage(2026-10-15): 想定外。並べ替えで下へ動いたテンプレ由来の講師だけの机を、次のテンプレ再マージ(教室の開き直し・次の生徒削除・基本データ/教室設定の変更の effect)が「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず講師を消していた(mergeManagedWeek の consumedManagedTeacherIndexes・pack / seat とも・削除は必要条件でない)。オーナー承認(同日「修正に進めて、すぐに全校展開して」)で v1.5.600 に修正(フラグなし・全教室): テンプレ(抑止後)のそのコマに同じ講師の講師だけの机があり、他の机に同じ講師が居らず、削除記録でもなければ机番号に関係なく今の机に残す。兄弟の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)も止まる。INV-02 マトリクスに 9 件、INV-12 の L-7 兄弟 2 の並びの期待を改定(台帳に記録)。',
+    checklistItemIds: ['tp-52'],
+    nextAction: 'オーナーが Issue #76 の修正内容を確認し、開発用教室で確認リスト tp-52 を確かめる(OK なら Issue #76 をクローズし、室長へ「直った」と伝える)。すでに講師が消えてしまった週は、講師セルから手で置き直す(手置きは再マージで消えない)。',
+    references: ['Issue #76', 'CHANGELOG v1.5.600', 'docs/spec-invariants.md INV-02(2026-10-15)', 'src/components/schedule-board/ScheduleBoardScreen.tsx mergeManagedWeek'],
     updatedOn: '2026-10-15',
   },
   {
