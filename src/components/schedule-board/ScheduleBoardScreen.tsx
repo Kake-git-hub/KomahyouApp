@@ -4542,15 +4542,23 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       }
     })
 
+    // 呼び名(表示名/ID)の対応表。削除記録の突き合わせ(下)と足場講師の据え置き(Issue #76)で同じものを使う(2026-10-14 / 2026-10-15)。
+    const aliasesOf: TeacherAliasResolver = teacherAliases ?? ((key) => [key])
+    // Issue #76: 授業なし・非 manual・出欠記録なしの「講師だけの机」(テンプレ由来の足場講師)の index。名前はいったん残し、
+    // 下の据え置き判定(consumed 判定の後)で残す／消すを決める。
+    const scaffoldCandidateIndexes = new Set<number>()
+
     const nextDesks = cell.desks.map((desk, deskIndex) => {
       const lesson = desk.lesson
       if (!lesson || !isManagedLesson(lesson)) {
         const hasRecordedStatus = hasRecordedStatusSlots(desk)
+        const isScaffoldSlot = !lesson && !desk.manualTeacher && !hasRecordedStatus
+        if (isScaffoldSlot && desk.teacher.trim()) scaffoldCandidateIndexes.add(deskIndex)
         return {
           ...desk,
           statusSlots: cloneStatusSlots(desk.statusSlots),
-          teacher: !lesson && !desk.manualTeacher && !hasRecordedStatus ? '' : desk.teacher,
-          manualTeacher: !lesson && !desk.manualTeacher && !hasRecordedStatus ? false : desk.manualTeacher,
+          teacher: isScaffoldSlot && !scaffoldCandidateIndexes.has(deskIndex) ? '' : desk.teacher,
+          manualTeacher: isScaffoldSlot ? false : desk.manualTeacher,
           teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
           teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
           teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : undefined,
@@ -4695,8 +4703,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
     })
 
     // Collect teacher names that were explicitly deleted from any desk (regardless of index)
-    // ★削除記録を消す(下)より前に集める＝この再マージでは消した講師を必ず外す。呼び名(表示名/ID)の対応表で比べる(2026-10-14)。
-    const aliasesOf: TeacherAliasResolver = teacherAliases ?? ((key) => [key])
+    // ★削除記録を消す(下)より前に集める＝この再マージでは消した講師を必ず外す。呼び名(表示名/ID)の対応表(aliasesOf・上で定義)で比べる(2026-10-14)。
     const deletedTeacherNameSet = new Set<string>()
     nextDesks.forEach((desk) => {
       if (desk.manualTeacher && desk.teacherAssignmentSource === 'deleted' && desk.teacherAssignmentTeacherId) {
@@ -4706,6 +4713,33 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
     const isDeletedTeacher = (managedDesk: DeskCell, idx: number) => {
       const ref = managedTeacherRef(managedDesk, idx)
       return [...aliasesOf(ref.teacher), ...(ref.teacherAssignmentTeacherId ? aliasesOf(ref.teacherAssignmentTeacherId) : [])].some((key) => deletedTeacherNameSet.has(key))
+    }
+
+    // Issue #76(緑が丘校・2026-10-15・INV-02 / INV-01 兄弟): 足場講師(scaffoldCandidateIndexes)の据え置き。
+    // テンプレ(抑止後の管理セル)のこのコマに同じ講師の「講師だけの机」があり、そのコマの他の机(授業あり・手置き・出欠記録あり)に
+    // 同じ講師が居らず、削除記録で消した講師でもなければ、**机番号に関係なく**今の机に残す(同じ講師は 1 机まで＝下の alreadyPresent と同じ単位)。
+    // 以前は無条件に講師を消してから下の再付与ループで「同じ机番号の盤面の机に授業があれば消費済み」と判定していたため、
+    // 並べ替え(上に詰めて／同席番)で足場講師の机が下へ動き、元の机番号に生徒のいる机が来ると、消した講師がどの机にも戻らず
+    // 盤面から消えていた(削除は必要条件でなく、テンプレの講師だけの机が埋まった机より上にあるコマの並べ替えでも同じ)。
+    // テンプレ追従は不変: テンプレからその講師が消えた机・丸ごと振替の日(strip 済み＝管理セルに講師だけの机が無い)は従来どおり消える。
+    const scaffoldTeacherIdByName = new Map<string, string | undefined>()
+    managedCell.desks.forEach((managedDesk, idx) => {
+      if (managedDesk.lesson) return
+      const name = managedDesk.teacher.trim()
+      if (name && !scaffoldTeacherIdByName.has(name)) scaffoldTeacherIdByName.set(name, managedTeacherRef(managedDesk, idx).teacherAssignmentTeacherId)
+    })
+    const presentTeacherNames = new Set(nextDesks.filter((_desk, index) => !scaffoldCandidateIndexes.has(index)).map((desk) => desk.teacher.trim()).filter(Boolean))
+    for (const index of scaffoldCandidateIndexes) {
+      const desk = nextDesks[index]
+      const name = desk.teacher.trim()
+      const deleted = [...aliasesOf(name), ...(desk.teacherAssignmentTeacherId ? aliasesOf(desk.teacherAssignmentTeacherId) : [])].some((key) => deletedTeacherNameSet.has(key))
+      if (scaffoldTeacherIdByName.has(name) && !presentTeacherNames.has(name) && !deleted) {
+        desk.teacherAssignmentTeacherId = scaffoldTeacherIdByName.get(name) ?? desk.teacherAssignmentTeacherId
+        presentTeacherNames.add(name)
+        continue
+      }
+      desk.teacher = ''
+      desk.teacherAssignmentTeacherId = undefined
     }
 
     // 削除記録の机を空き机へ戻す(オーナー決定 2026-10-14「削除記録は削除した講師だけに有効に」): 消した講師がそのコマのテンプレの**どこにも居ない**ときだけ

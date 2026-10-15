@@ -14,9 +14,15 @@
 
 ## 未リリース
 
-## v1.5.600 (2026-10-15)
+## v1.5.601 (2026-10-15)
 
 - feat: **テスト教室の確認リストはテンプレ関係(tp-44〜51)だけ・開発用教室は全項目**(オーナー指示 2026-10-15)。App が検証用教室の種別(開発用=development・テスト=sandbox)を台帳から決めてパネルへ渡し(`resolveVerificationChecklistAudience`)、パネルは `selectVerificationChecklistItems` で絞る(進捗・送信本文・Markdown も絞った項目で)。テスト教室に出す項目は生徒名プレースホルダや開発用教室の盤面を前提にしないものだけ(テストで固定)。見出しを「開発用教室(全項目)」「テスト教室(テンプレ関係のみ)」に (verificationChecklist.ts / developmentClassroom.ts / VerificationChecklistPanel.tsx / App.tsx / docs/spec-developer-report.md)
+
+## v1.5.600 (2026-10-15)
+
+- fix(INV-02/INV-01): **生徒を削除して並べ替えると講師の名前が消える不具合を修正**(緑が丘校 #76・オーナー承認 2026-10-15「修正に進めて、すぐに全校展開して」・全教室・フラグなし)。テンプレ再マージ(`mergeManagedWeek`)が授業なし・非 manual の講師だけの机(テンプレ由来の足場講師)を無条件に消してから「テンプレの講師だけの机は同じ机番号の盤面の机に授業があれば消費済み」と判定して戻していたため、並べ替え(上に詰めて／同席番)で足場講師の机が下へ動き、元の机番号に生徒のいる机が来ると講師がどの机にも戻らなかった(削除は必要条件でなく、テンプレに元々ある講師だけの机が埋まった机より上にあるコマの並べ替えでも同じ)。修正後はテンプレ(抑止後)のそのコマに同じ講師の講師だけの机があり、他の机(授業あり・手置き・出欠記録あり)に同じ講師が居らず、削除記録でもなければ机番号に関係なく今の机に残す(同じ講師は 1 机まで。テンプレ追従・削除記録・丸ごと振替の日の strip は不変)。兄弟の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)も同じ修正で止まる(INV-12 マトリクスの L-7 兄弟 2 の並びの期待を改定・台帳に記録)。回帰テスト: INV-02 マトリクスに 9 件(並べ替え 3 種 × 削除した机／テンプレの講師だけの机、守り 3 件)。確認リスト tp-52 (ScheduleBoardScreen.tsx / inv02-manual-edit-persistence.matrix.test.ts / inv12-placement-uniqueness.matrix.test.ts / docs/spec-invariants.md / verificationChecklist.ts / developmentStatusLedger.ts)
+- docs: **緑が丘校の利用者報告 #76(生徒を削除して並べ替えると講師の名前が消える)を triage**(2026-10-15・修正は未着手＝オーナー許可待ち)。想定外と判定: 並べ替えで下へ動いたテンプレ由来の講師だけの机を、次のテンプレ再マージ(`mergeManagedWeek`)が「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず講師を消す(`consumedManagedTeacherIndexes`・pack / seat とも・削除は必要条件でない・全教室)。再現テストは Issue のコメントに掲載(未コミット)。進行中テーマ台帳に `user-report-issue-76`(オーナー判断待ち)を追加 (developmentStatusLedger.ts)
+
 ## v1.5.599 (2026-10-14)
 
 - docs: **テスト教室(テスト担当)でも #75 の確認項目 tp-44〜51 を確認する**(オーナー指示 2026-10-15)。確認リストは登録台帳の検証用教室(開発用教室・テスト教室)に同じ一覧が出て、下書き・送信結果は教室ごとに分かれる(既存の仕組み)。tp-48 の前提を「開発用教室で」から「この教室で」へ、パネルの見出しを「検証用教室のみ」へ。台帳 user-request-issue-75 と仕様 E-2 にテスト教室の読み方(`--classroom test_classroom_20260507_dai`)を記載 (verificationChecklist.ts / VerificationChecklistPanel.tsx / developmentStatusLedger.ts / docs/spec-developer-report.md)

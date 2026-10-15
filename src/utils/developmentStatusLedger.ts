@@ -174,6 +174,16 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-10-14',
   },
   {
+    id: 'user-report-issue-76',
+    title: '緑が丘校の報告 #76: 生徒を削除して並べ替えると講師の名前が消える(修正済み v1.5.600・全教室)',
+    stage: 'awaiting-checklist',
+    summary: 'Issue #76(2026-10-15・source:user-report・type:bug)。triage(2026-10-15): 想定外。並べ替えで下へ動いたテンプレ由来の講師だけの机を、次のテンプレ再マージ(教室の開き直し・次の生徒削除・基本データ/教室設定の変更の effect)が「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず講師を消していた(mergeManagedWeek の consumedManagedTeacherIndexes・pack / seat とも・削除は必要条件でない)。オーナー承認(同日「修正に進めて、すぐに全校展開して」)で v1.5.600 に修正(フラグなし・全教室): テンプレ(抑止後)のそのコマに同じ講師の講師だけの机があり、他の机に同じ講師が居らず、削除記録でもなければ机番号に関係なく今の机に残す。兄弟の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)も止まる。INV-02 マトリクスに 9 件、INV-12 の L-7 兄弟 2 の並びの期待を改定(台帳に記録)。',
+    checklistItemIds: ['tp-52'],
+    nextAction: 'オーナーが Issue #76 の修正内容を確認し、開発用教室で確認リスト tp-52 を確かめる(OK なら Issue #76 をクローズし、室長へ「直った」と伝える)。すでに講師が消えてしまった週は、講師セルから手で置き直す(手置きは再マージで消えない)。',
+    references: ['Issue #76', 'CHANGELOG v1.5.600', 'docs/spec-invariants.md INV-02(2026-10-15)', 'src/components/schedule-board/ScheduleBoardScreen.tsx mergeManagedWeek'],
+    updatedOn: '2026-10-15',
+  },
+  {
     id: 'checklist-issues-cleanup',
     title: '確認リスト由来の Issue #62〜#66 のクローズ',
     stage: 'awaiting-owner',

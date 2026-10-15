@@ -20,6 +20,7 @@ import {
   computeStudentMove,
   applyHistoryEntry,
   remergeBoardWeekWithManagedData,
+  removeStudentFromDeskLesson,
   stripWithdrawnStudentsFromBoardWeek,
   computeStudentWithdrawSweep,
   computePendingDeskResolution,
@@ -2034,5 +2035,119 @@ describe('INV-02 × 保留中の自動処理: 保留の机（講師・位置・I
     const referenceDate = new Date('2026-09-29T00:00:00')
     expect(trimBoardWeeksForMemory([near, farPending, farPlain], { referenceDate, protectedCellIds: collectTemplatePendingCellIds(pending) })).toEqual([near, farPending])
     expect(trimBoardWeeksForMemory([near, farPending, farPlain], { referenceDate })).toEqual([near])
+  })
+})
+
+// ============================================================================
+// INV-02 × 列「並べ替え → 再マージ」（Issue #76・緑が丘校 2026-10-15・INV-01 兄弟）
+//
+// 保証（INV-02）: 盤面への手動編集（並べ替え＝机の位置の確定・生徒の削除）は、自動処理（テンプレ再マージ）で巻き戻らない。
+// 症状: 生徒を削除して講師だけになった机（テンプレ由来の非 manual 足場講師）を並べ替えで下へ動かすと、次の再マージ
+//   （教室の開き直し・次の生徒削除・基本データ/教室設定の変更 effect）が、テンプレの講師だけの机を「同じ机番号の盤面の机に
+//   授業があれば消費済み」とみなして戻さず、講師がどの机にも残らなかった（削除は必要条件でなく、テンプレに元々ある講師だけの机が
+//   埋まった机より上にあるコマの並べ替えでも同じ）。
+// 修正: mergeManagedWeek は、テンプレ（抑止後）のそのコマに同じ講師の講師だけの机がある間、机番号に関係なく足場講師を今の机に残す
+//   （残す数はテンプレの講師だけの机の数まで）。テンプレ追従（テンプレからその講師が消えたら足場講師も消える）・削除記録・
+//   丸ごと振替の日の strip は従来どおり。
+// 行: { 並べ替えなし（対照）/ 上に詰めて / 同席番 } × { 生徒を削除した机 / テンプレに元々ある講師だけの机 }、
+//     ＋ 守り（テンプレ追従は不変・同じ講師を 2 机にしない・削除記録の講師は戻らない・再マージ 2 回の不動点）。
+// 修正前: 並べ替えあり 4 行が落ちる（対照 2 行と守りは通る）。
+// ============================================================================
+describe('INV-02 × 並べ替え → 再マージ: 足場講師は並べ替え後の机に残る（Issue #76）', () => {
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-11'
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const TODAY = '2026-10-05'
+  const studentRows: StudentRow[] = [['sA', '青木'], ['sB', '馬場'], ['sC', '千葉']].map(([id, name]) => ({
+    id, name, displayName: name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01',
+  }))
+  const teacherRows: TeacherRow[] = [['t1', '田中'], ['t2', '鈴木'], ['t3', '佐藤']].map(([id, name]) => ({
+    id, name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+  }))
+  const row = (id: string, teacherId: string, student1Id = ''): RegularLessonRow => ({
+    id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5,
+  })
+  const settings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 4 } as ClassroomSettings
+  // テンプレ(水 5限): 机0=田中(A)・机1=鈴木(B)・机2=佐藤(C)・机3=空
+  const ROWS = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', 'sC')]
+  // テンプレに元々「講師だけの机」が埋まった机より上にある形: 机1=鈴木(生徒なし)
+  const ROWS_TEACHER_ONLY = [row('r0', 't1', 'sA'), row('r1', 't2'), row('r2', 't3', 'sC')]
+
+  const boardWeek = (rows: RegularLessonRow[]) => buildManagedScheduleCellsForRange({
+    range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+    fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END,
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: rows, boardWeeks: [],
+  })
+  const remerge = (weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[] = []) => remergeBoardWeeksWithManagedData(weeks, {
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: TODAY,
+  })
+  const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+  const teachersOf = (cell: SlotCell) => cell.desks.map((desk) => desk.teacher)
+  const sortCell = (week: SlotCell[], sortDesks: (cell: SlotCell) => DeskCell[]) => week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: sortDesks(cell) }))
+  const SORTS = [
+    ['並べ替えなし（対照）', (cell: SlotCell) => cell.desks],
+    ['上に詰めて並べ替え（pack）', (cell: SlotCell) => packSortCellDesks(cell, { skipStatusSlotPack: true })],
+    ['同席番で並べ替え（seat）', (cell: SlotCell) => seatSortCells([cell], { skipStatusSlotPack: true })[0].desks],
+  ] as const
+
+  describe.each(SORTS)('%s', (_label, sortDesks) => {
+    it('生徒を削除して講師だけになった机（テンプレ由来）は、並べ替え後の机に講師が残り、再マージ 2 回でも変わらない', () => {
+      const week = boardWeek(ROWS)
+      const cell = cellOf([week])
+      const student = cell.desks[1].lesson!.studentSlots[0]!
+      expect(student.name).toBe('馬場')
+      removeStudentFromDeskLesson(cell.desks[1], 0) // handleDeleteStudent 相当
+      const suppressed = [buildManagedOccurrenceKey(student, cell.dateKey, cell.slotNumber)]
+      const afterDelete = remerge([week], ROWS, suppressed) // 削除直後の effect
+      expect(teachersOf(cellOf(afterDelete))).toEqual(['田中', '鈴木', '佐藤', ''])
+      const sorted = sortCell(afterDelete[0], sortDesks) // handleBoardSort 相当
+      const sortedTeachers = teachersOf(cellOf([sorted]))
+      expect(sortedTeachers.filter((teacher) => teacher === '鈴木')).toHaveLength(1)
+      const once = remerge([sorted], ROWS, suppressed) // 次の削除・再読込
+      expect(teachersOf(cellOf(once))).toEqual(sortedTeachers)
+      expect(cellOf(once).desks.find((desk) => desk.teacher === '鈴木')?.lesson).toBeUndefined()
+      expect(cellOf(remerge(once, ROWS, suppressed))).toEqual(cellOf(once))
+    })
+
+    it('テンプレに元々ある講師だけの机も、並べ替え後の机に講師が残り、再マージ 2 回でも変わらない', () => {
+      const week = boardWeek(ROWS_TEACHER_ONLY)
+      expect(teachersOf(cellOf([week]))).toEqual(['田中', '鈴木', '佐藤', ''])
+      const sorted = sortCell(week, sortDesks)
+      const sortedTeachers = teachersOf(cellOf([sorted]))
+      expect(sortedTeachers.filter((teacher) => teacher === '鈴木')).toHaveLength(1)
+      const once = remerge([sorted], ROWS_TEACHER_ONLY)
+      expect(teachersOf(cellOf(once))).toEqual(sortedTeachers)
+      expect(cellOf(remerge(once, ROWS_TEACHER_ONLY))).toEqual(cellOf(once))
+    })
+  })
+
+  it('守り: テンプレ追従は不変＝テンプレからその講師が消えたら、並べ替え後の足場講師の机も空になる', () => {
+    const sorted = sortCell(boardWeek(ROWS_TEACHER_ONLY), SORTS[1][1])
+    expect(teachersOf(cellOf([sorted]))).toContain('鈴木')
+    const rowsWithoutSuzuki = [row('r0', 't1', 'sA'), row('r2', 't3', 'sC')]
+    const after = remerge([sorted], rowsWithoutSuzuki)
+    expect(teachersOf(cellOf(after))).not.toContain('鈴木')
+  })
+
+  it('守り: テンプレの講師だけの机が 1 机なら、盤面に同じ講師の講師だけの机が 2 つあっても 1 つに揃う（同じ講師を増やさない）', () => {
+    const week = boardWeek(ROWS_TEACHER_ONLY)
+    const cell = cellOf([week])
+    cell.desks[3] = { ...cell.desks[3], teacher: '鈴木' } // 非 manual の講師だけの机をもう 1 つ（旧データ相当）
+    const after = remerge([week], ROWS_TEACHER_ONLY)
+    expect(teachersOf(cellOf(after)).filter((teacher) => teacher === '鈴木')).toHaveLength(1)
+    expect(teachersOf(cellOf(after))[1]).toBe('鈴木')
+  })
+
+  it('守り: 盤面で削除した講師（削除記録）は、同じ講師の講師だけの机が別の机に残っていても戻らない', () => {
+    const week = boardWeek(ROWS_TEACHER_ONLY)
+    const cell = cellOf([week])
+    // 机1 の鈴木を削除（tombstone）し、机3 に非 manual の鈴木が残っている形（削除前に並べ替えで動いた写し相当）
+    cell.desks[1] = { ...cell.desks[1], teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't2' }
+    cell.desks[3] = { ...cell.desks[3], teacher: '鈴木', teacherAssignmentTeacherId: 't2' }
+    const after = remerge([week], ROWS_TEACHER_ONLY)
+    expect(teachersOf(cellOf(after))).not.toContain('鈴木')
+    expect(cellOf(after).desks[1].teacherAssignmentSource).toBe('deleted')
   })
 })
