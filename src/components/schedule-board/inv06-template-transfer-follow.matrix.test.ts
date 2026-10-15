@@ -33,6 +33,8 @@ const students: StudentRow[] = [
   { id: 'sB', name: '馬場', displayName: '馬場', email: 'b@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
   { id: 'sC', name: '千葉', displayName: '千葉', email: 'c@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
   { id: 'sD', name: '土屋', displayName: '土屋', email: 'd@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+  // 登録名と表示名が違う生徒（表示名は既定＝登録名の最初の語「江藤」）。盤面の記録は表示名を持つ（監査 M-C）。
+  { id: 'sE', name: '江藤 花子', displayName: '', email: 'e@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
 ]
 const teachers: TeacherRow[] = ['田中', '鈴木', '佐藤'].map((name, index) => ({
   id: `t${index + 1}`, name, email: `t${index + 1}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
@@ -68,8 +70,8 @@ function withDesk(weeks: SlotCell[][], cellId: string, deskIndex: number, patch:
 function remerge(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], classroomSettings = settings()) {
   return remergeBoardWeeksWithManagedData(weeks, { classroomSettings, teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29' })
 }
-function balances(weeks: SlotCell[][], rows: RegularLessonRow[], manualAdjustments: Record<string, ManualMakeupOrigin[]>, classroomSettings = settings()) {
-  const entries = buildMakeupStockEntries({ students, teachers, regularLessons: rows, classroomSettings, weeks, manualAdjustments, resolveStudentKey, today: TODAY })
+function balances(weeks: SlotCell[][], rows: RegularLessonRow[], manualAdjustments: Record<string, ManualMakeupOrigin[]>, classroomSettings = settings(), suppressedOrigins: Record<string, ManualMakeupOrigin[]> = {}) {
+  const entries = buildMakeupStockEntries({ students, teachers, regularLessons: rows, classroomSettings, weeks, manualAdjustments, suppressedOrigins, resolveStudentKey, today: TODAY })
   return Object.fromEntries(entries.map((item) => [item.key, item.balance])) as Record<string, number>
 }
 const cellOf = (weeks: SlotCell[][], id: string) => weeks.flat().find((cell) => cell.id === id)!
@@ -90,10 +92,11 @@ function transferredBoard(rows = OLD_ROWS, classroomSettings = settings(), trans
   return { weeks, suppressed: result.nextSuppressedRegularLessonOccurrences, ledgers: result.nextManualMakeupAdjustments }
 }
 
-function save(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], options: { classroomSettings?: ClassroomSettings; slotFilter?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['templatePendingDesks'] } = {}) {
+function save(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], options: { classroomSettings?: ClassroomSettings; slotFilter?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedMakeupOrigins?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['templatePendingDesks'] } = {}) {
   return computeTemplateDiffApplyForBoard({
     weeks, classroomSettings: options.classroomSettings ?? settings(), teachers, students, regularLessons: rows, effectiveStartDate: options.effectiveStartDate ?? EFFECTIVE,
     suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: options.templatePendingDesks ?? {}, createdAt: '2026-10-01T10:00:00.000Z', slotFilter: options.slotFilter, manualMakeupAdjustments: options.manualMakeupAdjustments ?? {},
+    suppressedMakeupOrigins: options.suppressedMakeupOrigins,
   })
 }
 function suppressedAfter(suppressed: string[], saved: ReturnType<typeof save>) {
@@ -246,13 +249,15 @@ describe('INV-06 × Q40-1: テンプレから外した生徒の根拠を失っ�
     expect(liveIds(saved.nextWeeks, FRI_CELL)).toContain('sA')
     expect(balances(saved.nextWeeks, newRows, board.ledgers)['sA__数'] ?? 0).toBe(0)
     expectFixpoint(saved, newRows, board.suppressed)
-    // 保留の下段に休みの記録（上段の机は空）
+    // 保留の下段に休みの記録（下段に生きている生徒も居る＝保留が残る形。木 5限 は範囲外にして保留を触らせない・監査 L-1）
     const thuDeskId = cellOf(board.weeks, THU_CELL).desks[0].id
-    const pending = { [buildTemplatePendingDeskKey(THU_CELL, thuDeskId)]: { lower: { statusSlots: [absentMakeupA, null] as [StudentStatusEntry | null, StudentStatusEntry | null] }, effectiveStartDate: EFFECTIVE, createdAt: 'x' } }
+    const pending = { [buildTemplatePendingDeskKey(THU_CELL, thuDeskId)]: { lower: { lesson: { id: 'lower_d', studentSlots: [MANUAL_D, null] as [StudentEntry | null, StudentEntry | null] }, statusSlots: [absentMakeupA, null] as [StudentStatusEntry | null, StudentStatusEntry | null] }, effectiveStartDate: EFFECTIVE, createdAt: 'x' } }
     const lower = remerge(placeOnFriday(withDesk(board.weeks, THU_CELL, 0, (desk) => ({ ...desk, lesson: undefined }))), OLD_ROWS, board.suppressed)
-    const savedLower = save(lower, newRows, board.suppressed, { manualMakeupAdjustments: board.ledgers, templatePendingDesks: pending })
+    const wedOnly = { slotKeys: new Set([buildTemplateSlotKey(3, SLOT)]) }
+    const savedLower = save(lower, newRows, board.suppressed, { manualMakeupAdjustments: board.ledgers, templatePendingDesks: pending, slotFilter: wedOnly })
     expect(savedLower.summary.orphanedMakeupsRemoved).toBe(0)
     expect(liveIds(savedLower.nextWeeks, FRI_CELL)).toContain('sA')
+    expect(Object.keys(savedLower.nextPendingDesks)).toEqual(Object.keys(pending))
   })
 
   it('範囲（変えたコマ）の外の振替元は触らない: 木 5限だけの絞り込みでは水 5限 由来の振替は消えず、置きもしない', () => {
@@ -439,5 +444,44 @@ describe('INV-06 × Q40 regression-reviewer 再検査（2026-10-15・H-A/M-A/M-B
     expect(liveIds(saved.nextWeeks, THU_CELL).filter((id) => id === 'sC')).toHaveLength(1)
     expect(liveIds(saved.nextWeeks, `${THU}_3`)).toEqual([])
     expectFixpoint(saved, newRows, board.suppressed)
+  })
+})
+
+describe('INV-06 × Q40 regression-reviewer 最終確認（2026-10-15・M-C/L-3）', () => {
+  it('M-C 鍵解決は表示名も見る: 管理生徒 ID の無い旧データの「振替を休んだ記録」（表示名）が立てる在庫から置いた ID つきの振替は、テンプレから外しても消えない（残数不変）', () => {
+    // 水 5限 机 1 の生徒 2 に E（登録名「江藤 花子」・表示名「江藤」）。
+    const rows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB', 'sE'), row('r2', 't3', '', '', 4)]
+    const base = remerge([buildWeek(rows)], rows, [])
+    const wedE = cellOf(base, WED_CELL).desks[1].lesson!.studentSlots[1]!
+    expect(wedE.managedStudentId).toBe('sE')
+    const legacyAbsent: StudentStatusEntry = { id: 'st_e_legacy', studentId: 'legacy', sourceManagedLesson: false, name: '江藤', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', teacherName: '佐藤', dateKey: THU, slotNumber: SLOT, recordedAt: 'x', status: 'absent', sourceLessonId: 'src', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限' }
+    const placedE: StudentEntry = { id: 'sE_mk', name: '江藤', managedStudentId: 'sE', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限' }
+    const keyE = buildManagedOccurrenceKey(wedE, WED, SLOT)
+    const weeks = withDesk(withDesk(withDesk(base, WED_CELL, 1, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], null] } })), THU_CELL, 0, (desk) => ({ ...desk, statusSlots: [legacyAbsent, null] as [StudentStatusEntry | null, StudentStatusEntry | null] })), FRI_CELL, 0, (desk) => ({ ...desk, lesson: { id: 'from_stock_e', studentSlots: [placedE, null] as [StudentEntry | null, StudentEntry | null] } }))
+    const normalized = remerge(weeks, rows, [keyE])
+    expect(balances(normalized, rows, {})['sE__数'] ?? 0).toBe(0)
+    const newRows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const saved = save(normalized, newRows, [keyE])
+    expect(saved.summary.orphanedMakeupsRemoved).toBe(0)
+    expect(liveIds(saved.nextWeeks, FRI_CELL)).toContain('sE')
+    expect(balances(saved.nextWeeks, newRows, {})['sE__数'] ?? 0).toBe(0)
+  })
+
+  it('L-3 抑止した origin は根拠にならない: 台帳の origin がその日ごと抑止されている振替は根拠なしで消え、残数は変わらない', () => {
+    const base = remerge([buildWeek(OLD_ROWS)], OLD_ROWS, [])
+    const wedA = cellOf(base, WED_CELL).desks[0].lesson!.studentSlots[0]!
+    const keyA = buildManagedOccurrenceKey(wedA, WED, SLOT)
+    const weeks = withDesk(withDesk(base, WED_CELL, 0, (desk) => ({ ...desk, lesson: undefined })), THU_CELL, 0, (desk) => ({ ...desk, lesson: { id: 'manual_mk', studentSlots: [{ ...wedA, id: 'sA_mk', lessonType: 'makeup', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限' } as StudentEntry, null] as [StudentEntry | null, StudentEntry | null] } }))
+    const normalized = remerge(weeks, OLD_ROWS, [keyA])
+    const ledger = { 'sA__数': [{ dateKey: WED }] }
+    const suppressed = { 'sA__数': [{ dateKey: WED }] }
+    const newRows = [row('r0', 't1'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const before = balances(normalized, OLD_ROWS, ledger, settings(), suppressed)
+    const saved = save(normalized, newRows, [keyA], { manualMakeupAdjustments: ledger, suppressedMakeupOrigins: suppressed })
+    expect(saved.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(liveIds(saved.nextWeeks, THU_CELL)).not.toContain('sA')
+    expect(balances(saved.nextWeeks, newRows, ledger, settings(), suppressed)['sA__数'] ?? 0).toBe(before['sA__数'] ?? 0)
+    // 抑止を渡さなければ根拠あり（H-2 の形）
+    expect(save(normalized, newRows, [keyA], { manualMakeupAdjustments: ledger }).summary.orphanedMakeupsRemoved).toBe(0)
   })
 })

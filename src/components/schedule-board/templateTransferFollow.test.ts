@@ -214,6 +214,20 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(holiday.stocked[0]?.ledger).toBe(false)
   })
 
+  it('振替元の机の記録は授業も記録も無い席に置く（監査 L-3）: テンプレの席に生きている生徒（記録なし）が居れば、もう一方の席へ', () => {
+    // 水 5限 机 0: 席 0 に生きている生徒 X（手動追加）・記録なし。移動元記録は机 1 にある（振替先の特定用）。
+    const weeks = [[
+      cell(WED, 5, [desk('w5d1', '', [student('sX_m', '山田', { manualAdded: true }), null]), desk('w5d2', '', undefined, [movedB, null])]),
+      cell(THU, 5, [desk('t5d1', '鈴木', [makeupOf('sB_mk', '馬場', WED, labelWed5), null]), desk('t5d2', '佐藤')]),
+    ]]
+    const plan = run(weeks, { skipped: [{ ...skippedC, seatIndex: 0 }] })
+    expect(plan.placed).toHaveLength(1)
+    const wed = plan.weeks[0].find((entry) => entry.id === `${WED}_5`)!
+    expect(wed.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sX')
+    expect(wed.desks[0].statusSlots?.[0] ?? null).toBeNull()
+    expect(wed.desks[0].statusSlots?.[1]).toMatchObject({ status: 'moved', managedStudentId: 'sC' })
+  })
+
   it('講師のいない机には置かない（監査 M-4・講師日程表に出ない授業を作らない）＝未消化', () => {
     const noTeacher = run(board(desk('t5d1', '', [makeupOf('sB_mk', '馬場', WED, labelWed5), null])))
     expect(noTeacher.placed).toHaveLength(0)

@@ -2576,11 +2576,20 @@ function resolveTemplateTransferStockKey(student: Pick<StudentEntry, 'managedStu
   return buildMakeupStockKey(student.managedStudentId ?? student.name, student.subject)
 }
 
-/** Q40: 在庫の正本（collectMakeupOriginDatesByKey）へ渡す生徒の鍵解決。盤面の resolveBoardStudentStockId と同じ順（管理生徒 ID → 名簿の名前 → name:）で、表示名の解決だけ省く。 */
+/** 名簿の「登録名」と「表示名」の両方から管理生徒を引く対応表（盤面の managedStudentByAnyName と Q40 の鍵解決が同じ表を使う＝判定を 2 か所に分けない）。 */
+export function buildManagedStudentByAnyNameMap(students: StudentRow[]) {
+  const entries = students.flatMap((student) => {
+    const displayName = getStudentDisplayName(student)
+    return [[student.name, student], [displayName, student]] as Array<[string, StudentRow]>
+  })
+  return new Map(entries)
+}
+
+/** Q40: 在庫の正本（collectMakeupOriginDatesByKey）へ渡す生徒の鍵解決。盤面の resolveBoardStudentStockId と同じ順（管理生徒 ID → 名簿の登録名・表示名 → name:）。 */
 function buildTemplateTransferStockIdResolver(students: StudentRow[]) {
-  const byName = new Map(students.map((student) => [student.name, student.id]))
+  const byAnyName = buildManagedStudentByAnyNameMap(students)
   return (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => {
-    const managedId = student.managedStudentId ?? byName.get(student.name)
+    const managedId = student.managedStudentId ?? byAnyName.get(student.name)?.id
     if (managedId) return managedId
     return student.manualAdded ? `manual:name:${student.name}` : `name:${student.name}`
   }
@@ -8214,13 +8223,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return byId
   }, [students])
 
-  const managedStudentByAnyName = useMemo(() => {
-    const entries = students.flatMap((student) => {
-      const displayName = getStudentDisplayName(student)
-      return [[student.name, student], [displayName, student]] as Array<[string, StudentRow]>
-    })
-    return new Map(entries)
-  }, [students])
+  const managedStudentByAnyName = useMemo(() => buildManagedStudentByAnyNameMap(students), [students])
 
   const resolveBoardStudentDisplayName = useCallback((name: string) => managedStudentNameMap.get(name) ?? name, [managedStudentNameMap])
   // No.146: 盤面セルの表示専用・ID優先版(BoardGrid へ渡す)。登録名を改名しても既存配置のセルが

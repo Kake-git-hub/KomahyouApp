@@ -359,6 +359,9 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(entry).toContain('resolveLedgerOriginDates: (ledgerAfterRemovals) => collectMakeupOriginDatesByKey({')
     expect(entry).toContain('manualAdjustments: ledgerAfterRemovals, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(params.students),')
     expect(entry).toContain('includeAbsentMakeupOrigins: true, templatePendingDesks: run.diff.nextPendingDesks,')
+    // 鍵解決は盤面と同じ対応表（登録名＋表示名）から（監査 M-C）。
+    expect(BOARD_TSX).toContain('const managedStudentByAnyName = useMemo(() => buildManagedStudentByAnyNameMap(students), [students])')
+    expect(BOARD_TSX).toContain('const byAnyName = buildManagedStudentByAnyNameMap(students)')
     expect(entry).toContain('manualMakeupAdjustments: MakeupOriginMap\n')
     // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の反復の絞り込みを書き換えない・監査 M-1）。
     expect(entry).not.toMatch(/params\.slotFilter\s*=/)
