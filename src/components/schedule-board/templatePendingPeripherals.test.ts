@@ -30,6 +30,7 @@ import {
   computeTemplateDiffApplyForBoard,
   reconcileSubmittedTeacherPlacements,
   repackTeacherOnlyDesks,
+  remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import { buildTemplatePendingDeskKey, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -158,8 +159,12 @@ function applyDiff(week: SlotCell[], newRows: RegularLessonRow[] = NEW_ROWS) {
   })
 }
 
+// 新テンプレ（机0=鈴木(C)・机1=佐藤(B)）: 田中はテンプレのどこにも居ない → QR 田中は Q21-9 例外 1 どおり机に残る形。
+// （NEW_ROWS は机1 に田中(B) が居るので、2026-10-15 の例外 1 の絞り込みで QR 田中が外れる形になる）
+const QR_KEPT_ROWS = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
+
 // 机0 に在庫由来の振替 M（下段になる）・移動元の記録・メモ。机0 の講師は QR 自動割振り（田中・講習 ss1）。新テンプレは机0 に C（鈴木）。
-function pendingWithQrTeacher() {
+function pendingWithQrTeacher(newRows: RegularLessonRow[] = NEW_ROWS) {
   let week = buildWeek(OLD_ROWS)
   week = mutateDesk(week, 0, (desk) => ({
     ...desk,
@@ -172,7 +177,7 @@ function pendingWithQrTeacher() {
     statusSlots: [null, status('sD', 'moved')],
     memoSlots: [null, '持ち物'],
   }))
-  const diff = applyDiff(week)
+  const diff = applyDiff(week, newRows)
   const deskId = cellOf(diff.nextWeeks).desks[0].id
   const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
   expect(diff.nextPendingDesks[key]).toBeDefined()
@@ -288,22 +293,69 @@ describe('講習の講師自動割当（applyTeacherAutoAssignRequest）: 保留
 
 describe('QR 提出講師の起動時自己修復（reconcileSubmittedTeacherPlacements）: 保留の机の QR 講師は配置済み（Q31・Q21-9）', () => {
   it('差分反映で保留になった机の QR 講師は机に残り、自己修復を何回通しても別の机へ置き直されない（講師が 2 か所に出ない）', () => {
-    const { diff, key } = pendingWithQrTeacher()
+    // テンプレのどこにも田中が居ない形（2026-10-15 の例外 1 の絞り込みに掛からない）。
+    const { diff, key } = pendingWithQrTeacher(QR_KEPT_ROWS)
     const pendingDesk = cellOf(diff.nextWeeks).desks[0]
     // Q21-9 末尾: 机の講師は QR 講師のまま・下段に講師は入らない。
     expect(pendingDesk.teacher).toBe('田中')
     expect(pendingDesk.teacherAssignmentSource).toBe('schedule-registration')
     expect(diff.nextPendingDesks[key].lower).not.toHaveProperty('teacher')
-    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: NEW_ROWS, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
+    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: QR_KEPT_ROWS, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
     const first = reconcileSubmittedTeacherPlacements({ weeks: diff.nextWeeks, ...params })
     expect(first.hasChanges).toBe(false)
     expect(first.placedCount).toBe(0)
     const second = reconcileSubmittedTeacherPlacements({ weeks: first.nextWeeks, ...params })
     expect(second.hasChanges).toBe(false)
     expect(second.nextWeeks).toEqual(diff.nextWeeks)
-    // QR の登録机（講習 ss1・田中）は保留の机の 1 か所だけ（机 2 の田中はテンプレの通常授業の机）。
+    // QR の登録机（講習 ss1・田中）は保留の机の 1 か所だけ。
     const qrDesks = second.nextWeeks.flat().flatMap((cell) => cell.desks).filter((desk) => desk.teacherAssignmentSource === 'schedule-registration' && desk.teacherAssignmentTeacherId === 't1')
     expect(qrDesks.map((desk) => desk.id)).toEqual([pendingDesk.id])
+  })
+
+  // Q21-9 例外 1 の絞り込み（オーナー指示 2026-10-15「日程表からの講師追加はテンプレが入っていたら消えて良い」）: テンプレが同じコマの別の机に同じ講師（生徒つき）を置く
+  // → 保留になった QR 机の講師はテンプレのその机の講師に替わる。QR の登録机がその講習で 1 つも残らなくても、自己修復は「田中が既に居るコマ」に置き直さない
+  // （autoAssignTeacherToSpecialSession の alreadyAssigned）ので、二重化にも週の増殖にも戻らない。
+  it('テンプレが別の机に同じ講師（生徒つき）を置くなら、保留の机の QR 講師はテンプレのその机の講師に替わり、自己修復を通しても同じ講師が 2 か所に戻らない（2026-10-15）', () => {
+    const { diff, key } = pendingWithQrTeacher(NEW_ROWS)
+    const cell = cellOf(diff.nextWeeks)
+    expect(cell.desks[0]).toMatchObject({ teacher: '鈴木', manualTeacher: false })
+    expect(cell.desks[0].teacherAssignmentSource).toBeUndefined()
+    expect(cell.desks[1]).toMatchObject({ teacher: '田中', manualTeacher: false })
+    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+    // 下段（振替 M・記録・メモ）はそのまま残る
+    expect(diff.nextPendingDesks[key].lower).not.toHaveProperty('teacher')
+    expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sM')
+    expect(diff.summary.qrTeacherRemoved).toBe(1)
+    // 外した机には「テンプレに寄せた」記録が残る（自己修復が配置済みと数える根拠）
+    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: NEW_ROWS, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
+    const first = reconcileSubmittedTeacherPlacements({ weeks: diff.nextWeeks, ...params })
+    expect(first.hasChanges).toBe(false)
+    expect(first.placedCount).toBe(0)
+    expect(first.nextWeeks).toEqual(diff.nextWeeks)
+    expect(first.nextWeeks.flat().flatMap((item) => item.desks).filter((desk) => desk.teacherAssignmentSource === 'schedule-registration' && desk.teacherAssignmentTeacherId === 't1')).toEqual([])
+    // 回帰の確認: 記録を消すと「提出済みなのに未配置」とみなされ、同じ日の他の時限へ置き直される（＝記録が自己修復の巻き戻しを止めている証拠）
+    const stripped = diff.nextWeeks.map((week) => week.map((item) => ({ ...item, desks: item.desks.map((desk) => { const { scheduleRegistrationSupersededByTemplate: _omit, ...rest } = desk; return rest }) })))
+    const rerun = reconcileSubmittedTeacherPlacements({ weeks: stripped, ...params })
+    expect(rerun.placedCount).toBe(1)
+  })
+
+  // regression-reviewer M-2（2026-10-15）: 記録が数えられるのは「そのコマに同じ講師がまだ居る間」だけ。後でテンプレからその講師が消えたら、
+  // 記録は無視され、従来どおり自己修復が QR を置き直す（出勤予定として使う QR がそのコマから消えたままにならない）。
+  it('寄せた後にテンプレからその講師が消えたら、記録は数えず自己修復がそのコマへ QR を置き直す', () => {
+    const { diff } = pendingWithQrTeacher(NEW_ROWS)
+    // テンプレから田中を外す（机1 を佐藤(B) に）→ 再マージで田中がコマから消え、記録だけが机0 に残る
+    const rowsWithoutTanaka = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
+    const remerged = remergeBoardWeeksWithManagedData(diff.nextWeeks, { classroomSettings: settings(), teachers, students, regularLessons: rowsWithoutTanaka, suppressedRegularLessonOccurrences: diff.addedSuppressedRegularLessonOccurrences, todayKey: '2026-09-29' })
+    const cell = cellOf(remerged)
+    expect(cell.desks.some((desk) => desk.teacher === '田中')).toBe(false)
+    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: rowsWithoutTanaka, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
+    const repaired = reconcileSubmittedTeacherPlacements({ weeks: remerged, ...params })
+    expect(repaired.placedCount).toBe(1)
+    const repairedCell = cellOf(repaired.nextWeeks)
+    expect(repairedCell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+    expect(repairedCell.desks.find((desk) => desk.teacher === '田中')).toMatchObject({ teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
   })
 
   it('未配置の提出講師を置き直すときも、上段の空いた保留の机は置き先にしない（渡さないと置いてしまう＝回帰の確認）', () => {

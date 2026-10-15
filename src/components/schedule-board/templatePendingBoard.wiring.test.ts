@@ -399,7 +399,12 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     expect(BOARD_TSX).not.toContain('template-mode-header-bar')
     expect(BOARD_TSX).not.toContain('机数 {classroomSettings.deskCount}')
     expect(BOARD_TSX).toContain('templateEffectiveStartDate={isTemplateMode ? templateEffectiveStartDate : undefined}')
-    expect(BOARD_TSX).toContain('onTemplateEffectiveStartDateChange={setTemplateEffectiveStartDate}')
+    // 2026-10-15 確認リスト tp-47 要改善「そもそも今日より前の日を選択できないようにして」: 差分反映の教室は min=今日＋入力値・Excel の値を今日へ丸める。
+    expect(BOARD_TSX).toContain('onTemplateEffectiveStartDateChange={handleTemplateEffectiveStartDateChange}')
+    expect(BOARD_TSX).toContain('templateEffectiveStartDateMin={isTemplateMode && templateDiffApplyEnabled ? toDateKey(new Date()) : undefined}')
+    expect(BOARD_TSX).toContain("setTemplateEffectiveStartDate(templateDiffApplyEnabled ? clampTemplateEffectiveStartDateToToday(value, toDateKey(new Date())) : value)")
+    expect(BOARD_TSX).toContain("setTemplateEffectiveStartDate(templateDiffApplyEnabled ? clampTemplateEffectiveStartDateToToday(filteredImported.effectiveStartDate, toDateKey(new Date())) : filteredImported.effectiveStartDate)")
+    expect(TOOLBAR_TSX).toContain('min={templateEffectiveStartDateMin}')
     const importIndex = TOOLBAR_TSX.indexOf('data-testid="template-import-button"')
     const dateIndex = TOOLBAR_TSX.indexOf('data-testid="template-effective-start-date"')
     const saveIndex = TOOLBAR_TSX.indexOf('data-testid="template-save-overwrite-button"')

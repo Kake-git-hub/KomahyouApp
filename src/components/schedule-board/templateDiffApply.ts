@@ -85,6 +85,78 @@ export function isTemplateDiffQrTeacher(desk: Pick<DeskCell, 'teacher' | 'teache
   return Boolean(desk.teacher.trim()) && desk.teacherAssignmentSource === 'schedule-registration' && Boolean(desk.teacherAssignmentSessionId)
 }
 
+/**
+ * 日程表登録（QR 自動割振り・schedule-registration＋講習期間 ID）の講師が、同じコマの**別の机**にテンプレ由来（非 manual）の同じ講師として
+ * 置かれているとき、その QR 机の index を返す（オーナー指示 2026-10-15・確認リスト v1.5.596 その他「日程表より登録された講師が、テンプレで組まれている
+ * 同じ講師がいても組まれてしまい、一コマに同じ講師が 2 人いる場合がある。日程表からの講師追加はテンプレが入っていたら消えて良い」）。
+ * Q21-9 例外 1 の絞り込み（INV-01 講師帰属の一意性の兄弟・spec-invariants INV-12 2026-10-14 の「未対応の兄弟」）:
+ *  - 例外 1 は「QR 講師を置き換えると起動時の自己修復（reconcileSubmittedTeacherPlacements）が別の空き机へ置き直して二重化する」ための保護。
+ *    同じ講師がテンプレで同じコマの別の机に居るなら、自己修復の自動割振り（autoAssignTeacherToSpecialSession）は「その講師が既に居るコマ」には
+ *    置かないので、QR 机の講師を外しても二重化しない。
+ *  - 条件は 2 つとも要る: (1) 盤面のそのコマの別の机に**非 manual**（＝テンプレ由来）の同じ講師が居る、(2) テンプレ（抑止・strip 後）のそのコマの
+ *    別の机にその講師が居る。(1) だけだと偶然同名で残った足場講師で QR を消し、(2) だけだと削除記録などでテンプレの講師が置かれなかったコマで
+ *    その講師が居なくなる。手置き（manual / manual-replaced）の同じ講師は対象外（室長が意図して置いた机は触らない・INV-02）。
+ *  - (2) のテンプレ机が**講師だけの机（足場）**で、QR 机に生徒が居るときは外さない（従来どおり足場の方を置かない＝INV-02 L-7 兄弟 2 の裁定。
+ *    外すと QR 講師の下の講習生徒が講師なし／別の講師になる）。QR 机にも生徒が居なければ（講師だけ同士）QR の方を外す。
+ *  - 差分反映（computeTemplateDiffApply の机の組み立ての後）と再マージ（mergeManagedWeek の末尾）が同じこの関数で判定する（権威 1 か所）。
+ *  - 同じ机にテンプレの同じ講師が来る形（QR 机＝テンプレ机）は重複でないので従来どおり kept-qr。
+ */
+/**
+ * QR 机の講師を外すときに机へ残す記録（types.ts の `scheduleRegistrationSupersededByTemplate`）。差分反映と再マージが同じ形で書く（不動点）。
+ * 講師 ID が無い旧データは表示名で残す（自己修復は ID・表示名・氏名のどれでも照合する）。
+ */
+export function buildScheduleRegistrationSupersession(desk: Pick<DeskCell, 'teacher' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>): NonNullable<DeskCell['scheduleRegistrationSupersededByTemplate']> {
+  return { sessionId: desk.teacherAssignmentSessionId ?? '', teacherId: desk.teacherAssignmentTeacherId?.trim() || desk.teacher.trim() }
+}
+
+/**
+ * QR 机の講師を外した後にその机に置く講師（regression-reviewer M-1・2026-10-15: 「外す机」だけでなく「外した後に誰を置くか」も 1 か所で決める）。
+ * そのコマのテンプレ（抑止・strip 後）の**同じ机番号**の講師（テンプレ足場扱い・非 manual）。居なければ講師なし。差分反映と再マージの両方がこれを使う。
+ */
+export function resolveSupersededQrDeskTeacherFields(templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined): TemplateDeskTeacherFields {
+  const templateTeacher = templateDesk?.teacher?.trim() ? templateDesk.teacher : ''
+  return {
+    teacher: templateTeacher,
+    manualTeacher: false,
+    teacherAssignmentSource: undefined,
+    teacherAssignmentSessionId: undefined,
+    teacherAssignmentTeacherId: templateTeacher ? templateDesk?.teacherAssignmentTeacherId : undefined,
+  }
+}
+
+export function findQrTeacherDesksSupersededByTemplate(
+  desks: ReadonlyArray<TemplateDeskTeacherFields & Pick<DeskCell, 'lesson'>>,
+  templateDesks: ReadonlyArray<Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId' | 'lesson'>>,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): number[] {
+  const result: number[] = []
+  desks.forEach((desk, index) => {
+    if (!isTemplateDiffQrTeacher(desk)) return
+    const qrDeskHasStudents = liveStudents(desk.lesson).length > 0
+    const qrKeys = new Set([
+      ...resolveAliases(desk.teacher.trim()),
+      ...(desk.teacherAssignmentTeacherId?.trim() ? resolveAliases(desk.teacherAssignmentTeacherId.trim()) : []),
+    ])
+    const matches = (other: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => {
+      const name = other.teacher?.trim() ?? ''
+      const id = other.teacherAssignmentTeacherId?.trim() ?? ''
+      if (!name) return false
+      return [...resolveAliases(name), ...(id ? resolveAliases(id) : [])].some((key) => qrKeys.has(key))
+    }
+    const placedElsewhereByTemplate = desks.some((other, otherIndex) => otherIndex !== index
+      && !other.manualTeacher
+      && other.teacherAssignmentSource !== 'schedule-registration'
+      && matches(other))
+    if (!placedElsewhereByTemplate) return
+    const templateHasTeacherElsewhere = templateDesks.some((templateDesk, templateIndex) => templateIndex !== index
+      && matches(templateDesk)
+      && (!qrDeskHasStudents || liveStudents(templateDesk.lesson).length > 0))
+    if (!templateHasTeacherElsewhere) return
+    result.push(index)
+  })
+  return result
+}
+
 function liveStudents(lesson?: DeskLesson): StudentEntry[] {
   const slots: ReadonlyArray<StudentEntry | null> = lesson?.studentSlots ?? []
   return slots.filter((student): student is StudentEntry => Boolean(student))
@@ -892,6 +964,8 @@ export type TemplateDiffApplySummary = {
   collapsedOnCreate: number
   /** テンプレ机に講師がいたが QR 自動割振りの講師を残した机（Q21-9 例外 1）。 */
   qrTeacherKept: number
+  /** 同じコマの別の机にテンプレが同じ講師を置くため、日程表登録（QR）の講師を外した机（Q21-9 例外 1 の絞り込み・オーナー指示 2026-10-15）。 */
+  qrTeacherRemoved: number
   /** 講師を削除した机にテンプレの生徒を置いた机（Q21-9 例外 2・削除した講師と同じ講師がテンプレに居て講師欄が空のままの机）。 */
   deletedTeacherDeskFilled: number
   /** 講師を削除した机に、削除した講師とは別のテンプレの講師を置いた机（Q21-9 例外 2 の改定・オーナー決定 2026-10-14）。 */
@@ -931,7 +1005,7 @@ export type TemplateDiffApplySummary = {
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, qrTeacherRemoved: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -1645,6 +1719,22 @@ function applyTemplateDiffToCell(context: {
     return upperDesk
   })
 
+  // ── 4. 日程表登録（QR）の講師が、同じコマの別の机にテンプレの同じ講師として置かれたなら QR 机の講師を外す（オーナー指示 2026-10-15・
+  //    findQrTeacherDesksSupersededByTemplate＝再マージと同じ権威関数）。その机のテンプレに講師が居ればその講師（テンプレ足場扱い）、居なければ講師なし。
+  for (const index of findQrTeacherDesksSupersededByTemplate(nextDesks, templateDesks, context.teacherAliases)) {
+    const templateDesk = templateDesks[index]
+    const fields = resolveSupersededQrDeskTeacherFields(templateDesk)
+    const supersession = buildScheduleRegistrationSupersession(nextDesks[index])
+    nextDesks[index] = {
+      ...applyTeacherFields(nextDesks[index], fields),
+      // 自己修復が「配置済み」と数えるための記録（types.ts）。再マージも同じ形で書く。
+      scheduleRegistrationSupersededByTemplate: supersession,
+    }
+    summary.qrTeacherRemoved += 1
+    // 上の kept-qr の数え方（テンプレ机に講師が居るときだけ数える）と対にする。
+    if (fields.teacher) summary.qrTeacherKept -= 1
+  }
+
   return {
     ...cell,
     isOpenDay: templateCell.applied.isOpenDay,
@@ -1759,6 +1849,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.seatMerged > 0) parts.push(`テンプレの空いた席に既存の生徒を残して 1 行にした机: ${summary.seatMerged}机。`)
   if (summary.collapsedOnCreate > 0) parts.push(`${summary.collapsedOnCreate}机は既存のメモ・記録を残してテンプレの生徒を置きました。`)
   if (summary.qrTeacherKept > 0) parts.push(`QR 自動割振りの講師を残した机: ${summary.qrTeacherKept}机。`)
+  if (summary.qrTeacherRemoved > 0) parts.push(`テンプレの同じ講師が同じコマに居るため日程表登録の講師を外した机: ${summary.qrTeacherRemoved}机。`)
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
   if (summary.deletedTeacherDeskReassigned > 0) parts.push(`講師を削除した机に別の講師をテンプレから置いた机: ${summary.deletedTeacherDeskReassigned}机。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)

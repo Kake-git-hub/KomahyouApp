@@ -319,7 +319,13 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '')")
     expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })")
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })")
-    expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '', { applyScope })")
+    // 2026-10-15（確認リスト v1.5.596 tp-44/tp-46 メモ「選択肢は不要で、自動的に変更のあったコマだけ反映。何も変更なかったときだけ全コマ」）:
+    // 確認モーダルの範囲のラジオ（変えたコマだけ／すべてのコマ）は外し、範囲は計画関数の既定（resolveDefaultTemplateDiffApplyScope）だけで決まる。
+    expect(BOARD_TSX).not.toContain('template-save-scope-all')
+    expect(BOARD_TSX).not.toContain('template-save-scope-changed')
+    expect(BOARD_TSX).not.toContain('handleTemplateSaveScopeChange')
+    expect(BOARD_TSX).toContain('const applyScope = options?.applyScope ?? resolveDefaultTemplateDiffApplyScope(definitionDiff)')
+    expect(BOARD_TSX).toContain('data-testid="template-save-changed-desks"')
     // 絞り込みは差分反映の本体と保存直後の再マージの重ね合わせの両方に効く（絞り込みの外は参照ごと不変）。
     expect(BOARD_TSX).toContain('slotFilter: params.slotFilter,')
     expect(BOARD_TSX).toContain('if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell')
