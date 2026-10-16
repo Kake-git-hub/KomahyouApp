@@ -7,6 +7,7 @@ import {
   collectStudentLedgerNames,
   findStudentsMentionedInQuestion,
   formatDigestDate,
+  formatWeekLabel,
   QUESTION_AI_DIGEST_NO_STUDENT_NOTE,
   QUESTION_AI_DIGEST_STUDENT_LIMIT,
   resolveJstDateKey,
@@ -52,13 +53,27 @@ describe('questionAiStudentDigest: 質問に名前が出た生徒のいまの数
     expect(digest.text).toContain('(今日は 10/16(金)。')
     expect(digest.text).toContain('## 山田 太郎')
     expect(digest.text).toContain('- 数: 未消化振替 残 2 回(元コマ: 10/2(金) 2限(休み) / 10/9(金) 2限(休み))')
-    expect(digest.text).toContain('今日以降の予定(近い 3 件): 10/20(火) 3限 振替(元 10/2(金) 2限) / 10/23(金) 2限 通常 / 10/30(金) 2限 通常')
+    // 週の印(月曜始まり・今日 10/16(金))。評価 4 回目で Sonnet が 10/23(金) を再来週と数え違えたので、AI に数えさせない。
+    expect(digest.text).toContain('今日以降の予定(近い 3 件): 10/20(火) 3限 振替(元 10/2(金) 2限)〔来週〕 / 10/23(金) 2限 通常〔来週〕 / 10/30(金) 2限 通常〔再来週〕')
+    expect(digest.text).toContain('週は月曜始まりで、〔今週〕〔来週〕の印はそのまま使い')
     expect(digest.text).toContain('休み(振替あり・新しい順): 10/9(金) 2限 通常 / 10/2(金) 2限 通常')
     expect(digest.text).toContain('直近 30 日の出席 2 回')
     expect(digest.text).toContain('- 未消化講習: 夏期講習 英 残 1 回')
     // 質問に出ていない生徒の数字・名前は本文に無い。
     expect(digest.text).not.toContain('佐藤')
     expect(digest.text).not.toContain('10/8')
+  })
+
+  it('週の印は月曜始まり(今日が金曜なら土曜は今週・次の月曜から来週)', () => {
+    expect(formatWeekLabel('2026-10-16', '2026-10-16')).toBe('〔今日〕')
+    expect(formatWeekLabel('2026-10-17', '2026-10-16')).toBe('〔今週〕')
+    expect(formatWeekLabel('2026-10-18', '2026-10-16')).toBe('〔今週〕')
+    expect(formatWeekLabel('2026-10-19', '2026-10-16')).toBe('〔来週〕')
+    expect(formatWeekLabel('2026-10-25', '2026-10-16')).toBe('〔来週〕')
+    expect(formatWeekLabel('2026-10-26', '2026-10-16')).toBe('〔再来週〕')
+    expect(formatWeekLabel('2026-11-02', '2026-10-16')).toBe('〔それ以降〕')
+    expect(formatWeekLabel('2026-10-12', '2026-10-16')).toBe('〔過去〕')
+    expect(formatWeekLabel('x', '2026-10-16')).toBe('')
   })
 
   it('名前が見つからなければ数字を渡さず決まった一文だけ。台帳が無ければ null', () => {
