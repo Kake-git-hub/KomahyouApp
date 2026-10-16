@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.611 (2026-10-16)
+
+- docs: 質問への AI 即時回答の引き継ぎ資料 `docs/handoff-question-ai-answer.md` を追加。v1.5.607〜610 の到達点、オーナーが決めたこと、評価 1 回目の結果、次にやることをまとめた(別セッションへ引き継ぐため・コード変更なし)
+
 ## v1.5.610 (2026-10-16)
 
 - feat: 質問 AI 回答の**評価ワークフロー**を追加(オーナー指示 2026-10-16「テスト質問とテスト回答はあなたの方で行って結果を見せて」)。Actions「Question AI eval」(手動実行)が確認用の 20 問を本番と同じ `generateQuestionAiAnswer`(同じ指示文・Haiku・機械検査)へ 1 問ずつ流し、回答・止めた回答・トークン・費用の目安を Job summary と成果物に出す。Firestore・教室データには触れない(AI を呼ぶだけ・secret `ANTHROPIC_API_KEY` を共用)。20 問の正本を `functions/src/questionAiEvalCases.ts` に置き、確認リスト qa-q01〜q20 と文面が一致することをテストで固定 (functions/src/questionAiEval.ts・questionAiEvalCases.ts・test, functions/tools/question-ai-eval.mjs, .github/workflows/question-ai-eval.yml)
