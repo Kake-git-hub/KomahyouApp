@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.618 (2026-10-16)
+
+- fix: v1.5.617 の週の印のテストで、同じ週の過ぎた日(月曜)を〔過去〕と期待していた誤りを直した(実装は〔今週〕が正しい。v1.5.617 の CI が赤になったため) (functions/src/questionAiStudentDigest.test.ts)
+
 ## v1.5.617 (2026-10-16)
 
 - fix: 質問 AI 回答の「質問に名前が出た生徒の数字」に、今日以降の予定ごとに〔今日〕〔今週〕〔来週〕〔再来週〕〔それ以降〕の印(月曜始まり)を付け、「印はそのまま使い自分で数え直さない」と添えた。評価 4 回目(run 38913782608・2 モデル × 23 問・Sonnet 約 113 円／Haiku 約 5.5 円・両方 23/23 表示)で Sonnet が Q22「来週の授業」の週を数え違えたため(Haiku は正しかった)。4 回目の結果と Sonnet/Haiku の比較を引き継ぎ資料に記録 (functions/src/questionAiStudentDigest.ts・test, docs/handoff-question-ai-answer.md)

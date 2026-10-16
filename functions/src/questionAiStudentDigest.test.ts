@@ -72,7 +72,9 @@ describe('questionAiStudentDigest: 質問に名前が出た生徒のいまの数
     expect(formatWeekLabel('2026-10-25', '2026-10-16')).toBe('〔来週〕')
     expect(formatWeekLabel('2026-10-26', '2026-10-16')).toBe('〔再来週〕')
     expect(formatWeekLabel('2026-11-02', '2026-10-16')).toBe('〔それ以降〕')
-    expect(formatWeekLabel('2026-10-12', '2026-10-16')).toBe('〔過去〕')
+    // 同じ週の過ぎた日(10/12(月))は〔今週〕、前の週は〔過去〕(今日以降の予定にしか付けないので実際には出ない)。
+    expect(formatWeekLabel('2026-10-12', '2026-10-16')).toBe('〔今週〕')
+    expect(formatWeekLabel('2026-10-11', '2026-10-16')).toBe('〔過去〕')
     expect(formatWeekLabel('x', '2026-10-16')).toBe('')
   })
 
