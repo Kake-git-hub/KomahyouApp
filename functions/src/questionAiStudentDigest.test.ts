@@ -54,10 +54,10 @@ describe('questionAiStudentDigest: 質問に名前が出た生徒のいまの数
     expect(digest.text).toContain('## 山田 太郎')
     expect(digest.text).toContain('- 数: 未消化振替 残 2 回(元コマ: 10/2(金) 2限(休み) / 10/9(金) 2限(休み))')
     // 週の印(月曜始まり・今日 10/16(金))。評価 4 回目で Sonnet が 10/23(金) を再来週と数え違えたので、AI に数えさせない。
-    expect(digest.text).toContain('今日以降の予定(近い 3 件): 10/20(火) 3限 振替(元 10/2(金) 2限)〔来週〕 / 10/23(金) 2限 通常〔来週〕 / 10/30(金) 2限 通常〔再来週〕')
+    expect(digest.text).toContain('今日以降の予定(近い 3 件): 10/20(火) 3限 振替(元 9/25(金) 2限)〔来週〕 / 10/23(金) 2限 通常〔来週〕 / 10/30(金) 2限 通常〔再来週〕')
     expect(digest.text).toContain('週は月曜始まりで、〔今週〕〔来週〕の印はそのまま使い')
-    expect(digest.text).toContain('休み(振替あり・新しい順): 10/9(金) 2限 通常 / 10/2(金) 2限 通常')
-    expect(digest.text).toContain('直近 30 日の出席 2 回')
+    expect(digest.text).toContain('休み(振替あり・新しい順): 10/9(金) 2限 通常 / 10/2(金) 2限 通常 / 9/25(金) 2限 通常')
+    expect(digest.text).toContain('直近 30 日の出席 1 回')
     expect(digest.text).toContain('- 未消化講習: 夏期講習 英 残 1 回')
     // 質問に出ていない生徒の数字・名前は本文に無い。
     expect(digest.text).not.toContain('佐藤')
