@@ -3,6 +3,7 @@ import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isA
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
+import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect'
 import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLectureStockRow } from '../../types/appState'
 import type { SubjectLabel } from '../schedule-board/types'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
@@ -114,6 +115,11 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
   const activeStudents = listInitialSetupActiveStudents(students)
+  // 未消化振替・未消化講習の「生徒を選択」(虫眼鏡で絞り込み・2026-10-16)。
+  const studentSelectOptions: SearchableSelectOption[] = [
+    { value: '', label: '生徒を選択', pinned: true },
+    ...activeStudents.map((s) => ({ value: s.id, label: formatStudentSelectionLabel(s), searchText: s.name })),
+  ]
   const selectedDevelopmentLoadClassroomId = developmentBackupSources.classrooms.some((classroom) => classroom.id === developmentLoadClassroomId)
     ? developmentLoadClassroomId
     : (developmentBackupSources.classrooms[0]?.id ?? '')
@@ -441,10 +447,13 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                     </table>
                   )}
                   <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
-                    <select value={makeupDraftStudentId} onChange={(e) => setMakeupDraftStudentId(e.target.value)} data-testid="setup-makeup-student">
-                      <option value="">生徒を選択</option>
-                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{formatStudentSelectionLabel(s)}</option>)}
-                    </select>
+                    <SearchableSelect
+                      wrapperClassName="inline"
+                      value={makeupDraftStudentId}
+                      onChange={setMakeupDraftStudentId}
+                      testId="setup-makeup-student"
+                      options={studentSelectOptions}
+                    />
                     <select value={makeupDraftSubject} onChange={(e) => setMakeupDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-makeup-subject">
                       {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
                     </select>
@@ -477,10 +486,13 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                     </table>
                   )}
                   <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
-                    <select value={lectureDraftStudentId} onChange={(e) => setLectureDraftStudentId(e.target.value)} data-testid="setup-lecture-student">
-                      <option value="">生徒を選択</option>
-                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{formatStudentSelectionLabel(s)}</option>)}
-                    </select>
+                    <SearchableSelect
+                      wrapperClassName="inline"
+                      value={lectureDraftStudentId}
+                      onChange={setLectureDraftStudentId}
+                      testId="setup-lecture-student"
+                      options={studentSelectOptions}
+                    />
                     <select value={lectureDraftSubject} onChange={(e) => setLectureDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-lecture-subject">
                       {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
                     </select>

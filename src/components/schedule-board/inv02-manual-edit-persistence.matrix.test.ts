@@ -1924,6 +1924,38 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     expect(saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
   })
 
+  // Q21-9 例外 1 の絞り込み（オーナー指示 2026-10-15・確認リスト v1.5.596 その他「一コマに同じ講師が 2 人いる。日程表からの講師追加はテンプレが入っていたら
+  // 消えて良い」）: 上の形と違い、テンプレが同じ講師を別の机に**生徒つき**で置くなら QR 机の講師を外す（差分反映・再マージとも findQrTeacherDesksSupersededByTemplate）。
+  // QR 机の中身（講習生徒）は残り、手置きの講師（manual）は対象外（INV-02）。
+  it('QR 講師と同じ講師をテンプレが同じコマの別の机に生徒つきで置く → QR 机の講師はテンプレのその机の講師に替わり（中身は残る）、保存結果は再マージの不動点。手置きの同じ講師は外さない', () => {
+    const qrDesk = (desk: DeskCell): DeskCell => ({
+      ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't1',
+      lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
+    })
+    // 新テンプレ: 机 0＝佐藤（講師だけ）・机 1＝鈴木（B）・机 2＝田中（A）
+    const rows = [row('r0', 't3'), row('r1', 't2', 'sB'), row('r2', 't1', 'sA')]
+    const { saved, desk0 } = saveAndRemerge(board(qrDesk), rows)
+    expect(desk0).toMatchObject({ teacher: '佐藤', manualTeacher: false })
+    expect(desk0.teacherAssignmentSource).toBeUndefined()
+    expect(desk0.teacherAssignmentSessionId).toBeUndefined()
+    expect(liveIds(desk0.lesson)).toEqual(['sM'])
+    const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+    expect(cell.desks[2]).toMatchObject({ teacher: '田中', manualTeacher: false })
+    expect(liveIds(cell.desks[2].lesson)).toEqual(['sA'])
+    expect(saved.summary.qrTeacherRemoved).toBe(1)
+
+    // 手置き（manual）の同じ講師は室長の意図なので外さない（テンプレ机に講師が居なければ従来どおり残る＝Q21-9。同じ講師 2 机は未対応の兄弟として台帳に記す）
+    // 机 2 を手置き 田中＋講習生徒 M にし、新テンプレは 机 0＝田中（A）・机 1＝鈴木（B）・机 2＝講師なし。
+    const manualDesk = (desk: DeskCell): DeskCell => ({ ...qrDesk(desk), teacherAssignmentSource: 'manual', teacherAssignmentSessionId: undefined })
+    const manualRows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB')]
+    const manual = saveAndRemerge(board(manualDesk, undefined, 2), manualRows)
+    const manualCell = manual.saved.nextWeeks.flat().find((item) => item.id === CELL)!
+    expect(manualCell.desks[2]).toMatchObject({ teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' })
+    expect(liveIds(manualCell.desks[2].lesson)).toEqual(['sM'])
+    expect(manual.saved.summary.qrTeacherRemoved).toBe(0)
+  })
+
   describe('休日のコマ（テンプレ机を空とみなす・Q21-6）', () => {
     it('印ありの机の会計記録は残り、印なしの机は空席になる（再マージでも変わらない）', () => {
       const holiday = diffSettings({ templateFreezeBeforeDate: DATE, holidayDates: [DATE] })

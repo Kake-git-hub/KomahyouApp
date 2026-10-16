@@ -4,28 +4,38 @@
 //  - 対象は category=question かつ 機能が有効な教室だけ(isQuestionAiAnswerEnabledForClassroom = 登録台帳
 //    src/utils/developmentClassroomRegistry.ts の検証用教室 → 会社既定 companyFeatureDefaults の 2 段解決)。本番教室では呼ばない。
 //  - 質問は従来どおり developerReports へ記録・メール通知される(AI 回答は「上乗せ」。記録を置き換えない)。
-//  - AI に渡すのは **利用者マニュアル(docs/user-manual.md)＋質問文＋直近の操作履歴** だけ。
+//  - AI に渡すのは **使い方の説明(docs/user-manual.md・利用者向け)＋質問文＋直近の操作履歴** だけ。
 //    教室データ(スナップショット)は渡さない(オーナー確定 2026-09-14)。
-//  - モデルは Claude Sonnet 最新(オーナー確定 2026-09-14)。**Claude on Google Cloud(Vertex AI)経由**で呼ぶ
-//    (オーナー指示 2026-09-14「請求先を増やしたくない」＝GCP の請求にまとめる)。API キーは使わない:
-//    Cloud Functions の実行サービスアカウント(ADC)で認証し、プロジェクトは実行中の GCP プロジェクト。
-//    Vertex AI API 未有効・モデル未有効化・権限不足のときは、その旨を短く返す(報告本体は成功のまま。理由は開発者向けの記録だけで、室長の画面には出さない)。
+//  - モデルは **Claude Sonnet 最新**(2026-10-16 夜 オーナー指示「質問回答 AI モデルも Sonnet の最新を使うように」。
+//    同日昼の Haiku 確定を覆した。説明書を本文へ拡充したので、読み解きの精度を優先する)。
+//    1 問 ≒ 入力 1.2 万トークン(説明書 約 1.3 万字＋指示＋操作履歴)＋出力 1 千トークンで Sonnet 5.5 は約 5 円
+//    (入力 $2・出力 $10/100 万トークン・1 ドル 150 円)。月 500 問で約 2,500 円。Haiku 5.5 なら約 0.3 円。
+//    アプリ側で回数の上限は設けない(オーナー判断 2026-10-16)。使いすぎの歯止めは Anthropic コンソールの月の利用上限額だけ
+//    (上限に達するとその月は全教室で AI 回答が止まり、「自動回答を作れませんでした」＝開発者が回答、に戻る)。
+//  - 回答文は **利用者から見て AI 自身が説明書**という立場で書く(オーナー指示 2026-10-16 夜)。「マニュアルでは〜」
+//    「マニュアルに記載が無い」のように他の資料へ責任を預ける(他責の)言い回しは禁止し、機械検査でも止める。
+//  - 呼び出しは **Claude API 直(API キー)**(オーナー指示 2026-10-16
+//    「支払い窓口が増えてもよいので確実に動く案に」)。2026-09-14〜10-16 は請求を GCP にまとめるため Vertex AI 経由だったが、
+//    新規プロジェクトの Claude 割り当てが 0 のままで毎回 429(「Vertex AI の割り当て上限」)になり一度も回答できなかった
+//    (開発用教室の報告 2026-09-14・09-28 で確認)。Claude API は Anthropic のコンソールで前払いクレジットを入れた
+//    API キーがあれば割り当て申請なしで動く。キーは functions runtime env の ANTHROPIC_API_KEY
+//    (CI ではリポジトリ secret ANTHROPIC_API_KEY を deploy-functions.yml が .env.komahyouapp-prod へ追記)。
+//    キー未設定のときは AI を呼ばずに理由を返す(報告本体は成功のまま。理由は開発者向けの記録だけで、室長の画面には出さない)。
 //  - 回答文の制約は §G-4 の基準に合わせる(個別教室の中身・約束・料金・不可逆操作の指示・個人情報を書かない)。
 //
 // この 1 ファイルは SDK 呼び出し以外を純関数に保ち、テストで固定する。
 
 import Anthropic from '@anthropic-ai/sdk'
-import { AnthropicVertex } from '@anthropic-ai/vertex-sdk'
 
 import type { DeveloperReportCategory, NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 
-/** 回答に使うモデル(Sonnet 最新。オーナー確定 2026-09-14)。Vertex AI でも同じ ID(接頭辞・日付なし)。 */
-export const QUESTION_AI_MODEL = 'claude-sonnet-5'
-/** Vertex AI のリージョン。既定は `global` エンドポイント(推奨)。env QUESTION_AI_VERTEX_REGION で上書き可。 */
-export const QUESTION_AI_VERTEX_DEFAULT_REGION = 'global'
+/** 回答に使うモデル(Sonnet 最新。2026-10-16 夜 オーナー指示で Haiku から戻した)。ID は接頭辞・日付なしのまま使う。 */
+export const QUESTION_AI_MODEL = 'claude-sonnet-5-5'
+/** 思考も含めた出力トークンの上限(費用の歯止め)。Sonnet は思考に使う分が多いので Haiku のときの 4000 から戻した。 */
+export const QUESTION_AI_MAX_TOKENS = 8000
 /** AI に渡す操作履歴の件数(新しい方から)。質問の文脈が分かれば足りるので絞る。 */
 export const QUESTION_AI_TRACE_LIMIT = 40
 /** 利用者へ返す回答文の上限(異常に長い出力で画面が埋まらないように)。 */
@@ -51,29 +61,89 @@ export function shouldAnswerQuestionWithAi(input: { category: DeveloperReportCat
   return input.category === 'question' && input.isFeatureEnabled && !input.isVerificationChecklist
 }
 
+/** 根拠(使い方の説明)に無いときの決まり文句。「マニュアルに記載が無い」のような他責の言い方はしない(オーナー指示 2026-10-16 夜)。 */
+export const QUESTION_AI_NO_MANUAL_REPLY = 'この点は開発者が確認してから回答します。'
+/** 「動かない・おかしい」系(不具合を認めない・オーナー指定 2026-10-16)の決まり文句。 */
+export const QUESTION_AI_BEHAVIOR_CHECK_REPLY = '動作については開発者が確認してから回答します。'
+/** 金額・契約(答えない・同)の決まり文句。 */
+export const QUESTION_AI_PRICE_REPLY = '料金・契約については、開発者から個別にご案内します。'
+/** 他の教室(一切出さない・同)の決まり文句。 */
+export const QUESTION_AI_OTHER_CLASSROOM_REPLY = 'いま開いている教室のことだけをご案内しています。'
+
 export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL_MARKDOWN): string {
   return [
     'あなたは学習塾向け「コマ表アプリ」の使い方サポート担当です。教室の利用者(室長・スタッフ)からの質問に、日本語でその場で回答します。',
     '',
-    '# 回答の根拠',
-    '- 下の「利用者マニュアル」に書かれている内容だけを根拠にしてください。マニュアルに無いこと・〔未執筆〕の章については推測で手順を作らず、「マニュアルに記載が無いため、開発者が確認してから回答します」と伝えてください。',
+    '# あなたの立場と回答の根拠',
+    '- 利用者から見て、あなた自身がこのアプリの使い方の案内役です。回答は自分の言葉で、自分の案内として書いてください。',
+    '- 根拠にできるのは、下の「案内できる内容」に書かれていることだけです。書かれていないことは推測で手順やボタン名を作らず、' +
+      `「${QUESTION_AI_NO_MANUAL_REPLY}」と伝えてください。`,
+    '- 「マニュアルでは〜」「マニュアルに記載が無い」「説明書に書かれていない」のように、他の資料に責任を預ける言い方はしません。' +
+      '「マニュアル」「説明書」「記載」「明記」という言葉自体を回答に書かないでください。',
     '- 直近の操作履歴は「利用者がどの画面で何をしていたか」を知る手がかりとしてだけ使ってください。',
     '',
-    '# 回答に書いてはいけないこと',
-    '1. 生徒名・講師名・具体的な配置内容など、個別教室の中身(一般化して書く)。',
-    '2. 他の教室の名前や事例。',
-    '3. 未リリースの機能や対応時期の約束(「次の更新で直します」等)。',
-    '4. 料金・契約・請求についての確約(「開発者から個別に連絡します」と伝える)。',
-    '5. データの復元・削除・ロールバックなど取り消せない操作の手順(「開発者にご相談ください」と伝える)。',
-    '6. メールアドレス・ID・トークン・保存先パスなどの内部情報。',
+    '# 必ず守ること(例外なし)',
+    '1. 謝罪の言葉を使わない。「申し訳ありません」「すみません」「お詫び」「ご迷惑をおかけ」「ご不便をおかけ」などは書かない。できないこと・分からないことも、謝らずに事実と次にすることだけを伝える。',
+    `2. アプリに不具合・バグ・障害・エラーがあると認めたり、その可能性を書いたりしない(「不具合です」「バグの可能性があります」「システムの問題です」も書かない)。思ったとおりに動かない・表示がおかしい・数が合わないという内容には、案内できる操作手順の確認だけを案内し、「${QUESTION_AI_BEHAVIOR_CHECK_REPLY}」と伝える。原因を推測しない。`,
+    `3. 金額・料金・費用・価格・契約・請求・無料/有料については、数字を含め一切答えない。「${QUESTION_AI_PRICE_REPLY}」とだけ伝える。`,
+    `4. 他の教室・校舎の情報を一切出さない(教室名・人数・使い方・事例・比較を含む)。他の教室について聞かれても「${QUESTION_AI_OTHER_CLASSROOM_REPLY}」とだけ伝える。`,
+    '5. 生徒名・講師名・具体的な配置内容など、個別教室の中身は書かない(一般化して書く)。',
+    '6. 未リリースの機能や対応時期を約束しない(「次の更新で直します」等)。',
+    '7. データの復元・削除・ロールバックなど取り消せない操作の手順は書かず、「開発者にご相談ください」と伝える(その機能がどの画面にあるかを伝えるのはよい)。',
+    '8. メールアドレス・ID・トークン・ファイル名・保存先パス・開発用の文書名(docs/ などの名前)などの内部情報を書かない。',
+    '9. 「」で囲んでボタン名・メニュー名として書けるのは、下の「案内できる内容」に出てくる名前だけ。無い名前を作って「」で書かない。',
+    '10. 分からないことに推測の手順を書いてから「確認します」と付け足さない。分からない点はその部分だけを決まり文句で伝える。',
+    '11. 決まり文句は「」で囲まず、ふつうの文として書く。',
     '',
     '# 書き方',
-    '- 画面に出ている言葉(ボタン名・メニュー名)で、手順は番号付きで短く書いてください。Markdown の見出しや表は使わず、プレーンテキストで書いてください。',
-    '- 不具合の可能性がある内容なら、その旨を添えてください(質問は開発者にも届いています)。',
+    '- 丁寧語で、結論から書いてください。手順は画面に出ている言葉(ボタン名・メニュー名)で番号付きで短く書いてください。',
+    '- 案内できる内容に答えがあるときは、言い切ってください(「明確ではありません」「〜と思われます」のような弱い言い方をしない)。',
+    '- Markdown の見出し・表・太字は使わず、プレーンテキストで書いてください。',
+    '- 開発者が確認する内容のときは「質問は開発者にも届いています」と添えてかまいません。',
     '',
-    '# 利用者マニュアル',
+    '# 案内できる内容(このアプリの使い方。利用者には「あなたの知識」として伝える)',
     manualMarkdown,
   ].join('\n')
+}
+
+/**
+ * 回答文が「必ず守ること」に反していないかの機械的な検査(2026-10-16 オーナー指定の制限の歯止め)。
+ * 指示文だけでは守られない場合に備え、反していたら回答を室長に見せず(「自動回答を作れませんでした」＝開発者が回答)、
+ * 元の文は報告文書の aiAnswerBlocked に残して開発者が見直せるようにする。決まり文句(QUESTION_AI_*_REPLY)は引っかからない。
+ * 戻り値は反した種類(開発者向けの短い名前)。問題なければ null。
+ */
+export function findQuestionAiAnswerViolation(answer: string, options: { otherClassroomNames?: readonly string[] } = {}): string | null {
+  // 「ご不便」「ご迷惑」は形(〜をおかけ／〜をかけ／〜になり)によらず止める(評価 1 回目 Q20「ご不便をかけている状況を把握しました」が検査を抜けた)。
+  if (/申し訳|すみません|すいません|お詫び|おわび|ご迷惑|ご不便|ご面倒|失礼(?:いた)?しました/u.test(answer)) return '謝罪'
+  // 他の資料へ責任を預ける言い回し(オーナー指示 2026-10-16 夜「マニュアルでは〜など他責な言い回しはしない」)。
+  if (/マニュアル|説明書|ヘルプ(?:に|で|を|は)|記載(?:が|は)?(?:無|な|あり|されて|して)|明記(?:が|は|されて|して)/u.test(answer)) return '他責の言い回し'
+  if (/(?:バグ|不具合|障害|欠陥|システムの問題)(?:が|は|も)?(?:あり|ござい|発生|起き|起こっ|生じ|確認され|見つか)|(?:バグ|不具合|障害|欠陥)(?:です|でした|と思われ|かもしれ|の可能性|によ|のため|が原因)|(?:バグ|不具合)を(?:修正|直)/u.test(answer)) return '不具合を認める'
+  if (/[0-9０-９][0-9０-９,，.．]*\s*(?:円|万円|ドル)|[¥￥$＄]\s*[0-9０-９]|無料|有料|月額|年額|割引/u.test(answer)) return '金額'
+  const names = (options.otherClassroomNames ?? []).map((name) => name.trim()).filter((name) => name.length >= 3)
+  if (names.some((name) => answer.includes(name))) return '他教室'
+  return null
+}
+
+/**
+ * 他の教室の名前のうち、回答に出たら止める語(フルネームと、空白で区切った 3 文字以上の語)。
+ * いま開いている教室の名前に含まれる語(例: 共通のブランド名)は除く(自教室の案内まで止めないため)。
+ */
+export function buildOtherClassroomNameWords(input: { currentClassroomName: string; allClassroomNames: readonly string[] }): string[] {
+  const current = input.currentClassroomName.trim()
+  const words = new Set<string>()
+  for (const raw of input.allClassroomNames) {
+    const name = raw.trim()
+    if (!name || name === current) continue
+    for (const word of [name, ...name.split(/[\s\u3000]+/u)]) {
+      if (word.length >= 3 && !current.includes(word)) words.add(word)
+    }
+  }
+  return [...words]
+}
+
+/** 「#テスト」「#test」(オーナーの動作確認用の印・Issue 起票を止める)を AI に渡す質問文から外す。 */
+export function stripQuestionAiTestMarker(note: string): string {
+  return note.replace(/#テスト|#test\b/giu, '').trim()
 }
 
 export function buildQuestionAiUserMessage(input: {
@@ -86,7 +156,7 @@ export function buildQuestionAiUserMessage(input: {
   const contextLines = Object.entries(input.scheduleContext).map(([key, value]) => `- ${key}: ${value}`)
   return [
     '# 質問',
-    input.note,
+    stripQuestionAiTestMarker(input.note),
     '',
     '# 質問したときの画面',
     input.screen || '(不明)',
@@ -109,7 +179,7 @@ export function extractQuestionAiAnswerText(message: Pick<Anthropic.Message, 'co
 
 export type QuestionAiAnswerResult =
   | { ok: true; answer: string; model: string; inputTokens: number; outputTokens: number }
-  | { ok: false; error: string }
+  | { ok: false; error: string; blockedAnswer?: string; inputTokens?: number; outputTokens?: number }
 
 /**
  * 失敗理由を**開発者向けの短文**に丸める(内部のスタックや鍵の断片を出さない)。
@@ -118,11 +188,12 @@ export type QuestionAiAnswerResult =
  * 原因(権限・モデル未有効化・割り当て上限など)を追えるよう、設定の手がかりになる文面のまま残す。
  */
 export function describeQuestionAiError(error: unknown): string {
-  if (error instanceof Anthropic.AuthenticationError) return 'AI(Vertex AI)の認証に失敗しました'
-  if (error instanceof Anthropic.PermissionDeniedError) return 'Vertex AI の権限がありません(API の有効化・実行サービスアカウントの権限を確認してください)'
-  if (error instanceof Anthropic.NotFoundError) return 'Vertex AI で Claude のモデルが見つかりません(Model Garden でモデルを有効化してください)'
-  if (error instanceof Anthropic.RateLimitError) return 'AI が混み合っています(Vertex AI の割り当て上限)'
+  if (error instanceof Anthropic.AuthenticationError) return 'AI(Claude API)の認証に失敗しました(API キーを確認してください)'
+  if (error instanceof Anthropic.PermissionDeniedError) return 'Claude API の権限がありません(API キーのワークスペース・権限を確認してください)'
+  if (error instanceof Anthropic.NotFoundError) return 'Claude API でモデルが見つかりません(モデル名を確認してください)'
+  if (error instanceof Anthropic.RateLimitError) return 'AI が混み合っています(Claude API の利用上限・クレジット残高を確認してください)'
   if (error instanceof Anthropic.APIConnectionTimeoutError) return 'AI の応答が時間内に返りませんでした'
+  if (error instanceof Anthropic.BadRequestError) return 'AI の呼び出しに失敗しました(400: クレジット残高不足のこともあります)'
   if (error instanceof Anthropic.APIError) return `AI の呼び出しに失敗しました(${error.status ?? '不明'})`
   return 'AI の呼び出しに失敗しました'
 }
@@ -130,24 +201,19 @@ export function describeQuestionAiError(error: unknown): string {
 export type CreateQuestionAiMessage = (params: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>
 
 export async function generateQuestionAiAnswer(
-  input: Parameters<typeof buildQuestionAiUserMessage>[0],
-  deps: { projectId: string; region?: string; createMessage?: CreateQuestionAiMessage },
+  input: Parameters<typeof buildQuestionAiUserMessage>[0] & { otherClassroomNames?: readonly string[] },
+  deps: { apiKey: string; createMessage?: CreateQuestionAiMessage },
 ): Promise<QuestionAiAnswerResult> {
-  if (!deps.projectId) return { ok: false, error: 'AI 回答の設定(GCP プロジェクト)が分かりません' }
+  if (!deps.apiKey) return { ok: false, error: 'AI 回答の設定(API キー ANTHROPIC_API_KEY)がありません' }
   const createMessage: CreateQuestionAiMessage = deps.createMessage ?? ((params) => {
-    // 認証は実行サービスアカウントの ADC(google-auth-library)。キーは持たない。
-    const client = new AnthropicVertex({
-      projectId: deps.projectId,
-      region: deps.region || QUESTION_AI_VERTEX_DEFAULT_REGION,
-      timeout: QUESTION_AI_TIMEOUT_MS,
-      maxRetries: 1,
-    })
+    const client = new Anthropic({ apiKey: deps.apiKey, timeout: QUESTION_AI_TIMEOUT_MS, maxRetries: 1 })
     return client.messages.create(params)
   })
   try {
     const message = await createMessage({
       model: QUESTION_AI_MODEL,
-      max_tokens: 8000,
+      // 思考も含めた上限。回答は QUESTION_AI_ANSWER_CHAR_LIMIT で切るので、これ以上は費用の歯止めとして絞る。
+      max_tokens: QUESTION_AI_MAX_TOKENS,
       output_config: { effort: 'medium' },
       system: buildQuestionAiSystemPrompt(),
       messages: [{ role: 'user', content: buildQuestionAiUserMessage(input) }],
@@ -155,6 +221,10 @@ export async function generateQuestionAiAnswer(
     if (message.stop_reason === 'refusal') return { ok: false, error: 'AI がこの質問への回答を控えました' }
     const answer = extractQuestionAiAnswerText(message)
     if (!answer) return { ok: false, error: 'AI から回答文が返りませんでした' }
+    const violation = findQuestionAiAnswerViolation(answer, { otherClassroomNames: input.otherClassroomNames })
+    if (violation) {
+      return { ok: false, error: `回答の決まりに反したため表示しませんでした(${violation})`, blockedAnswer: answer, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
+    }
     return { ok: true, answer, model: message.model, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
   } catch (error) {
     return { ok: false, error: describeQuestionAiError(error) }

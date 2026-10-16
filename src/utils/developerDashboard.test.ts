@@ -39,6 +39,8 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     issueUrl: '',
     hasAiAnswer: false,
     aiAnswerError: '',
+    aiAnswer: '',
+    aiAnswerBlocked: '',
     mailSentAt: null,
     mailError: '',
     answerFinal: '',
@@ -56,7 +58,7 @@ describe('normalizeDeveloperReportRecord', () => {
       reportedAt: '2026-09-16T07:00:00.000Z', recordedAt: '2026-09-16T07:00:01.000Z', issueNumber: 69, issueUrl: 'https://github.com/x/y/issues/69',
       aiAnswer: '回答', notifiedAt: '2026-09-16T07:15:00.000Z',
     }, 'fallback')
-    expect(record).toMatchObject({ reportId: 'r1', category: 'question', issueNumber: 69, hasAiAnswer: true, notifiedAt: '2026-09-16T07:15:00.000Z', isVerificationChecklist: false })
+    expect(record).toMatchObject({ reportId: 'r1', category: 'question', issueNumber: 69, hasAiAnswer: true, aiAnswer: '回答', aiAnswerBlocked: '', notifiedAt: '2026-09-16T07:15:00.000Z', isVerificationChecklist: false })
     const broken = normalizeDeveloperReportRecord({ category: 'weird', issueNumber: 'abc', aiAnswer: '   ' }, 'doc-id')
     expect(broken).toMatchObject({ reportId: 'doc-id', category: 'bug', issueNumber: null, hasAiAnswer: false, notifiedAt: null })
     expect(normalizeDeveloperReportRecord({ issueNumber: '12' }, 'x').issueNumber).toBe(12)

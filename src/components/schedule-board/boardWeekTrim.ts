@@ -30,6 +30,8 @@ export function weekHasManualBoardData(week: SlotCell[]): boolean {
     for (const desk of cell.desks) {
       if (desk.manualTeacher) return true
       if (desk.teacherAssignmentSource) return true
+      // テンプレの同じ講師に寄せて外した QR 机の記録(2026-10-15)。間引きで消えると自己修復が「未配置」と誤判定して置き直す(regression-reviewer L-2)。
+      if (desk.scheduleRegistrationSupersededByTemplate) return true
       if (desk.memoSlots && desk.memoSlots.some((memo) => memo != null && memo.trim() !== '')) return true
       if (desk.statusSlots && desk.statusSlots.some((status) => status != null)) return true
       const lesson = desk.lesson

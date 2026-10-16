@@ -120,6 +120,14 @@ export type DeskCell = {
   teacherAssignmentSource?: 'manual' | 'manual-replaced' | 'schedule-registration' | 'deleted'
   teacherAssignmentSessionId?: string
   teacherAssignmentTeacherId?: string
+  /**
+   * この机に居た日程表登録(QR 自動割振り・schedule-registration)の講師を、同じコマの別の机にテンプレが置く同じ講師に寄せて外した記録
+   * (2026-10-15・spec-template-behavior Q21-9 例外 1 の絞り込み・`findQrTeacherDesksSupersededByTemplate`)。
+   * 起動時の自己修復(reconcileSubmittedTeacherPlacements)はこれを「その講習でその講師は配置済み」と数える。数えないと、その講習の QR 机が
+   * 全部テンプレに寄せられた講師を「提出済みなのに未配置」と誤判定し、手で講師を替えた(manual-replaced)コマへ置き直す(INV-02 の 2026-08-02 と同型)。
+   * 外す側(差分反映・再マージ)が同じ形で書く。消さない(QR 机が 1 つでも残る講師を触らないのと同じ扱い)。
+   */
+  scheduleRegistrationSupersededByTemplate?: { sessionId: string; teacherId: string }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]

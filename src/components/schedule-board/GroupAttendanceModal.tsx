@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { SearchableSelect } from '../common/SearchableSelect'
 import { openGroupAttendancePrint } from './groupAttendanceHtml'
 
 export type GroupAttendanceRoster = { id: string; name: string }
@@ -151,19 +152,20 @@ export function GroupAttendanceModal({
 
         <div className="student-menu-section">
           <label className="student-menu-label" htmlFor="group-attendance-add">中3を追加</label>
-          <select
+          {/* 虫眼鏡で絞り込み(2026-10-16)。選んだ瞬間に追加する 1 回きりの選択なので、打つたびの自動選択はしない。 */}
+          <SearchableSelect
             id="group-attendance-add"
             className="student-menu-select"
             value=""
-            onChange={(event) => { addCandidate(event.target.value); event.target.value = '' }}
+            onChange={addCandidate}
             disabled={addableCandidates.length === 0}
-            data-testid="group-attendance-add-select"
-          >
-            <option value="">{addableCandidates.length === 0 ? '追加できる中3がいません' : '追加する中3を選択'}</option>
-            {addableCandidates.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
-            ))}
-          </select>
+            autoSelectOnSearch={false}
+            testId="group-attendance-add-select"
+            options={[
+              { value: '', label: addableCandidates.length === 0 ? '追加できる中3がいません' : '追加する中3を選択', pinned: true },
+              ...addableCandidates.map((candidate) => ({ value: candidate.id, label: candidate.name })),
+            ]}
+          />
         </div>
 
         <div className="student-menu-section student-menu-actions">

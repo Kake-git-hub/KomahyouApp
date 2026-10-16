@@ -14,6 +14,54 @@
 
 ## 未リリース
 
+## v1.5.612 (2026-10-16)
+
+- feat: 質問への AI 即時回答(開発用教室のみ・§G-7)を**オーナー指示 2026-10-16 夜の 3 点**で改定。①回答は「AI 自身が利用者にとっての説明書」という立場で書き、「マニュアルでは〜」「マニュアルに記載が無い」のような他責の言い回しを禁止(システム指示に明記・決まり文句を「この点は開発者が確認してから回答します。」へ・機械検査 `findQuestionAiAnswerViolation` に種類「他責の言い回し」を追加)。評価 1 回目の反省も反映(「ご不便」「ご迷惑」は形によらず止める／無いボタン名を「」で作らない／推測の手順＋「確認します」を書かない／決まり文句を「」で囲まない／答えがあるときは言い切る)。②モデルを Haiku 最新から **Sonnet 最新 `claude-sonnet-5-5`** へ戻す(max_tokens 8000・試算 1 問約 5 円・評価ワークフローの単価も Sonnet へ)。③使い方の説明 `docs/user-manual.md` を骨子(約 3,400 字・〔未執筆〕4 か所)から**本文(全 12 章・約 1.3 万字)へ拡充**(各 spec から起こし、画面の言葉だけで書き、内部名・文書名・試験中の機能は載せない。`functions/src/generated/userManual.ts` を再生成)。確認リストに qa-ai-2 を追加・qa-q16 の期待文言を更新(版 v1.5.604 据え置き)。進行中テーマ台帳・引き継ぎ資料を更新。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・questionAiEval.ts・test・questionAiEvalCases.ts, docs/user-manual.md, docs/spec-developer-report.md §G-7, docs/handoff-question-ai-answer.md, src/utils/verificationChecklist.ts・developmentStatusLedger.ts)
+
+## v1.5.611 (2026-10-16)
+
+- docs: 質問への AI 即時回答の引き継ぎ資料 `docs/handoff-question-ai-answer.md` を追加。v1.5.607〜610 の到達点、オーナーが決めたこと、評価 1 回目の結果、次にやることをまとめた(別セッションへ引き継ぐため・コード変更なし)
+
+## v1.5.610 (2026-10-16)
+
+- feat: 質問 AI 回答の**評価ワークフロー**を追加(オーナー指示 2026-10-16「テスト質問とテスト回答はあなたの方で行って結果を見せて」)。Actions「Question AI eval」(手動実行)が確認用の 20 問を本番と同じ `generateQuestionAiAnswer`(同じ指示文・Haiku・機械検査)へ 1 問ずつ流し、回答・止めた回答・トークン・費用の目安を Job summary と成果物に出す。Firestore・教室データには触れない(AI を呼ぶだけ・secret `ANTHROPIC_API_KEY` を共用)。20 問の正本を `functions/src/questionAiEvalCases.ts` に置き、確認リスト qa-q01〜q20 と文面が一致することをテストで固定 (functions/src/questionAiEval.ts・questionAiEvalCases.ts・test, functions/tools/question-ai-eval.mjs, .github/workflows/question-ai-eval.yml)
+
+## v1.5.609 (2026-10-16)
+
+- feat: 質問への AI 即時回答(開発用教室のみ)に**回答の決まり**を追加(オーナー指定 2026-10-16)。①謝らない ②不具合・バグを認めない/推測しない(「動作については開発者が確認してから回答します。」)③金額・料金・契約は数字を含め答えない ④他の教室・校舎の情報を一切出さない。システム指示に「必ず守ること」として書き、旧文面「不具合の可能性があればその旨を添える」(②と矛盾)を削除。指示だけに頼らず回答文を機械検査(`findQuestionAiAnswerViolation`: 謝罪語・不具合を認める言い回し・金額/無料/有料/月額・同じ運営会社の他教室名)し、反したら室長には見せず「自動回答を作れませんでした」(＝開発者が回答)に倒して元の文を `aiAnswerBlocked` に残す。開発ダッシュボードで質問を開くと AI の回答・失敗理由・止めた回答を全文で読めるように。質問文の「#テスト」は AI に渡さない。確認リストに新規利用者向けの質問 20 問 qa-q01〜qa-q20 を追加(章を一巡＋マニュアルに無い機能・料金・他校舎・バグの指摘・強い口調で決まりを試す・版 v1.5.604 据え置き)。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・index.ts, src/utils/developerDashboard.ts・DeveloperDashboardDetail.tsx・App.css, src/utils/verificationChecklist.ts・test, developmentStatusLedger.ts, docs/spec-developer-report.md §G-7)
+
+## v1.5.608 (2026-10-16)
+
+- refactor: 質問への AI 即時回答のモデルを Sonnet 最新から **Haiku 最新 `claude-haiku-5-5`** へ(オーナー確定 2026-10-16)。全教室展開(15 教室見込み・気軽な質問も来る想定)で月 3,000 円以下に収めるため。試算は 1 問 ≒ 入力 6 千トークン(マニュアル骨子 約 3,400 字＋指示＋操作履歴)で Sonnet 5.5 約 4 円 → Haiku 5.5 約 0.2 円(月 500 問で約 100 円)。思考込みの出力上限 max_tokens を 8000 → 4000 に。アプリ側の回数上限は設けない(オーナー判断・歯止めは Anthropic コンソールの月の上限額)。全教室への展開は開発用教室で qa-ai-1 を確認してから(進行中テーマ台帳に記載)。本番教室の挙動はまだ不変 (functions/src/questionAiAnswer.ts・test, docs/spec-developer-report.md §G-7, src/utils/developmentStatusLedger.ts)
+
+## v1.5.607 (2026-10-16)
+
+- refactor: 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)の呼び出し先を **Vertex AI から Claude API 直(API キー)へ戻した**(オーナー指示 2026-10-16「支払い窓口が増えてもよいので確実に動く案に」)。Vertex 経由は新規プロジェクトの Claude 割り当てが 0 のままで、開発用教室の質問 2 件(2026-09-14・09-28)とも 429「Vertex AI の割り当て上限」で一度も回答できていなかった。キーは functions runtime env `ANTHROPIC_API_KEY`。CI はリポジトリ secret **`ANTHROPIC_API_KEY`**(`PROD_FUNCTIONS_ENV` とは別・貼り直し不要)を `.env.komahyouapp-prod` へ 1 行追記してデプロイする。キー未設定なら AI を呼ばず理由を記録するだけ(報告本体は成功・室長の画面は「自動回答を作れませんでした」のまま)。モデルは Sonnet 最新 `claude-sonnet-5-5` へ。失敗理由の文面を Claude API 向け(API キー・クレジット残高)に。`@anthropic-ai/vertex-sdk` を削除。本番教室の挙動は不変(AI は呼ばない)。確認リスト qa-ai-1 を追加(版 v1.5.604 据え置き)・進行中テーマ台帳を更新 (functions/src/questionAiAnswer.ts・index.ts・package.json・.github/workflows/deploy-functions.yml・src/utils/featureRollout.ts・developmentStatusLedger.ts・verificationChecklist.ts・docs/spec-developer-report.md §G-7)
+
+## v1.5.606 (2026-10-16)
+
+- fix: **`*.test.tsx` が CI で一度も走っていなかったのを直した**。`vitest.config.ts` の `test.include` に `src/**/*.test.tsx` を足し、PDF 出力の処理中オーバーレイの回帰防止 `BusyOverlay.test.tsx`(2026-09-12 追加)を `npm run test:unit`／CI で実行するようにした。走らせたところ、テンプレ保存前レポートの配線テストが 1 件落ちた。1c975ad で文言が `resolveTemplateOverwriteReportLabels(...).busyMessage` へ移ったのに追随していなかったためで、挙動の回帰ではない(finally で消す配線は健在)。現行の配線に合わせ、上書き/差分反映の両方の文言を固定した。古い前提を書いたコメント 2 か所も直した (vitest.config.ts / src/components/common/BusyOverlay.test.tsx / SearchableSelect.test.ts / parentPortalPageModel.ts)
+
+## v1.5.605 (2026-10-16)
+
+- feat: **生徒・講師を選ぶプルダウンに虫眼鏡(🔍)の名前絞り込み**(オーナー指示「手動での講師追加・生徒追加のメニューに検索虫眼鏡ボタン。複数生徒から選ぶ画面はすべて検索つきに」)。共通部品 `SearchableSelect`(ネイティブ select はそのまま・🔍 を押したときだけ検索欄)と純粋関数 `resolveSearchableSelectView`(全角半角・ひらがなカタカナ・空白を同一視／選択中が隠れたら先頭の一致を選び直す＝見えない人を確定しない／一致 0 件は選択中を残す／「生徒なし」等は常に残す)を追加。対象: 盤面の講師設定・生徒追加・テンプレの生徒追加/編集・集団授業の担当講師/中3追加(この 2 つは選んだ瞬間に反映するので自動選択しない)・初期設定の未消化振替/講習の生徒・自動割振ルールのペア制約(保存済み行は自動選択しない)と「個人」の生徒一覧(絞り込み＋選択中 N 名)。未消化講習/振替の生徒一覧は既に検索つきなので対象外。確認リスト sr-1〜sr-3 を追加(版は v1.5.604 据え置き) (src/components/common/SearchableSelect.tsx / src/utils/searchableSelect.ts / ScheduleBoardScreen.tsx / GroupAttendanceModal.tsx / BackupRestoreScreen.tsx / AutoAssignRuleScreen.tsx / App.css / verificationChecklist.ts)
+
+## v1.5.604 (2026-10-15)
+
+- docs: **確認リスト第55版(v1.5.604)**: 受付 20261015-151056959-a8890098 で OK の c-5・tp-47・tp-53・tp-54 を外した(tp-47・tp-53 はテスト教室の表示からも消える)。q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 は結果待ちのまま。進行中テーマ台帳(template-diff-apply / user-request-issue-75)と spec-developer-report E-2 を追随 (verificationChecklist.ts / verificationChecklist.test.ts / developmentStatusLedger.ts / docs/spec-developer-report.md)
+
+## v1.5.603 (2026-10-15)
+
+- docs: **QR 重複解消(再マージ側・全教室)をオーナー確定として記録**(2026-10-15「QR 重複解消を全教室に効かせたままでよい」)。決定記録 40・INV-01 台帳・進行中テーマ台帳の「主セッション判断(異議があれば戻す)」をオーナー確定に改めた。コードの変更なし (docs/spec-template-behavior.md / docs/spec-invariants.md / developmentStatusLedger.ts)
+
+## v1.5.602 (2026-10-15)
+
+- fix(INV-01/INV-02/INV-03): **QR 自動割振り(日程表登録)の講師と同じ講師をテンプレが同じコマの別の机に置くと、同じ講師が 1 コマに 2 人出ていた**(受付 20261015-133308495-046ae8de その他欄「日程表より登録された講師が、テンプレで組まれている同じ講師がいても組まれてしまい、一コマに同じ講師が 2 人いる場合がある。日程表からの講師追加はテンプレが入っていたら消えて良い」・報告の盤面で 7 コマ)。spec-template-behavior Q21-9 例外 1(QR 講師は置き換えない)を絞り、テンプレが同じコマの別の机に同じ講師を**生徒つき**で置き、保存結果のその机に非 manual の同じ講師が居るなら QR の机の講師を外す(テンプレのその机の講師か講師なし。生徒・記録は不変。保存後のメッセージ「テンプレの同じ講師が同じコマに居るため日程表登録の講師を外した机: ○机」)。テンプレ側が足場(講師だけ)で QR 机に生徒が居る形は従来どおり QR を残す(INV-02 L-7 兄弟 2)・手置きの同じ講師は対象外。権威関数 `findQrTeacherDesksSupersededByTemplate` を差分反映(机の組み立ての後)と**再マージ `mergeManagedWeek`(配置ループの前後・全教室・読み込み時にも効く＝既存の二重は開き直しで 1 人になる)**の両方で使う。外した机には `scheduleRegistrationSupersededByTemplate`(講習 ID＋講師 ID・`types.ts`)を残し、起動時の自己修復 `reconcileSubmittedTeacherPlacements` はこれを「配置済み」と数える(無いと、その講習の QR 机が全部テンプレに寄せられた講師を未配置と誤判定し、手で講師を替えたコマへ置き直す＝INV-02 の 2026-08-02 と同型)。自己修復は講師が既に居るコマに置き直さないので寄せたコマは戻らない。regression-reviewer の監査(同日)を取り込み: **M-1** 外した後に置く講師も権威関数 `resolveSupersededQrDeskTeacherFields`(同じ机番号のテンプレの講師・無ければ講師なし)1 か所にし、差分反映と読み込み時の再マージで結果を揃える(再マージだけ講師なしになる形を解消)、**M-2** 記録を「配置済み」と数えるのはそのコマに同じ講師がまだ居る間だけ(後でテンプレから講師が消えたら従来どおり自己修復が QR を置き直す)、**L-1** 再マージの 2 回目の判定で机が空いたら足場講師の置き直しを同じ再マージの中で回す(1 回で不動点)、**L-2** 週の間引き(`weekHasManualBoardData`)は記録のある週を残す。残る兄弟(台帳): 手置きの同じ講師、上段が空いた保留の QR 机(L-3)、机番号のずれ(L-4)、同じ講師かの判定が表示名一致の箇所(L-5)、読み込み時に外した分が操作ログに残らない(L-6)。テスト: `templateDiffApply.test.ts`(判定 4 件・差分反映 2 件・再マージ 3 件)、`boardWeekTrim.test.ts`、INV-01 マトリクス (d-2)、INV-02 マトリクス(生徒つき→外れて不動点／手置きは外さない)、`templatePendingPeripherals.test.ts`(保留の QR 机が寄せられても自己修復が置き直さない・記録を消すと置き直される＝回帰の確認。従来の「テンプレに居ない講師の QR は残る」行は別テンプレで維持)。台帳 INV-01・INV-12 に記録。確認リスト tp-54 (templateDiffApply.ts / ScheduleBoardScreen.tsx / docs/spec-template-behavior.md / docs/spec-invariants.md)
+- fix: **テンプレ保存の確認モーダルから「変えたコマだけ反映／すべてのコマを突き合わせる」のラジオを外した**(同受付の tp-44/tp-46 メモ「選択肢は入らず、自動的に変更のあったコマだけ反映して」「選択肢は不要で、何も変更なかったときだけ自動で全コマ突き合わせにして」)。範囲は従来の既定(変えたコマがあればそのコマだけ・0 なら全コマ)のまま自動。変更点一覧は残す。`handleTemplateSaveScopeChange` を削除(Q39-3 改定・配線テストを追随)。確認リスト tp-53 (ScheduleBoardScreen.tsx / templatePendingDesks.wiring.test.ts)
+- fix: **テンプレの反映開始日は今日より前を選べないようにした**(同受付の tp-47 要改善「来週月曜は OK／そもそも今日より前の日を選択できないようにして」・差分反映の教室だけ)。date 入力に `min`=今日を付け、キー入力・Excel 取り込みの過去日も今日へ丸める(純関数 `clampTemplateEffectiveStartDateToToday`)。確認文の過去日の警告は最後の保険として残す(Q39-5 追記)。テスト: `templateDefinitionDiff.test.ts`・`templatePendingBoard.wiring.test.ts`。確認リスト tp-47 差し替え (BoardToolbar.tsx / ScheduleBoardScreen.tsx / templateDefinitionDiff.ts)
+- fix: **別タブの確認リストを「－」で縮めてもパネルがタブいっぱいのまま(中身だけ小さくなる)ようにした**(同受付の c-5 要改善「小さくなるが、表示できる縦幅も小さくなってしまい意味がない。内容だけ小さくなるように」)。CSS zoom はパネルの中の vh も縮めるため `height: 100vh` だと 50% でタブの半分しか使わず、125% で下(保存して送信)がはみ出て押せなかった。html → body → 土台 → パネルを `height: 100%` で繋ぐ(親に対する % は zoom の影響を受けない)。source-scan テスト追加。確認リスト c-5 差し替え (App.css / verificationChecklistWindow.test.ts)
+- docs: **確認リスト第54版(v1.5.602)**: 受付 20261015-133308495-046ae8de で OK の tp-39・tp-41・tp-40・c-6・tp-42・tp-43・tp-44・tp-45・tp-46・tp-52 を外し、上の 4 件の確認 c-5・tp-47・tp-53・tp-54 と、オーナー指示「テンプレ作成の確認リストに、未消化数が変化しないこと、日程表とコマ表に差異がないこと、コマ表から意図してない変更が発生してないことを確認するようなアプリの基本仕様のデバッグも含めて(テスト教室でテスト担当者がテンプレ機能追加によるバグが出ていないか確認する目的)」の tp-55(未消化振替・未消化講習の残数が変わらない)・tp-56(盤面と生徒/講師日程表が一致)・tp-57(変えていないコマ・反映日より前・手入力に意図しない変更が無い)を追加。テスト教室に出す項目は tp-47・tp-53・tp-48〜51・tp-55〜57(tp-54 は QR 提出が要るので開発用教室だけ)。q-1〜q-6・tp-15・tp-48〜51 は結果待ちのまま。進行中テーマ台帳(template-diff-apply / user-request-issue-75 / user-report-issue-76)と spec-developer-report E-2 を更新 (verificationChecklist.ts / verificationChecklist.test.ts / developmentStatusLedger.ts / docs/spec-developer-report.md)
+
 ## v1.5.601 (2026-10-15)
 
 - feat: **テスト教室の確認リストはテンプレ関係(tp-44〜51)だけ・開発用教室は全項目**(オーナー指示 2026-10-15)。App が検証用教室の種別(開発用=development・テスト=sandbox)を台帳から決めてパネルへ渡し(`resolveVerificationChecklistAudience`)、パネルは `selectVerificationChecklistItems` で絞る(進捗・送信本文・Markdown も絞った項目で)。テスト教室に出す項目は生徒名プレースホルダや開発用教室の盤面を前提にしないものだけ(テストで固定)。見出しを「開発用教室(全項目)」「テスト教室(テンプレ関係のみ)」に (verificationChecklist.ts / developmentClassroom.ts / VerificationChecklistPanel.tsx / App.tsx / docs/spec-developer-report.md)

@@ -368,3 +368,12 @@ export function resolveDefaultTemplateEffectiveStartDate(params: { todayKey: str
 export function isTemplateEffectiveStartDateInPast(effectiveStartDate: string, todayKey: string) {
   return Boolean(effectiveStartDate) && effectiveStartDate < todayKey
 }
+
+/**
+ * 反映開始日は今日より前を選べない（オーナー指示 2026-10-15・確認リスト v1.5.596 tp-47「そもそも今日より前の日を選択できないようにして」・差分反映の教室だけ）。
+ * date 入力の `min` はカレンダーの選択を止めるだけで、キー入力・Excel 取り込みの値は通るので、値を受けるところでも今日へ丸める。
+ * 空（入力途中）はそのまま返す。確認文の過去日の警告（Q39-5）は、これをすり抜けた値への最後の保険として残す。
+ */
+export function clampTemplateEffectiveStartDateToToday(effectiveStartDate: string, todayKey: string) {
+  return isTemplateEffectiveStartDateInPast(effectiveStartDate, todayKey) ? todayKey : effectiveStartDate
+}

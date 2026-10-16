@@ -1,5 +1,7 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
+import { SearchableSelect, type SearchableSelectOption } from '../common/SearchableSelect'
+import { matchesSelectSearch } from '../../utils/searchableSelect'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import {
   autoAssignPeriodOptions,
@@ -412,8 +414,17 @@ export function AutoAssignRuleScreen({
     .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
   [referenceDate, teachers])
 
+  // 「個人」の生徒一覧の虫眼鏡絞り込み(2026-10-16)。null = 検索欄を閉じている。
+  const [studentPickerSearch, setStudentPickerSearch] = useState<string | null>(null)
   const studentNameById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, formatStudentSelectionLabel(student, referenceDate)])), [referenceDate, visibleStudents])
   const teacherNameById = useMemo(() => Object.fromEntries(visibleTeachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [visibleTeachers])
+  // ペア制約の人物A/B(講師/生徒)の選択肢(虫眼鏡で絞り込み・2026-10-16)。
+  const buildPairPersonOptions = (personType: PairConstraintRow['personAType'], placeholder: string): SearchableSelectOption[] => [
+    { value: '', label: placeholder, pinned: true },
+    ...(personType === 'teacher'
+      ? visibleTeachers.map((teacher) => ({ value: teacher.id, label: teacherNameById[teacher.id], searchText: teacher.name }))
+      : visibleStudents.map((student) => ({ value: student.id, label: studentNameById[student.id], searchText: student.name }))),
+  ]
   const studentGradeById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, resolveStudentGradeLabel(student.birthDate, referenceDate)])), [referenceDate, visibleStudents])
   const gradeOptions = useMemo(() => listAutoAssignTargetGrades(visibleStudents, referenceDate), [referenceDate, visibleStudents])
   const normalizedRules = useMemo(() => rules.map(normalizeRule), [rules])
@@ -457,6 +468,7 @@ export function AutoAssignRuleScreen({
 
   const resetModalDraft = (ruleKey: AutoAssignRuleKey, mode: SelectionModalMode) => {
     const key = createModalKey(ruleKey, mode)
+    setStudentPickerSearch(null) // モーダルを開き直したら絞り込みは閉じた状態から
     setDraftTypes((current) => ({ ...current, [key]: mode === 'exclude' ? 'grade' : 'all' }))
     setDraftGrades((current) => ({ ...current, [key]: [] }))
     setDraftStudentIds((current) => ({ ...current, [key]: [] }))
@@ -889,19 +901,25 @@ export function AutoAssignRuleScreen({
           <option value="teacher">講師</option>
           <option value="student">生徒</option>
         </select>
-        <select value={pairConstraintDraft.personAId} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, personAId: event.target.value }))} data-testid="auto-assign-pair-draft-person-a-id">
-          <option value="">人物Aを選択</option>
-          {(pairConstraintDraft.personAType === 'teacher' ? visibleTeachers : visibleStudents).map((person) => <option key={person.id} value={person.id}>{pairConstraintDraft.personAType === 'teacher' ? teacherNameById[person.id] : studentNameById[person.id]}</option>)}
-        </select>
+        <SearchableSelect
+          wrapperClassName="inline"
+          value={pairConstraintDraft.personAId}
+          onChange={(nextId) => setPairConstraintDraft((current) => ({ ...current, personAId: nextId }))}
+          testId="auto-assign-pair-draft-person-a-id"
+          options={buildPairPersonOptions(pairConstraintDraft.personAType, '人物Aを選択')}
+        />
         <span className="basic-data-xmark">×</span>
         <select value={pairConstraintDraft.personBType} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, personBType: event.target.value as PairConstraintRow['personBType'], personBId: '' }))} data-testid="auto-assign-pair-draft-person-b-type">
           <option value="teacher">講師</option>
           <option value="student">生徒</option>
         </select>
-        <select value={pairConstraintDraft.personBId} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, personBId: event.target.value }))} data-testid="auto-assign-pair-draft-person-b-id">
-          <option value="">人物Bを選択</option>
-          {(pairConstraintDraft.personBType === 'teacher' ? visibleTeachers : visibleStudents).map((person) => <option key={person.id} value={person.id}>{pairConstraintDraft.personBType === 'teacher' ? teacherNameById[person.id] : studentNameById[person.id]}</option>)}
-        </select>
+        <SearchableSelect
+          wrapperClassName="inline"
+          value={pairConstraintDraft.personBId}
+          onChange={(nextId) => setPairConstraintDraft((current) => ({ ...current, personBId: nextId }))}
+          testId="auto-assign-pair-draft-person-b-id"
+          options={buildPairPersonOptions(pairConstraintDraft.personBType, '人物Bを選択')}
+        />
         <select value={pairConstraintDraft.category ?? 'constraint'} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, category: event.target.value as PairConstraintCategory }))} data-testid="auto-assign-pair-draft-category">
           <option value="constraint">制約事項</option>
           <option value="priority">優先事項</option>
@@ -928,10 +946,15 @@ export function AutoAssignRuleScreen({
                     <option value="teacher">講師</option>
                     <option value="student">生徒</option>
                   </select>
-                  <select value={row.personAId} onChange={(event) => updatePairConstraint(row.id, { personAId: event.target.value })} data-testid={`auto-assign-pair-person-a-id-${row.id}`}>
-                    <option value="">人物Aを選択</option>
-                    {(row.personAType === 'teacher' ? visibleTeachers : visibleStudents).map((person) => <option key={person.id} value={person.id}>{row.personAType === 'teacher' ? teacherNameById[person.id] : studentNameById[person.id]}</option>)}
-                  </select>
+                  {/* 保存済みの行は選んだ瞬間に書き換わるので、打つたびの自動選択はしない(2026-10-16)。 */}
+                  <SearchableSelect
+                    wrapperClassName="inline"
+                    value={row.personAId}
+                    onChange={(nextId) => updatePairConstraint(row.id, { personAId: nextId })}
+                    autoSelectOnSearch={false}
+                    testId={`auto-assign-pair-person-a-id-${row.id}`}
+                    options={buildPairPersonOptions(row.personAType, '人物Aを選択')}
+                  />
                 </div>
               </td>
               <td className="basic-data-xmark-cell">×</td>
@@ -941,10 +964,15 @@ export function AutoAssignRuleScreen({
                     <option value="teacher">講師</option>
                     <option value="student">生徒</option>
                   </select>
-                  <select value={row.personBId} onChange={(event) => updatePairConstraint(row.id, { personBId: event.target.value })} data-testid={`auto-assign-pair-person-b-id-${row.id}`}>
-                    <option value="">人物Bを選択</option>
-                    {(row.personBType === 'teacher' ? visibleTeachers : visibleStudents).map((person) => <option key={person.id} value={person.id}>{row.personBType === 'teacher' ? teacherNameById[person.id] : studentNameById[person.id]}</option>)}
-                  </select>
+                  {/* 保存済みの行は選んだ瞬間に書き換わるので、打つたびの自動選択はしない(2026-10-16)。 */}
+                  <SearchableSelect
+                    wrapperClassName="inline"
+                    value={row.personBId}
+                    onChange={(nextId) => updatePairConstraint(row.id, { personBId: nextId })}
+                    autoSelectOnSearch={false}
+                    testId={`auto-assign-pair-person-b-id-${row.id}`}
+                    options={buildPairPersonOptions(row.personBType, '人物Bを選択')}
+                  />
                 </div>
               </td>
               <td><span className="status-chip secondary">組み合わせ不可</span></td>
@@ -1118,8 +1146,41 @@ export function AutoAssignRuleScreen({
               ) : null}
 
               {draftType === 'students' ? (
+                <div className="searchable-select-search-row auto-assign-student-search-row">
+                  <button
+                    type="button"
+                    className={`searchable-select-toggle${studentPickerSearch !== null ? ' active' : ''}`}
+                    onClick={() => setStudentPickerSearch((current) => (current === null ? '' : null))}
+                    aria-label={studentPickerSearch !== null ? '絞り込みを閉じる' : '名前で絞り込み'}
+                    aria-pressed={studentPickerSearch !== null}
+                    title={studentPickerSearch !== null ? '絞り込みを閉じる' : '名前で絞り込み'}
+                    data-testid={`auto-assign-student-search-toggle-${rule.key}`}
+                  ><span aria-hidden="true">🔍</span></button>
+                  {studentPickerSearch !== null ? (
+                    <>
+                      <input
+                        type="search"
+                        className="searchable-select-search"
+                        value={studentPickerSearch}
+                        onChange={(event) => setStudentPickerSearch(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setStudentPickerSearch(null) } }}
+                        placeholder="名前で絞り込み"
+                        aria-label="名前で絞り込み"
+                        autoFocus
+                        data-testid={`auto-assign-student-search-${rule.key}`}
+                      />
+                      {/* 絞り込みで隠れても選択は外れない(選択中の人数を出して、見えない選択を忘れないようにする)。 */}
+                      <span className="searchable-select-count">{`選択中 ${selectedStudentIds.length}名`}</span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {draftType === 'students' ? (
                 <div className="auto-assign-student-picker" data-testid={`auto-assign-student-picker-${rule.key}`}>
-                  {selectableStudents.map((student) => {
+                  {selectableStudents
+                    .filter((student) => !studentPickerSearch || matchesSelectSearch({ value: student.id, label: studentNameById[student.id] ?? '', searchText: student.name }, studentPickerSearch))
+                    .map((student) => {
                     const isSelected = selectedStudentIds.includes(student.id)
                     return (
                       <button
@@ -1137,6 +1198,9 @@ export function AutoAssignRuleScreen({
                     )
                   })}
                   {selectableStudents.length === 0 ? <div className="auto-assign-target-empty">同じ制約グループ内で選べる個人はありません。</div> : null}
+                  {selectableStudents.length > 0 && studentPickerSearch && !selectableStudents.some((student) => matchesSelectSearch({ value: student.id, label: studentNameById[student.id] ?? '', searchText: student.name }, studentPickerSearch))
+                    ? <div className="auto-assign-target-empty" data-testid={`auto-assign-student-search-empty-${rule.key}`}>「{studentPickerSearch}」に一致する生徒はいません。</div>
+                    : null}
                 </div>
               ) : null}
 

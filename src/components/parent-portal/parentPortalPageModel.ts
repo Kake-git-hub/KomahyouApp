@@ -1,7 +1,7 @@
 // 保護者ポータル公開ページ(/p/{token})の純ロジック(spec-parent-portal.md §C / §E)。
 //
 // ParentPortalPage.tsx から React に依存しない判断・整形をここへ切り出し、単体テストで固定する
-// (E2E 廃止後はユニットが唯一の自動ゲート。.test.tsx は CI で走らないため .test.ts から検証する)。
+// (E2E 廃止後はユニットが唯一の自動ゲート。純粋関数なので .test.ts から検証する)。
 // 型は k_contract §1 の API 契約(functions/src/parentPortal.ts の応答)と一致させる。
 //
 // ★2026-09-18(オーナー指示): 自由記述の「教室へ連絡」を廃止し、**授業行をタップ → 休み連絡**だけにした。

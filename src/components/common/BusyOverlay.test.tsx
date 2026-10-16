@@ -6,9 +6,13 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { BusyOverlay } from './BusyOverlay'
+
+vi.mock('html2canvas', () => ({ default: vi.fn() }))
+vi.mock('jspdf', () => ({ default: class {} }))
+const { resolveTemplateOverwriteReportLabels } = await import('../../utils/pdf')
 
 const BOARD_TSX = readFileSync(fileURLToPath(new URL('../schedule-board/ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
 
@@ -45,9 +49,15 @@ describe('盤面(ScheduleBoardScreen)への配線', () => {
 
   it('テンプレ上書きレポートの PDF 出力も同じオーバーレイを finally で消す', () => {
     const body = BOARD_TSX.slice(BOARD_TSX.indexOf('const handleTemplateSaveConfirm = async'), BOARD_TSX.indexOf('const handleTemplateClear ='))
-    expect(body).toContain("setBusyOverlayMessage('上書き内容のレポートを PDF 出力中… しばらくお待ちください')")
+    // 文言は 1c975ad で pdf.ts の resolveTemplateOverwriteReportLabels へ移った(差分反映の教室は見出し違い)。文言そのものは下の it で固定する。
+    expect(body).toContain('setBusyOverlayMessage(resolveTemplateOverwriteReportLabels(templateReportMode).busyMessage)')
     const finallyIndex = body.indexOf('} finally {')
     expect(finallyIndex).toBeGreaterThan(0)
     expect(body.slice(finallyIndex)).toContain('setBusyOverlayMessage(null)')
+  })
+
+  it('テンプレ保存前レポートのオーバーレイ文言(上書き/差分反映の両方とも「PDF 出力中」と分かる)', () => {
+    expect(resolveTemplateOverwriteReportLabels('overwrite').busyMessage).toBe('上書き内容のレポートを PDF 出力中… しばらくお待ちください')
+    expect(resolveTemplateOverwriteReportLabels('diff').busyMessage).toBe('テンプレ保存前の盤面を PDF 出力中… しばらくお待ちください')
   })
 })

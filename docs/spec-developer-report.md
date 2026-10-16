@@ -92,7 +92,7 @@
   `VerificationChecklistPanel.wiring.test.ts` で固定）。
 - **テスト教室にはテンプレ関係の項目だけ出す（2026-10-15 オーナー指示「テスト教室には、テンプレ関係の確認リストだけ残して。開発用教室はすべて残して」）**:
   App が `resolveVerificationChecklistAudience`（開発用教室＝development・テスト教室＝sandbox）を決めてパネルに渡し、パネルは
-  `selectVerificationChecklistItems` で絞る。sandbox に出すのは `VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS`（tp-44〜51）＝特定の教室のデータに依らない
+  `selectVerificationChecklistItems` で絞る。sandbox に出すのは `VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS`（第 55 版〔v1.5.604〕: tp-48〜51 と基本仕様の確認 tp-55〜57。id は版ごとに入れ替わる）＝特定の教室のデータに依らない
   テンプレ関係の項目だけ（生徒プレースホルダを使う項目・開発用教室の盤面を前提にする項目は載せない。テスト教室の生徒は開発用教室と違うので、
   名前の差し込みが「名前不明(ID)」になるため）。進捗・送信本文・Markdown も絞った項目で数える。
 - **テスト教室でも同じ定義（`VERIFICATION_CHECKLIST`）から出る**（2026-10-15 オーナー指示「テスト教室でテスト担当にもチェックさせる」）。
@@ -347,25 +347,32 @@
 |---|---|
 | 対象 | 種別 `question` × 開発用教室（`isDevelopmentClassroomIdentity`＝開発用教室・テスト教室）。確認リスト送信は対象外 |
 | 見せ方 | 送信の流れは従来と同じ（記録 → メール通知）。**送信後の結果画面**に受付文に続けて「― 自動回答（試験中・誤りがあることがあります）―」を表示（2026-10-10 文言見直し）。盤面モーダル・日程表タブで同一 |
-| AI に渡すもの | **利用者マニュアル `docs/user-manual.md` 全文＋質問文＋表示条件＋直近の操作履歴（新しい方 40 件）**。教室データ（スナップショット）は渡さない |
-| モデル | **Claude on Google Cloud（Vertex AI）**の **Sonnet 最新**（`claude-sonnet-5`・effort medium）。当初の Claude API 直（API キー）はオーナー指示で Vertex へ変更（2026-09-14） |
-| 回答文の制約 | §G-4 の禁止事項（個別教室の中身・他教室・約束・料金・不可逆操作の手順・内部情報）をシステム指示に同梱。マニュアルに無い内容は「開発者が確認してから回答」と返す |
+| AI に渡すもの | **使い方の説明 `docs/user-manual.md` 全文＋質問文＋表示条件＋直近の操作履歴（新しい方 40 件）**。教室データ（スナップショット）は渡さない。**2026-10-16 夜（v1.5.612）: `docs/user-manual.md` を骨子（約 3,400 字・〔未執筆〕4 か所）から本文（約 1.3 万字・全 12 章・内部名や文書名を含めない）へ拡充**（オーナー指示「マニュアルを Fable 5.1 で拡充して」。内容は各 `docs/spec-*.md` から起こし、全教室で有効な機能だけを載せる。試験中の機能は載せない） |
+| モデル | **Claude API 直（API キー）**の **Sonnet 最新**（`claude-sonnet-5-5`・effort medium・max_tokens 8000・思考は省略＝adaptive）。**2026-10-16 夜 オーナー指示「質問回答 AI モデルも Sonnet の最新を使うように」で Haiku から戻した**（説明書を本文へ拡充したので読み解きの精度を優先。試算 1 問 ≒ 入力 1.2 万トークン＋出力 1 千トークンで約 5 円・月 500 問で約 2,500 円。Haiku なら約 0.3 円）。同日昼の Haiku 確定（`claude-haiku-5-5`・max_tokens 4000・全教室展開で月 3,000 円以下に収めるため Sonnet から変更・試算 Sonnet 約 4 円 → Haiku 約 0.2 円）はこれで上書き。**アプリ側の回数上限は設けない**（同日オーナー判断）。歯止めは Anthropic コンソールの月の利用上限額。経緯: 当初 Claude API 直 → 2026-09-14 請求を GCP にまとめるため Vertex AI へ → Vertex は割り当て 0 の 429 で一度も回答できず、**2026-10-16 オーナー指示「支払い窓口が増えてもよいので確実に動く案に」で Claude API 直へ戻した** |
+| 回答文の制約 | §G-4 の禁止事項（個別教室の中身・他教室・約束・料金・不可逆操作の手順・内部情報）をシステム指示に同梱。説明に無い内容は「この点は開発者が確認してから回答します。」と返す（**2026-10-16 夜 オーナー指示「マニュアルでは〜など他責な言い回しはしない。回答 AI 自身が利用者にとってはマニュアル」**: 旧文面「マニュアルに記載が無いため、開発者が確認してから回答します。」を改め、システム指示に「あなた自身が案内役。他の資料に責任を預ける言い方をしない。『マニュアル』『説明書』『記載』『明記』という言葉を書かない」を追加。根拠の見出しも「利用者マニュアル」→「案内できる内容」。あわせて評価 1 回目の反省から「無いボタン名を「」で作らない」「推測の手順＋『確認します』を書かない」「決まり文句を「」で囲まない」「答えがあるときは言い切る」を追加）。**2026-10-16 オーナー指定で 4 点を「必ず守ること」に格上げ**: ①謝らない（謝罪語を使わない）②不具合を認めない・推測しない（「動作については開発者が確認してから回答します。」）③金額・料金・契約は数字を含め一切答えない（「料金・契約については、開発者から個別にご案内します。」）④他の教室・校舎の情報を一切出さない（「いま開いている教室のことだけをご案内しています。」）。旧文面「不具合の可能性がある内容ならその旨を添える」は②と矛盾するので削除 |
+| 機械検査（2026-10-16） | 指示文だけに頼らず、回答文を `findQuestionAiAnswerViolation` で検査する（謝罪語〔**同日夜に「ご不便」「ご迷惑」を形によらず止めるよう拡張**＝評価 1 回目 Q20「ご不便をかけている状況を把握しました」が抜けた〕／不具合を認める言い回し／金額・無料・有料・月額／他教室の名前＝同じ運営会社の他教室名とその 3 文字以上の語・自教室名に含まれる語は除く／**他責の言い回し**〔同日夜追加・「マニュアル」「説明書」「ヘルプに」「記載が無い」「明記されて」など。種類名 `他責の言い回し`〕）。反したら**室長には見せず**「自動回答を作れませんでした」（＝開発者が回答）に倒し、元の文を `aiAnswerBlocked`・理由を `aiAnswerError`（例「回答の決まりに反したため表示しませんでした(謝罪)」）に残す。開発ダッシュボードで質問を開くと「AI の回答」「AI 失敗の理由」「止めた回答」を全文で読める。決まり文句 4 つは検査に引っかからない（テストで固定）。質問文の「#テスト」の印は AI に渡さない |
 | 失敗時 | 報告本体は成功のまま。結果画面に「（自動回答を作れませんでした。開発者が確認してから回答します）」を添える。**理由は室長に出さない**（2026-10-10 文言見直し）。理由（短文化し鍵やスタックを含まない開発者向け文）は記録の `aiAnswerError`・関数ログに残し、開発ダッシュボードで読む |
 | 記録 | `developerReports/{id}` に `aiAnswer` / `aiAnswerError` / `aiAnswerModel` / `aiAnsweredAt` / `aiAnswerInputTokens` / `aiAnswerOutputTokens` を追記（開発者が後から確認できる）。メール本文には載らない（メールは作成時に送るため） |
 
 - 実装: `functions/src/questionAiAnswer.ts`（`shouldAnswerQuestionWithAi` が権威）＋ `index.ts` の `submitDeveloperReport`
   （記録の後に呼ぶ・関数タイムアウト 180 秒）。画面側の切り替えは featureRollout `questionAiAnswer`（`development-only`）で、
   **表示（注意文・送信中文言・日程表タブの応答待ち時間）だけ**を変える。昇格するときはサーバー判定と**同時に**変える。
-- マニュアルは functions のデプロイに含まれないため `functions/scripts/sync-shared.mjs` が
+- 使い方の説明（`docs/user-manual.md`）は functions のデプロイに含まれないため `functions/scripts/sync-shared.mjs` が
   `functions/src/generated/userManual.ts` へ複製する（ズレは `questionAiAnswer.test.ts` が検出）。
-- **呼び出し経路: Claude on Google Cloud（Vertex AI）**（オーナー指示 2026-09-14「請求先を増やしたくない」＝請求を GCP にまとめる）。
-  `@anthropic-ai/vertex-sdk` の `AnthropicVertex`・プロジェクトは実行中の GCP プロジェクト（`GCLOUD_PROJECT`）・
-  リージョン既定 `global`（runtime env `QUESTION_AI_VERTEX_REGION` で上書き可）。**API キーは持たない**（実行サービスアカウント
-  `<プロジェクト番号>-compute@developer.gserviceaccount.com` の ADC で認証）。
-- 使えるようにする前提（プロジェクトごと・オーナーが GCP コンソールで行う）: ①Vertex AI API（`aiplatform.googleapis.com`）を有効化
-  ②Model Garden で Claude Sonnet 5 を有効化（利用規約への同意） ③実行サービスアカウントに Vertex AI の呼び出し権限
-  （本番は 2026-09-14 時点で `roles/editor` を持つので追加不要。最小権限にするなら `roles/aiplatform.user`）。
-  **未整備のうちは AI を呼んでも失敗し、結果画面に「自動回答を作れませんでした」と出るだけ**（報告本体は成功・デプロイも失敗しない）。原因（「Vertex AI の権限がありません／モデルが見つかりません」等）は記録の `aiAnswerError` と関数ログで確認する。
+- **呼び出し経路: Claude API 直（API キー）**（オーナー指示 2026-10-16「支払い窓口が増えてもよいので確実に動く案」）。
+  `@anthropic-ai/sdk` の `new Anthropic({ apiKey })`。キーは functions runtime env の `ANTHROPIC_API_KEY`。
+  CI（`.github/workflows/deploy-functions.yml`）はリポジトリ secret **`ANTHROPIC_API_KEY`**（`PROD_FUNCTIONS_ENV` とは別）を
+  `functions/.env.komahyouapp-prod` へ 1 行追記してデプロイする（`PROD_FUNCTIONS_ENV` を貼り直さなくてよい）。
+  請求は Anthropic（platform.claude.com の前払いクレジット）になり、GCP とは別の支払い窓口が 1 つ増える。
+- 切り替えの理由（記録）: Vertex AI 経由（2026-09-14〜10-16）は開発用教室の質問 2 件（2026-09-14・09-28）とも
+  `aiAnswerError` =「AI が混み合っています(Vertex AI の割り当て上限)」＝ 429。新規 GCP プロジェクトの Claude 割り当てが 0 のままで、
+  割り当て増加の申請・審査が要る。Claude API はクレジットを入れたキーがあれば申請なしで動く。
+- 使えるようにする前提（オーナーが行う・一度きり）: ①Anthropic のコンソール（platform.claude.com）で組織を作り、
+  請求先（カード）を登録して前払いクレジットを入れる（任意で月の利用上限を設定） ②API キーを発行
+  ③GitHub リポジトリの Settings → Secrets and variables → Actions に `ANTHROPIC_API_KEY` を追加
+  ④Actions →「Deploy Cloud Functions」を main で実行（キーは次のデプロイで入る）。
+  **キー未設定のうちは AI を呼ばず、結果画面に「自動回答を作れませんでした」と出るだけ**（報告本体は成功・デプロイも成功）。
+  原因（「API キーがありません／認証に失敗／クレジット残高不足」等）は記録の `aiAnswerError` と関数ログで確認する。
 
 ### G-6. QA 公開（任意・既定 OFF）
 

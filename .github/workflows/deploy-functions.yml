@@ -15,6 +15,9 @@ name: Deploy Cloud Functions
 #     GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN を含む(1行1キー)。firebase-tools が functions/.env.komahyouapp-prod を
 #     読んで runtime env に焼き込む。**未設定だと Google Drive 自動同期が無効のままデプロイされる**
 #     (functions/.env は .gitignore 済みで CI には来ないため。2026-07-10 の同期停止事故の恒久対策)。
+#   ANTHROPIC_API_KEY … 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)の Claude API キー(sk-ant-…)。
+#     PROD_FUNCTIONS_ENV を貼り直さずに足せるよう別 secret にし、下のステップで .env.komahyouapp-prod へ 1 行追記する
+#     (2026-10-16 Vertex AI から Claude API 直へ切り替え)。未設定なら AI 回答は「API キーがありません」で止まるだけ(デプロイは成功)。
 #
 # トリガー:
 #   - 手動(workflow_dispatch): Actions タブから「Run workflow」で実行。
@@ -77,6 +80,21 @@ jobs:
           fi
         env:
           PROD_FUNCTIONS_ENV: ${{ secrets.PROD_FUNCTIONS_ENV }}
+
+      # 質問 AI 即時回答の Claude API キーを runtime env に足す(別 secret・値はログに出さない)。
+      # PROD_FUNCTIONS_ENV 側にも同じキーがあればこちらの値で上書きする(後勝ちにせず、重複行を消してから追記)。
+      - name: Append Claude API key for question AI answer
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            touch functions/.env.komahyouapp-prod
+            sed -i '/^ANTHROPIC_API_KEY=/d' functions/.env.komahyouapp-prod
+            printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" >> functions/.env.komahyouapp-prod
+            echo "Appended ANTHROPIC_API_KEY to functions/.env.komahyouapp-prod"
+          else
+            echo "::warning::ANTHROPIC_API_KEY secret が未設定です。質問への AI 即時回答(開発用教室)は「API キーがありません」で止まります。"
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Write Firebase service account credentials
         run: |

@@ -62,7 +62,7 @@ import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, ty
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
-import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { buildOtherClassroomNameWords, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
@@ -1835,10 +1835,10 @@ export function toLessonHistoryHttpsError(error: unknown): HttpsError {
 // 開発者へ送る。メタ＋操作痕跡は Firestore(workspaces/{ws}/developerReports)、教室データ本体は Storage へ。
 // 通知(GitHub Issue 起票)は .github/workflows/developer-reports.yml が notifiedAt==null を拾って行う。
 // 本番データ(classroomSnapshots 等)には一切書かない＝読み取り専用の安全な機能。
-// 質問への AI 即時回答(試験・開発用教室のみ。spec-developer-report §G-7)は Claude on Google Cloud(Vertex AI)で呼ぶ。
-// 請求は GCP にまとめる(オーナー指示 2026-09-14)。キーは持たず、実行サービスアカウントで認証する。
-// リージョンは既定 global。functions runtime env の QUESTION_AI_VERTEX_REGION で上書きできる。
-const QUESTION_AI_VERTEX_REGION = (process.env.QUESTION_AI_VERTEX_REGION ?? '').trim()
+// 質問への AI 即時回答(試験・開発用教室のみ。spec-developer-report §G-7)は Claude API 直(API キー)で呼ぶ。
+// 2026-10-16 オーナー指示で Vertex AI(割り当て 0 で 429 が続いた)から切り替え。キーは functions runtime env の
+// ANTHROPIC_API_KEY(CI ではリポジトリ secret ANTHROPIC_API_KEY を deploy-functions.yml が .env へ追記)。未設定なら AI を呼ばない。
+const QUESTION_AI_API_KEY = (process.env.ANTHROPIC_API_KEY ?? '').trim()
 
 export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 180, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
@@ -1960,19 +1960,38 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
   if (shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })) {
+    // 他の教室の名前が回答に出たら止める(オーナー指定 2026-10-16「他教室の情報を一切出さない」の歯止め)。
+    // 名前が読めなくても回答は止めない(AI には他教室のデータを渡していないので、ここは二重の安全策)。
+    let otherClassroomNames: string[] = []
+    try {
+      const classroomsSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').get()
+      otherClassroomNames = buildOtherClassroomNameWords({
+        currentClassroomName: classroomName,
+        allClassroomNames: classroomsSnapshot.docs.filter((doc) => doc.id !== classroomId).map((doc) => (typeof doc.data()?.name === 'string' ? String(doc.data().name) : '')),
+      })
+    } catch (error) {
+      logger.warn(`[DeveloperReport] Failed to load classroom names for AI answer guard report=${reportId}`, error)
+    }
     const aiResult = await generateQuestionAiAnswer({
       note: report.note,
       screen: report.screen,
       scheduleContext: report.scheduleContext,
       recentOperations: report.recentOperations,
-    }, { projectId: process.env.GCLOUD_PROJECT ?? process.env.GOOGLE_CLOUD_PROJECT ?? '', region: QUESTION_AI_VERTEX_REGION })
+      otherClassroomNames,
+    }, { apiKey: QUESTION_AI_API_KEY })
     const answeredAt = new Date().toISOString()
     if (aiResult.ok) {
       aiAnswerFields = { aiAnswer: aiResult.answer }
       await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens }, { merge: true })
     } else {
       aiAnswerFields = { aiAnswerError: aiResult.error }
-      await reportRef.set({ aiAnswerError: aiResult.error, aiAnswerModel: QUESTION_AI_MODEL, aiAnsweredAt: answeredAt }, { merge: true })
+      // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。
+      await reportRef.set({
+        aiAnswerError: aiResult.error,
+        aiAnswerModel: QUESTION_AI_MODEL,
+        aiAnsweredAt: answeredAt,
+        ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0 } : {}),
+      }, { merge: true })
     }
     logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`}`)
   }

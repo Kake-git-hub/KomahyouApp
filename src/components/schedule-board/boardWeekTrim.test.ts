@@ -47,6 +47,10 @@ describe('weekHasManualBoardData', () => {
     expect(weekHasManualBoardData(week)).toBe(false)
   })
 
+  it('テンプレに寄せて外した QR 机の記録(scheduleRegistrationSupersededByTemplate)だけの週も手動と判定(間引きで消すと自己修復が置き直す・2026-10-15)', () => {
+    expect(weekHasManualBoardData(makeWeek('2026-06-01', [makeDesk({ scheduleRegistrationSupersededByTemplate: { sessionId: 'ss1', teacherId: 't1' } })]))).toBe(true)
+  })
+
   it('振替・体験・講習・手動追加の生徒は手動と判定', () => {
     expect(weekHasManualBoardData(makeWeek('2026-06-01', [makeDesk({ lesson: { id: 'l', studentSlots: [makeStudent({ lessonType: 'makeup', makeupSourceDate: '2026-05-01' }), null] } })]))).toBe(true)
     expect(weekHasManualBoardData(makeWeek('2026-06-01', [makeDesk({ lesson: { id: 'l', studentSlots: [makeStudent({ lessonType: 'trial' }), null] } })]))).toBe(true)
