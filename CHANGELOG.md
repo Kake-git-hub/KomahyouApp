@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.608 (2026-10-16)
+
+- refactor: 質問への AI 即時回答のモデルを Sonnet 最新から **Haiku 最新 `claude-haiku-5-5`** へ(オーナー確定 2026-10-16)。全教室展開(15 教室見込み・気軽な質問も来る想定)で月 3,000 円以下に収めるため。試算は 1 問 ≒ 入力 6 千トークン(マニュアル骨子 約 3,400 字＋指示＋操作履歴)で Sonnet 5.5 約 4 円 → Haiku 5.5 約 0.2 円(月 500 問で約 100 円)。思考込みの出力上限 max_tokens を 8000 → 4000 に。アプリ側の回数上限は設けない(オーナー判断・歯止めは Anthropic コンソールの月の上限額)。全教室への展開は開発用教室で qa-ai-1 を確認してから(進行中テーマ台帳に記載)。本番教室の挙動はまだ不変 (functions/src/questionAiAnswer.ts・test, docs/spec-developer-report.md §G-7, src/utils/developmentStatusLedger.ts)
+
 ## v1.5.607 (2026-10-16)
 
 - refactor: 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)の呼び出し先を **Vertex AI から Claude API 直(API キー)へ戻した**(オーナー指示 2026-10-16「支払い窓口が増えてもよいので確実に動く案に」)。Vertex 経由は新規プロジェクトの Claude 割り当てが 0 のままで、開発用教室の質問 2 件(2026-09-14・09-28)とも 429「Vertex AI の割り当て上限」で一度も回答できていなかった。キーは functions runtime env `ANTHROPIC_API_KEY`。CI はリポジトリ secret **`ANTHROPIC_API_KEY`**(`PROD_FUNCTIONS_ENV` とは別・貼り直し不要)を `.env.komahyouapp-prod` へ 1 行追記してデプロイする。キー未設定なら AI を呼ばず理由を記録するだけ(報告本体は成功・室長の画面は「自動回答を作れませんでした」のまま)。モデルは Sonnet 最新 `claude-sonnet-5-5` へ。失敗理由の文面を Claude API 向け(API キー・クレジット残高)に。`@anthropic-ai/vertex-sdk` を削除。本番教室の挙動は不変(AI は呼ばない)。確認リスト qa-ai-1 を追加(版 v1.5.604 据え置き)・進行中テーマ台帳を更新 (functions/src/questionAiAnswer.ts・index.ts・package.json・.github/workflows/deploy-functions.yml・src/utils/featureRollout.ts・developmentStatusLedger.ts・verificationChecklist.ts・docs/spec-developer-report.md §G-7)
