@@ -1835,10 +1835,10 @@ export function toLessonHistoryHttpsError(error: unknown): HttpsError {
 // 開発者へ送る。メタ＋操作痕跡は Firestore(workspaces/{ws}/developerReports)、教室データ本体は Storage へ。
 // 通知(GitHub Issue 起票)は .github/workflows/developer-reports.yml が notifiedAt==null を拾って行う。
 // 本番データ(classroomSnapshots 等)には一切書かない＝読み取り専用の安全な機能。
-// 質問への AI 即時回答(試験・開発用教室のみ。spec-developer-report §G-7)は Claude on Google Cloud(Vertex AI)で呼ぶ。
-// 請求は GCP にまとめる(オーナー指示 2026-09-14)。キーは持たず、実行サービスアカウントで認証する。
-// リージョンは既定 global。functions runtime env の QUESTION_AI_VERTEX_REGION で上書きできる。
-const QUESTION_AI_VERTEX_REGION = (process.env.QUESTION_AI_VERTEX_REGION ?? '').trim()
+// 質問への AI 即時回答(試験・開発用教室のみ。spec-developer-report §G-7)は Claude API 直(API キー)で呼ぶ。
+// 2026-10-16 オーナー指示で Vertex AI(割り当て 0 で 429 が続いた)から切り替え。キーは functions runtime env の
+// ANTHROPIC_API_KEY(CI ではリポジトリ secret ANTHROPIC_API_KEY を deploy-functions.yml が .env へ追記)。未設定なら AI を呼ばない。
+const QUESTION_AI_API_KEY = (process.env.ANTHROPIC_API_KEY ?? '').trim()
 
 export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 180, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
@@ -1965,7 +1965,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
       screen: report.screen,
       scheduleContext: report.scheduleContext,
       recentOperations: report.recentOperations,
-    }, { projectId: process.env.GCLOUD_PROJECT ?? process.env.GOOGLE_CLOUD_PROJECT ?? '', region: QUESTION_AI_VERTEX_REGION })
+    }, { apiKey: QUESTION_AI_API_KEY })
     const answeredAt = new Date().toISOString()
     if (aiResult.ok) {
       aiAnswerFields = { aiAnswer: aiResult.answer }

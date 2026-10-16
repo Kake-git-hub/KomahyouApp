@@ -104,13 +104,14 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
   {
     id: 'question-ai-answer',
-    title: '質問への AI 即時回答(Vertex AI・試験)',
+    title: '質問への AI 即時回答(Claude API・試験)',
     stage: 'development-only',
-    summary: 'オーナー指示(2026-09-14)で開発用教室だけに実装(v1.5.524)。本番教室へ広げる予定は決まっていない(§G-1 は「即答は作らない」)。',
+    summary: 'オーナー指示(2026-09-14)で開発用教室だけに実装(v1.5.524)。Vertex AI 経由は割り当て 0 の 429 で一度も回答できなかったため、2026-10-16 オーナー指示で Claude API 直(API キー)へ切り替え(支払い窓口が Anthropic に 1 つ増える)。本番教室へ広げる予定は決まっていない(§G-1 は「即答は作らない」)。',
     featureKeys: ['questionAiAnswer'],
-    nextAction: '試験を続けるか本番へ出すかをオーナーが決める。出すときはクライアントとサーバーを同時に変える。',
-    references: ['docs/spec-developer-report.md §G-7', 'functions/src/questionAiAnswer.ts'],
-    updatedOn: '2026-09-25',
+    checklistItemIds: ['qa-ai-1'],
+    nextAction: 'オーナーが Anthropic コンソールで請求登録＋API キー発行 → GitHub secret ANTHROPIC_API_KEY を追加 → Actions「Deploy Cloud Functions」を実行。開発用教室で質問を送り、自動回答が出るか(確認リスト qa-ai-1)を確かめる。その後、試験を続けるか本番へ出すかをオーナーが決める(出すときはクライアントとサーバーを同時に変える)。',
+    references: ['docs/spec-developer-report.md §G-7', 'functions/src/questionAiAnswer.ts', '.github/workflows/deploy-functions.yml'],
+    updatedOn: '2026-10-16',
   },
 
   // ── 実装済み・確認リスト結果待ち ──────────────────────────────────────────
