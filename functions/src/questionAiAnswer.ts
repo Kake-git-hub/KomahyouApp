@@ -6,7 +6,11 @@
 //  - 質問は従来どおり developerReports へ記録・メール通知される(AI 回答は「上乗せ」。記録を置き換えない)。
 //  - AI に渡すのは **利用者マニュアル(docs/user-manual.md)＋質問文＋直近の操作履歴** だけ。
 //    教室データ(スナップショット)は渡さない(オーナー確定 2026-09-14)。
-//  - モデルは Claude Sonnet 最新(オーナー確定 2026-09-14)。**Claude API 直(API キー)**で呼ぶ(オーナー指示 2026-10-16
+//  - モデルは **Claude Haiku 最新**(2026-10-16 オーナー確定。それまでは Sonnet 最新)。全教室展開(15 教室見込み)で
+//    月 3,000 円以下に収めるため。1 問 ≒ 入力 6 千トークン(マニュアル骨子＋指示＋操作履歴)で Sonnet 5.5 は約 4 円、Haiku 5.5 は約 0.2 円。
+//    アプリ側で回数の上限は設けない(オーナー判断 2026-10-16)。使いすぎの歯止めは Anthropic コンソールの月の利用上限額だけ
+//    (上限に達するとその月は全教室で AI 回答が止まり、「自動回答を作れませんでした」＝開発者が回答、に戻る)。
+//  - 呼び出しは **Claude API 直(API キー)**(オーナー指示 2026-10-16
 //    「支払い窓口が増えてもよいので確実に動く案に」)。2026-09-14〜10-16 は請求を GCP にまとめるため Vertex AI 経由だったが、
 //    新規プロジェクトの Claude 割り当てが 0 のままで毎回 429(「Vertex AI の割り当て上限」)になり一度も回答できなかった
 //    (開発用教室の報告 2026-09-14・09-28 で確認)。Claude API は Anthropic のコンソールで前払いクレジットを入れた
@@ -24,8 +28,8 @@ import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 
-/** 回答に使うモデル(Sonnet 最新。オーナー確定 2026-09-14)。ID は接頭辞・日付なしのまま使う。 */
-export const QUESTION_AI_MODEL = 'claude-sonnet-5-5'
+/** 回答に使うモデル(Haiku 最新。2026-10-16 オーナー確定・費用を抑えるため Sonnet から変更)。ID は接頭辞・日付なしのまま使う。 */
+export const QUESTION_AI_MODEL = 'claude-haiku-5-5'
 /** AI に渡す操作履歴の件数(新しい方から)。質問の文脈が分かれば足りるので絞る。 */
 export const QUESTION_AI_TRACE_LIMIT = 40
 /** 利用者へ返す回答文の上限(異常に長い出力で画面が埋まらないように)。 */
@@ -142,7 +146,8 @@ export async function generateQuestionAiAnswer(
   try {
     const message = await createMessage({
       model: QUESTION_AI_MODEL,
-      max_tokens: 8000,
+      // 思考も含めた上限。回答は QUESTION_AI_ANSWER_CHAR_LIMIT で切るので、これ以上は費用の歯止めとして絞る。
+      max_tokens: 4000,
       output_config: { effort: 'medium' },
       system: buildQuestionAiSystemPrompt(),
       messages: [{ role: 'user', content: buildQuestionAiUserMessage(input) }],

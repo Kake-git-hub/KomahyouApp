@@ -78,12 +78,16 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(message.match(/\[board-commit\]/g)).toHaveLength(QUESTION_AI_TRACE_LIMIT)
   })
 
-  it('Sonnet 最新で呼び、テキストだけを回答にする', async () => {
+  it('Haiku 最新で呼び(2026-10-16 オーナー確定・費用を抑えるため Sonnet から変更)、テキストだけを回答にする', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async () => fakeMessage())
     const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage })
     expect(result).toEqual({ ok: true, answer: '基本データ画面で生徒を選びます。', model: QUESTION_AI_MODEL, inputTokens: 1200, outputTokens: 80 })
     const params = createMessage.mock.calls[0][0]
-    expect(params.model).toBe('claude-sonnet-5-5')
+    expect(params.model).toBe('claude-haiku-5-5')
+    // 思考込みの出力上限を絞る(費用の歯止め)。回答文自体は QUESTION_AI_ANSWER_CHAR_LIMIT で切る。
+    expect(params.max_tokens).toBe(4000)
+    // Haiku 5.5 はサンプリング指定(temperature 等)を送ると 400 になるので送らない。
+    expect(params).not.toHaveProperty('temperature')
     expect(params.messages).toEqual([{ role: 'user', content: buildQuestionAiUserMessage(baseInput) }])
     expect(params.system).toBe(buildQuestionAiSystemPrompt())
   })
