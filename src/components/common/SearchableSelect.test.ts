@@ -1,6 +1,6 @@
 // 虫眼鏡つきプルダウン(SearchableSelect・オーナー要望 2026-10-16)の描画と、各画面への配線の回帰防止。
 // 描画は react-dom/server の静的レンダリング、配線は各画面のソース字面で固定する。
-// vitest の include は *.test.ts だけなので、JSX を使わず createElement で描く(.tsx だと実行されない)。
+// JSX を使わず createElement で描く(作成時は vitest の include が *.test.ts だけだった名残。2026-10-16 から *.test.tsx も走る)。
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

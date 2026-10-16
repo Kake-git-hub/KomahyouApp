@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- fix: **`*.test.tsx` が CI で一度も走っていなかったのを直した**。`vitest.config.ts` の `test.include` に `src/**/*.test.tsx` を足し、PDF 出力の処理中オーバーレイの回帰防止 `BusyOverlay.test.tsx`(2026-09-12 追加)を `npm run test:unit`／CI で実行するようにした。走らせたところ、テンプレ保存前レポートの配線テストが 1 件落ちた。1c975ad で文言が `resolveTemplateOverwriteReportLabels(...).busyMessage` へ移ったのに追随していなかったためで、挙動の回帰ではない(finally で消す配線は健在)。現行の配線に合わせ、上書き/差分反映の両方の文言を固定した。古い前提を書いたコメント 2 か所も直した (vitest.config.ts / src/components/common/BusyOverlay.test.tsx / SearchableSelect.test.ts / parentPortalPageModel.ts)
+
 ## v1.5.605 (2026-10-16)
 
 - feat: **生徒・講師を選ぶプルダウンに虫眼鏡(🔍)の名前絞り込み**(オーナー指示「手動での講師追加・生徒追加のメニューに検索虫眼鏡ボタン。複数生徒から選ぶ画面はすべて検索つきに」)。共通部品 `SearchableSelect`(ネイティブ select はそのまま・🔍 を押したときだけ検索欄)と純粋関数 `resolveSearchableSelectView`(全角半角・ひらがなカタカナ・空白を同一視／選択中が隠れたら先頭の一致を選び直す＝見えない人を確定しない／一致 0 件は選択中を残す／「生徒なし」等は常に残す)を追加。対象: 盤面の講師設定・生徒追加・テンプレの生徒追加/編集・集団授業の担当講師/中3追加(この 2 つは選んだ瞬間に反映するので自動選択しない)・初期設定の未消化振替/講習の生徒・自動割振ルールのペア制約(保存済み行は自動選択しない)と「個人」の生徒一覧(絞り込み＋選択中 N 名)。未消化講習/振替の生徒一覧は既に検索つきなので対象外。確認リスト sr-1〜sr-3 を追加(版は v1.5.604 据え置き) (src/components/common/SearchableSelect.tsx / src/utils/searchableSelect.ts / ScheduleBoardScreen.tsx / GroupAttendanceModal.tsx / BackupRestoreScreen.tsx / AutoAssignRuleScreen.tsx / App.css / verificationChecklist.ts)
