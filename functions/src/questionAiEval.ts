@@ -5,8 +5,8 @@
 import { buildOtherClassroomNameWords, generateQuestionAiAnswer, QUESTION_AI_MODEL, type CreateQuestionAiMessage, type QuestionAiAnswerResult } from './questionAiAnswer'
 import type { QuestionAiEvalCase } from './questionAiEvalCases'
 
-/** Haiku 5.5 の単価(100K トークン以下のプロンプト・ドル/100 万トークン)と、円換算の目安レート。 */
-export const QUESTION_AI_EVAL_PRICE_PER_MTOK = { input: 0.1, output: 0.5 } as const
+/** Sonnet 5.5 の単価(ドル/100 万トークン・2026-10-16 夜 Haiku → Sonnet 最新へ戻したのに合わせた)と、円換算の目安レート。 */
+export const QUESTION_AI_EVAL_PRICE_PER_MTOK = { input: 2, output: 10 } as const
 export const QUESTION_AI_EVAL_YEN_PER_USD = 150
 
 /**

@@ -135,10 +135,10 @@ export const QUESTION_AI_EVAL_CASES: readonly QuestionAiEvalCase[] = [
   },
   {
     id: 'qa-q16',
-    title: 'マニュアルに無い機能',
+    title: '案内に無い機能',
     question: '生徒の名簿をExcelに書き出せますか？',
     expectations: [
-      '推測で手順を作らず、「マニュアルに記載が無いため、開発者が確認してから回答します。」と答えている',
+      '推測で手順を作らず、「この点は開発者が確認してから回答します。」と答えている。「マニュアル」「記載」という言葉を使っていない',
     ],
   },
   {

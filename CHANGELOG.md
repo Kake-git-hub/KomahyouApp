@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.612 (2026-10-16)
+
+- feat: 質問への AI 即時回答(開発用教室のみ・§G-7)を**オーナー指示 2026-10-16 夜の 3 点**で改定。①回答は「AI 自身が利用者にとっての説明書」という立場で書き、「マニュアルでは〜」「マニュアルに記載が無い」のような他責の言い回しを禁止(システム指示に明記・決まり文句を「この点は開発者が確認してから回答します。」へ・機械検査 `findQuestionAiAnswerViolation` に種類「他責の言い回し」を追加)。評価 1 回目の反省も反映(「ご不便」「ご迷惑」は形によらず止める／無いボタン名を「」で作らない／推測の手順＋「確認します」を書かない／決まり文句を「」で囲まない／答えがあるときは言い切る)。②モデルを Haiku 最新から **Sonnet 最新 `claude-sonnet-5-5`** へ戻す(max_tokens 8000・試算 1 問約 5 円・評価ワークフローの単価も Sonnet へ)。③使い方の説明 `docs/user-manual.md` を骨子(約 3,400 字・〔未執筆〕4 か所)から**本文(全 12 章・約 1.3 万字)へ拡充**(各 spec から起こし、画面の言葉だけで書き、内部名・文書名・試験中の機能は載せない。`functions/src/generated/userManual.ts` を再生成)。確認リストに qa-ai-2 を追加・qa-q16 の期待文言を更新(版 v1.5.604 据え置き)。進行中テーマ台帳・引き継ぎ資料を更新。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・questionAiEval.ts・test・questionAiEvalCases.ts, docs/user-manual.md, docs/spec-developer-report.md §G-7, docs/handoff-question-ai-answer.md, src/utils/verificationChecklist.ts・developmentStatusLedger.ts)
+
 ## v1.5.611 (2026-10-16)
 
 - docs: 質問への AI 即時回答の引き継ぎ資料 `docs/handoff-question-ai-answer.md` を追加。v1.5.607〜610 の到達点、オーナーが決めたこと、評価 1 回目の結果、次にやることをまとめた(別セッションへ引き継ぐため・コード変更なし)

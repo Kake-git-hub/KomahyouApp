@@ -17,6 +17,7 @@ import {
   generateQuestionAiAnswer,
   QUESTION_AI_ANSWER_CHAR_LIMIT,
   QUESTION_AI_BEHAVIOR_CHECK_REPLY,
+  QUESTION_AI_MAX_TOKENS,
   QUESTION_AI_MODEL,
   QUESTION_AI_NO_MANUAL_REPLY,
   QUESTION_AI_OTHER_CLASSROOM_REPLY,
@@ -66,12 +67,27 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: true, isVerificationChecklist: true })).toBe(false)
   })
 
-  it('システム指示は利用者マニュアル全文と §G-4 の禁止事項を含む', () => {
+  it('システム指示は使い方の説明の全文と §G-4 の禁止事項を含む', () => {
     const prompt = buildQuestionAiSystemPrompt()
     expect(prompt).toContain(USER_MANUAL_MARKDOWN)
-    for (const keyword of ['マニュアルに記載が無いため', '他の教室', '料金', '復元', 'トークン']) {
+    for (const keyword of [QUESTION_AI_NO_MANUAL_REPLY, '他の教室', '料金', '復元', 'トークン']) {
       expect(prompt).toContain(keyword)
     }
+  })
+
+  it('AI 自身が案内役(他責の言い回しをしない)という立場をシステム指示に書き、決まり文句も他責でない(オーナー指示 2026-10-16 夜)', () => {
+    const prompt = buildQuestionAiSystemPrompt()
+    expect(prompt).toContain('あなた自身がこのアプリの使い方の案内役')
+    expect(prompt).toContain('他の資料に責任を預ける言い方はしません')
+    expect(prompt).toContain('「マニュアル」「説明書」「記載」「明記」という言葉自体を回答に書かない')
+    // 推測のボタン名・推測の手順＋「確認します」・決まり文句の「」囲みを禁じる(評価 1 回目 Q4/Q6/Q11/Q13/Q15 の反省)。
+    expect(prompt).toContain('無い名前を作って「」で書かない')
+    expect(prompt).toContain('推測の手順を書いてから「確認します」と付け足さない')
+    expect(prompt).toContain('決まり文句は「」で囲まず')
+    expect(QUESTION_AI_NO_MANUAL_REPLY).not.toMatch(/マニュアル|記載/u)
+    // 根拠の見出しも「マニュアル」ではなく AI の知識として渡す。
+    expect(prompt).toContain('# 案内できる内容')
+    expect(prompt).not.toContain('# 利用者マニュアル')
   })
 
   it('利用者メッセージは質問文＋画面＋直近の操作履歴(新しい方から上限件数)だけで、教室データは載せない', () => {
@@ -85,16 +101,18 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(message.match(/\[board-commit\]/g)).toHaveLength(QUESTION_AI_TRACE_LIMIT)
   })
 
-  it('Haiku 最新で呼び(2026-10-16 オーナー確定・費用を抑えるため Sonnet から変更)、テキストだけを回答にする', async () => {
+  it('Sonnet 最新で呼び(2026-10-16 夜 オーナー指示で Haiku から戻した)、テキストだけを回答にする', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async () => fakeMessage())
     const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage })
     expect(result).toEqual({ ok: true, answer: '基本データ画面で生徒を選びます。', model: QUESTION_AI_MODEL, inputTokens: 1200, outputTokens: 80 })
     const params = createMessage.mock.calls[0][0]
-    expect(params.model).toBe('claude-haiku-5-5')
-    // 思考込みの出力上限を絞る(費用の歯止め)。回答文自体は QUESTION_AI_ANSWER_CHAR_LIMIT で切る。
-    expect(params.max_tokens).toBe(4000)
-    // Haiku 5.5 はサンプリング指定(temperature 等)を送ると 400 になるので送らない。
+    expect(params.model).toBe('claude-sonnet-5-5')
+    // 思考込みの出力上限(費用の歯止め)。回答文自体は QUESTION_AI_ANSWER_CHAR_LIMIT で切る。
+    expect(params.max_tokens).toBe(QUESTION_AI_MAX_TOKENS)
+    expect(QUESTION_AI_MAX_TOKENS).toBe(8000)
+    // Sonnet 5.5 はサンプリング指定(temperature 等)の既定値以外を送ると 400 になるので送らない。思考の指定も送らない(省略＝adaptive)。
     expect(params).not.toHaveProperty('temperature')
+    expect(params).not.toHaveProperty('thinking')
     expect(params.messages).toEqual([{ role: 'user', content: buildQuestionAiUserMessage(baseInput) }])
     expect(params.system).toBe(buildQuestionAiSystemPrompt())
   })
@@ -159,6 +177,15 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
   it.each([
     ['申し訳ありませんが、マニュアルに記載がありません。', '謝罪'],
     ['ご不便をおかけしております。', '謝罪'],
+    // 評価 1 回目(2026-10-16 run 38844858406)Q20 の冒頭。「をおかけ」でない形も止める。
+    ['ご不便をかけている状況を把握しました。', '謝罪'],
+    ['ご迷惑になり、', '謝罪'],
+    // 他責の言い回し(オーナー指示 2026-10-16 夜)。
+    ['マニュアルでは、休日設定は日付メニューから行います。', '他責の言い回し'],
+    ['マニュアルに記載が無いため、お答えできません。', '他責の言い回し'],
+    ['説明書に書かれていません。', '他責の言い回し'],
+    ['この機能については明記されていません。', '他責の言い回し'],
+    ['残り回数の場所は記載されておりません。', '他責の言い回し'],
     ['すみません、分かりません。', '謝罪'],
     ['これはアプリの不具合です。', '不具合を認める'],
     ['バグの可能性があります。', '不具合を認める'],

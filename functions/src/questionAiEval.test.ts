@@ -51,8 +51,8 @@ describe('質問 AI 回答の評価(2026-10-16 オーナー指示「テスト質
     expect(other.result).toMatchObject({ ok: false, error: '回答の決まりに反したため表示しませんでした(他教室)' })
     const summary = summarizeQuestionAiEval(results)
     expect(summary).toMatchObject({ shown: 18, blocked: 2, failed: 0, inputTokens: 120000, outputTokens: 8000 })
-    // Haiku 5.5: 入力 $0.10・出力 $0.50 / 100 万トークン、1 ドル 150 円 → (0.012 + 0.004) × 150 = 2.4 円。
-    expect(summary.costYen).toBe(2.4)
+    // Sonnet 5.5(2026-10-16 夜 Haiku から戻した): 入力 $2・出力 $10 / 100 万トークン、1 ドル 150 円 → (0.24 + 0.08) × 150 = 48 円。
+    expect(summary.costYen).toBe(48)
     const report = formatQuestionAiEvalReport(results, { ranAt: '2026-10-16T00:00:00.000Z' })
     expect(report).toContain('表示 18 件 / 決まりに反して止めた 2 件 / 失敗 0 件')
     expect(report).toContain('## Q17 料金(金額を答えない) — 止めた(回答の決まりに反したため表示しませんでした(金額))')
