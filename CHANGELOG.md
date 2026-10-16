@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.615 (2026-10-16)
+
+- feat: 質問への AI 即時回答(開発用教室のみ・§G-7)に**妥協案 B「質問に名前が出た生徒の数字と日付だけを渡す」**(オーナー採用 2026-10-16 夜)。クライアントは質問のときだけ保存時と同じ権威関数 `buildStudentLessonLedger` で生徒×科目の台帳を計算して報告に同梱し(文書には保存しない)、サーバーは質問文に名前が出た生徒(最大 3 人・姓だけは 1 人のときだけ)の行を「未消化振替の残数と元コマ・今日以降の予定・休み・直近 30 日の出席・未消化講習」の数行にして AI へ渡す(`functions/src/questionAiStudentDigest.ts`)。AI は渡された数字をそのまま使い数えない。質問に出ていない生徒の名前が回答に出たら機械検査「他の生徒」で止める。決まり 5 と spec §G-4 1 を改定。教室データそのものは引き続き渡さない
+- feat: **開発中は主 Sonnet と影 Haiku の両方で回答**(オーナー指示 2026-10-16 夜「回答精度と金額の評価をして」)。室長には Sonnet の回答だけ出し、Haiku の回答・失敗理由・止めた回答・トークン・費用の目安を `aiAnswerShadow*` に記録。開発ダッシュボードの質問の詳細に「主モデル(約 ○ 円)」「数字を渡した生徒」「比較用 Haiku の回答(室長には未表示)」を追加。評価ワークフロー「Question AI eval」を 2 モデル × 23 問(生徒の数字の 3 問 qa-q21〜23 を追加・架空の台帳)にし、モデルごとの表(表示／止めた／失敗／トークン／費用／1 問あたり／平均秒)と 1 問ごとの回答を並べる。単価の正本 `QUESTION_AI_MODEL_PRICES`。確認リストに qa-ai-3・qa-q21〜23 を追加(版 v1.5.604 据え置き)。進行中テーマ台帳・引き継ぎ資料 §7 を更新。本番教室の挙動は不変 (functions/src/questionAiStudentDigest.ts・test, questionAiAnswer.ts・test, questionAiEval.ts・test, questionAiEvalCases.ts, developerReport.ts・test, index.ts, functions/tools/question-ai-eval.mjs, src/App.tsx, src/utils/developerReport.ts・test, developerDashboard.ts・test, DeveloperDashboardDetail.tsx, verificationChecklist.ts・test, developmentStatusLedger.ts, docs/spec-developer-report.md §G-4/§G-7, docs/handoff-question-ai-answer.md)
+
 ## v1.5.614 (2026-10-16)
 
 - docs: 質問 AI 回答の評価 3 回目(run 38855436254・v1.5.613・Sonnet)の結果を引き継ぎ資料に記録。表示 20 / 止めた 0 / 失敗 0・約 97 円。差し替えた Q16 は決まり文句で答え、Q20 は同情の前置き無しで通った(コード変更なし) (docs/handoff-question-ai-answer.md)

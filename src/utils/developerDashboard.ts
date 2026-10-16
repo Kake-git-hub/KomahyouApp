@@ -42,6 +42,17 @@ export type DeveloperReportRecord = {
   aiAnswer: string
   /** 回答の決まり(謝罪・不具合を認める・金額・他教室)に反して止めた元の文(2026-10-16)。室長には見せていない。 */
   aiAnswerBlocked: string
+  /** 主(室長に表示)のモデル名と費用の目安(円)。 */
+  aiAnswerModel: string
+  aiAnswerCostYen: number | null
+  /** 比較用(影)のモデルの結果(2026-10-16 夜・開発中だけ Sonnet と Haiku の両方で回答する)。室長には見せていない。 */
+  aiAnswerShadowModel: string
+  aiAnswerShadow: string
+  aiAnswerShadowError: string
+  aiAnswerShadowBlocked: string
+  aiAnswerShadowCostYen: number | null
+  /** 「質問に名前が出た生徒の数字」を渡した生徒(妥協案 B)。 */
+  aiAnswerDigestStudents: string[]
   mailSentAt: string | null
   mailError: string
   /** 開発者の回答(spec-developer-report §G-3・2026-09-28)。空文字/null = 未回答。 */
@@ -133,6 +144,14 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     aiAnswerError: readString(data.aiAnswerError),
     aiAnswer: readString(data.aiAnswer),
     aiAnswerBlocked: readString(data.aiAnswerBlocked),
+    aiAnswerModel: readString(data.aiAnswerModel),
+    aiAnswerCostYen: typeof data.aiAnswerCostYen === 'number' && Number.isFinite(data.aiAnswerCostYen) ? data.aiAnswerCostYen : null,
+    aiAnswerShadowModel: readString(data.aiAnswerShadowModel),
+    aiAnswerShadow: readString(data.aiAnswerShadow),
+    aiAnswerShadowError: readString(data.aiAnswerShadowError),
+    aiAnswerShadowBlocked: readString(data.aiAnswerShadowBlocked),
+    aiAnswerShadowCostYen: typeof data.aiAnswerShadowCostYen === 'number' && Number.isFinite(data.aiAnswerShadowCostYen) ? data.aiAnswerShadowCostYen : null,
+    aiAnswerDigestStudents: Array.isArray(data.aiAnswerDigestStudents) ? data.aiAnswerDigestStudents.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [],
     mailSentAt: readNullableString(data.mailSentAt),
     mailError: readString(data.mailError),
     answerFinal: readString(data.answerFinal),

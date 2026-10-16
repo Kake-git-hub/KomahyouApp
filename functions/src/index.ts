@@ -62,7 +62,8 @@ import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, ty
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
-import { buildOtherClassroomNameWords, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { buildOtherClassroomNameWords, buildQuestionAiShadowFields, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, QUESTION_AI_SHADOW_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
@@ -1972,17 +1973,27 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     } catch (error) {
       logger.warn(`[DeveloperReport] Failed to load classroom names for AI answer guard report=${reportId}`, error)
     }
-    const aiResult = await generateQuestionAiAnswer({
+    // 質問に名前が出た生徒の数字(妥協案 B・2026-10-16 夜)。台帳はクライアントが権威関数で計算して同梱したもの。無ければ渡さない。
+    const digest = buildQuestionAiStudentDigest({ note: report.note, ledger: report.studentLedger })
+    const aiInput = {
       note: report.note,
       screen: report.screen,
       scheduleContext: report.scheduleContext,
       recentOperations: report.recentOperations,
       otherClassroomNames,
-    }, { apiKey: QUESTION_AI_API_KEY })
+      ...(digest ? { studentDigest: digest.text, otherStudentNames: digest.otherStudentNames } : {}),
+    }
+    // 開発中は主(Sonnet・室長に表示)と影(Haiku・記録だけ)を同時に流し、回答と費用を比べる(オーナー指示 2026-10-16 夜)。
+    const [aiResult, shadowResult] = await Promise.all([
+      generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY }),
+      generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY, model: QUESTION_AI_SHADOW_MODEL }),
+    ])
     const answeredAt = new Date().toISOString()
+    const digestFields = digest ? { aiAnswerDigestStudents: digest.mentionedNames } : {}
+    const shadowFields = buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, shadowResult, answeredAt)
     if (aiResult.ok) {
       aiAnswerFields = { aiAnswer: aiResult.answer }
-      await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens }, { merge: true })
+      await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens, aiResult.outputTokens), ...digestFields, ...shadowFields }, { merge: true })
     } else {
       aiAnswerFields = { aiAnswerError: aiResult.error }
       // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。
@@ -1990,10 +2001,12 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
         aiAnswerError: aiResult.error,
         aiAnswerModel: QUESTION_AI_MODEL,
         aiAnsweredAt: answeredAt,
-        ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0 } : {}),
+        ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens ?? 0, aiResult.outputTokens ?? 0) } : {}),
+        ...digestFields,
+        ...shadowFields,
       }, { merge: true })
     }
-    logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`}`)
+    logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`} digestStudents=${digest?.mentionedNames.length ?? 'n/a'} shadow(${QUESTION_AI_SHADOW_MODEL}) ok=${shadowResult.ok}`)
   }
   return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest, ...aiAnswerFields }
 })

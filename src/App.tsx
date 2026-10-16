@@ -46,7 +46,7 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportStudentLedger, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
@@ -4123,6 +4123,14 @@ function AuthenticatedApp() {
   // 報告時点の教室データ(未保存の変更込み)を開発者へ送る。本番データには一切書かない(Cloud Function は
   // 別コレクション developerReports と Storage にだけ書く)。盤面ツールバーと日程表タブの両方から呼ばれる。
   const [developerReportModal, setDeveloperReportModal] = useState<{ sending: boolean; resultMessage: string | null } | null>(null)
+  const buildDeveloperReportStudentLedger = (payload: AppSnapshotPayload): DeveloperReportStudentLedger | null => {
+    try {
+      const ledger = buildStudentLessonLedger({ payload })
+      return ledger ? { computedAt: ledger.computedAt, rows: ledger.rows.map(({ studentKey: _studentKey, ...row }) => row), lectureRows: ledger.lectureRows.map(({ sessionId: _sessionId, ...row }) => row) } : null
+    } catch {
+      return null
+    }
+  }
   const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext; attachments?: DeveloperReportAttachment[] }) => {
     if (!actingClassroomId) return { ok: false as const, error: '教室が選択されていません。' }
     const currentScreen = screenRef.current
@@ -4157,6 +4165,9 @@ function AuthenticatedApp() {
       scheduleContext: input.scheduleContext,
       snapshotPayload,
       attachments: input.attachments,
+      // 質問のときだけ、保存時と同じ権威関数で生徒×科目の台帳を計算して同梱する(妥協案 B・2026-10-16)。
+      // サーバーは質問に名前が出た生徒の行だけを AI へ渡す。失敗しても報告は送る。
+      studentLedger: input.category === 'question' ? buildDeveloperReportStudentLedger(snapshotPayload) : null,
     })
     try {
       const result = await submitDeveloperReportViaFunction(body)

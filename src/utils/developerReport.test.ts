@@ -228,6 +228,15 @@ describe('developerReport: 送信本文の組み立て', () => {
     expect(body.scheduleContext).toEqual({ viewType: 'teacher', personLabel: '佐藤' })
   })
 
+  it('生徒×科目の台帳(妥協案 B・2026-10-16)は質問のときだけ載せ、要望・不具合では載せない', () => {
+    const studentLedger = { computedAt: '2026-10-16T03:00:00.000Z', rows: [{ studentId: 's1', name: '山田 太郎', subject: '数', makeupBalance: 2, makeupRemaining: ['2026-10-03#2|休み'], attended: [], absent: [], absentNoMakeup: [], placed: [] }], lectureRows: [] }
+    const base = { classroomId: 'c1', source: 'board' as const, note: 'q', appVersion: '1', userAgent: 'ua', pageUrl: 'u', screen: 'board', boardDirty: false, lastSavedAt: '', recentOperations: [], snapshotPayload: null, studentLedger }
+    expect(buildDeveloperReportRequestBody({ ...base, category: 'question' }).studentLedger).toEqual(studentLedger)
+    expect(buildDeveloperReportRequestBody({ ...base, category: 'request' })).not.toHaveProperty('studentLedger')
+    expect(buildDeveloperReportRequestBody({ ...base, category: 'bug' })).not.toHaveProperty('studentLedger')
+    expect(buildDeveloperReportRequestBody({ ...base, category: 'question', studentLedger: null })).not.toHaveProperty('studentLedger')
+  })
+
   it('結果文は成功に受付番号、テストはその旨、失敗に理由を含む', () => {
     expect(formatDeveloperReportResultMessage({ ok: true, reportId: '20260904-1200-abc' })).toContain('20260904-1200-abc')
     // 2026-10-10 文言見直し(#470): 「開発者への課題登録は行いません。」は出さない(開発側の用語)。

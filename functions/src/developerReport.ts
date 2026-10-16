@@ -62,7 +62,45 @@ export type NormalizedDeveloperReport = {
   recentOperations: NormalizedDeveloperReportTraceEntry[]
   scheduleContext: Record<string, string>
   hasSnapshotPayload: boolean
+  /**
+   * 生徒×科目の台帳(クライアントが保存時と同じ権威関数で計算・src/utils/studentLessonLedger.ts)。質問への AI 即時回答で
+   * 「質問に名前が出た生徒の数字」(妥協案 B・2026-10-16)を作るためだけに使い、Firestore 文書には入れない(1MiB 対策)。無ければ null。
+   */
+  studentLedger: NormalizedDeveloperReportStudentLedger | null
 }
+
+/** 台帳 1 行(生徒×科目)。トークンは `YYYY-MM-DD#限|種別|元日|元限`(src/utils/studentLessonLedger.ts と同じ形)。 */
+export type NormalizedDeveloperReportStudentLedgerRow = {
+  studentId: string | null
+  name: string
+  subject: string
+  makeupBalance: number
+  makeupRemaining: string[]
+  attended: string[]
+  absent: string[]
+  absentNoMakeup: string[]
+  placed: string[]
+}
+
+export type NormalizedDeveloperReportStudentLedgerLectureRow = {
+  studentId: string
+  name: string
+  sessionLabel: string
+  subject: string
+  pending: number
+  origins: string[]
+}
+
+export type NormalizedDeveloperReportStudentLedger = {
+  computedAt: string
+  rows: NormalizedDeveloperReportStudentLedgerRow[]
+  lectureRows: NormalizedDeveloperReportStudentLedgerLectureRow[]
+}
+
+/** 台帳の行数・トークン数の上限(異常な入力でメモリを食わないため。超えた分は捨てる)。 */
+export const DEVELOPER_REPORT_LEDGER_ROW_LIMIT = 3000
+export const DEVELOPER_REPORT_LEDGER_TOKEN_LIMIT = 500
+const LEDGER_TOKEN_PATTERN = /^\d{4}-\d{2}-\d{2}#\d*(?:\|[^|]{0,60}){0,3}$/u
 
 const SAFE_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,120}$/
 const CONTEXT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,39}$/
@@ -158,6 +196,66 @@ export function normalizeDeveloperReportScheduleContext(raw: unknown): Record<st
   return result
 }
 
+function readTokenList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const result: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const token = item.trim()
+    if (!LEDGER_TOKEN_PATTERN.test(token)) continue
+    result.push(token)
+    if (result.length >= DEVELOPER_REPORT_LEDGER_TOKEN_LIMIT) break
+  }
+  return result
+}
+
+function readCount(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : 0
+}
+
+/** クライアントが同梱した生徒×科目の台帳を検証する(形が違う行は捨てる)。無ければ null。 */
+export function normalizeDeveloperReportStudentLedger(raw: unknown, options: { fallbackIso: string }): NormalizedDeveloperReportStudentLedger | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const candidate = raw as Record<string, unknown>
+  const rows: NormalizedDeveloperReportStudentLedgerRow[] = []
+  for (const item of Array.isArray(candidate.rows) ? candidate.rows : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const row = item as Record<string, unknown>
+    const name = readTrimmedString(row.name, 80)
+    if (!name) continue
+    rows.push({
+      studentId: typeof row.studentId === 'string' && row.studentId.trim() ? row.studentId.trim().slice(0, 40) : null,
+      name,
+      subject: readTrimmedString(row.subject, 40),
+      makeupBalance: readCount(row.makeupBalance),
+      makeupRemaining: readTokenList(row.makeupRemaining),
+      attended: readTokenList(row.attended),
+      absent: readTokenList(row.absent),
+      absentNoMakeup: readTokenList(row.absentNoMakeup),
+      placed: readTokenList(row.placed),
+    })
+    if (rows.length >= DEVELOPER_REPORT_LEDGER_ROW_LIMIT) break
+  }
+  const lectureRows: NormalizedDeveloperReportStudentLedgerLectureRow[] = []
+  for (const item of Array.isArray(candidate.lectureRows) ? candidate.lectureRows : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const row = item as Record<string, unknown>
+    const name = readTrimmedString(row.name, 80)
+    if (!name) continue
+    lectureRows.push({
+      studentId: readTrimmedString(row.studentId, 40),
+      name,
+      sessionLabel: readTrimmedString(row.sessionLabel, 60),
+      subject: readTrimmedString(row.subject, 40),
+      pending: readCount(row.pending),
+      origins: readTokenList(row.origins),
+    })
+    if (lectureRows.length >= DEVELOPER_REPORT_LEDGER_ROW_LIMIT) break
+  }
+  if (rows.length === 0 && lectureRows.length === 0) return null
+  return { computedAt: normalizeIsoTimestamp(candidate.computedAt, options.fallbackIso), rows, lectureRows }
+}
+
 /** 受信した報告を正規化する。classroomId は呼び出し側が権限確認済みの値を渡す。 */
 export function normalizeDeveloperReport(raw: Record<string, unknown>, options: { classroomId: string; fallbackIso: string }): NormalizedDeveloperReport {
   const snapshotPayload = raw.snapshotPayload
@@ -178,6 +276,7 @@ export function normalizeDeveloperReport(raw: Record<string, unknown>, options: 
     recentOperations: normalizeDeveloperReportTrace(raw.recentOperations, { fallbackIso: options.fallbackIso }),
     scheduleContext: normalizeDeveloperReportScheduleContext(raw.scheduleContext),
     hasSnapshotPayload: Boolean(snapshotPayload) && typeof snapshotPayload === 'object' && !Array.isArray(snapshotPayload),
+    studentLedger: normalizeDeveloperReportStudentLedger(raw.studentLedger, { fallbackIso: options.fallbackIso }),
   }
 }
 

@@ -171,6 +171,18 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
                     {entry.aiAnswer ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-answer-${entry.reportId}`}>AI の回答(室長に表示):{'\n'}{entry.aiAnswer}</div> : null}
                     {entry.aiAnswerError ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-error-${entry.reportId}`}>AI 失敗の理由: {entry.aiAnswerError}</div> : null}
                     {entry.aiAnswerBlocked ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-blocked-${entry.reportId}`}>止めた回答(室長には未表示):{'\n'}{entry.aiAnswerBlocked}</div> : null}
+                    {entry.aiAnswerModel || entry.aiAnswerDigestStudents.length > 0 ? (
+                      <div className="detail-note" data-testid={`developer-dashboard-ai-meta-${entry.reportId}`}>
+                        {entry.aiAnswerModel ? `主モデル ${entry.aiAnswerModel}${entry.aiAnswerCostYen !== null ? `(約 ${entry.aiAnswerCostYen} 円)` : ''}` : ''}
+                        {entry.aiAnswerDigestStudents.length > 0 ? ` / 数字を渡した生徒: ${entry.aiAnswerDigestStudents.join('・')}` : ''}
+                      </div>
+                    ) : null}
+                    {entry.aiAnswerShadowModel ? (
+                      <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-shadow-${entry.reportId}`}>
+                        比較用 {entry.aiAnswerShadowModel}{entry.aiAnswerShadowCostYen !== null ? `(約 ${entry.aiAnswerShadowCostYen} 円)` : ''}の回答(室長には未表示):{'\n'}
+                        {entry.aiAnswerShadow || (entry.aiAnswerShadowBlocked ? `[止めた: ${entry.aiAnswerShadowError}]\n${entry.aiAnswerShadowBlocked}` : `[失敗: ${entry.aiAnswerShadowError}]`)}
+                      </div>
+                    ) : null}
                     {entry.attachments.length > 0 ? (
                       // 添付画像(2026-10-14)は Storage の保存先だけ出す(画像本体はクライアントから読めない・読み取り専用トークンで取る)。
                       <ul className="developer-dashboard-report-attachments">

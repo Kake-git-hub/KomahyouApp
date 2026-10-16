@@ -9,6 +9,7 @@ import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 import {
   buildOtherClassroomNameWords,
+  buildQuestionAiShadowFields,
   buildQuestionAiSystemPrompt,
   buildQuestionAiUserMessage,
   describeQuestionAiError,
@@ -16,9 +17,11 @@ import {
   findQuestionAiAnswerViolation,
   generateQuestionAiAnswer,
   QUESTION_AI_ANSWER_CHAR_LIMIT,
+  estimateQuestionAiCostYen,
   QUESTION_AI_BEHAVIOR_CHECK_REPLY,
   QUESTION_AI_MAX_TOKENS,
   QUESTION_AI_MODEL,
+  QUESTION_AI_SHADOW_MODEL,
   QUESTION_AI_NO_MANUAL_REPLY,
   QUESTION_AI_OTHER_CLASSROOM_REPLY,
   QUESTION_AI_PRICE_REPLY,
@@ -229,6 +232,58 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(indexSource).toContain('otherClassroomNames,')
     expect(indexSource).toContain('buildOtherClassroomNameWords({')
     expect(indexSource).toContain('aiAnswerBlocked: aiResult.blockedAnswer')
+    // 妥協案 B(2026-10-16 夜): 台帳から数字を作って渡し、影(Haiku)も同時に流して aiAnswerShadow* に残す。
+    expect(indexSource).toContain('buildQuestionAiStudentDigest({ note: report.note, ledger: report.studentLedger })')
+    expect(indexSource).toContain('studentDigest: digest.text, otherStudentNames: digest.otherStudentNames')
+    expect(indexSource).toContain('model: QUESTION_AI_SHADOW_MODEL')
+    expect(indexSource).toContain('buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, shadowResult, answeredAt)')
+  })
+
+  it('質問に名前が出た生徒の数字(妥協案 B)は利用者メッセージの専用の節に入り、無いときは節ごと出さない', () => {
+    const withDigest = buildQuestionAiUserMessage({ ...baseInput, studentDigest: '## 山田 太郎\n- 数: 未消化振替 残 2 回' })
+    expect(withDigest).toContain('# 質問に名前が出た生徒のいまの数字(そのまま使う・数えない)\n## 山田 太郎')
+    expect(buildQuestionAiUserMessage(baseInput)).not.toContain('質問に名前が出た生徒')
+    // 決まり 5 は「質問に出た生徒の数字だけ使ってよい・数えない・見つからなければ名前の確認を促す」に改めた。
+    const prompt = buildQuestionAiSystemPrompt()
+    expect(prompt).toContain('質問に名前が出た生徒については、下の「質問に名前が出た生徒のいまの数字」が渡されたときだけ')
+    expect(prompt).toContain('そこに無い数字を数えたり推測したりしない')
+    expect(prompt).toContain('生徒の名前が名簿の表示名と同じか確かめてもらうよう案内する')
+  })
+
+  it('質問に出ていない生徒の名前が回答に出たら止める(空白の有無を問わない)。質問に出た生徒は止めない', () => {
+    const otherStudentNames = ['佐藤 花子', '鈴木一郎', '李']
+    expect(findQuestionAiAnswerViolation('山田太郎さんの残りは 2 回です。', { otherStudentNames })).toBeNull()
+    expect(findQuestionAiAnswerViolation('佐藤花子さんも残っています。', { otherStudentNames })).toBe('他の生徒')
+    expect(findQuestionAiAnswerViolation('佐藤 花子さんは 1 回です。', { otherStudentNames })).toBe('他の生徒')
+    expect(findQuestionAiAnswerViolation('鈴木一郎くんの分です。', { otherStudentNames })).toBe('他の生徒')
+    // 2 文字以下の名前は誤検知が多いので止めない。
+    expect(findQuestionAiAnswerViolation('李さん', { otherStudentNames })).toBeNull()
+    const blocked = generateQuestionAiAnswer({ ...baseInput, otherStudentNames }, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '佐藤花子さんの分です。', citations: null }] }) })
+    return expect(blocked).resolves.toMatchObject({ ok: false, error: '回答の決まりに反したため表示しませんでした(他の生徒)' })
+  })
+
+  it('影(比較用)のモデルは deps.model で切り替え、結果を aiAnswerShadow* の形にし、費用の目安を単価表から出す(2026-10-16 夜)', async () => {
+    const createMessage = vi.fn<CreateQuestionAiMessage>(async (params) => fakeMessage({ model: params.model }))
+    const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage, model: QUESTION_AI_SHADOW_MODEL })
+    expect(createMessage.mock.calls[0][0].model).toBe('claude-haiku-5-5')
+    expect(result).toMatchObject({ ok: true, model: 'claude-haiku-5-5', inputTokens: 1200, outputTokens: 80 })
+    expect(buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, result, '2026-10-16T12:00:00.000Z')).toEqual({
+      aiAnswerShadowModel: 'claude-haiku-5-5',
+      aiAnsweredShadowAt: '2026-10-16T12:00:00.000Z',
+      aiAnswerShadowInputTokens: 1200,
+      aiAnswerShadowOutputTokens: 80,
+      aiAnswerShadowCostYen: 0.02,
+      aiAnswerShadow: '基本データ画面で生徒を選びます。',
+    })
+    expect(buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, { ok: false, error: '回答の決まりに反したため表示しませんでした(謝罪)', blockedAnswer: '申し訳ありません。', inputTokens: 10, outputTokens: 5 }, 't')).toMatchObject({
+      aiAnswerShadowError: '回答の決まりに反したため表示しませんでした(謝罪)',
+      aiAnswerShadowBlocked: '申し訳ありません。',
+      aiAnswerShadowInputTokens: 10,
+    })
+    // 単価: Sonnet 5.5 $2/$10・Haiku 5.5 $0.1/$0.5(100 万トークンあたり)・1 ドル 150 円。
+    expect(estimateQuestionAiCostYen('claude-sonnet-5-5', 14_000, 400)).toBe(4.8)
+    expect(estimateQuestionAiCostYen('claude-haiku-5-5', 14_000, 400)).toBe(0.24)
+    expect(estimateQuestionAiCostYen('unknown-model', 14_000, 400)).toBe(0)
   })
 
   it('長すぎる回答は上限で切る', () => {

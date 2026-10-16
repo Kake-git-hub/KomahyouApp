@@ -109,6 +109,30 @@ describe('developerReport(server): 報告本体の正規化', () => {
     expect(report.isTest).toBe(true)
   })
 
+  it('生徒×科目の台帳(妥協案 B・2026-10-16)は形を検証して受け、壊れた行・トークンは捨て、無ければ null', () => {
+    const report = normalizeDeveloperReport({
+      category: 'question',
+      note: '山田太郎さんの振替は？',
+      studentLedger: {
+        computedAt: '2026-10-16T03:00:00.000Z',
+        rows: [
+          { studentId: 's001', name: ' 山田 太郎 ', subject: '数', makeupBalance: 2.7, makeupRemaining: ['2026-10-03#2|休み', 'not-a-token', 42], attended: [], absent: ['2026-10-03#2|regular'], absentNoMakeup: 'x', placed: ['2026-10-20#3|makeup|2026-10-03|2'] },
+          { name: '', subject: '英' },
+          'garbage',
+        ],
+        lectureRows: [{ studentId: 's001', name: '山田 太郎', sessionLabel: '夏期講習', subject: '英', pending: -1, origins: ['2026-08-01#1'] }],
+      },
+    }, { classroomId: 'c1', fallbackIso: FALLBACK })
+    expect(report.studentLedger).toEqual({
+      computedAt: '2026-10-16T03:00:00.000Z',
+      rows: [{ studentId: 's001', name: '山田 太郎', subject: '数', makeupBalance: 2, makeupRemaining: ['2026-10-03#2|休み'], attended: [], absent: ['2026-10-03#2|regular'], absentNoMakeup: [], placed: ['2026-10-20#3|makeup|2026-10-03|2'] }],
+      lectureRows: [{ studentId: 's001', name: '山田 太郎', sessionLabel: '夏期講習', subject: '英', pending: 0, origins: ['2026-08-01#1'] }],
+    })
+    expect(normalizeDeveloperReport({ note: 'x' }, { classroomId: 'c1', fallbackIso: FALLBACK }).studentLedger).toBeNull()
+    expect(normalizeDeveloperReport({ note: 'x', studentLedger: { rows: [], lectureRows: [] } }, { classroomId: 'c1', fallbackIso: FALLBACK }).studentLedger).toBeNull()
+    expect(normalizeDeveloperReport({ note: 'x', studentLedger: [] }, { classroomId: 'c1', fallbackIso: FALLBACK }).studentLedger).toBeNull()
+  })
+
   it('source が不明なら board、snapshotPayload が配列/欠落なら無し扱い', () => {
     const report = normalizeDeveloperReport({ source: 'x', snapshotPayload: [] }, { classroomId: 'c1', fallbackIso: FALLBACK })
     expect(report.source).toBe('board')
