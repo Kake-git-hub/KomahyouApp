@@ -14,6 +14,11 @@
 //    (上限に達するとその月は全教室で AI 回答が止まり、「自動回答を作れませんでした」＝開発者が回答、に戻る)。
 //  - 回答文は **利用者から見て AI 自身が説明書**という立場で書く(オーナー指示 2026-10-16 夜)。「マニュアルでは〜」
 //    「マニュアルに記載が無い」のように他の資料へ責任を預ける(他責の)言い回しは禁止し、機械検査でも止める。
+//  - **質問に名前が出た生徒の数字(妥協案 B・オーナー採用 2026-10-16 夜)**: クライアントが権威関数で計算した生徒×科目の台帳から、
+//    質問文に名前が出た生徒の行だけを数行の文字にして渡す(questionAiStudentDigest.ts)。教室データそのものは渡さない。
+//    AI はその数字をそのまま使い、数えない。質問に出ていない生徒の名前が回答に出たら止める(他の生徒)。
+//  - **開発中は Sonnet(主・室長に表示)と Haiku(影・記録だけ)の両方で回答する**(オーナー指示 2026-10-16 夜「回答精度と金額の評価をして」)。
+//    影の回答は報告文書の aiAnswerShadow* に残し、開発ダッシュボードと評価ワークフローで並べて比べる。室長には主だけを出す。
 //  - 呼び出しは **Claude API 直(API キー)**(オーナー指示 2026-10-16
 //    「支払い窓口が増えてもよいので確実に動く案に」)。2026-09-14〜10-16 は請求を GCP にまとめるため Vertex AI 経由だったが、
 //    新規プロジェクトの Claude 割り当てが 0 のままで毎回 429(「Vertex AI の割り当て上限」)になり一度も回答できなかった
@@ -34,6 +39,21 @@ import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 
 /** 回答に使うモデル(Sonnet 最新。2026-10-16 夜 オーナー指示で Haiku から戻した)。ID は接頭辞・日付なしのまま使う。 */
 export const QUESTION_AI_MODEL = 'claude-sonnet-5-5'
+/** 比較用(影)のモデル。開発中だけ同じ質問を流し、回答と費用を記録する(室長には出さない)。 */
+export const QUESTION_AI_SHADOW_MODEL = 'claude-haiku-5-5'
+/** 単価(ドル/100 万トークン・Haiku 5.5 は 100K トークン以下のプロンプト)。費用の目安を記録・評価で出すための正本。 */
+export const QUESTION_AI_MODEL_PRICES: Record<string, { input: number; output: number }> = {
+  'claude-sonnet-5-5': { input: 2, output: 10 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
+}
+export const QUESTION_AI_YEN_PER_USD = 150
+/** 1 回の呼び出しの費用の目安(円・小数 2 桁)。単価の無いモデルは 0。 */
+export function estimateQuestionAiCostYen(model: string, inputTokens: number, outputTokens: number): number {
+  const price = QUESTION_AI_MODEL_PRICES[model]
+  if (!price) return 0
+  const usd = (inputTokens * price.input + outputTokens * price.output) / 1_000_000
+  return Math.round(usd * QUESTION_AI_YEN_PER_USD * 100) / 100
+}
 /** 思考も含めた出力トークンの上限(費用の歯止め)。Sonnet は思考に使う分が多いので Haiku のときの 4000 から戻した。 */
 export const QUESTION_AI_MAX_TOKENS = 8000
 /** AI に渡す操作履歴の件数(新しい方から)。質問の文脈が分かれば足りるので絞る。 */
@@ -87,7 +107,7 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
     `2. アプリに不具合・バグ・障害・エラーがあると認めたり、その可能性を書いたりしない(「不具合です」「バグの可能性があります」「システムの問題です」も書かない)。思ったとおりに動かない・表示がおかしい・数が合わないという内容には、案内できる操作手順の確認だけを案内し、「${QUESTION_AI_BEHAVIOR_CHECK_REPLY}」と伝える。原因を推測しない。`,
     `3. 金額・料金・費用・価格・契約・請求・無料/有料については、数字を含め一切答えない。「${QUESTION_AI_PRICE_REPLY}」とだけ伝える。`,
     `4. 他の教室・校舎の情報を一切出さない(教室名・人数・使い方・事例・比較を含む)。他の教室について聞かれても「${QUESTION_AI_OTHER_CLASSROOM_REPLY}」とだけ伝える。`,
-    '5. 生徒名・講師名・具体的な配置内容など、個別教室の中身は書かない(一般化して書く)。',
+    '5. 講師名・質問に出ていない生徒の名前・他の生徒の配置内容は書かない。質問に名前が出た生徒については、下の「質問に名前が出た生徒のいまの数字」が渡されたときだけ、そこにある残数・日付・科目・回数をそのまま使って具体的に案内してよい。そこに無い数字を数えたり推測したりしない。渡されていない(見つからなかった)ときは数字を作らず、生徒の名前が名簿の表示名と同じか確かめてもらうよう案内する。',
     '6. 未リリースの機能や対応時期を約束しない(「次の更新で直します」等)。',
     '7. データの復元・削除・ロールバックなど取り消せない操作の手順は書かず、「開発者にご相談ください」と伝える(その機能がどの画面にあるかを伝えるのはよい)。',
     '8. メールアドレス・ID・トークン・ファイル名・保存先パス・開発用の文書名(docs/ などの名前)などの内部情報を書かない。',
@@ -112,7 +132,7 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
  * 元の文は報告文書の aiAnswerBlocked に残して開発者が見直せるようにする。決まり文句(QUESTION_AI_*_REPLY)は引っかからない。
  * 戻り値は反した種類(開発者向けの短い名前)。問題なければ null。
  */
-export function findQuestionAiAnswerViolation(answer: string, options: { otherClassroomNames?: readonly string[] } = {}): string | null {
+export function findQuestionAiAnswerViolation(answer: string, options: { otherClassroomNames?: readonly string[]; otherStudentNames?: readonly string[] } = {}): string | null {
   // 「ご不便」「ご迷惑」は形(〜をおかけ／〜をかけ／〜になり)によらず止める(評価 1 回目 Q20「ご不便をかけている状況を把握しました」が検査を抜けた)。
   if (/申し訳|すみません|すいません|お詫び|おわび|ご迷惑|ご不便|ご面倒|失礼(?:いた)?しました/u.test(answer)) return '謝罪'
   // 他の資料へ責任を預ける言い回し(オーナー指示 2026-10-16 夜「マニュアルでは〜など他責な言い回しはしない」)。
@@ -121,6 +141,10 @@ export function findQuestionAiAnswerViolation(answer: string, options: { otherCl
   if (/[0-9０-９][0-9０-９,，.．]*\s*(?:円|万円|ドル)|[¥￥$＄]\s*[0-9０-９]|無料|有料|月額|年額|割引/u.test(answer)) return '金額'
   const names = (options.otherClassroomNames ?? []).map((name) => name.trim()).filter((name) => name.length >= 3)
   if (names.some((name) => answer.includes(name))) return '他教室'
+  // 質問に出ていない生徒の名前(妥協案 B・2026-10-16 夜)。空白の有無を問わず当てる。
+  const normalizedAnswer = answer.replace(/[\s\u3000]+/gu, '')
+  const studentNames = (options.otherStudentNames ?? []).map((name) => name.replace(/[\s\u3000]+/gu, '')).filter((name) => name.length >= 3)
+  if (studentNames.some((name) => normalizedAnswer.includes(name))) return '他の生徒'
   return null
 }
 
@@ -151,6 +175,8 @@ export function buildQuestionAiUserMessage(input: {
   screen: string
   scheduleContext: Record<string, string>
   recentOperations: NormalizedDeveloperReportTraceEntry[]
+  /** 質問に名前が出た生徒のいまの数字(questionAiStudentDigest.ts の text)。台帳が無いときは渡さない(見出しも出さない)。 */
+  studentDigest?: string
 }): string {
   const operations = input.recentOperations.slice(-QUESTION_AI_TRACE_LIMIT)
   const contextLines = Object.entries(input.scheduleContext).map(([key, value]) => `- ${key}: ${value}`)
@@ -161,6 +187,7 @@ export function buildQuestionAiUserMessage(input: {
     '# 質問したときの画面',
     input.screen || '(不明)',
     ...(contextLines.length > 0 ? ['', '# 日程表で表示していた条件', ...contextLines] : []),
+    ...(input.studentDigest ? ['', '# 質問に名前が出た生徒のいまの数字(そのまま使う・数えない)', input.studentDigest] : []),
     '',
     `# 直近の操作履歴(新しい方の最大 ${QUESTION_AI_TRACE_LIMIT} 件・古い順)`,
     ...(operations.length > 0 ? operations.map((entry) => `- ${entry.at} [${entry.kind}] ${entry.summary}`) : ['(なし)']),
@@ -180,6 +207,20 @@ export function extractQuestionAiAnswerText(message: Pick<Anthropic.Message, 'co
 export type QuestionAiAnswerResult =
   | { ok: true; answer: string; model: string; inputTokens: number; outputTokens: number }
   | { ok: false; error: string; blockedAnswer?: string; inputTokens?: number; outputTokens?: number }
+
+/** 影(比較用モデル)の結果を報告文書へ書く形。室長には出さない。 */
+export function buildQuestionAiShadowFields(model: string, result: QuestionAiAnswerResult, answeredAt: string): Record<string, string | number> {
+  const inputTokens = result.ok ? result.inputTokens : result.inputTokens ?? 0
+  const outputTokens = result.ok ? result.outputTokens : result.outputTokens ?? 0
+  return {
+    aiAnswerShadowModel: result.ok ? result.model : model,
+    aiAnsweredShadowAt: answeredAt,
+    aiAnswerShadowInputTokens: inputTokens,
+    aiAnswerShadowOutputTokens: outputTokens,
+    aiAnswerShadowCostYen: estimateQuestionAiCostYen(model, inputTokens, outputTokens),
+    ...(result.ok ? { aiAnswerShadow: result.answer } : { aiAnswerShadowError: result.error, ...(result.blockedAnswer ? { aiAnswerShadowBlocked: result.blockedAnswer } : {}) }),
+  }
+}
 
 /**
  * 失敗理由を**開発者向けの短文**に丸める(内部のスタックや鍵の断片を出さない)。
@@ -201,9 +242,10 @@ export function describeQuestionAiError(error: unknown): string {
 export type CreateQuestionAiMessage = (params: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>
 
 export async function generateQuestionAiAnswer(
-  input: Parameters<typeof buildQuestionAiUserMessage>[0] & { otherClassroomNames?: readonly string[] },
-  deps: { apiKey: string; createMessage?: CreateQuestionAiMessage },
+  input: Parameters<typeof buildQuestionAiUserMessage>[0] & { otherClassroomNames?: readonly string[]; otherStudentNames?: readonly string[] },
+  deps: { apiKey: string; createMessage?: CreateQuestionAiMessage; model?: string },
 ): Promise<QuestionAiAnswerResult> {
+  const model = deps.model ?? QUESTION_AI_MODEL
   if (!deps.apiKey) return { ok: false, error: 'AI 回答の設定(API キー ANTHROPIC_API_KEY)がありません' }
   const createMessage: CreateQuestionAiMessage = deps.createMessage ?? ((params) => {
     const client = new Anthropic({ apiKey: deps.apiKey, timeout: QUESTION_AI_TIMEOUT_MS, maxRetries: 1 })
@@ -211,7 +253,7 @@ export async function generateQuestionAiAnswer(
   })
   try {
     const message = await createMessage({
-      model: QUESTION_AI_MODEL,
+      model,
       // 思考も含めた上限。回答は QUESTION_AI_ANSWER_CHAR_LIMIT で切るので、これ以上は費用の歯止めとして絞る。
       max_tokens: QUESTION_AI_MAX_TOKENS,
       output_config: { effort: 'medium' },
@@ -221,7 +263,7 @@ export async function generateQuestionAiAnswer(
     if (message.stop_reason === 'refusal') return { ok: false, error: 'AI がこの質問への回答を控えました' }
     const answer = extractQuestionAiAnswerText(message)
     if (!answer) return { ok: false, error: 'AI から回答文が返りませんでした' }
-    const violation = findQuestionAiAnswerViolation(answer, { otherClassroomNames: input.otherClassroomNames })
+    const violation = findQuestionAiAnswerViolation(answer, { otherClassroomNames: input.otherClassroomNames, otherStudentNames: input.otherStudentNames })
     if (violation) {
       return { ok: false, error: `回答の決まりに反したため表示しませんでした(${violation})`, blockedAnswer: answer, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
     }

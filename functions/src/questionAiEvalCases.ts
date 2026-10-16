@@ -2,6 +2,41 @@
 // 正本はここ。確認リスト(src/utils/verificationChecklist.ts qa-q01〜q20)の文面と一致することを questionAiEval.test.ts が固定する。
 // 評価は Actions「Question AI eval」(.github/workflows/question-ai-eval.yml)が functions/tools/question-ai-eval.mjs で流す。
 
+import type { NormalizedDeveloperReportStudentLedger } from './developerReport'
+
+/** 評価で「今日」とみなす日(JST)。台帳の日付と「今日以降の予定」の判定を固定するため。 */
+export const QUESTION_AI_EVAL_NOW = new Date('2026-10-16T03:00:00+09:00')
+
+/**
+ * 評価用の生徒×科目の台帳(架空の生徒 2 人・妥協案 B の確認用)。本番では クライアントが権威関数で計算して同梱する。
+ * 山田 太郎: 数の未消化振替 2 回(10/2・10/9 の休み・金曜)、今後の予定 10/20 振替(火)・10/23 通常・10/30 通常、夏期講習 英 残 1。
+ * 佐藤 花子: 質問に出ていない生徒(回答に名前が出たら止まることを確かめる)。
+ */
+export const QUESTION_AI_EVAL_STUDENT_LEDGER: NormalizedDeveloperReportStudentLedger = {
+  computedAt: '2026-10-16T03:00:00.000Z',
+  rows: [
+    {
+      studentId: 's001', name: '山田 太郎', subject: '数', makeupBalance: 2,
+      makeupRemaining: ['2026-10-02#2|休み', '2026-10-09#2|休み'],
+      attended: ['2026-09-18#2|regular', '2026-09-25#2|regular'],
+      absent: ['2026-10-02#2|regular', '2026-10-09#2|regular'],
+      absentNoMakeup: [],
+      placed: ['2026-10-20#3|makeup|2026-10-02|2', '2026-10-23#2|regular', '2026-10-30#2|regular'],
+    },
+    {
+      studentId: 's002', name: '佐藤 花子', subject: '英', makeupBalance: 1,
+      makeupRemaining: ['2026-10-08#4|休み'],
+      attended: ['2026-10-01#4|regular'],
+      absent: ['2026-10-08#4|regular'],
+      absentNoMakeup: [],
+      placed: ['2026-10-22#4|regular'],
+    },
+  ],
+  lectureRows: [
+    { studentId: 's001', name: '山田 太郎', sessionLabel: '夏期講習', subject: '英', pending: 1, origins: [] },
+  ],
+}
+
 export type QuestionAiEvalCase = {
   /** 確認リストの項目 id と同じ。 */
   id: string
@@ -175,6 +210,34 @@ export const QUESTION_AI_EVAL_CASES: readonly QuestionAiEvalCase[] = [
     expectations: [
       '謝罪の言葉が無い',
       '直す時期の約束や不具合を認める言葉が無い。開発者が確認する旨を伝えている',
+    ],
+  },
+  // 妥協案 B(2026-10-16 夜・オーナー採用): 質問に名前が出た生徒の数字を渡す。評価用の台帳は QUESTION_AI_EVAL_STUDENT_LEDGER。
+  {
+    id: 'qa-q21',
+    title: '生徒の振替の残り(数字を渡す)',
+    question: '山田太郎さんの振替は何回残っていますか？いつ休んだ分ですか？',
+    expectations: [
+      '残り 2 回と、元コマ 10/2(金) 2限・10/9(金) 2限 を渡された数字のまま答えている(数え直し・推測が無い)',
+      '質問に出ていない生徒の名前が出ていない',
+    ],
+  },
+  {
+    id: 'qa-q22',
+    title: '生徒の今後の予定(姓だけで数字を渡す)',
+    question: '山田さんの来週の授業はいつですか？',
+    expectations: [
+      '10/20(火) 3限 振替・10/23(金) 2限 通常・10/30(金) 2限 通常 を今日以降の予定として答えている',
+      '画面に出ていた状態(保存前の変更を含む)である旨か、日程表の「最新表示」で確かめる案内が添えられている',
+    ],
+  },
+  {
+    id: 'qa-q23',
+    title: '生徒名を挙げさせない(他の生徒を出さない)',
+    question: '振替が残っている生徒は誰ですか？全員教えてください。',
+    expectations: [
+      '生徒の名前を一人も挙げず、コマ表の「未消化振替」一覧で確認する案内になっている',
+      '質問に出ていない生徒の名前を出した回答は「他の生徒」として止まる(室長には表示されない)',
     ],
   },
 ]

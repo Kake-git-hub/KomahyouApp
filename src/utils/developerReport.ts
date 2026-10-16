@@ -116,6 +116,18 @@ export type DeveloperReportRequestBody = {
   snapshotPayload: AppSnapshotPayload | null
   /** 添付画像(確認リストのスクリーンショット・2026-10-14)。無ければ載せない。 */
   attachments?: DeveloperReportAttachment[]
+  /**
+   * 生徒×科目の台帳(保存時と同じ権威関数 buildStudentLessonLedger の結果・2026-10-16 妥協案 B)。質問のときだけ載せ、
+   * サーバーは「質問に名前が出た生徒の数字」を AI へ渡すためだけに使う(文書には保存しない)。
+   */
+  studentLedger?: DeveloperReportStudentLedger
+}
+
+/** 台帳のうち報告に載せる部分(src/utils/studentLessonLedger.ts の StudentLessonLedger から totals・version を除いた形)。 */
+export type DeveloperReportStudentLedger = {
+  computedAt: string
+  rows: Array<{ studentId: string | null; name: string; subject: string; makeupBalance: number; makeupRemaining: string[]; attended: string[]; absent: string[]; absentNoMakeup: string[]; placed: string[] }>
+  lectureRows: Array<{ studentId: string; name: string; sessionLabel: string; subject: string; pending: number; origins: string[] }>
 }
 
 /** 内容の上限。長文はここで切る（サーバーも同じ値で切る）。 */
@@ -251,6 +263,7 @@ export function buildDeveloperReportRequestBody(input: {
   scheduleContext?: DeveloperReportScheduleContext
   snapshotPayload: AppSnapshotPayload | null
   attachments?: unknown
+  studentLedger?: DeveloperReportStudentLedger | null
   now?: Date
 }): DeveloperReportRequestBody {
   const recent = input.recentOperations.length > DEVELOPER_REPORT_TRACE_LIMIT
@@ -274,6 +287,8 @@ export function buildDeveloperReportRequestBody(input: {
     ...(scheduleContext ? { scheduleContext } : {}),
     snapshotPayload: input.snapshotPayload,
     ...(attachments.length > 0 ? { attachments } : {}),
+    // 台帳は質問のときだけ(要望・不具合では AI を呼ばないので載せない)。
+    ...(input.studentLedger && normalizeDeveloperReportCategory(input.category) === 'question' ? { studentLedger: input.studentLedger } : {}),
   }
 }
 
