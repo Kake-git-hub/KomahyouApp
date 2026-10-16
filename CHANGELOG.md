@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.617 (2026-10-16)
+
+- fix: 質問 AI 回答の「質問に名前が出た生徒の数字」に、今日以降の予定ごとに〔今日〕〔今週〕〔来週〕〔再来週〕〔それ以降〕の印(月曜始まり)を付け、「印はそのまま使い自分で数え直さない」と添えた。評価 4 回目(run 38913782608・2 モデル × 23 問・Sonnet 約 113 円／Haiku 約 5.5 円・両方 23/23 表示)で Sonnet が Q22「来週の授業」の週を数え違えたため(Haiku は正しかった)。4 回目の結果と Sonnet/Haiku の比較を引き継ぎ資料に記録 (functions/src/questionAiStudentDigest.ts・test, docs/handoff-question-ai-answer.md)
+
 ## v1.5.616 (2026-10-16)
 
 - feat: **質問・要望の蓄積 → フィードバック → QA の充実の輪**(オーナー指示 2026-10-16 夜)。読み取り専用ツール `tools/question-qa-digest.mjs` が、まだ整理していない質問・要望(テスト・確認リスト・整理済みを除く)を 1 本の「QA 候補パック」(整理の指示文つき・AI が答えられなかった質問を最優先・AI と開発者の回答の食い違いに印)にして `local/qa-digests/` へ出す(Git 管理外・Firestore へは書かない)。整理 → オーナー承認 → 説明書 `docs/user-manual.md` 11 章へ QA を足す(＝AI 即時回答の根拠が増える)→ 記録 `docs/qa-curation-log.md`(次回のパックから外す)→ 評価で確認、の手順を `docs/runbooks/question-qa-loop.md` に定めた。spec §G-6 の QA 公開の場を説明書 11 章と明記。室長側の「役に立った／立たなかった」は未実装でオーナー判断待ち(runbook §5 に妥協案 A〜C)。`.gitignore` に `local/` (tools/question-qa-digest.mjs・test, docs/qa-curation-log.md, docs/runbooks/question-qa-loop.md, docs/spec-developer-report.md §G-6, docs/handoff-question-ai-answer.md §8, .gitignore)

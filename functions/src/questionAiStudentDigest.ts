@@ -99,6 +99,32 @@ function formatOriginToken(token: string): string {
   return `${formatDateSlot(dateKey, slot)}${reason ? `(${reason})` : ''}`
 }
 
+/** 月曜始まりの週で、今日から見て何週先か(0=今週・1=来週・2=再来週・負=過去)。読めない日付は null。 */
+export function resolveWeekOffset(dateKey: string, todayKey: string): number | null {
+  const parse = (key: string) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(key)
+    return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null
+  }
+  const date = parse(dateKey)
+  const today = parse(todayKey)
+  if (date === null || today === null) return null
+  const dayMs = 24 * 60 * 60 * 1000
+  const todayDow = (new Date(today).getUTCDay() + 6) % 7 // 月=0 … 日=6
+  const weekStart = today - todayDow * dayMs
+  return Math.floor((date - weekStart) / (7 * dayMs))
+}
+
+/** 週の印。評価 4 回目(2026-10-16)で Sonnet が「来週」の範囲を数え違えたので、AI に数えさせず印で渡す。 */
+export function formatWeekLabel(dateKey: string, todayKey: string): string {
+  const offset = resolveWeekOffset(dateKey, todayKey)
+  if (offset === null) return ''
+  if (offset < 0) return '〔過去〕'
+  if (offset === 0) return dateKey === todayKey ? '〔今日〕' : '〔今週〕'
+  if (offset === 1) return '〔来週〕'
+  if (offset === 2) return '〔再来週〕'
+  return '〔それ以降〕'
+}
+
 function shiftDateKey(dateKey: string, days: number): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(dateKey)
   if (!match) return dateKey
@@ -119,7 +145,7 @@ function describeSubjectRow(row: NormalizedDeveloperReportStudentLedgerRow, toda
     .filter((token) => parseToken(token).dateKey >= todayKey)
     .sort()
     .slice(0, QUESTION_AI_DIGEST_LESSON_LIMIT)
-    .map((token) => formatLessonToken(token, { withSource: true }))
+    .map((token) => `${formatLessonToken(token, { withSource: true })}${formatWeekLabel(parseToken(token).dateKey, todayKey)}`)
   lines.push(`  今日以降の予定(${upcoming.length === 0 ? '盤面に無し' : `近い ${upcoming.length} 件`}): ${upcoming.length > 0 ? upcoming.join(' / ') : '—'}`)
   const recentAbsent = [...row.absent].sort().slice(-QUESTION_AI_DIGEST_LESSON_LIMIT).reverse().map((token) => formatLessonToken(token))
   if (recentAbsent.length > 0) lines.push(`  休み(振替あり・新しい順): ${recentAbsent.join(' / ')}`)
@@ -152,7 +178,7 @@ export function buildQuestionAiStudentDigest(input: { note: string; ledger: Norm
   const otherStudentNames = names.filter((name) => !mentionedSet.has(name) && normalizeStudentNameForMatch(name).length >= 3)
   if (mentioned.length === 0) return { text: QUESTION_AI_DIGEST_NO_STUDENT_NOTE, mentionedNames: [], otherStudentNames }
   const todayKey = resolveJstDateKey(input.now ?? new Date())
-  const lines: string[] = [`(今日は ${formatDigestDate(todayKey)}。数字は質問した時点で画面に出ていた状態で、保存前の変更を含みます)`]
+  const lines: string[] = [`(今日は ${formatDigestDate(todayKey)}。数字は質問した時点で画面に出ていた状態で、保存前の変更を含みます。週は月曜始まりで、〔今週〕〔来週〕の印はそのまま使い、自分で数え直さない)`]
   for (const name of mentioned) {
     lines.push('', `## ${name}`)
     const rows = input.ledger.rows.filter((row) => row.name.trim() === name).sort((left, right) => left.subject.localeCompare(right.subject, 'ja'))
