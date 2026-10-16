@@ -8,15 +8,22 @@ import { buildUserManualModuleContent, normalizeToLf, USER_MANUAL_OUTPUT_PATH, U
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 import {
+  buildOtherClassroomNameWords,
   buildQuestionAiSystemPrompt,
   buildQuestionAiUserMessage,
   describeQuestionAiError,
   extractQuestionAiAnswerText,
+  findQuestionAiAnswerViolation,
   generateQuestionAiAnswer,
   QUESTION_AI_ANSWER_CHAR_LIMIT,
+  QUESTION_AI_BEHAVIOR_CHECK_REPLY,
   QUESTION_AI_MODEL,
+  QUESTION_AI_NO_MANUAL_REPLY,
+  QUESTION_AI_OTHER_CLASSROOM_REPLY,
+  QUESTION_AI_PRICE_REPLY,
   QUESTION_AI_TRACE_LIMIT,
   shouldAnswerQuestionWithAi,
+  stripQuestionAiTestMarker,
   type CreateQuestionAiMessage,
 } from './questionAiAnswer'
 
@@ -128,6 +135,71 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
     expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })
     expect(describeQuestionAiError(new Error('sk-ant-xxx'))).not.toContain('sk-ant')
+  })
+
+  it('回答の決まり(オーナー指定 2026-10-16: 謝らない・不具合を認めない・金額を答えない・他教室を出さない)をシステム指示に入れる', () => {
+    const prompt = buildQuestionAiSystemPrompt()
+    for (const keyword of ['謝罪の言葉を使わない', '不具合・バグ・障害・エラーがあると認めたり', '金額・料金・費用・価格', '他の教室・校舎の情報を一切出さない']) {
+      expect(prompt).toContain(keyword)
+    }
+    for (const reply of [QUESTION_AI_BEHAVIOR_CHECK_REPLY, QUESTION_AI_PRICE_REPLY, QUESTION_AI_OTHER_CLASSROOM_REPLY, QUESTION_AI_NO_MANUAL_REPLY]) expect(prompt).toContain(reply)
+    // 旧文面「不具合の可能性がある内容なら、その旨を添えて」は「不具合を認めない」と矛盾するので消した。
+    expect(prompt).not.toContain('その旨を添えて')
+  })
+
+  it('決まり文句は機械検査に引っかからない(決まりどおりに答えたら止めない)', () => {
+    for (const reply of [QUESTION_AI_BEHAVIOR_CHECK_REPLY, QUESTION_AI_PRICE_REPLY, QUESTION_AI_OTHER_CLASSROOM_REPLY, QUESTION_AI_NO_MANUAL_REPLY]) {
+      expect(findQuestionAiAnswerViolation(`手順を確認してください。${reply}質問は開発者にも届いています。`), reply).toBeNull()
+    }
+    // 種類「不具合」を選ぶ案内は「不具合を認める」ではない。
+    expect(findQuestionAiAnswerViolation('「質問・要望」で種類「不具合」を選んで送ってください。')).toBeNull()
+    expect(findQuestionAiAnswerViolation('不具合かどうかは開発者が確認します。')).toBeNull()
+  })
+
+  it.each([
+    ['申し訳ありませんが、マニュアルに記載がありません。', '謝罪'],
+    ['ご不便をおかけしております。', '謝罪'],
+    ['すみません、分かりません。', '謝罪'],
+    ['これはアプリの不具合です。', '不具合を認める'],
+    ['バグの可能性があります。', '不具合を認める'],
+    ['現在、不具合が発生しています。', '不具合を認める'],
+    ['次の更新で不具合を修正します。', '不具合を認める'],
+    ['月額 5,000 円です。', '金額'],
+    ['1教室 ３０００円 かかります。', '金額'],
+    ['基本機能は無料です。', '金額'],
+    ['¥1000 です。', '金額'],
+  ])('決まりに反した回答は止める: %s → %s', (answer, expected) => {
+    expect(findQuestionAiAnswerViolation(answer)).toBe(expected)
+  })
+
+  it('他の教室の名前が出た回答は止める。自教室の名前・共通のブランド名は止めない', () => {
+    const words = buildOtherClassroomNameWords({ currentClassroomName: 'スクールIE 日大前校', allClassroomNames: ['スクールIE 緑が丘校', 'スクールIE 薬円台校', 'スクールIE 日大前校', '', 'A校'] })
+    expect(words).toEqual(expect.arrayContaining(['スクールIE 緑が丘校', '緑が丘校', 'スクールIE 薬円台校', '薬円台校']))
+    expect(words).not.toContain('スクールIE')
+    expect(words).not.toContain('日大前校')
+    expect(words).not.toContain('A校')
+    expect(findQuestionAiAnswerViolation('緑が丘校では自動割振を使っています。', { otherClassroomNames: words })).toBe('他教室')
+    expect(findQuestionAiAnswerViolation('スクールIE 日大前校の盤面で操作してください。', { otherClassroomNames: words })).toBeNull()
+  })
+
+  it('決まりに反した回答は室長に見せず(ok:false)、元の文とトークン数を返す(報告文書の aiAnswerBlocked に残す)', async () => {
+    const blocked = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '申し訳ありません。これは不具合です。', citations: null }] }) })
+    expect(blocked).toEqual({ ok: false, error: '回答の決まりに反したため表示しませんでした(謝罪)', blockedAnswer: '申し訳ありません。これは不具合です。', inputTokens: 1200, outputTokens: 80 })
+    const other = await generateQuestionAiAnswer({ ...baseInput, otherClassroomNames: ['緑が丘校'] }, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '緑が丘校の例です。', citations: null }] }) })
+    expect(other).toMatchObject({ ok: false, error: '回答の決まりに反したため表示しませんでした(他教室)' })
+  })
+
+  it('「#テスト」の印は AI に渡す質問文から外す(オーナーの試験送信で AI が印に反応しないように)', () => {
+    expect(stripQuestionAiTestMarker('生徒を登録するには？ #テスト')).toBe('生徒を登録するには？')
+    expect(stripQuestionAiTestMarker('#test 振替は？')).toBe('振替は？')
+    expect(buildQuestionAiUserMessage({ ...baseInput, note: '振替は？ #テスト' })).not.toContain('#テスト')
+  })
+
+  it('submitDeveloperReport は他教室名を渡し、止めた回答を aiAnswerBlocked に残す(配線)', () => {
+    const indexSource = readFileSync(resolve(repoRoot, 'functions/src/index.ts'), 'utf8')
+    expect(indexSource).toContain('otherClassroomNames,')
+    expect(indexSource).toContain('buildOtherClassroomNameWords({')
+    expect(indexSource).toContain('aiAnswerBlocked: aiResult.blockedAnswer')
   })
 
   it('長すぎる回答は上限で切る', () => {

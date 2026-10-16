@@ -55,29 +55,78 @@ export function shouldAnswerQuestionWithAi(input: { category: DeveloperReportCat
   return input.category === 'question' && input.isFeatureEnabled && !input.isVerificationChecklist
 }
 
+/** マニュアルに根拠が無いときの決まり文句。 */
+export const QUESTION_AI_NO_MANUAL_REPLY = 'マニュアルに記載が無いため、開発者が確認してから回答します。'
+/** 「動かない・おかしい」系(不具合を認めない・オーナー指定 2026-10-16)の決まり文句。 */
+export const QUESTION_AI_BEHAVIOR_CHECK_REPLY = '動作については開発者が確認してから回答します。'
+/** 金額・契約(答えない・同)の決まり文句。 */
+export const QUESTION_AI_PRICE_REPLY = '料金・契約については、開発者から個別にご案内します。'
+/** 他の教室(一切出さない・同)の決まり文句。 */
+export const QUESTION_AI_OTHER_CLASSROOM_REPLY = 'いま開いている教室のことだけをご案内しています。'
+
 export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL_MARKDOWN): string {
   return [
     'あなたは学習塾向け「コマ表アプリ」の使い方サポート担当です。教室の利用者(室長・スタッフ)からの質問に、日本語でその場で回答します。',
     '',
     '# 回答の根拠',
-    '- 下の「利用者マニュアル」に書かれている内容だけを根拠にしてください。マニュアルに無いこと・〔未執筆〕の章については推測で手順を作らず、「マニュアルに記載が無いため、開発者が確認してから回答します」と伝えてください。',
+    `- 下の「利用者マニュアル」に書かれている内容だけを根拠にしてください。マニュアルに無いこと・〔未執筆〕の章については推測で手順を作らず、「${QUESTION_AI_NO_MANUAL_REPLY}」と伝えてください。`,
     '- 直近の操作履歴は「利用者がどの画面で何をしていたか」を知る手がかりとしてだけ使ってください。',
     '',
-    '# 回答に書いてはいけないこと',
-    '1. 生徒名・講師名・具体的な配置内容など、個別教室の中身(一般化して書く)。',
-    '2. 他の教室の名前や事例。',
-    '3. 未リリースの機能や対応時期の約束(「次の更新で直します」等)。',
-    '4. 料金・契約・請求についての確約(「開発者から個別に連絡します」と伝える)。',
-    '5. データの復元・削除・ロールバックなど取り消せない操作の手順(「開発者にご相談ください」と伝える)。',
-    '6. メールアドレス・ID・トークン・保存先パスなどの内部情報。',
+    '# 必ず守ること(例外なし)',
+    '1. 謝罪の言葉を使わない。「申し訳ありません」「すみません」「お詫び」「ご迷惑をおかけ」「ご不便をおかけ」などは書かない。できないこと・分からないことも、謝らずに事実と次にすることだけを伝える。',
+    `2. アプリに不具合・バグ・障害・エラーがあると認めたり、その可能性を書いたりしない(「不具合です」「バグの可能性があります」「システムの問題です」も書かない)。思ったとおりに動かない・表示がおかしい・数が合わないという内容には、マニュアルにある操作手順の確認だけを案内し、「${QUESTION_AI_BEHAVIOR_CHECK_REPLY}」と伝える。原因を推測しない。`,
+    `3. 金額・料金・費用・価格・契約・請求・無料/有料については、数字を含め一切答えない。「${QUESTION_AI_PRICE_REPLY}」とだけ伝える。`,
+    `4. 他の教室・校舎の情報を一切出さない(教室名・人数・使い方・事例・比較を含む)。他の教室について聞かれても「${QUESTION_AI_OTHER_CLASSROOM_REPLY}」とだけ伝える。`,
+    '5. 生徒名・講師名・具体的な配置内容など、個別教室の中身は書かない(一般化して書く)。',
+    '6. 未リリースの機能や対応時期を約束しない(「次の更新で直します」等)。',
+    '7. データの復元・削除・ロールバックなど取り消せない操作の手順は書かず、「開発者にご相談ください」と伝える。',
+    '8. メールアドレス・ID・トークン・ファイル名・保存先パス・開発用の文書名(docs/ などの名前)などの内部情報を書かない。',
     '',
     '# 書き方',
-    '- 画面に出ている言葉(ボタン名・メニュー名)で、手順は番号付きで短く書いてください。Markdown の見出しや表は使わず、プレーンテキストで書いてください。',
-    '- 不具合の可能性がある内容なら、その旨を添えてください(質問は開発者にも届いています)。',
+    '- 丁寧語で、結論から書いてください。手順は画面に出ている言葉(ボタン名・メニュー名)で番号付きで短く書いてください。',
+    '- Markdown の見出し・表・太字は使わず、プレーンテキストで書いてください。',
+    '- 開発者が確認する内容のときは「質問は開発者にも届いています」と添えてかまいません。',
     '',
     '# 利用者マニュアル',
     manualMarkdown,
   ].join('\n')
+}
+
+/**
+ * 回答文が「必ず守ること」に反していないかの機械的な検査(2026-10-16 オーナー指定の制限の歯止め)。
+ * 指示文だけでは守られない場合に備え、反していたら回答を室長に見せず(「自動回答を作れませんでした」＝開発者が回答)、
+ * 元の文は報告文書の aiAnswerBlocked に残して開発者が見直せるようにする。決まり文句(QUESTION_AI_*_REPLY)は引っかからない。
+ * 戻り値は反した種類(開発者向けの短い名前)。問題なければ null。
+ */
+export function findQuestionAiAnswerViolation(answer: string, options: { otherClassroomNames?: readonly string[] } = {}): string | null {
+  if (/申し訳|すみません|すいません|お詫び|おわび|ご迷惑をおかけ|ご不便をおかけ|失礼(?:いた)?しました/u.test(answer)) return '謝罪'
+  if (/(?:バグ|不具合|障害|欠陥|システムの問題)(?:が|は|も)?(?:あり|ござい|発生|起き|起こっ|生じ|確認され|見つか)|(?:バグ|不具合|障害|欠陥)(?:です|でした|と思われ|かもしれ|の可能性|によ|のため|が原因)|(?:バグ|不具合)を(?:修正|直)/u.test(answer)) return '不具合を認める'
+  if (/[0-9０-９][0-9０-９,，.．]*\s*(?:円|万円|ドル)|[¥￥$＄]\s*[0-9０-９]|無料|有料|月額|年額|割引/u.test(answer)) return '金額'
+  const names = (options.otherClassroomNames ?? []).map((name) => name.trim()).filter((name) => name.length >= 3)
+  if (names.some((name) => answer.includes(name))) return '他教室'
+  return null
+}
+
+/**
+ * 他の教室の名前のうち、回答に出たら止める語(フルネームと、空白で区切った 3 文字以上の語)。
+ * いま開いている教室の名前に含まれる語(例: 共通のブランド名)は除く(自教室の案内まで止めないため)。
+ */
+export function buildOtherClassroomNameWords(input: { currentClassroomName: string; allClassroomNames: readonly string[] }): string[] {
+  const current = input.currentClassroomName.trim()
+  const words = new Set<string>()
+  for (const raw of input.allClassroomNames) {
+    const name = raw.trim()
+    if (!name || name === current) continue
+    for (const word of [name, ...name.split(/[\s\u3000]+/u)]) {
+      if (word.length >= 3 && !current.includes(word)) words.add(word)
+    }
+  }
+  return [...words]
+}
+
+/** 「#テスト」「#test」(オーナーの動作確認用の印・Issue 起票を止める)を AI に渡す質問文から外す。 */
+export function stripQuestionAiTestMarker(note: string): string {
+  return note.replace(/#テスト|#test\b/giu, '').trim()
 }
 
 export function buildQuestionAiUserMessage(input: {
@@ -90,7 +139,7 @@ export function buildQuestionAiUserMessage(input: {
   const contextLines = Object.entries(input.scheduleContext).map(([key, value]) => `- ${key}: ${value}`)
   return [
     '# 質問',
-    input.note,
+    stripQuestionAiTestMarker(input.note),
     '',
     '# 質問したときの画面',
     input.screen || '(不明)',
@@ -113,7 +162,7 @@ export function extractQuestionAiAnswerText(message: Pick<Anthropic.Message, 'co
 
 export type QuestionAiAnswerResult =
   | { ok: true; answer: string; model: string; inputTokens: number; outputTokens: number }
-  | { ok: false; error: string }
+  | { ok: false; error: string; blockedAnswer?: string; inputTokens?: number; outputTokens?: number }
 
 /**
  * 失敗理由を**開発者向けの短文**に丸める(内部のスタックや鍵の断片を出さない)。
@@ -135,7 +184,7 @@ export function describeQuestionAiError(error: unknown): string {
 export type CreateQuestionAiMessage = (params: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>
 
 export async function generateQuestionAiAnswer(
-  input: Parameters<typeof buildQuestionAiUserMessage>[0],
+  input: Parameters<typeof buildQuestionAiUserMessage>[0] & { otherClassroomNames?: readonly string[] },
   deps: { apiKey: string; createMessage?: CreateQuestionAiMessage },
 ): Promise<QuestionAiAnswerResult> {
   if (!deps.apiKey) return { ok: false, error: 'AI 回答の設定(API キー ANTHROPIC_API_KEY)がありません' }
@@ -155,6 +204,10 @@ export async function generateQuestionAiAnswer(
     if (message.stop_reason === 'refusal') return { ok: false, error: 'AI がこの質問への回答を控えました' }
     const answer = extractQuestionAiAnswerText(message)
     if (!answer) return { ok: false, error: 'AI から回答文が返りませんでした' }
+    const violation = findQuestionAiAnswerViolation(answer, { otherClassroomNames: input.otherClassroomNames })
+    if (violation) {
+      return { ok: false, error: `回答の決まりに反したため表示しませんでした(${violation})`, blockedAnswer: answer, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
+    }
     return { ok: true, answer, model: message.model, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
   } catch (error) {
     return { ok: false, error: describeQuestionAiError(error) }

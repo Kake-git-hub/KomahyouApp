@@ -62,7 +62,7 @@ import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, ty
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
-import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { buildOtherClassroomNameWords, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
@@ -1960,11 +1960,24 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
   if (shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })) {
+    // 他の教室の名前が回答に出たら止める(オーナー指定 2026-10-16「他教室の情報を一切出さない」の歯止め)。
+    // 名前が読めなくても回答は止めない(AI には他教室のデータを渡していないので、ここは二重の安全策)。
+    let otherClassroomNames: string[] = []
+    try {
+      const classroomsSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').get()
+      otherClassroomNames = buildOtherClassroomNameWords({
+        currentClassroomName: classroomName,
+        allClassroomNames: classroomsSnapshot.docs.filter((doc) => doc.id !== classroomId).map((doc) => (typeof doc.data()?.name === 'string' ? String(doc.data().name) : '')),
+      })
+    } catch (error) {
+      logger.warn(`[DeveloperReport] Failed to load classroom names for AI answer guard report=${reportId}`, error)
+    }
     const aiResult = await generateQuestionAiAnswer({
       note: report.note,
       screen: report.screen,
       scheduleContext: report.scheduleContext,
       recentOperations: report.recentOperations,
+      otherClassroomNames,
     }, { apiKey: QUESTION_AI_API_KEY })
     const answeredAt = new Date().toISOString()
     if (aiResult.ok) {
@@ -1972,7 +1985,13 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
       await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens }, { merge: true })
     } else {
       aiAnswerFields = { aiAnswerError: aiResult.error }
-      await reportRef.set({ aiAnswerError: aiResult.error, aiAnswerModel: QUESTION_AI_MODEL, aiAnsweredAt: answeredAt }, { merge: true })
+      // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。
+      await reportRef.set({
+        aiAnswerError: aiResult.error,
+        aiAnswerModel: QUESTION_AI_MODEL,
+        aiAnsweredAt: answeredAt,
+        ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0 } : {}),
+      }, { merge: true })
     }
     logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`}`)
   }

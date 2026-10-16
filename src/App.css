@@ -865,6 +865,13 @@
   cursor: pointer;
 }
 
+/* AI の回答・失敗理由・止めた回答(2026-10-16)。改行を保って全文を読めるようにする。 */
+.developer-dashboard-ai-answer {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .developer-dashboard-issue-link {
   display: inline-block;
   margin-right: 6px;

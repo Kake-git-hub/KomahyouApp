@@ -38,6 +38,10 @@ export type DeveloperReportRecord = {
   issueUrl: string
   hasAiAnswer: boolean
   aiAnswerError: string
+  /** AI の回答本文(室長に見せた文)。開いたときに開発者が中身を確かめる(2026-10-16)。 */
+  aiAnswer: string
+  /** 回答の決まり(謝罪・不具合を認める・金額・他教室)に反して止めた元の文(2026-10-16)。室長には見せていない。 */
+  aiAnswerBlocked: string
   mailSentAt: string | null
   mailError: string
   /** 開発者の回答(spec-developer-report §G-3・2026-09-28)。空文字/null = 未回答。 */
@@ -127,6 +131,8 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     issueUrl: readString(data.issueUrl),
     hasAiAnswer: typeof data.aiAnswer === 'string' && data.aiAnswer.trim().length > 0,
     aiAnswerError: readString(data.aiAnswerError),
+    aiAnswer: readString(data.aiAnswer),
+    aiAnswerBlocked: readString(data.aiAnswerBlocked),
     mailSentAt: readNullableString(data.mailSentAt),
     mailError: readString(data.mailError),
     answerFinal: readString(data.answerFinal),

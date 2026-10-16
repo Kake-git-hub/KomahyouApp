@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.609 (2026-10-16)
+
+- feat: 質問への AI 即時回答(開発用教室のみ)に**回答の決まり**を追加(オーナー指定 2026-10-16)。①謝らない ②不具合・バグを認めない/推測しない(「動作については開発者が確認してから回答します。」)③金額・料金・契約は数字を含め答えない ④他の教室・校舎の情報を一切出さない。システム指示に「必ず守ること」として書き、旧文面「不具合の可能性があればその旨を添える」(②と矛盾)を削除。指示だけに頼らず回答文を機械検査(`findQuestionAiAnswerViolation`: 謝罪語・不具合を認める言い回し・金額/無料/有料/月額・同じ運営会社の他教室名)し、反したら室長には見せず「自動回答を作れませんでした」(＝開発者が回答)に倒して元の文を `aiAnswerBlocked` に残す。開発ダッシュボードで質問を開くと AI の回答・失敗理由・止めた回答を全文で読めるように。質問文の「#テスト」は AI に渡さない。確認リストに新規利用者向けの質問 20 問 qa-q01〜qa-q20 を追加(章を一巡＋マニュアルに無い機能・料金・他校舎・バグの指摘・強い口調で決まりを試す・版 v1.5.604 据え置き)。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・index.ts, src/utils/developerDashboard.ts・DeveloperDashboardDetail.tsx・App.css, src/utils/verificationChecklist.ts・test, developmentStatusLedger.ts, docs/spec-developer-report.md §G-7)
+
 ## v1.5.608 (2026-10-16)
 
 - refactor: 質問への AI 即時回答のモデルを Sonnet 最新から **Haiku 最新 `claude-haiku-5-5`** へ(オーナー確定 2026-10-16)。全教室展開(15 教室見込み・気軽な質問も来る想定)で月 3,000 円以下に収めるため。試算は 1 問 ≒ 入力 6 千トークン(マニュアル骨子 約 3,400 字＋指示＋操作履歴)で Sonnet 5.5 約 4 円 → Haiku 5.5 約 0.2 円(月 500 問で約 100 円)。思考込みの出力上限 max_tokens を 8000 → 4000 に。アプリ側の回数上限は設けない(オーナー判断・歯止めは Anthropic コンソールの月の上限額)。全教室への展開は開発用教室で qa-ai-1 を確認してから(進行中テーマ台帳に記載)。本番教室の挙動はまだ不変 (functions/src/questionAiAnswer.ts・test, docs/spec-developer-report.md §G-7, src/utils/developmentStatusLedger.ts)
