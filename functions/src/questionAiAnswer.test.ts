@@ -16,7 +16,6 @@ import {
   QUESTION_AI_ANSWER_CHAR_LIMIT,
   QUESTION_AI_MODEL,
   QUESTION_AI_TRACE_LIMIT,
-  QUESTION_AI_VERTEX_DEFAULT_REGION,
   shouldAnswerQuestionWithAi,
   type CreateQuestionAiMessage,
 } from './questionAiAnswer'
@@ -81,40 +80,49 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
 
   it('Sonnet 最新で呼び、テキストだけを回答にする', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async () => fakeMessage())
-    const result = await generateQuestionAiAnswer(baseInput, { projectId: 'komahyouapp-prod', createMessage })
+    const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage })
     expect(result).toEqual({ ok: true, answer: '基本データ画面で生徒を選びます。', model: QUESTION_AI_MODEL, inputTokens: 1200, outputTokens: 80 })
     const params = createMessage.mock.calls[0][0]
-    expect(params.model).toBe('claude-sonnet-5')
+    expect(params.model).toBe('claude-sonnet-5-5')
     expect(params.messages).toEqual([{ role: 'user', content: buildQuestionAiUserMessage(baseInput) }])
     expect(params.system).toBe(buildQuestionAiSystemPrompt())
   })
 
-  it('GCP プロジェクトが分からなければ AI を呼ばずに理由を返す(報告本体は成功のまま)', async () => {
+  it('API キー(ANTHROPIC_API_KEY)が無ければ AI を呼ばずに理由を返す(報告本体は成功のまま)', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>()
-    expect(await generateQuestionAiAnswer(baseInput, { projectId: '', createMessage })).toEqual({ ok: false, error: 'AI 回答の設定(GCP プロジェクト)が分かりません' })
+    expect(await generateQuestionAiAnswer(baseInput, { apiKey: '', createMessage })).toEqual({ ok: false, error: 'AI 回答の設定(API キー ANTHROPIC_API_KEY)がありません' })
     expect(createMessage).not.toHaveBeenCalled()
   })
 
-  it('Claude on Google Cloud(Vertex AI)経由で呼ぶ(API キーを使わない・請求は GCP)。既定リージョンは global', () => {
+  it('Claude API 直(API キー)で呼ぶ(2026-10-16 オーナー指示: Vertex AI は割り当て 0 の 429 で一度も動かなかったため切り替え)', () => {
     const source = readFileSync(resolve(repoRoot, 'functions/src/questionAiAnswer.ts'), 'utf8')
-    expect(source).toContain("import { AnthropicVertex } from '@anthropic-ai/vertex-sdk'")
-    expect(source).toContain('new AnthropicVertex({')
-    expect(source).not.toContain('apiKey')
-    expect(QUESTION_AI_VERTEX_DEFAULT_REGION).toBe('global')
+    expect(source).not.toContain('@anthropic-ai/vertex-sdk')
+    expect(source).not.toContain('AnthropicVertex')
+    expect(source).toContain('new Anthropic({ apiKey: deps.apiKey')
+    // キーは runtime env から読む(ソースに鍵を書かない)。CI は secret ANTHROPIC_API_KEY を .env へ追記する。
     const indexSource = readFileSync(resolve(repoRoot, 'functions/src/index.ts'), 'utf8')
-    expect(indexSource).not.toContain('ANTHROPIC_API_KEY')
+    expect(indexSource).toContain("process.env.ANTHROPIC_API_KEY")
+    expect(indexSource).toContain('{ apiKey: QUESTION_AI_API_KEY }')
+    expect(`${source}\n${indexSource}`).not.toMatch(/sk-ant-[A-Za-z0-9]/)
+    const workflow = readFileSync(resolve(repoRoot, '.github/workflows/deploy-functions.yml'), 'utf8')
+    expect(workflow).toContain('secrets.ANTHROPIC_API_KEY')
+    expect(workflow).toContain('ANTHROPIC_API_KEY=')
+    const functionsPackage = JSON.parse(readFileSync(resolve(repoRoot, 'functions/package.json'), 'utf8')) as { dependencies: Record<string, string> }
+    expect(functionsPackage.dependencies['@anthropic-ai/vertex-sdk']).toBeUndefined()
   })
 
-  it('Vertex AI 特有の失敗(権限不足・モデル未有効化)は設定の手がかりになる短い理由にする', () => {
+  it('Claude API の失敗(認証・残高/上限)は設定の手がかりになる短い理由にする', () => {
     const headers = new Headers()
-    expect(describeQuestionAiError(new Anthropic.PermissionDeniedError(403, undefined, 'denied', headers))).toContain('Vertex AI の権限')
-    expect(describeQuestionAiError(new Anthropic.NotFoundError(404, undefined, 'not found', headers))).toContain('Model Garden')
+    expect(describeQuestionAiError(new Anthropic.AuthenticationError(401, undefined, 'invalid x-api-key', headers))).toContain('API キー')
+    expect(describeQuestionAiError(new Anthropic.RateLimitError(429, undefined, 'rate', headers))).toContain('クレジット')
+    expect(describeQuestionAiError(new Anthropic.BadRequestError(400, undefined, 'credit balance is too low', headers))).toContain('クレジット残高不足')
+    expect(describeQuestionAiError(new Anthropic.AuthenticationError(401, undefined, 'sk-ant-xxx', headers))).not.toContain('sk-ant')
   })
 
   it('拒否・空応答・例外は開発者向けの短い理由に丸める(内部情報やスタックを出さない・室長の画面には出さない 2026-10-10)', async () => {
-    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ stop_reason: 'refusal' }) })).toEqual({ ok: false, error: 'AI がこの質問への回答を控えました' })
-    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
-    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })
+    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ stop_reason: 'refusal' }) })).toEqual({ ok: false, error: 'AI がこの質問への回答を控えました' })
+    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
+    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })
     expect(describeQuestionAiError(new Error('sk-ant-xxx'))).not.toContain('sk-ant')
   })
 

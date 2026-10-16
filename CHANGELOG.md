@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.607 (2026-10-16)
+
+- refactor: 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)の呼び出し先を **Vertex AI から Claude API 直(API キー)へ戻した**(オーナー指示 2026-10-16「支払い窓口が増えてもよいので確実に動く案に」)。Vertex 経由は新規プロジェクトの Claude 割り当てが 0 のままで、開発用教室の質問 2 件(2026-09-14・09-28)とも 429「Vertex AI の割り当て上限」で一度も回答できていなかった。キーは functions runtime env `ANTHROPIC_API_KEY`。CI はリポジトリ secret **`ANTHROPIC_API_KEY`**(`PROD_FUNCTIONS_ENV` とは別・貼り直し不要)を `.env.komahyouapp-prod` へ 1 行追記してデプロイする。キー未設定なら AI を呼ばず理由を記録するだけ(報告本体は成功・室長の画面は「自動回答を作れませんでした」のまま)。モデルは Sonnet 最新 `claude-sonnet-5-5` へ。失敗理由の文面を Claude API 向け(API キー・クレジット残高)に。`@anthropic-ai/vertex-sdk` を削除。本番教室の挙動は不変(AI は呼ばない)。確認リスト qa-ai-1 を追加(版 v1.5.604 据え置き)・進行中テーマ台帳を更新 (functions/src/questionAiAnswer.ts・index.ts・package.json・.github/workflows/deploy-functions.yml・src/utils/featureRollout.ts・developmentStatusLedger.ts・verificationChecklist.ts・docs/spec-developer-report.md §G-7)
+
 ## v1.5.606 (2026-10-16)
 
 - fix: **`*.test.tsx` が CI で一度も走っていなかったのを直した**。`vitest.config.ts` の `test.include` に `src/**/*.test.tsx` を足し、PDF 出力の処理中オーバーレイの回帰防止 `BusyOverlay.test.tsx`(2026-09-12 追加)を `npm run test:unit`／CI で実行するようにした。走らせたところ、テンプレ保存前レポートの配線テストが 1 件落ちた。1c975ad で文言が `resolveTemplateOverwriteReportLabels(...).busyMessage` へ移ったのに追随していなかったためで、挙動の回帰ではない(finally で消す配線は健在)。現行の配線に合わせ、上書き/差分反映の両方の文言を固定した。古い前提を書いたコメント 2 か所も直した (vitest.config.ts / src/components/common/BusyOverlay.test.tsx / SearchableSelect.test.ts / parentPortalPageModel.ts)

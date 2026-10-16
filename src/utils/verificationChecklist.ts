@@ -264,6 +264,9 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.604'
  * 第56版(v1.5.605・2026-10-16): オーナー指示「手動での講師追加・生徒追加のメニューに虫眼鏡ボタンで絞り込み。複数生徒から選ぶ画面はすべて検索つきに」→
  *   盤面(講師設定・生徒追加・テンプレの生徒追加/編集・集団授業の担当講師/中3追加)・初期設定の未消化登録・自動割振ルール(ペア制約・個人)の確認 sr-1〜sr-3 を追加。
  *   ★版は v1.5.604 据え置き(項目を足しただけ・第55版の結果はまだ無い＝第14版の決まり)。
+ * 第57版(v1.5.607・2026-10-16): オーナー指示「AI 質問回答は支払い窓口が増えてもよいので確実に動く案に」→ 質問への AI 即時回答を
+ *   Vertex AI(割り当て 0 の 429 で一度も回答できなかった)から Claude API 直(API キー)へ切り替え。その確認 qa-ai-1 を追加
+ *   (前提: オーナーが GitHub secret ANTHROPIC_API_KEY を入れて Deploy Cloud Functions を実行済み)。★版は v1.5.604 据え置き(項目を足しただけ)。
  */
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
   version: VERIFICATION_CHECKLIST_VERSION,
@@ -556,6 +559,20 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '初期設定: 打つと該当の生徒が選ばれる',
       ],
       introducedIn: 'v1.5.605',
+    },
+    {
+      id: 'qa-ai-1',
+      area: '質問への AI 自動回答',
+      title: '質問を送ると、その場で AI の自動回答が出る(Claude API へ切り替え)',
+      prep: 'GitHub の secret ANTHROPIC_API_KEY を入れて、Actions「Deploy Cloud Functions」を実行し緑になった後に行う',
+      steps: [
+        '開発用教室で「質問・要望」→ 種類「質問」で「休みにした生徒の振替先を後から変えるには？」などを送る(1〜2 分待つ)',
+      ],
+      check: [
+        '受付の文に続けて「― 自動回答（試験中・誤りがあることがあります）―」と回答文が出る',
+        '「自動回答を作れませんでした」と出たら要改善(理由は開発ダッシュボードの記録で見る)',
+      ],
+      introducedIn: 'v1.5.607',
     },
   ],
 }
