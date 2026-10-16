@@ -75,6 +75,7 @@ import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, open
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
+import { SearchableSelect } from '../common/SearchableSelect'
 import { buildScheduleLessonHistoryResultMessage, formatLessonHistoryErrorMessage, isLessonHistoryClassroomMismatch, LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR, parseScheduleLessonHistoryRequestMessage, type ScheduleLessonHistoryResultMessage } from '../../utils/lessonHistoryMessage'
 import { fetchStudentLessonHistoryViaFunction } from '../../integrations/firebase/adminFunctions'
 
@@ -15309,20 +15310,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               </div>
               <div className="student-menu-section">
                 <label className="student-menu-label" htmlFor="teacher-select-input">講師</label>
-                <select
+                {/* 虫眼鏡で絞り込み(オーナー要望 2026-10-16・SearchableSelect)。 */}
+                <SearchableSelect
                   id="teacher-select-input"
                   className="student-menu-select"
                   value={teacherMenu.selectedTeacherName}
-                  onChange={(event) => setTeacherMenu((current) => (current ? { ...current, selectedTeacherName: event.target.value } : current))}
-                  data-testid="teacher-select-input"
-                >
-                  {teacherOptions.map((teacher) => {
+                  onChange={(nextTeacherName) => setTeacherMenu((current) => (current ? { ...current, selectedTeacherName: nextTeacherName } : current))}
+                  testId="teacher-select-input"
+                  options={teacherOptions.map((teacher) => {
                     const lectureMark = teacherOptionLectureMarks.get(teacher.id)
-                    return (
-                      <option key={teacher.id} value={teacher.name}>{lectureMark ? teacher.name + '　' + lectureMark : teacher.name}</option>
-                    )
+                    return { key: teacher.id, value: teacher.name, label: lectureMark ? teacher.name + '　' + lectureMark : teacher.name }
                   })}
-                </select>
+                />
               </div>
               <div className="student-menu-section student-menu-actions">
                 <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
@@ -15361,19 +15360,22 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 {groupClassMenu.kind === 'teacher' ? (
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="group-teacher-select">担当講師</label>
-                    <select
+                    {/* 選んだ瞬間に保存する選択なので、打つたびの自動選択はしない(SearchableSelect・2026-10-16)。 */}
+                    <SearchableSelect
                       id="group-teacher-select"
                       className="student-menu-select"
                       value={groupClassEntries[groupClassEntryKey(groupClassMenu.dateKey, groupClassMenu.band)]?.teacherName ?? ''}
-                      onChange={(event) => handlePickGroupTeacher(event.target.value)}
-                      data-testid="group-teacher-select"
-                    >
-                      <option value="">未設定</option>
-                      {teachers.map((teacher) => {
-                        const teacherDisplayName = getTeacherDisplayName(teacher)
-                        return <option key={teacher.id} value={teacherDisplayName}>{teacherDisplayName}</option>
-                      })}
-                    </select>
+                      onChange={handlePickGroupTeacher}
+                      autoSelectOnSearch={false}
+                      testId="group-teacher-select"
+                      options={[
+                        { value: '', label: '未設定', pinned: true },
+                        ...teachers.map((teacher) => {
+                          const teacherDisplayName = getTeacherDisplayName(teacher)
+                          return { key: teacher.id, value: teacherDisplayName, label: teacherDisplayName, searchText: teacher.name }
+                        }),
+                      ]}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -15558,16 +15560,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   </div>
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="template-edit-student-select">生徒</label>
-                    <select
+                    <SearchableSelect
                       id="template-edit-student-select"
                       className="student-menu-select"
                       value={templateEditDraft.studentId}
-                      onChange={(e) => setTemplateEditDraft((d) => d ? { ...d, studentId: e.target.value } : d)}
-                      data-testid="template-edit-student-select"
-                    >
-                      <option value="">生徒なし</option>
-                      {templateAddableStudents.map((s) => <option key={s.id} value={s.id}>{s.displayName}</option>)}
-                    </select>
+                      onChange={(nextStudentId) => setTemplateEditDraft((d) => d ? { ...d, studentId: nextStudentId } : d)}
+                      testId="template-edit-student-select"
+                      options={[
+                        { value: '', label: '生徒なし', pinned: true },
+                        ...templateAddableStudents.map((s) => ({ value: s.id, label: s.displayName })),
+                      ]}
+                    />
                   </div>
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="template-edit-subject-select">科目</label>
@@ -15613,15 +15616,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   </div>
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="template-add-student-select">生徒</label>
-                    <select
+                    <SearchableSelect
                       id="template-add-student-select"
                       className="student-menu-select"
                       value={templateAddDraft.studentId}
-                      onChange={(e) => setTemplateAddDraft((d) => d ? { ...d, studentId: e.target.value } : d)}
-                      data-testid="template-add-student-select"
-                    >
-                      {templateAddableStudents.map((s) => <option key={s.id} value={s.id}>{s.displayName}</option>)}
-                    </select>
+                      onChange={(nextStudentId) => setTemplateAddDraft((d) => d ? { ...d, studentId: nextStudentId } : d)}
+                      testId="template-add-student-select"
+                      options={templateAddableStudents.map((s) => ({ value: s.id, label: s.displayName }))}
+                    />
                   </div>
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="template-add-subject-select">科目</label>
@@ -15786,27 +15788,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   </div>
                   <div className="student-menu-section">
                     <label className="student-menu-label" htmlFor="menu-add-student-select">生徒</label>
-                    <select
+                    {/* 虫眼鏡で絞り込み(オーナー要望 2026-10-16)。絞り込みで選び直したときも下の onChange を通るので、科目の補正は従来どおり。 */}
+                    <SearchableSelect
                       id="menu-add-student-select"
                       className="student-menu-select"
                       value={addExistingStudentDraft?.studentId ?? ''}
-                      onChange={(event) => setAddExistingStudentDraft((current) => {
-                        const nextStudent = addableStudents.find((entry) => entry.id === event.target.value)?.student ?? null
+                      onChange={(nextStudentId) => setAddExistingStudentDraft((current) => {
+                        const nextStudent = addableStudents.find((entry) => entry.id === nextStudentId)?.student ?? null
                         const nextSubjects = getSelectableSubjectsForStudent(nextStudent, emptyMenuContext?.cell.dateKey ?? displayWeekDate)
                         return current
                           ? {
                               ...current,
-                              studentId: event.target.value,
+                              studentId: nextStudentId,
                               subject: nextSubjects.includes(current.subject) ? current.subject : nextSubjects[0],
                             }
                           : current
                       })}
-                      data-testid="menu-add-student-select"
-                    >
-                      {addableStudents.map((entry) => (
-                        <option key={entry.id} value={entry.id}>{entry.displayName}</option>
-                      ))}
-                    </select>
+                      testId="menu-add-student-select"
+                      options={addableStudents.map((entry) => ({ value: entry.id, label: entry.displayName, searchText: entry.student.name }))}
+                    />
                   </div>
                   <div className="student-menu-section">
                     <span className="student-menu-label">授業区分</span>

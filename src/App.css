@@ -3229,6 +3229,88 @@ tr.sa-group-row td {
   box-sizing: border-box;
 }
 
+.searchable-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.searchable-select.inline {
+  width: auto;
+  max-width: 100%;
+}
+
+.searchable-select-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.searchable-select-row > select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.searchable-select-toggle {
+  flex: 0 0 auto;
+  border: 1px solid #d7e2f1;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  min-height: 32px;
+}
+
+.searchable-select-toggle.active {
+  background: #dceaff;
+  border-color: #8fb8f8;
+}
+
+.searchable-select-toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.searchable-select-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.searchable-select-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid #d7e2f1;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.searchable-select-search:focus {
+  outline: none;
+  border-color: #bdd3f7;
+  box-shadow: 0 0 0 3px rgba(189, 211, 247, 0.4);
+}
+
+.searchable-select-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #69809a;
+  white-space: nowrap;
+}
+
+.searchable-select-count.is-empty {
+  color: #c0392b;
+}
+
 .student-menu-select-name {
   appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, #5c7390 50%), linear-gradient(135deg, #5c7390 50%, transparent 50%);
@@ -3843,6 +3925,10 @@ tr.sa-group-row td {
   border: 1px solid #d7e2f1;
   border-radius: 16px;
   background: #f8fbff;
+}
+
+.auto-assign-student-search-row {
+  margin-bottom: 8px;
 }
 
 .auto-assign-student-picker {

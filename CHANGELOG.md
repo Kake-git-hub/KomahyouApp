@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.605 (2026-10-16)
+
+- feat: **生徒・講師を選ぶプルダウンに虫眼鏡(🔍)の名前絞り込み**(オーナー指示「手動での講師追加・生徒追加のメニューに検索虫眼鏡ボタン。複数生徒から選ぶ画面はすべて検索つきに」)。共通部品 `SearchableSelect`(ネイティブ select はそのまま・🔍 を押したときだけ検索欄)と純粋関数 `resolveSearchableSelectView`(全角半角・ひらがなカタカナ・空白を同一視／選択中が隠れたら先頭の一致を選び直す＝見えない人を確定しない／一致 0 件は選択中を残す／「生徒なし」等は常に残す)を追加。対象: 盤面の講師設定・生徒追加・テンプレの生徒追加/編集・集団授業の担当講師/中3追加(この 2 つは選んだ瞬間に反映するので自動選択しない)・初期設定の未消化振替/講習の生徒・自動割振ルールのペア制約(保存済み行は自動選択しない)と「個人」の生徒一覧(絞り込み＋選択中 N 名)。未消化講習/振替の生徒一覧は既に検索つきなので対象外。確認リスト sr-1〜sr-3 を追加(版は v1.5.604 据え置き) (src/components/common/SearchableSelect.tsx / src/utils/searchableSelect.ts / ScheduleBoardScreen.tsx / GroupAttendanceModal.tsx / BackupRestoreScreen.tsx / AutoAssignRuleScreen.tsx / App.css / verificationChecklist.ts)
+
 ## v1.5.604 (2026-10-15)
 
 - docs: **確認リスト第55版(v1.5.604)**: 受付 20261015-151056959-a8890098 で OK の c-5・tp-47・tp-53・tp-54 を外した(tp-47・tp-53 はテスト教室の表示からも消える)。q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 は結果待ちのまま。進行中テーマ台帳(template-diff-apply / user-request-issue-75)と spec-developer-report E-2 を追随 (verificationChecklist.ts / verificationChecklist.test.ts / developmentStatusLedger.ts / docs/spec-developer-report.md)
