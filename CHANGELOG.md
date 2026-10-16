@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.620 (2026-10-16)
+
+- docs: 質問 AI 回答の評価 6 回目(run 38920242034・Haiku だけ・23 問)の結果を引き継ぎ資料に記録(23/23 表示・止めた 0・約 5.4 円・平均 1.9 秒。決まり文句「開発者より別途回答いたします」が出ること、Q20 の「申し訳ありませんが」が止まらず表示されることを確認。Q10 で肯定の答えに謝罪の前置きが付いた点を次回の観察点に) (docs/handoff-question-ai-answer.md)
+
 ## v1.5.619 (2026-10-16)
 
 - feat: 質問への AI 即時回答をオーナー確定(2026-10-16 深夜)の形へ。①モデルを **Haiku**(`claude-haiku-5-5`)に確定し、開発中の二重回答(主 Sonnet・影 Haiku)を終了(評価 4・5 回目で Haiku が Sonnet とほぼ同等・費用約 1/20。`buildQuestionAiShadowFields` 削除・ダッシュボードの「比較用」表示は古い記録のため残す) ②「申し訳ありませんが」程度の謝罪は止めない(決まり 1 を「謝罪を主旨にしない」に緩め、機械検査から謝罪語を外した) ③オーナー承認なしで室長にすぐ表示(回答末尾を「この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。」へ) ④**開発者への通知メールを AI の結果が書かれてから送り、回答文を本文に載せる**(`notifyDeveloperReportByMail` を `onDocumentWritten` に・純関数 `shouldSendDeveloperReportMailOnWrite`・`aiAnswerPending` を作成時に立て成功/失敗/例外の全経路で下ろす・件名【質問/AI回答済】・失敗時は理由と止めた元の文)。訂正回答は既存の開発者画面「質問への回答」から ⑤開発者の回答が必要なときの決まり文句を「**開発者より別途回答いたします**」に統一(`QUESTION_AI_DEVELOPER_REPLY`・クライアントの失敗時の一文・履歴の回答待ちの一文・評価の期待・確認リスト・GitHub Issue 本文) ⑥評価ワークフローは既定 1 モデル(Haiku・約 6 円)・入力 `compare` で Sonnet も流す ⑦QA の輪からオーナー承認の段を外した(runbook・ツールの指示文・§G-6)。確認リストに qa-ai-3(書き換え: すぐ表示＋メールに回答文)・qa-ai-4(訂正回答の経路)。テスト: 謝罪語を止めない／メールを送る条件／メール本文の AI の節／配線(1 回だけ呼ぶ・`aiAnswerPending` 3 経路)／評価の既定と比較 (functions/src/questionAiAnswer.ts・developerReport.ts・index.ts・questionAiEval.ts・各 test, functions/tools/question-ai-eval.mjs, .github/workflows/question-ai-eval.yml, src/utils/developerReport.ts・reportAnswers.ts・verificationChecklist.ts・developmentStatusLedger.ts, tools/developer-report-notify.mjs・question-qa-digest.mjs, docs/spec-developer-report.md §G-6/§G-7, docs/runbooks/question-qa-loop.md, docs/handoff-question-ai-answer.md §9)
