@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.610 (2026-10-16)
+
+- feat: 質問 AI 回答の**評価ワークフロー**を追加(オーナー指示 2026-10-16「テスト質問とテスト回答はあなたの方で行って結果を見せて」)。Actions「Question AI eval」(手動実行)が確認用の 20 問を本番と同じ `generateQuestionAiAnswer`(同じ指示文・Haiku・機械検査)へ 1 問ずつ流し、回答・止めた回答・トークン・費用の目安を Job summary と成果物に出す。Firestore・教室データには触れない(AI を呼ぶだけ・secret `ANTHROPIC_API_KEY` を共用)。20 問の正本を `functions/src/questionAiEvalCases.ts` に置き、確認リスト qa-q01〜q20 と文面が一致することをテストで固定 (functions/src/questionAiEval.ts・questionAiEvalCases.ts・test, functions/tools/question-ai-eval.mjs, .github/workflows/question-ai-eval.yml)
+
 ## v1.5.609 (2026-10-16)
 
 - feat: 質問への AI 即時回答(開発用教室のみ)に**回答の決まり**を追加(オーナー指定 2026-10-16)。①謝らない ②不具合・バグを認めない/推測しない(「動作については開発者が確認してから回答します。」)③金額・料金・契約は数字を含め答えない ④他の教室・校舎の情報を一切出さない。システム指示に「必ず守ること」として書き、旧文面「不具合の可能性があればその旨を添える」(②と矛盾)を削除。指示だけに頼らず回答文を機械検査(`findQuestionAiAnswerViolation`: 謝罪語・不具合を認める言い回し・金額/無料/有料/月額・同じ運営会社の他教室名)し、反したら室長には見せず「自動回答を作れませんでした」(＝開発者が回答)に倒して元の文を `aiAnswerBlocked` に残す。開発ダッシュボードで質問を開くと AI の回答・失敗理由・止めた回答を全文で読めるように。質問文の「#テスト」は AI に渡さない。確認リストに新規利用者向けの質問 20 問 qa-q01〜qa-q20 を追加(章を一巡＋マニュアルに無い機能・料金・他校舎・バグの指摘・強い口調で決まりを試す・版 v1.5.604 据え置き)。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・index.ts, src/utils/developerDashboard.ts・DeveloperDashboardDetail.tsx・App.css, src/utils/verificationChecklist.ts・test, developmentStatusLedger.ts, docs/spec-developer-report.md §G-7)
