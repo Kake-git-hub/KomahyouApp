@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEVELOPER_REPORT_AI_ANSWER_HEADING,
+  DEVELOPER_REPORT_AI_ANSWER_TRAILER,
   DEVELOPER_REPORT_CATEGORIES,
   DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY,
   DEVELOPER_REPORT_UI_TEXT,
@@ -121,11 +122,13 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
 ${DEVELOPER_REPORT_AI_ANSWER_HEADING}
 基本データ画面で生徒を選びます。`)
     expect(DEVELOPER_REPORT_AI_ANSWER_HEADING).toBe('― 自動回答（試験中・誤りがあることがあります）―')
-    expect(answered.endsWith('\n\nこれで解決しない場合は、開発者が確認して改めて回答します。')).toBe(true)
+    // 2026-10-16 夜(オーナー指示): 承認なしですぐ表示し、開発者にはメールで届く。訂正・補足は「開発者より別途回答いたします」。
+    expect(answered.endsWith(`\n\n${DEVELOPER_REPORT_AI_ANSWER_TRAILER}`)).toBe(true)
+    expect(DEVELOPER_REPORT_AI_ANSWER_TRAILER).toBe('この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。')
     // 2026-10-10 文言見直し(#473): 失敗理由は室長へ出さない(Vertex AI・GCP・サービスアカウント等の開発者向け文面を見せない)。
     // 理由は報告文書の aiAnswerError と関数ログに残る(functions/src/index.ts)。
     const failed = formatDeveloperReportResultMessage({ ok: true, reportId: 'r2', aiAnswerError: 'Vertex AI の権限がありません(API の有効化・実行サービスアカウントの権限を確認してください)' })
-    expect(failed).toBe('開発者へ送りました（受付番号 r2）。ありがとうございます。\n\n（自動回答を作れませんでした。開発者が確認してから回答します）')
+    expect(failed).toBe('開発者へ送りました（受付番号 r2）。ありがとうございます。\n\n（自動回答を作れませんでした。開発者より別途回答いたします）')
     expect(failed).not.toContain('Vertex')
     expect(failed).not.toContain('サービスアカウント')
     // AI 結果が無い(本番教室・要望/不具合)ときは従来と同一の文。

@@ -1,12 +1,17 @@
 name: Question AI eval
 
-# 質問への AI 即時回答の評価(2026-10-16 オーナー指示)。確認用の 20 問(functions/src/questionAiEvalCases.ts)を
+# 質問への AI 即時回答の評価(2026-10-16 オーナー指示)。確認用の 23 問(functions/src/questionAiEvalCases.ts)を
 # 本番と同じ指示文・モデル・機械検査(functions/src/questionAiAnswer.ts)へ流し、回答を Job summary と成果物に出す。
-# Firestore・教室データには一切触れない(AI を呼ぶだけ)。費用は 1 回 20 問で数円。
+# Firestore・教室データには一切触れない(AI を呼ぶだけ)。費用は 1 回 23 問で Haiku 約 6 円(compare を選ぶと Sonnet 約 110 円が加わる)。
 # 必要な secret: ANTHROPIC_API_KEY(deploy-functions.yml と共用)。
 
 on:
   workflow_dispatch:
+    inputs:
+      compare:
+        description: '比較用モデル(Sonnet)も流して 1 問ずつ並べる(費用が約 20 倍になる)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,6 +46,7 @@ jobs:
         run: node tools/question-ai-eval.mjs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          QUESTION_AI_EVAL_COMPARE: ${{ inputs.compare && '1' || '0' }}
 
       - name: Upload result
         if: always()

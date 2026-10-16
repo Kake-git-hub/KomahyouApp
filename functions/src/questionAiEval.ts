@@ -1,10 +1,10 @@
 // 質問への AI 即時回答の評価(2026-10-16 オーナー指示「テスト質問とテスト回答はあなたの方で行なって、結果を見せて」)。
 // 確認用の質問(questionAiEvalCases.ts)を本番と同じ generateQuestionAiAnswer(同じ指示文・同じ機械検査)へ流し、結果を Markdown にまとめる。
-// 2026-10-16 夜(オーナー指示「開発中は Sonnet と Haiku の両方で回答し、精度と金額を評価」): 主(Sonnet)と影(Haiku)の 2 モデルで同じ質問を流し、
-// 1 問ずつ並べて出す。妥協案 B の「質問に名前が出た生徒の数字」も本番と同じ関数(questionAiStudentDigest.ts)で評価用の台帳から作る。
+// 2026-10-16 夜: 既定は本番と同じ 1 モデル(Haiku)。`compare` を選ぶと比較用(Sonnet)も流して 1 問ずつ並べて出す(評価 4・5 回目で使った形)。
+// 妥協案 B の「質問に名前が出た生徒の数字」も本番と同じ関数(questionAiStudentDigest.ts)で評価用の台帳から作る。
 // Firestore には何も書かない(教室データにも触れない)。実行は Actions「Question AI eval」。
 
-import { buildOtherClassroomNameWords, estimateQuestionAiCostYen, generateQuestionAiAnswer, QUESTION_AI_MODEL, QUESTION_AI_SHADOW_MODEL, QUESTION_AI_YEN_PER_USD, type CreateQuestionAiMessage, type QuestionAiAnswerResult } from './questionAiAnswer'
+import { buildOtherClassroomNameWords, estimateQuestionAiCostYen, generateQuestionAiAnswer, QUESTION_AI_COMPARISON_MODEL, QUESTION_AI_MODEL, QUESTION_AI_YEN_PER_USD, type CreateQuestionAiMessage, type QuestionAiAnswerResult } from './questionAiAnswer'
 import { QUESTION_AI_EVAL_NOW, QUESTION_AI_EVAL_STUDENT_LEDGER, type QuestionAiEvalCase } from './questionAiEvalCases'
 import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
 
@@ -14,8 +14,10 @@ import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
  */
 export const QUESTION_AI_EVAL_CURRENT_CLASSROOM = '開発用教室'
 export const QUESTION_AI_EVAL_OTHER_CLASSROOMS = ['スクールIE 日大前校', 'スクールIE 緑が丘校', 'スクールIE 薬円台校'] as const
-/** 評価で流すモデル(主・影の順)。 */
-export const QUESTION_AI_EVAL_MODELS = [QUESTION_AI_MODEL, QUESTION_AI_SHADOW_MODEL] as const
+/** 評価で流すモデル(既定・本番と同じ 1 モデル)。 */
+export const QUESTION_AI_EVAL_MODELS = [QUESTION_AI_MODEL] as const
+/** 比較つき(Actions の `compare`・環境変数 QUESTION_AI_EVAL_COMPARE=1): 本番のモデルと比較用の順。 */
+export const QUESTION_AI_EVAL_COMPARISON_MODELS = [QUESTION_AI_MODEL, QUESTION_AI_COMPARISON_MODEL] as const
 
 export type QuestionAiEvalResult = { case: QuestionAiEvalCase; result: QuestionAiAnswerResult; elapsedMs: number }
 export type QuestionAiEvalModelRun = { model: string; results: QuestionAiEvalResult[] }

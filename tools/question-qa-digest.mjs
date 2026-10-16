@@ -44,7 +44,7 @@ export const QA_CURATION_INSTRUCTIONS = [
   '4. **「AI が答えられなかった質問」は最優先**。説明書に章を足すか、QA を足すかを書く。',
   '5. 出力は「QA 案(説明書 11 章へ足す候補)」「説明書の本文を直す候補」「要望の一覧」「対象外(テスト・重複・個別対応で完了)」の 4 つの見出しで。',
   '',
-  '**オーナーの承認を得てから** docs/user-manual.md「11. よくある質問」へ足し、`npm --prefix functions run sync-shared` を回して main へマージする。',
+  '整理した QA と本文の修正は **Claude がそのまま** docs/user-manual.md「11. よくある質問」へ足し、`npm --prefix functions run sync-shared` を回して main へマージする(オーナー承認は要らない・2026-10-16 夜。何を足したかは CHANGELOG と記録で分かる)。仕様が無い・曖昧な QA だけは足さず「要確認」として返す。',
   '整理した受付番号は docs/qa-curation-log.md に書く(次回のパックに載らない)。このパックには生徒名が含まれるので、リポジトリ・Issue・公開ログへ貼らない。',
 ].join('\n')
 

@@ -152,7 +152,7 @@ export function buildIssueBody(report, options = {}) {
     '2. 必要なら `bug-triage` の手順で再現手順・影響範囲・優先度をこの Issue に追記する(整理のみ)。',
     '3. 開発者の許可が出たら `dev-fix` で修正＋回帰防止テスト。仕様の誤解なら室長へ説明し、必要なら改善 Issue を切る。',
     ...(report.category === 'question'
-      ? ['4. 使い方の質問(2026-09-13): 利用者への自動回答はしない。開発者が内容を確認・承認した回答だけを返す(`docs/spec-developer-report.md` §G)。']
+      ? ['4. 使い方の質問(2026-10-16 夜): 開発用教室では AI がその場で回答し室長に表示済み(回答文は通知メールに載る)。訂正・補足が要れば開発者画面「質問への回答」から送る。本番教室は従来どおり開発者が同じ画面から回答する(`docs/spec-developer-report.md` §G-7)。']
       : []),
     '',
     `Run: ${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${process.env.GITHUB_REPOSITORY ?? 'Kake-git-hub/KomahyouApp'}/actions/runs/${process.env.GITHUB_RUN_ID ?? '(local)'}`,

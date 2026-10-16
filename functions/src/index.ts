@@ -5,7 +5,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
-import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore'
+import { onDocumentWritten } from 'firebase-functions/v2/firestore'
 import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
@@ -59,10 +59,10 @@ import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from '.
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
-import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
+import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
-import { buildOtherClassroomNameWords, buildQuestionAiShadowFields, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, QUESTION_AI_SHADOW_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { buildOtherClassroomNameWords, describeQuestionAiError, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
@@ -1908,6 +1908,9 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
+  // 質問への AI 即時回答(試験・開発用教室のみ)を呼ぶか。呼ぶなら文書に aiAnswerPending を立て、メール通知(notifyDeveloperReportByMail)は
+  // AI の結果が書かれてから送る(オーナー指示 2026-10-16 夜「開発者にもメールでやり取りを知らせる」＝回答文をメールに載せる)。
+  const answerWithAi = shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1943,6 +1946,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,
     notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : null,
     issueNumber: null,
+    aiAnswerPending: answerWithAi,
   })
   logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength} attachments=${storedAttachments.length}/${attachments.length}`)
 
@@ -1958,75 +1962,87 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   }
 
   // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
-  // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
+  // 結果は利用者へすぐ返す(オーナー承認なし・オーナー指示 2026-10-16 夜)と同時に報告文書へ追記し、aiAnswerPending を下ろす。
+  // 下ろした書き込みでメール通知が送られ、開発者は回答文を見て、必要なら開発者画面「質問への回答」から訂正回答を送る。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
-  if (shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })) {
-    // 他の教室の名前が回答に出たら止める(オーナー指定 2026-10-16「他教室の情報を一切出さない」の歯止め)。
-    // 名前が読めなくても回答は止めない(AI には他教室のデータを渡していないので、ここは二重の安全策)。
-    let otherClassroomNames: string[] = []
+  if (answerWithAi) {
     try {
-      const classroomsSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').get()
-      otherClassroomNames = buildOtherClassroomNameWords({
-        currentClassroomName: classroomName,
-        allClassroomNames: classroomsSnapshot.docs.filter((doc) => doc.id !== classroomId).map((doc) => (typeof doc.data()?.name === 'string' ? String(doc.data().name) : '')),
-      })
+      // 他の教室の名前が回答に出たら止める(オーナー指定 2026-10-16「他教室の情報を一切出さない」の歯止め)。
+      // 名前が読めなくても回答は止めない(AI には他教室のデータを渡していないので、ここは二重の安全策)。
+      let otherClassroomNames: string[] = []
+      try {
+        const classroomsSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').get()
+        otherClassroomNames = buildOtherClassroomNameWords({
+          currentClassroomName: classroomName,
+          allClassroomNames: classroomsSnapshot.docs.filter((doc) => doc.id !== classroomId).map((doc) => (typeof doc.data()?.name === 'string' ? String(doc.data().name) : '')),
+        })
+      } catch (error) {
+        logger.warn(`[DeveloperReport] Failed to load classroom names for AI answer guard report=${reportId}`, error)
+      }
+      // 質問に名前が出た生徒の数字(妥協案 B・2026-10-16 夜)。台帳はクライアントが権威関数で計算して同梱したもの。無ければ渡さない。
+      const digest = buildQuestionAiStudentDigest({ note: report.note, ledger: report.studentLedger })
+      const aiInput = {
+        note: report.note,
+        screen: report.screen,
+        scheduleContext: report.scheduleContext,
+        recentOperations: report.recentOperations,
+        otherClassroomNames,
+        ...(digest ? { studentDigest: digest.text, otherStudentNames: digest.otherStudentNames } : {}),
+      }
+      // 1 モデル(Haiku)だけ呼ぶ。開発中の二重回答(主 Sonnet・影 Haiku)は 2026-10-16 夜に終了(比較は評価ワークフローの compare で)。
+      const aiResult = await generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY })
+      const answeredAt = new Date().toISOString()
+      const digestFields = digest ? { aiAnswerDigestStudents: digest.mentionedNames } : {}
+      if (aiResult.ok) {
+        aiAnswerFields = { aiAnswer: aiResult.answer }
+        await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens, aiResult.outputTokens), ...digestFields, aiAnswerPending: false }, { merge: true })
+      } else {
+        aiAnswerFields = { aiAnswerError: aiResult.error }
+        // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。
+        await reportRef.set({
+          aiAnswerError: aiResult.error,
+          aiAnswerModel: QUESTION_AI_MODEL,
+          aiAnsweredAt: answeredAt,
+          ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens ?? 0, aiResult.outputTokens ?? 0) } : {}),
+          ...digestFields,
+          aiAnswerPending: false,
+        }, { merge: true })
+      }
+      logger.info(`[DeveloperReport] AI answer report=${reportId} model=${QUESTION_AI_MODEL} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`} digestStudents=${digest?.mentionedNames.length ?? 'n/a'}`)
     } catch (error) {
-      logger.warn(`[DeveloperReport] Failed to load classroom names for AI answer guard report=${reportId}`, error)
+      // 想定外の例外でも aiAnswerPending を必ず下ろす(下ろさないとメール通知が送られない)。報告本体は成功のまま。
+      const message = describeQuestionAiError(error)
+      logger.error(`[DeveloperReport] AI answer threw report=${reportId}: ${message}`, error)
+      aiAnswerFields = { aiAnswerError: message }
+      await reportRef.set({ aiAnswerError: message, aiAnswerModel: QUESTION_AI_MODEL, aiAnsweredAt: new Date().toISOString(), aiAnswerPending: false }, { merge: true }).catch((writeError) => {
+        logger.error(`[DeveloperReport] Failed to clear aiAnswerPending report=${reportId}`, writeError)
+      })
     }
-    // 質問に名前が出た生徒の数字(妥協案 B・2026-10-16 夜)。台帳はクライアントが権威関数で計算して同梱したもの。無ければ渡さない。
-    const digest = buildQuestionAiStudentDigest({ note: report.note, ledger: report.studentLedger })
-    const aiInput = {
-      note: report.note,
-      screen: report.screen,
-      scheduleContext: report.scheduleContext,
-      recentOperations: report.recentOperations,
-      otherClassroomNames,
-      ...(digest ? { studentDigest: digest.text, otherStudentNames: digest.otherStudentNames } : {}),
-    }
-    // 開発中は主(Sonnet・室長に表示)と影(Haiku・記録だけ)を同時に流し、回答と費用を比べる(オーナー指示 2026-10-16 夜)。
-    const [aiResult, shadowResult] = await Promise.all([
-      generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY }),
-      generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY, model: QUESTION_AI_SHADOW_MODEL }),
-    ])
-    const answeredAt = new Date().toISOString()
-    const digestFields = digest ? { aiAnswerDigestStudents: digest.mentionedNames } : {}
-    const shadowFields = buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, shadowResult, answeredAt)
-    if (aiResult.ok) {
-      aiAnswerFields = { aiAnswer: aiResult.answer }
-      await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens, aiResult.outputTokens), ...digestFields, ...shadowFields }, { merge: true })
-    } else {
-      aiAnswerFields = { aiAnswerError: aiResult.error }
-      // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。
-      await reportRef.set({
-        aiAnswerError: aiResult.error,
-        aiAnswerModel: QUESTION_AI_MODEL,
-        aiAnsweredAt: answeredAt,
-        ...(aiResult.blockedAnswer ? { aiAnswerBlocked: aiResult.blockedAnswer, aiAnswerInputTokens: aiResult.inputTokens ?? 0, aiAnswerOutputTokens: aiResult.outputTokens ?? 0, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens ?? 0, aiResult.outputTokens ?? 0) } : {}),
-        ...digestFields,
-        ...shadowFields,
-      }, { merge: true })
-    }
-    logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`} digestStudents=${digest?.mentionedNames.length ?? 'n/a'} shadow(${QUESTION_AI_SHADOW_MODEL}) ok=${shadowResult.ok}`)
   }
   return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest, ...aiAnswerFields }
 })
 
 // 「要望・報告」のメール即時通知(オーナー要望 2026-09-04: LINE ではなくメールへ直接、15分待たずに)。
-// developerReports 文書の作成をトリガに SMTP で送る。設定は functions runtime env(functions/.env・CI では
+// developerReports 文書の書き込みをトリガに SMTP で送る。設定は functions runtime env(functions/.env・CI では
 // secret PROD_FUNCTIONS_ENV)の REPORT_MAIL_SMTP_URL / REPORT_MAIL_TO(任意 REPORT_MAIL_FROM)。未設定なら送らず記録だけ残す。
 // 送信の成否は文書に mailSentAt / mailError として残す(本番データには触れない)。
+// 2026-10-16 夜(オーナー指示「開発者にもメールでやり取りを知らせる」): 作成時ではなく **AI の回答が書かれてから**送る。
+// 送るか否かは純関数 shouldSendDeveloperReportMailOnWrite(developerReport.ts)が決める(作成時に aiAnswerPending なら待ち、
+// AI の結果で aiAnswerPending が下りた 1 回だけ送る。送信済み・スキップ済み・失敗済みの文書には送らない)。
 const REPORT_MAIL_SMTP_URL = (process.env.REPORT_MAIL_SMTP_URL ?? '').trim()
 const REPORT_MAIL_TO = (process.env.REPORT_MAIL_TO ?? '').trim()
 const REPORT_MAIL_FROM = (process.env.REPORT_MAIL_FROM ?? '').trim()
 
-export const notifyDeveloperReportByMail = onDocumentCreated({
+export const notifyDeveloperReportByMail = onDocumentWritten({
   document: 'workspaces/{workspaceKey}/developerReports/{reportId}',
   timeoutSeconds: 60,
   memory: '256MiB',
 }, async (event) => {
-  const snapshot = event.data
-  if (!snapshot) return
+  const snapshot = event.data?.after
+  if (!snapshot?.exists) return
   const data = snapshot.data() as DeveloperReportMailSource
+  const before = event.data?.before?.exists ? (event.data.before.data() as DeveloperReportMailSource) : null
+  if (!shouldSendDeveloperReportMailOnWrite(before, data)) return
   const workspaceKey = String(event.params.workspaceKey ?? '')
   const reportId = String(event.params.reportId ?? data.reportId ?? '')
   const mailSkipReason = resolveDeveloperReportMailSkipReason(data)

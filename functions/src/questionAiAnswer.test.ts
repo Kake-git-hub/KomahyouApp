@@ -9,7 +9,6 @@ import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 import {
   buildOtherClassroomNameWords,
-  buildQuestionAiShadowFields,
   buildQuestionAiSystemPrompt,
   buildQuestionAiUserMessage,
   describeQuestionAiError,
@@ -21,7 +20,8 @@ import {
   QUESTION_AI_BEHAVIOR_CHECK_REPLY,
   QUESTION_AI_MAX_TOKENS,
   QUESTION_AI_MODEL,
-  QUESTION_AI_SHADOW_MODEL,
+  QUESTION_AI_COMPARISON_MODEL,
+  QUESTION_AI_DEVELOPER_REPLY,
   QUESTION_AI_NO_MANUAL_REPLY,
   QUESTION_AI_OTHER_CLASSROOM_REPLY,
   QUESTION_AI_PRICE_REPLY,
@@ -87,9 +87,16 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(prompt).toContain('無い名前を作って「」で書かない')
     expect(prompt).toContain('推測の手順を書いてから「確認します」と付け足さない')
     expect(prompt).toContain('決まり文句は「」で囲まず')
-    // 評価 2 回目(run 38855010263)Q20 が「ご不便な状況とのことですが」で止まった → 言葉自体をどんな形でも書かないと指示する。
-    expect(prompt).toContain('「ご不便」「ご迷惑」「ご面倒」という言葉は、どんな形')
+    // 2026-10-16 夜 オーナー指示「多少の口調での謝罪などは止めなくていい」→ 謝罪を主旨にしない指示に緩め、軽い前置きは可と書く。
+    expect(prompt).toContain('謝罪を主旨にしない。「申し訳ありませんが」のような軽い前置き程度はよい')
+    expect(prompt).not.toContain('どんな形(「ご不便な状況」')
     expect(QUESTION_AI_NO_MANUAL_REPLY).not.toMatch(/マニュアル|記載/u)
+    // 決まり文句はオーナー指示の言い方「開発者より別途回答いたします」に揃える(2026-10-16 夜)。
+    expect(QUESTION_AI_DEVELOPER_REPLY).toBe('開発者より別途回答いたします。')
+    expect(QUESTION_AI_NO_MANUAL_REPLY).toBe('この点は開発者より別途回答いたします。')
+    expect(QUESTION_AI_BEHAVIOR_CHECK_REPLY).toBe('動作については開発者より別途回答いたします。')
+    expect(QUESTION_AI_PRICE_REPLY).toBe('料金・契約については開発者より別途回答いたします。')
+    expect(QUESTION_AI_MODEL).toBe('claude-haiku-5-5')
     // 根拠の見出しも「マニュアル」ではなく AI の知識として渡す。
     expect(prompt).toContain('# 案内できる内容')
     expect(prompt).not.toContain('# 利用者マニュアル')
@@ -106,12 +113,12 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(message.match(/\[board-commit\]/g)).toHaveLength(QUESTION_AI_TRACE_LIMIT)
   })
 
-  it('Sonnet 最新で呼び(2026-10-16 夜 オーナー指示で Haiku から戻した)、テキストだけを回答にする', async () => {
+  it('Haiku 最新で呼び(2026-10-16 夜 オーナー確定「Haiku にして」)、テキストだけを回答にする', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async () => fakeMessage())
     const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage })
     expect(result).toEqual({ ok: true, answer: '基本データ画面で生徒を選びます。', model: QUESTION_AI_MODEL, inputTokens: 1200, outputTokens: 80 })
     const params = createMessage.mock.calls[0][0]
-    expect(params.model).toBe('claude-sonnet-5-5')
+    expect(params.model).toBe('claude-haiku-5-5')
     // 思考込みの出力上限(費用の歯止め)。回答文自体は QUESTION_AI_ANSWER_CHAR_LIMIT で切る。
     expect(params.max_tokens).toBe(QUESTION_AI_MAX_TOKENS)
     expect(QUESTION_AI_MAX_TOKENS).toBe(8000)
@@ -162,7 +169,7 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
 
   it('回答の決まり(オーナー指定 2026-10-16: 謝らない・不具合を認めない・金額を答えない・他教室を出さない)をシステム指示に入れる', () => {
     const prompt = buildQuestionAiSystemPrompt()
-    for (const keyword of ['謝罪の言葉を使わない', '不具合・バグ・障害・エラーがあると認めたり', '金額・料金・費用・価格', '他の教室・校舎の情報を一切出さない']) {
+    for (const keyword of ['謝罪を主旨にしない', '不具合・バグ・障害・エラーがあると認めたり', '金額・料金・費用・価格', '他の教室・校舎の情報を一切出さない']) {
       expect(prompt).toContain(keyword)
     }
     for (const reply of [QUESTION_AI_BEHAVIOR_CHECK_REPLY, QUESTION_AI_PRICE_REPLY, QUESTION_AI_OTHER_CLASSROOM_REPLY, QUESTION_AI_NO_MANUAL_REPLY]) expect(prompt).toContain(reply)
@@ -179,19 +186,21 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(findQuestionAiAnswerViolation('不具合かどうかは開発者が確認します。')).toBeNull()
   })
 
+  it('謝罪語は止めない(オーナー指示 2026-10-16 夜「多少の口調での謝罪は止めなくていい。今の程度なら良し」・評価 5 回目で Haiku の Q20 が止まった件)', () => {
+    for (const answer of ['申し訳ありませんが、この点は開発者より別途回答いたします。', 'ご不便をおかけしております。', 'ご不便をかけている状況を把握しました。', 'ご迷惑になり、', 'すみません、分かりません。']) {
+      expect(findQuestionAiAnswerViolation(answer), answer).toBeNull()
+    }
+    // 謝罪が他の違反と同居していれば、その違反で止まる(謝罪が免罪符にはならない)。
+    expect(findQuestionAiAnswerViolation('申し訳ありませんが、マニュアルに記載がありません。')).toBe('他責の言い回し')
+  })
+
   it.each([
-    ['申し訳ありませんが、マニュアルに記載がありません。', '謝罪'],
-    ['ご不便をおかけしております。', '謝罪'],
-    // 評価 1 回目(2026-10-16 run 38844858406)Q20 の冒頭。「をおかけ」でない形も止める。
-    ['ご不便をかけている状況を把握しました。', '謝罪'],
-    ['ご迷惑になり、', '謝罪'],
     // 他責の言い回し(オーナー指示 2026-10-16 夜)。
     ['マニュアルでは、休日設定は日付メニューから行います。', '他責の言い回し'],
     ['マニュアルに記載が無いため、お答えできません。', '他責の言い回し'],
     ['説明書に書かれていません。', '他責の言い回し'],
     ['この機能については明記されていません。', '他責の言い回し'],
     ['残り回数の場所は記載されておりません。', '他責の言い回し'],
-    ['すみません、分かりません。', '謝罪'],
     ['これはアプリの不具合です。', '不具合を認める'],
     ['バグの可能性があります。', '不具合を認める'],
     ['現在、不具合が発生しています。', '不具合を認める'],
@@ -216,7 +225,7 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
 
   it('決まりに反した回答は室長に見せず(ok:false)、元の文とトークン数を返す(報告文書の aiAnswerBlocked に残す)', async () => {
     const blocked = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '申し訳ありません。これは不具合です。', citations: null }] }) })
-    expect(blocked).toEqual({ ok: false, error: '回答の決まりに反したため表示しませんでした(謝罪)', blockedAnswer: '申し訳ありません。これは不具合です。', inputTokens: 1200, outputTokens: 80 })
+    expect(blocked).toEqual({ ok: false, error: '回答の決まりに反したため表示しませんでした(不具合を認める)', blockedAnswer: '申し訳ありません。これは不具合です。', inputTokens: 1200, outputTokens: 80 })
     const other = await generateQuestionAiAnswer({ ...baseInput, otherClassroomNames: ['緑が丘校'] }, { apiKey: 'sk-test', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '緑が丘校の例です。', citations: null }] }) })
     expect(other).toMatchObject({ ok: false, error: '回答の決まりに反したため表示しませんでした(他教室)' })
   })
@@ -227,16 +236,24 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(buildQuestionAiUserMessage({ ...baseInput, note: '振替は？ #テスト' })).not.toContain('#テスト')
   })
 
-  it('submitDeveloperReport は他教室名を渡し、止めた回答を aiAnswerBlocked に残す(配線)', () => {
+  it('submitDeveloperReport は他教室名を渡し、止めた回答を aiAnswerBlocked に残し、1 モデルだけ呼んで aiAnswerPending を必ず下ろす(配線)', () => {
     const indexSource = readFileSync(resolve(repoRoot, 'functions/src/index.ts'), 'utf8')
     expect(indexSource).toContain('otherClassroomNames,')
     expect(indexSource).toContain('buildOtherClassroomNameWords({')
     expect(indexSource).toContain('aiAnswerBlocked: aiResult.blockedAnswer')
-    // 妥協案 B(2026-10-16 夜): 台帳から数字を作って渡し、影(Haiku)も同時に流して aiAnswerShadow* に残す。
+    // 妥協案 B(2026-10-16 夜): 台帳から数字を作って渡す。
     expect(indexSource).toContain('buildQuestionAiStudentDigest({ note: report.note, ledger: report.studentLedger })')
     expect(indexSource).toContain('studentDigest: digest.text, otherStudentNames: digest.otherStudentNames')
-    expect(indexSource).toContain('model: QUESTION_AI_SHADOW_MODEL')
-    expect(indexSource).toContain('buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, shadowResult, answeredAt)')
+    // 2026-10-16 夜 オーナー指示「Haiku にして」: 二重回答(影)は終了。1 回だけ呼ぶ。
+    expect(indexSource).not.toContain('QUESTION_AI_SHADOW_MODEL')
+    expect(indexSource).not.toContain('buildQuestionAiShadowFields')
+    expect(indexSource).toContain("const aiResult = await generateQuestionAiAnswer(aiInput, { apiKey: QUESTION_AI_API_KEY })")
+    // メール通知は AI の結果が書かれてから送る: 作成時に aiAnswerPending を立て、成功・失敗・例外のどの経路でも false を書く。
+    expect(indexSource).toContain('aiAnswerPending: answerWithAi,')
+    expect(indexSource.match(/aiAnswerPending: false/gu)).toHaveLength(3)
+    expect(indexSource).toContain('if (!shouldSendDeveloperReportMailOnWrite(before, data)) return')
+    expect(indexSource).toContain('export const notifyDeveloperReportByMail = onDocumentWritten({')
+    expect(indexSource).not.toContain('onDocumentCreated')
   })
 
   it('質問に名前が出た生徒の数字(妥協案 B)は利用者メッセージの専用の節に入り、無いときは節ごと出さない', () => {
@@ -262,24 +279,15 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     return expect(blocked).resolves.toMatchObject({ ok: false, error: '回答の決まりに反したため表示しませんでした(他の生徒)' })
   })
 
-  it('影(比較用)のモデルは deps.model で切り替え、結果を aiAnswerShadow* の形にし、費用の目安を単価表から出す(2026-10-16 夜)', async () => {
+  it('比較用のモデルは deps.model で切り替えられ(評価ワークフローの compare 用)、費用の目安を単価表から出す(2026-10-16 夜)', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async (params) => fakeMessage({ model: params.model }))
-    const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage, model: QUESTION_AI_SHADOW_MODEL })
-    expect(createMessage.mock.calls[0][0].model).toBe('claude-haiku-5-5')
-    expect(result).toMatchObject({ ok: true, model: 'claude-haiku-5-5', inputTokens: 1200, outputTokens: 80 })
-    expect(buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, result, '2026-10-16T12:00:00.000Z')).toEqual({
-      aiAnswerShadowModel: 'claude-haiku-5-5',
-      aiAnsweredShadowAt: '2026-10-16T12:00:00.000Z',
-      aiAnswerShadowInputTokens: 1200,
-      aiAnswerShadowOutputTokens: 80,
-      aiAnswerShadowCostYen: 0.02,
-      aiAnswerShadow: '基本データ画面で生徒を選びます。',
-    })
-    expect(buildQuestionAiShadowFields(QUESTION_AI_SHADOW_MODEL, { ok: false, error: '回答の決まりに反したため表示しませんでした(謝罪)', blockedAnswer: '申し訳ありません。', inputTokens: 10, outputTokens: 5 }, 't')).toMatchObject({
-      aiAnswerShadowError: '回答の決まりに反したため表示しませんでした(謝罪)',
-      aiAnswerShadowBlocked: '申し訳ありません。',
-      aiAnswerShadowInputTokens: 10,
-    })
+    const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage, model: QUESTION_AI_COMPARISON_MODEL })
+    expect(createMessage.mock.calls[0][0].model).toBe('claude-sonnet-5-5')
+    expect(result).toMatchObject({ ok: true, model: 'claude-sonnet-5-5', inputTokens: 1200, outputTokens: 80 })
+    // 本番の回答は Haiku(オーナー確定 2026-10-16 夜)。
+    const production = await generateQuestionAiAnswer(baseInput, { apiKey: 'sk-test', createMessage })
+    expect(createMessage.mock.calls[1][0].model).toBe('claude-haiku-5-5')
+    expect(production).toMatchObject({ ok: true, model: 'claude-haiku-5-5' })
     // 単価: Sonnet 5.5 $2/$10・Haiku 5.5 $0.1/$0.5(100 万トークンあたり)・1 ドル 150 円。
     expect(estimateQuestionAiCostYen('claude-sonnet-5-5', 14_000, 400)).toBe(4.8)
     expect(estimateQuestionAiCostYen('claude-haiku-5-5', 14_000, 400)).toBe(0.24)

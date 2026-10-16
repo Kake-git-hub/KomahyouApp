@@ -48,7 +48,7 @@ export const REPORT_ANSWER_UI_TEXT = {
   historyEmptyNote: '(この一覧には、これから送るものが載ります)',
   markRead: '確認しました',
   markAllRead: 'すべて確認しました',
-  pendingNote: '開発者が確認してから回答します。',
+  pendingNote: '開発者より別途回答いたします。',
   revisedNote: '(回答が更新されました)',
 } as const
 
