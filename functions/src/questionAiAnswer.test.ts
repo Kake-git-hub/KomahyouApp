@@ -84,6 +84,8 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(prompt).toContain('無い名前を作って「」で書かない')
     expect(prompt).toContain('推測の手順を書いてから「確認します」と付け足さない')
     expect(prompt).toContain('決まり文句は「」で囲まず')
+    // 評価 2 回目(run 38855010263)Q20 が「ご不便な状況とのことですが」で止まった → 言葉自体をどんな形でも書かないと指示する。
+    expect(prompt).toContain('「ご不便」「ご迷惑」「ご面倒」という言葉は、どんな形')
     expect(QUESTION_AI_NO_MANUAL_REPLY).not.toMatch(/マニュアル|記載/u)
     // 根拠の見出しも「マニュアル」ではなく AI の知識として渡す。
     expect(prompt).toContain('# 案内できる内容')
