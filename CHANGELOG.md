@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.606 (2026-10-16)
+
 - fix: **`*.test.tsx` が CI で一度も走っていなかったのを直した**。`vitest.config.ts` の `test.include` に `src/**/*.test.tsx` を足し、PDF 出力の処理中オーバーレイの回帰防止 `BusyOverlay.test.tsx`(2026-09-12 追加)を `npm run test:unit`／CI で実行するようにした。走らせたところ、テンプレ保存前レポートの配線テストが 1 件落ちた。1c975ad で文言が `resolveTemplateOverwriteReportLabels(...).busyMessage` へ移ったのに追随していなかったためで、挙動の回帰ではない(finally で消す配線は健在)。現行の配線に合わせ、上書き/差分反映の両方の文言を固定した。古い前提を書いたコメント 2 か所も直した (vitest.config.ts / src/components/common/BusyOverlay.test.tsx / SearchableSelect.test.ts / parentPortalPageModel.ts)
 
 ## v1.5.605 (2026-10-16)
