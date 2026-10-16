@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.616 (2026-10-16)
+
+- feat: **質問・要望の蓄積 → フィードバック → QA の充実の輪**(オーナー指示 2026-10-16 夜)。読み取り専用ツール `tools/question-qa-digest.mjs` が、まだ整理していない質問・要望(テスト・確認リスト・整理済みを除く)を 1 本の「QA 候補パック」(整理の指示文つき・AI が答えられなかった質問を最優先・AI と開発者の回答の食い違いに印)にして `local/qa-digests/` へ出す(Git 管理外・Firestore へは書かない)。整理 → オーナー承認 → 説明書 `docs/user-manual.md` 11 章へ QA を足す(＝AI 即時回答の根拠が増える)→ 記録 `docs/qa-curation-log.md`(次回のパックから外す)→ 評価で確認、の手順を `docs/runbooks/question-qa-loop.md` に定めた。spec §G-6 の QA 公開の場を説明書 11 章と明記。室長側の「役に立った／立たなかった」は未実装でオーナー判断待ち(runbook §5 に妥協案 A〜C)。`.gitignore` に `local/` (tools/question-qa-digest.mjs・test, docs/qa-curation-log.md, docs/runbooks/question-qa-loop.md, docs/spec-developer-report.md §G-6, docs/handoff-question-ai-answer.md §8, .gitignore)
+
 ## v1.5.615 (2026-10-16)
 
 - feat: 質問への AI 即時回答(開発用教室のみ・§G-7)に**妥協案 B「質問に名前が出た生徒の数字と日付だけを渡す」**(オーナー採用 2026-10-16 夜)。クライアントは質問のときだけ保存時と同じ権威関数 `buildStudentLessonLedger` で生徒×科目の台帳を計算して報告に同梱し(文書には保存しない)、サーバーは質問文に名前が出た生徒(最大 3 人・姓だけは 1 人のときだけ)の行を「未消化振替の残数と元コマ・今日以降の予定・休み・直近 30 日の出席・未消化講習」の数行にして AI へ渡す(`functions/src/questionAiStudentDigest.ts`)。AI は渡された数字をそのまま使い数えない。質問に出ていない生徒の名前が回答に出たら機械検査「他の生徒」で止める。決まり 5 と spec §G-4 1 を改定。教室データそのものは引き続き渡さない
