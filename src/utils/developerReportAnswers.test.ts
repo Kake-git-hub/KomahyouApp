@@ -37,6 +37,8 @@ const record = (overrides: Partial<DeveloperReportRecord> = {}): DeveloperReport
   issueUrl: '',
   hasAiAnswer: false,
   aiAnswerError: '',
+  aiAnswer: '',
+  aiAnswerBlocked: '',
   mailSentAt: null,
   mailError: '',
   answerFinal: '',

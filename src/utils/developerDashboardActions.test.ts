@@ -40,6 +40,8 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     issueUrl: '',
     hasAiAnswer: false,
     aiAnswerError: '',
+    aiAnswer: '',
+    aiAnswerBlocked: '',
     mailSentAt: null,
     mailError: '',
     // 回答フィールド(v1.5.565・spec-developer-report §G-3)。未回答の既定。

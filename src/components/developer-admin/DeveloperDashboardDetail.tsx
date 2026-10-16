@@ -168,6 +168,9 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
                     受付 {entry.reportId} / 報告元 {entry.source || '—'} / 版 {entry.appVersion || '—'} / 権限 {entry.reporterRole || '—'}
                     {entry.notifySkipped ? ` / 通知省略: ${entry.notifySkipped}` : ''}
                     {entry.mailSentAt ? ` / メール送信 ${formatDashboardDateTime(entry.mailSentAt)}` : ''}
+                    {entry.aiAnswer ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-answer-${entry.reportId}`}>AI の回答(室長に表示):{'\n'}{entry.aiAnswer}</div> : null}
+                    {entry.aiAnswerError ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-error-${entry.reportId}`}>AI 失敗の理由: {entry.aiAnswerError}</div> : null}
+                    {entry.aiAnswerBlocked ? <div className="developer-dashboard-ai-answer" data-testid={`developer-dashboard-ai-blocked-${entry.reportId}`}>止めた回答(室長には未表示):{'\n'}{entry.aiAnswerBlocked}</div> : null}
                     {entry.attachments.length > 0 ? (
                       // 添付画像(2026-10-14)は Storage の保存先だけ出す(画像本体はクライアントから読めない・読み取り専用トークンで取る)。
                       <ul className="developer-dashboard-report-attachments">
