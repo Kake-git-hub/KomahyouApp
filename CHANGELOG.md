@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.613 (2026-10-16)
+
+- fix: 質問 AI 回答の評価 2 回目(Sonnet・説明書拡充後・run 38855010263: 表示 19 / 止めた 1 / 失敗 0・入力 284,370 トークン・約 97 円)の結果を反映。①Q20 が「ご不便な状況とのことですが」で機械検査(謝罪)に止まった → システム指示 1 を「『ご不便』『ご迷惑』『ご面倒』はどんな形でも書かない・同情の前置きも付けない」に強めた。②Q16「名簿を Excel に書き出せますか」は説明書 9-3 に答えがあり正しく案内された(無い機能の試験にならない)→ 質問を「生徒のテストの点数や成績を記録する機能はありますか？」へ差し替え(評価の正本・確認リスト qa-q16・qa-ai-2)。引き継ぎ資料に 2 回目の結果を記録 (functions/src/questionAiAnswer.ts・test・questionAiEvalCases.ts, src/utils/verificationChecklist.ts, docs/handoff-question-ai-answer.md)
+
 ## v1.5.612 (2026-10-16)
 
 - feat: 質問への AI 即時回答(開発用教室のみ・§G-7)を**オーナー指示 2026-10-16 夜の 3 点**で改定。①回答は「AI 自身が利用者にとっての説明書」という立場で書き、「マニュアルでは〜」「マニュアルに記載が無い」のような他責の言い回しを禁止(システム指示に明記・決まり文句を「この点は開発者が確認してから回答します。」へ・機械検査 `findQuestionAiAnswerViolation` に種類「他責の言い回し」を追加)。評価 1 回目の反省も反映(「ご不便」「ご迷惑」は形によらず止める／無いボタン名を「」で作らない／推測の手順＋「確認します」を書かない／決まり文句を「」で囲まない／答えがあるときは言い切る)。②モデルを Haiku 最新から **Sonnet 最新 `claude-sonnet-5-5`** へ戻す(max_tokens 8000・試算 1 問約 5 円・評価ワークフローの単価も Sonnet へ)。③使い方の説明 `docs/user-manual.md` を骨子(約 3,400 字・〔未執筆〕4 か所)から**本文(全 12 章・約 1.3 万字)へ拡充**(各 spec から起こし、画面の言葉だけで書き、内部名・文書名・試験中の機能は載せない。`functions/src/generated/userManual.ts` を再生成)。確認リストに qa-ai-2 を追加・qa-q16 の期待文言を更新(版 v1.5.604 据え置き)。進行中テーマ台帳・引き継ぎ資料を更新。本番教室の挙動は不変 (functions/src/questionAiAnswer.ts・test・questionAiEval.ts・test・questionAiEvalCases.ts, docs/user-manual.md, docs/spec-developer-report.md §G-7, docs/handoff-question-ai-answer.md, src/utils/verificationChecklist.ts・developmentStatusLedger.ts)
