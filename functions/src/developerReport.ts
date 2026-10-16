@@ -406,6 +406,32 @@ export type DeveloperReportMailSource = {
   recentOperations?: Array<{ at: string; kind: string; summary: string }>
   recentOperationCount?: number
   snapshotStoragePath?: string
+  /** AI 即時回答(開発用教室の質問・spec §G-7)。2026-10-16 夜からメールは AI の結果が書かれてから送るので、本文に載せる。 */
+  aiAnswerPending?: boolean
+  aiAnswer?: string
+  aiAnswerError?: string
+  aiAnswerBlocked?: string
+  aiAnswerModel?: string
+  aiAnswerDigestStudents?: string[]
+  /** 送信の記録(index.ts notifyDeveloperReportByMail が書く)。どれかがあれば二度送らない。 */
+  mailSentAt?: string
+  mailSkipped?: string
+  mailError?: string
+}
+
+/**
+ * developerReports 文書の書き込み(作成・更新)でメールを送るか(2026-10-16 夜・オーナー指示「開発者にもメールでやり取りを知らせる」)。
+ * - 送信済み・スキップ済み・失敗済み(mailSentAt / mailSkipped / mailError)なら送らない(自分の書き込みで再発火しても止まる)。
+ * - AI の回答待ち(aiAnswerPending=true)なら送らない(回答文を載せるため)。
+ * - 作成時(before なし)は AI を呼ばない報告(本番教室・要望・不具合)だけ送る。
+ * - 更新時は「aiAnswerPending が true → 下りた」1 回だけ送る(開発者の回答など、ほかの更新では送らない。古い文書の更新でも送らない)。
+ */
+export function shouldSendDeveloperReportMailOnWrite(before: DeveloperReportMailSource | null, after: DeveloperReportMailSource | null): boolean {
+  if (!after) return false
+  if (after.mailSentAt || after.mailSkipped || after.mailError) return false
+  if (after.aiAnswerPending === true) return false
+  if (!before) return true
+  return before.aiAnswerPending === true
 }
 
 const SOURCE_LABELS: Record<string, string> = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
@@ -426,7 +452,10 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   const category = CATEGORY_LABELS[report.category ?? ''] ?? report.category ?? '(不明)'
   const noteHead = (report.note ?? '').split('\n')[0].trim()
   // 質問(2026-09-13)は件名に【質問】を付けて、不具合/要望と受信箱で見分けられるようにする(流れは同じ: ストック→メール→後で対応)。
-  const subject = `${report.isTest ? '【テスト】' : ''}${report.category === 'question' ? '【質問】' : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
+  // AI がすぐ回答して室長に表示済みの質問は【質問/AI回答済】(2026-10-16 夜)。開発者が回答すべき質問(AI 失敗・対象外)は【質問】のまま。
+  const isQuestion = report.category === 'question'
+  const aiAnswered = isQuestion && Boolean(report.aiAnswer?.trim())
+  const subject = `${report.isTest ? '【テスト】' : ''}${isQuestion ? (aiAnswered ? '【質問/AI回答済】' : '【質問】') : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
   const docPath = `workspaces/${options.workspaceKey}/developerReports/${report.reportId}`
   const consoleUrl = `https://console.firebase.google.com/project/${options.projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
   const contextLines = Object.entries(report.scheduleContext ?? {})
@@ -450,10 +479,11 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
     '■ 内容',
     report.note?.trim() ? report.note.trim() : '(なし)',
     '',
+    ...(isQuestion ? buildDeveloperReportMailAiAnswerLines(report) : []),
     '■ 進め方(オーナー指示 2026-09-04)',
     '勝手に修正を始めない。切り分け・整理までにとどめ、修正の着手は開発者(オーナー)が確認して許可してから。',
-    ...(report.category === 'question'
-      ? ['質問(2026-09-13): 利用者への自動回答はしない。回答は開発者が内容を確認・承認したものだけを返す(返答の仕組みは docs/spec-developer-report.md §G)。']
+    ...(isQuestion
+      ? ['質問(2026-10-16 夜): 開発用教室では AI がその場で回答し室長に表示済み(上の「AI の自動回答」)。訂正・補足が要れば開発者画面「質問への回答」から送る(室長の「質問・要望」ボタンに未読が付く)。AI が答えられなかった質問・対象外の教室の質問は、同じ画面から開発者が回答する(docs/spec-developer-report.md §G-7)。']
       : []),
     '',
     `■ 直近の操作痕跡(新しい方から ${shownOperations.length} 件 / 全 ${report.recentOperationCount ?? operations.length} 件は Firestore 文書で)`,
@@ -469,6 +499,30 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
       : '教室データ: (保存されていません。関数ログ [DeveloperReport] を確認)',
   ]
   return { subject, text: lines.filter((line) => line !== '').join('\n') }
+}
+
+/**
+ * 質問のメールに載せる AI の自動回答の節(2026-10-16 夜)。室長に何が表示されたかを開発者がそのまま読めるようにする。
+ * - 回答あり: 回答文(室長に表示済み)。
+ * - 失敗・止めた: 理由と、止めた元の文(室長には見せていない)。室長には「自動回答を作れませんでした。開発者より別途回答いたします」が出ている。
+ * - どちらも無い(本番教室・確認リストなど AI を呼んでいない): その旨。
+ */
+export function buildDeveloperReportMailAiAnswerLines(report: DeveloperReportMailSource): string[] {
+  const answer = (report.aiAnswer ?? '').trim()
+  const model = report.aiAnswerModel ? `・${report.aiAnswerModel}` : ''
+  const students = report.aiAnswerDigestStudents && report.aiAnswerDigestStudents.length > 0 ? `・数字を渡した生徒 ${report.aiAnswerDigestStudents.join(' / ')}` : ''
+  if (answer) {
+    return ['■ AI の自動回答(室長の画面にすぐ表示済み' + model + students + ')', answer, '']
+  }
+  if (report.aiAnswerError) {
+    return [
+      '■ AI の自動回答: 作れなかった(室長には「自動回答を作れませんでした。開発者より別途回答いたします」と表示済み' + model + ')',
+      `理由: ${report.aiAnswerError}`,
+      ...(report.aiAnswerBlocked?.trim() ? ['止めた元の文(室長には未表示):', report.aiAnswerBlocked.trim()] : []),
+      '',
+    ]
+  }
+  return ['■ AI の自動回答: なし(この教室では AI を呼んでいない。室長には「回答は開発者が確認してからお返しします」と案内済み)', '']
 }
 
 /** SMTP URL(例: smtps://user%40gmail.com:app-password@smtp.gmail.com:465)が使える形か。空や不正なら送らない。 */

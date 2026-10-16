@@ -16,14 +16,16 @@
 
 ## v1.5.619 (2026-10-16)
 
-- docs: 質問 AI 回答の評価 5 回目(run 38914946917・週の印つき・2 モデル × 23 問)の結果を引き継ぎ資料に記録(Q22 は両モデルとも正解・Haiku は Q20 で謝罪語を書き機械検査で 1 件止まった・Sonnet 約 112 円／Haiku 約 5.4 円)。評価用の台帳の数字の矛盾(置き済みの振替の元コマが未消化にも残っていた)を直した(コード変更なし・テストのみ) (docs/handoff-question-ai-answer.md, functions/src/questionAiEvalCases.ts, functions/src/questionAiStudentDigest.test.ts)
+- feat: 質問への AI 即時回答をオーナー確定(2026-10-16 深夜)の形へ。①モデルを **Haiku**(`claude-haiku-5-5`)に確定し、開発中の二重回答(主 Sonnet・影 Haiku)を終了(評価 4・5 回目で Haiku が Sonnet とほぼ同等・費用約 1/20。`buildQuestionAiShadowFields` 削除・ダッシュボードの「比較用」表示は古い記録のため残す) ②「申し訳ありませんが」程度の謝罪は止めない(決まり 1 を「謝罪を主旨にしない」に緩め、機械検査から謝罪語を外した) ③オーナー承認なしで室長にすぐ表示(回答末尾を「この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。」へ) ④**開発者への通知メールを AI の結果が書かれてから送り、回答文を本文に載せる**(`notifyDeveloperReportByMail` を `onDocumentWritten` に・純関数 `shouldSendDeveloperReportMailOnWrite`・`aiAnswerPending` を作成時に立て成功/失敗/例外の全経路で下ろす・件名【質問/AI回答済】・失敗時は理由と止めた元の文)。訂正回答は既存の開発者画面「質問への回答」から ⑤開発者の回答が必要なときの決まり文句を「**開発者より別途回答いたします**」に統一(`QUESTION_AI_DEVELOPER_REPLY`・クライアントの失敗時の一文・履歴の回答待ちの一文・評価の期待・確認リスト・GitHub Issue 本文) ⑥評価ワークフローは既定 1 モデル(Haiku・約 6 円)・入力 `compare` で Sonnet も流す ⑦QA の輪からオーナー承認の段を外した(runbook・ツールの指示文・§G-6)。確認リストに qa-ai-3(書き換え: すぐ表示＋メールに回答文)・qa-ai-4(訂正回答の経路)。テスト: 謝罪語を止めない／メールを送る条件／メール本文の AI の節／配線(1 回だけ呼ぶ・`aiAnswerPending` 3 経路)／評価の既定と比較 (functions/src/questionAiAnswer.ts・developerReport.ts・index.ts・questionAiEval.ts・各 test, functions/tools/question-ai-eval.mjs, .github/workflows/question-ai-eval.yml, src/utils/developerReport.ts・reportAnswers.ts・verificationChecklist.ts・developmentStatusLedger.ts, tools/developer-report-notify.mjs・question-qa-digest.mjs, docs/spec-developer-report.md §G-6/§G-7, docs/runbooks/question-qa-loop.md, docs/handoff-question-ai-answer.md §9)
 
 ## v1.5.618 (2026-10-16)
 
-- fix: v1.5.617 の週の印のテストで、同じ週の過ぎた日(月曜)を〔過去〕と期待していた誤りを直した(実装は〔今週〕が正しい。v1.5.617 の CI が赤になったため) (functions/src/questionAiStudentDigest.test.ts)
+- docs: 質問 AI 回答の評価 5 回目(run 38914946917・週の印つき・2 モデル × 23 問)の結果を引き継ぎ資料に記録(Q22 は両モデルとも正解・Haiku は Q20 で謝罪語を書き機械検査で 1 件止まった・Sonnet 約 112 円／Haiku 約 5.4 円)。評価用の台帳の数字の矛盾(置き済みの振替の元コマが未消化にも残っていた)を直した(コード変更なし・テストのみ) (docs/handoff-question-ai-answer.md, functions/src/questionAiEvalCases.ts, functions/src/questionAiStudentDigest.test.ts)
 
 ## v1.5.617 (2026-10-16)
 
+- chore(changelog): **版の表記を直した** — 下の「週の印」の変更を v1.5.617、そのテスト修正を v1.5.618、評価 5 回目の記録を v1.5.619 と記していたが、「週の印」の push は CI(テスト赤)でデプロイされず、実際の配信版は 1 つ若い(週の印＋テスト修正＝1.5.617・評価 5 回目の記録＝1.5.618)。version.json と見比べるときはこの節の版を正とする
+- fix: v1.5.617 の週の印のテストで、同じ週の過ぎた日(月曜)を〔過去〕と期待していた誤りを直した(実装は〔今週〕が正しい。v1.5.617 の CI が赤になったため) (functions/src/questionAiStudentDigest.test.ts)
 - fix: 質問 AI 回答の「質問に名前が出た生徒の数字」に、今日以降の予定ごとに〔今日〕〔今週〕〔来週〕〔再来週〕〔それ以降〕の印(月曜始まり)を付け、「印はそのまま使い自分で数え直さない」と添えた。評価 4 回目(run 38913782608・2 モデル × 23 問・Sonnet 約 113 円／Haiku 約 5.5 円・両方 23/23 表示)で Sonnet が Q22「来週の授業」の週を数え違えたため(Haiku は正しかった)。4 回目の結果と Sonnet/Haiku の比較を引き継ぎ資料に記録 (functions/src/questionAiStudentDigest.ts・test, docs/handoff-question-ai-answer.md)
 
 ## v1.5.616 (2026-10-16)

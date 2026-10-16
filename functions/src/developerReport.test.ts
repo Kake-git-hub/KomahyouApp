@@ -11,7 +11,7 @@ import {
   isMailTransportConfigured,
   isVerificationChecklistNote,
   isVerificationChecklistReport,
-  resolveDeveloperReportMailSkipReason,
+  resolveDeveloperReportMailSkipReason, shouldSendDeveloperReportMailOnWrite,
   normalizeDeveloperReportCategory,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_KINDS,
@@ -197,18 +197,53 @@ describe('developerReport(server): メール即時通知の本文', () => {
     expect(mail.text).not.toContain('【テスト】')
   })
 
-  it('質問(question・2026-09-13)は件名に【質問】が付き、本文に「自動回答しない・承認した回答だけ返す」が載る', () => {
+  it('質問(question・2026-09-13)は件名に【質問】が付き、本文に AI の自動回答の節と「訂正回答は開発者画面から」の進め方が載る(2026-10-16 夜)', () => {
+    // AI を呼んでいない質問(本番教室): 「なし」の節と【質問】。
     const mail = buildDeveloperReportMail({ ...base, category: 'question', note: '休みにした生徒の振替先を後から変えるには？' }, options)
     expect(mail.subject).toBe('【質問】[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 使い方の質問: 休みにした生徒の振替先を後から変えるには？')
     expect(mail.text).toContain('種類: 使い方の質問')
-    expect(mail.text).toContain('自動回答はしない')
-    expect(mail.text).toContain('承認したものだけ')
-    // 不具合/要望には質問向けの行は出ない(件名も【質問】なし)。
-    const bugMail = buildDeveloperReportMail({ ...base, category: 'bug' }, options)
+    expect(mail.text).toContain('■ AI の自動回答: なし(この教室では AI を呼んでいない')
+    expect(mail.text).toContain('訂正・補足が要れば開発者画面「質問への回答」から送る')
+    expect(mail.text).not.toContain('自動回答はしない')
+    // AI が回答した質問(開発用教室): 回答文がそのまま載り、件名は【質問/AI回答済】。
+    const answered = buildDeveloperReportMail({ ...base, category: 'question', note: '山田太郎さんの振替は？', aiAnswer: '未消化振替の一覧から選び直せます。\n2 行目', aiAnswerModel: 'claude-haiku-5-5', aiAnswerDigestStudents: ['山田 太郎'] }, options)
+    expect(answered.subject.startsWith('【質問/AI回答済】[コマ表アプリ 要望・報告]')).toBe(true)
+    expect(answered.text).toContain('■ AI の自動回答(室長の画面にすぐ表示済み・claude-haiku-5-5・数字を渡した生徒 山田 太郎)\n未消化振替の一覧から選び直せます。\n2 行目')
+    expect(answered.text.indexOf('■ AI の自動回答')).toBeLessThan(answered.text.indexOf('■ 進め方'))
+    // AI が答えられなかった(止めた)質問: 理由と止めた元の文(室長には未表示)を載せ、件名は【質問】のまま(開発者が回答する)。
+    const blocked = buildDeveloperReportMail({ ...base, category: 'question', aiAnswerError: '回答の決まりに反したため表示しませんでした(金額)', aiAnswerBlocked: '月額 5,000 円です。', aiAnswerModel: 'claude-haiku-5-5' }, options)
+    expect(blocked.subject.startsWith('【質問】[コマ表アプリ 要望・報告]')).toBe(true)
+    expect(blocked.text).toContain('■ AI の自動回答: 作れなかった(室長には「自動回答を作れませんでした。開発者より別途回答いたします」と表示済み・claude-haiku-5-5)\n理由: 回答の決まりに反したため表示しませんでした(金額)\n止めた元の文(室長には未表示):\n月額 5,000 円です。')
+    // 不具合/要望には質問向けの節・行は出ない(件名も【質問】なし)。
+    const bugMail = buildDeveloperReportMail({ ...base, category: 'bug', aiAnswer: 'x' }, options)
     expect(bugMail.subject.startsWith('[コマ表アプリ 要望・報告]')).toBe(true)
-    expect(bugMail.text).not.toContain('自動回答はしない')
+    expect(bugMail.text).not.toContain('AI の自動回答')
+    expect(bugMail.text).not.toContain('質問への回答')
     // テスト送信の質問は【テスト】【質問】の順。
     expect(buildDeveloperReportMail({ ...base, category: 'question', isTest: true }, options).subject.startsWith('【テスト】【質問】[コマ表アプリ 要望・報告]')).toBe(true)
+    expect(buildDeveloperReportMail({ ...base, category: 'question', isTest: true, aiAnswer: 'a' }, options).subject.startsWith('【テスト】【質問/AI回答済】[コマ表アプリ 要望・報告]')).toBe(true)
+  })
+
+  it('メールは AI の回答が書かれてから 1 回だけ送る(2026-10-16 夜・オーナー指示「開発者にもメールでやり取りを知らせる」)', () => {
+    // 作成時: AI を呼ばない報告はすぐ送る。AI 待ち(aiAnswerPending)は送らない。
+    expect(shouldSendDeveloperReportMailOnWrite(null, { reportId: 'r', classroomId: 'c' })).toBe(true)
+    expect(shouldSendDeveloperReportMailOnWrite(null, { reportId: 'r', classroomId: 'c', aiAnswerPending: false })).toBe(true)
+    expect(shouldSendDeveloperReportMailOnWrite(null, { reportId: 'r', classroomId: 'c', aiAnswerPending: true })).toBe(false)
+    // 更新時: aiAnswerPending が true → 下りた 1 回だけ送る(成功・失敗どちらでも)。
+    const pending = { reportId: 'r', classroomId: 'c', aiAnswerPending: true }
+    expect(shouldSendDeveloperReportMailOnWrite(pending, { ...pending, aiAnswerPending: false, aiAnswer: '回答' })).toBe(true)
+    expect(shouldSendDeveloperReportMailOnWrite(pending, { ...pending, aiAnswerPending: false, aiAnswerError: '失敗' })).toBe(true)
+    expect(shouldSendDeveloperReportMailOnWrite(pending, { ...pending, aiAnswerPending: true, note: '別の更新' })).toBe(false)
+    // 開発者の回答・Issue 番号など、AI 待ちでなかった文書の更新では送らない(古い文書に回答しても送らない)。
+    const settled = { reportId: 'r', classroomId: 'c', aiAnswerPending: false, mailSentAt: '2026-10-16T00:00:00.000Z' }
+    expect(shouldSendDeveloperReportMailOnWrite(settled, { ...settled, answerFinal: '開発者の回答' } as never)).toBe(false)
+    expect(shouldSendDeveloperReportMailOnWrite({ reportId: 'r', classroomId: 'c' }, { reportId: 'r', classroomId: 'c', issueNumber: 80 } as never)).toBe(false)
+    // 送信済み・スキップ済み・失敗済みは二度送らない(自分の書き込みで再発火しても止まる)。
+    for (const mark of [{ mailSentAt: 't' }, { mailSkipped: 'test' }, { mailError: 'x' }]) {
+      expect(shouldSendDeveloperReportMailOnWrite(null, { reportId: 'r', classroomId: 'c', ...mark })).toBe(false)
+      expect(shouldSendDeveloperReportMailOnWrite(pending, { ...pending, aiAnswerPending: false, ...mark })).toBe(false)
+    }
+    expect(shouldSendDeveloperReportMailOnWrite(pending, null)).toBe(false)
   })
 
   it('#テスト の報告は件名・本文にテスト扱いを明示し、内容なし・教室データなしでも成立する', () => {

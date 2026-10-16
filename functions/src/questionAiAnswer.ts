@@ -37,10 +37,14 @@ import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 
-/** 回答に使うモデル(Sonnet 最新。2026-10-16 夜 オーナー指示で Haiku から戻した)。ID は接頭辞・日付なしのまま使う。 */
-export const QUESTION_AI_MODEL = 'claude-sonnet-5-5'
-/** 比較用(影)のモデル。開発中だけ同じ質問を流し、回答と費用を記録する(室長には出さない)。 */
-export const QUESTION_AI_SHADOW_MODEL = 'claude-haiku-5-5'
+/**
+ * 回答に使うモデル(Haiku 最新)。ID は接頭辞・日付なしのまま使う。
+ * 2026-10-16 夜 オーナー指示「Haiku にして」: 評価 4・5 回目(2 モデル × 23 問)で Haiku の回答が Sonnet とほぼ同等で費用が約 1/20
+ * (1 問約 0.25 円 ↔ 約 5 円)だったため確定。それまでの経緯は Sonnet(同日夜・v1.5.612)← Haiku(同日昼・v1.5.608)← Sonnet。
+ */
+export const QUESTION_AI_MODEL = 'claude-haiku-5-5'
+/** 比較用のモデル(評価ワークフローで `compare` を選んだときだけ流す)。本番の回答では呼ばない(二重回答は 2026-10-16 夜に終了)。 */
+export const QUESTION_AI_COMPARISON_MODEL = 'claude-sonnet-5-5'
 /** 単価(ドル/100 万トークン・Haiku 5.5 は 100K トークン以下のプロンプト)。費用の目安を記録・評価で出すための正本。 */
 export const QUESTION_AI_MODEL_PRICES: Record<string, { input: number; output: number }> = {
   'claude-sonnet-5-5': { input: 2, output: 10 },
@@ -81,12 +85,17 @@ export function shouldAnswerQuestionWithAi(input: { category: DeveloperReportCat
   return input.category === 'question' && input.isFeatureEnabled && !input.isVerificationChecklist
 }
 
+/**
+ * 開発者の回答が必要なときに室長へ返す言い方の正本(オーナー指示 2026-10-16 夜「開発者より別途回答いたします と返事し、開発者に今まで通りメールで知らせる」)。
+ * 下の決まり文句 3 つと、クライアントの「自動回答を作れませんでした」の一文(src/utils/developerReport.ts)・履歴の回答待ちの一文(src/utils/reportAnswers.ts)はこれに揃える。
+ */
+export const QUESTION_AI_DEVELOPER_REPLY = '開発者より別途回答いたします。'
 /** 根拠(使い方の説明)に無いときの決まり文句。「マニュアルに記載が無い」のような他責の言い方はしない(オーナー指示 2026-10-16 夜)。 */
-export const QUESTION_AI_NO_MANUAL_REPLY = 'この点は開発者が確認してから回答します。'
+export const QUESTION_AI_NO_MANUAL_REPLY = `この点は${QUESTION_AI_DEVELOPER_REPLY}`
 /** 「動かない・おかしい」系(不具合を認めない・オーナー指定 2026-10-16)の決まり文句。 */
-export const QUESTION_AI_BEHAVIOR_CHECK_REPLY = '動作については開発者が確認してから回答します。'
+export const QUESTION_AI_BEHAVIOR_CHECK_REPLY = `動作については${QUESTION_AI_DEVELOPER_REPLY}`
 /** 金額・契約(答えない・同)の決まり文句。 */
-export const QUESTION_AI_PRICE_REPLY = '料金・契約については、開発者から個別にご案内します。'
+export const QUESTION_AI_PRICE_REPLY = `料金・契約については${QUESTION_AI_DEVELOPER_REPLY}`
 /** 他の教室(一切出さない・同)の決まり文句。 */
 export const QUESTION_AI_OTHER_CLASSROOM_REPLY = 'いま開いている教室のことだけをご案内しています。'
 
@@ -103,7 +112,7 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
     '- 直近の操作履歴は「利用者がどの画面で何をしていたか」を知る手がかりとしてだけ使ってください。',
     '',
     '# 必ず守ること(例外なし)',
-    '1. 謝罪の言葉を使わない。「申し訳ありません」「すみません」「お詫び」は書かない。「ご不便」「ご迷惑」「ご面倒」という言葉は、どんな形(「ご不便な状況」「ご迷惑になり」など)でも書かない。できないこと・分からないことも、謝らず・同情の前置きも付けず、事実と次にすることだけを伝える。',
+    '1. 謝罪を主旨にしない。「申し訳ありませんが」のような軽い前置き程度はよいが、謝ること自体が目的の文(「ご不便をおかけして申し訳ありません」「お詫び申し上げます」など)は書かない。できないこと・分からないことは、事実と次にすることを伝える。',
     `2. アプリに不具合・バグ・障害・エラーがあると認めたり、その可能性を書いたりしない(「不具合です」「バグの可能性があります」「システムの問題です」も書かない)。思ったとおりに動かない・表示がおかしい・数が合わないという内容には、案内できる操作手順の確認だけを案内し、「${QUESTION_AI_BEHAVIOR_CHECK_REPLY}」と伝える。原因を推測しない。`,
     `3. 金額・料金・費用・価格・契約・請求・無料/有料については、数字を含め一切答えない。「${QUESTION_AI_PRICE_REPLY}」とだけ伝える。`,
     `4. 他の教室・校舎の情報を一切出さない(教室名・人数・使い方・事例・比較を含む)。他の教室について聞かれても「${QUESTION_AI_OTHER_CLASSROOM_REPLY}」とだけ伝える。`,
@@ -119,7 +128,7 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
     '- 丁寧語で、結論から書いてください。手順は画面に出ている言葉(ボタン名・メニュー名)で番号付きで短く書いてください。',
     '- 案内できる内容に答えがあるときは、言い切ってください(「明確ではありません」「〜と思われます」のような弱い言い方をしない)。',
     '- Markdown の見出し・表・太字は使わず、プレーンテキストで書いてください。',
-    '- 開発者が確認する内容のときは「質問は開発者にも届いています」と添えてかまいません。',
+    '- 開発者より別途回答する内容のときは「質問は開発者にも届いています」と添えてかまいません。',
     '',
     '# 案内できる内容(このアプリの使い方。利用者には「あなたの知識」として伝える)',
     manualMarkdown,
@@ -131,10 +140,10 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
  * 指示文だけでは守られない場合に備え、反していたら回答を室長に見せず(「自動回答を作れませんでした」＝開発者が回答)、
  * 元の文は報告文書の aiAnswerBlocked に残して開発者が見直せるようにする。決まり文句(QUESTION_AI_*_REPLY)は引っかからない。
  * 戻り値は反した種類(開発者向けの短い名前)。問題なければ null。
+ * 謝罪語の検査は 2026-10-16 夜に外した(オーナー指示「多少の口調での謝罪などは止めなくていい。今の程度なら良し」＝評価 5 回目で Haiku が
+ * 「申し訳ありませんが」と書いて止まった件)。謝罪を主旨にしない指示(決まり 1)は残し、検査では止めない。
  */
 export function findQuestionAiAnswerViolation(answer: string, options: { otherClassroomNames?: readonly string[]; otherStudentNames?: readonly string[] } = {}): string | null {
-  // 「ご不便」「ご迷惑」は形(〜をおかけ／〜をかけ／〜になり)によらず止める(評価 1 回目 Q20「ご不便をかけている状況を把握しました」が検査を抜けた)。
-  if (/申し訳|すみません|すいません|お詫び|おわび|ご迷惑|ご不便|ご面倒|失礼(?:いた)?しました/u.test(answer)) return '謝罪'
   // 他の資料へ責任を預ける言い回し(オーナー指示 2026-10-16 夜「マニュアルでは〜など他責な言い回しはしない」)。
   if (/マニュアル|説明書|ヘルプ(?:に|で|を|は)|記載(?:が|は)?(?:無|な|あり|されて|して)|明記(?:が|は|されて|して)/u.test(answer)) return '他責の言い回し'
   if (/(?:バグ|不具合|障害|欠陥|システムの問題)(?:が|は|も)?(?:あり|ござい|発生|起き|起こっ|生じ|確認され|見つか)|(?:バグ|不具合|障害|欠陥)(?:です|でした|と思われ|かもしれ|の可能性|によ|のため|が原因)|(?:バグ|不具合)を(?:修正|直)/u.test(answer)) return '不具合を認める'
@@ -207,20 +216,6 @@ export function extractQuestionAiAnswerText(message: Pick<Anthropic.Message, 'co
 export type QuestionAiAnswerResult =
   | { ok: true; answer: string; model: string; inputTokens: number; outputTokens: number }
   | { ok: false; error: string; blockedAnswer?: string; inputTokens?: number; outputTokens?: number }
-
-/** 影(比較用モデル)の結果を報告文書へ書く形。室長には出さない。 */
-export function buildQuestionAiShadowFields(model: string, result: QuestionAiAnswerResult, answeredAt: string): Record<string, string | number> {
-  const inputTokens = result.ok ? result.inputTokens : result.inputTokens ?? 0
-  const outputTokens = result.ok ? result.outputTokens : result.outputTokens ?? 0
-  return {
-    aiAnswerShadowModel: result.ok ? result.model : model,
-    aiAnsweredShadowAt: answeredAt,
-    aiAnswerShadowInputTokens: inputTokens,
-    aiAnswerShadowOutputTokens: outputTokens,
-    aiAnswerShadowCostYen: estimateQuestionAiCostYen(model, inputTokens, outputTokens),
-    ...(result.ok ? { aiAnswerShadow: result.answer } : { aiAnswerShadowError: result.error, ...(result.blockedAnswer ? { aiAnswerShadowBlocked: result.blockedAnswer } : {}) }),
-  }
-}
 
 /**
  * 失敗理由を**開発者向けの短文**に丸める(内部のスタックや鍵の断片を出さない)。

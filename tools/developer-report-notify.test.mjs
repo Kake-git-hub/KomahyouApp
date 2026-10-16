@@ -75,12 +75,13 @@ describe('Issue の整形(公開リポジトリ前提)', () => {
     expect(buildIssueTitle({ ...report, category: 'request', note: '電話番号の欄がほしい' })).toBe('📣 [利用者要望] スクールIE 緑が丘校: 電話番号の欄がほしい')
     expect(resolveIssueLabels(report)).toEqual(['type:bug', 'status:triage', 'source:user-report'])
     expect(resolveIssueLabels({ category: 'request' })).toEqual(['type:feature', 'status:triage', 'source:user-report'])
-    // 使い方の質問(2026-09-13): ラベル type:question・タイトル [利用者質問]・本文に「自動回答しない」の進め方。
+    // 使い方の質問: ラベル type:question・タイトル [利用者質問]・本文に進め方(2026-10-16 夜: 開発用教室は AI がすぐ回答・訂正回答は開発者画面から)。
     expect(buildIssueTitle({ ...report, category: 'question', note: '振替先を後から変えるには？' })).toBe('📣 [利用者質問] スクールIE 緑が丘校: 振替先を後から変えるには？')
     expect(resolveIssueLabels({ category: 'question' })).toEqual(['type:question', 'status:triage', 'source:user-report'])
     expect(buildIssueBody({ ...report, category: 'question' })).toContain('- 種類: 使い方の質問')
-    expect(buildIssueBody({ ...report, category: 'question' })).toContain('自動回答はしない')
-    expect(buildIssueBody(report)).not.toContain('自動回答はしない')
+    expect(buildIssueBody({ ...report, category: 'question' })).toContain('AI がその場で回答し室長に表示済み')
+    expect(buildIssueBody({ ...report, category: 'question' })).toContain('開発者画面「質問への回答」から送る')
+    expect(buildIssueBody(report)).not.toContain('質問への回答')
     expect(resolveIssueLabels({})).toEqual(ISSUE_LABELS)
     expect(buildIssueBody(report)).toContain('- 種類: 不具合・おかしい')
   })

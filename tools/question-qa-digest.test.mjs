@@ -83,7 +83,9 @@ describe('question-qa-digest: パック本文', () => {
     ]
     const markdown = buildQaDigestMarkdown(reports, { workspaceKey: 'main', sinceLabel: '2026-07-18 以降', generatedAt: '2026-10-16T05:00:00.000Z' })
     expect(markdown.startsWith(QA_CURATION_INSTRUCTIONS)).toBe(true)
-    expect(QA_CURATION_INSTRUCTIONS).toContain('オーナーの承認を得てから')
+    // 2026-10-16 夜: オーナー承認の段を外した(Claude がそのまま足す)。承認待ちの文言は残さない。
+    expect(QA_CURATION_INSTRUCTIONS).toContain('オーナー承認は要らない')
+    expect(QA_CURATION_INSTRUCTIONS).not.toContain('承認を得てから')
     expect(QA_CURATION_INSTRUCTIONS).toContain('docs/qa-curation-log.md')
     expect(markdown).toContain('# QA 候補パック(main・2026-07-18 以降・作成 2026-10-16 14:00)')
     expect(markdown).toContain('- 件数 3(質問 2・要望 1)。')

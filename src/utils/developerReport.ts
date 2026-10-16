@@ -5,7 +5,8 @@
 //  - 一言は**必須**（空欄では送れない）。
 //  - ボタン名は「要望・報告」。不具合だけでなく**追加要望**も同じ導線で送れる（category = bug / request）。
 //  - 2026-09-13: **使い方の質問**（category = question）も同じ導線・同じ流れ（ストック → メール通知 → 後で開発者が対応）で
-//    送れる。利用者への自動回答はしない（開発者が承認した回答だけを返す。docs/spec-developer-report.md §G）。
+//    送れる。本番教室では利用者への自動回答はしない。開発用教室では AI がその場で回答し室長にすぐ表示する（オーナー承認なし・
+//    2026-10-16 夜。開発者にはメールで回答文が届き、訂正回答は開発者画面から送れる。docs/spec-developer-report.md §G-7）。
 //  - 内容に `#テスト` を含めるとテスト扱い（サーバーが Issue 起票をしない。メールは【テスト】付きで届く）。
 //    2026-09-14: モーダルの案内文(testHint)は削除（オーナー指示）。判定そのものは残す。
 //  - 2026-09-14: ボタン名を「質問・要望」へ、種類の並びを 質問 → 要望 → 不具合 へ、モーダルの既定を質問へ（オーナー指示）。
@@ -299,8 +300,14 @@ export type DeveloperReportSubmitResult =
 
 export const DEVELOPER_REPORT_AI_ANSWER_HEADING = '― 自動回答（試験中・誤りがあることがあります）―'
 
-/** AI 即時回答が作れなかったときに室長へ出す一文。理由は含めない(開発者向けの理由は報告文書 aiAnswerError に残る)。 */
-export const DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE = '（自動回答を作れませんでした。開発者が確認してから回答します）'
+/**
+ * AI 即時回答が作れなかったときに室長へ出す一文。理由は含めない(開発者向けの理由は報告文書 aiAnswerError に残る)。
+ * 「開発者より別途回答いたします」はオーナー指示(2026-10-16 夜)の言い方。サーバーの決まり文句(functions/src/questionAiAnswer.ts
+ * QUESTION_AI_DEVELOPER_REPLY)・履歴の回答待ちの一文(reportAnswers.ts)と揃える。
+ */
+export const DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE = '（自動回答を作れませんでした。開発者より別途回答いたします）'
+/** AI の回答の後ろに添える一文(回答は開発者にも届いていて、訂正・補足は開発者から返ることを伝える・2026-10-16 夜)。 */
+export const DEVELOPER_REPORT_AI_ANSWER_TRAILER = 'この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。'
 
 /** 送信結果を利用者向けの1文にする（盤面モーダル・日程表タブのモーダルで共用）。 */
 export function formatDeveloperReportResultMessage(result: DeveloperReportSubmitResult): string {
@@ -308,7 +315,7 @@ export function formatDeveloperReportResultMessage(result: DeveloperReportSubmit
     const head = result.isTest
       ? `テストとして受け付けました（受付番号 ${result.reportId}）。`
       : `開発者へ送りました（受付番号 ${result.reportId}）。ありがとうございます。`
-    if (result.aiAnswer) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_HEADING}\n${result.aiAnswer}\n\nこれで解決しない場合は、開発者が確認して改めて回答します。`
+    if (result.aiAnswer) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_HEADING}\n${result.aiAnswer}\n\n${DEVELOPER_REPORT_AI_ANSWER_TRAILER}`
     // 失敗理由(aiAnswerError)は室長へ出さない(2026-10-10 文言見直し #473)。理由は開発者向けに報告文書の aiAnswerError・
     // 関数ログ・操作痕跡(App.tsx の recordOperationTrace)へ残り、開発ダッシュボードで読める。
     if (result.aiAnswerError) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE}`
