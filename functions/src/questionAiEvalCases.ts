@@ -9,7 +9,8 @@ export const QUESTION_AI_EVAL_NOW = new Date('2026-10-16T03:00:00+09:00')
 
 /**
  * 評価用の生徒×科目の台帳(架空の生徒 2 人・妥協案 B の確認用)。本番では クライアントが権威関数で計算して同梱する。
- * 山田 太郎: 数の未消化振替 2 回(10/2・10/9 の休み・金曜)、今後の予定 10/20 振替(火)・10/23 通常・10/30 通常、夏期講習 英 残 1。
+ * 山田 太郎: 数の休み 3 回(9/25・10/2・10/9・金曜)のうち 9/25 の分は 10/20(火) に振替を置き済み → 未消化振替 2 回(10/2・10/9)。
+ *   今後の予定 10/20 振替・10/23 通常・10/30 通常、夏期講習 英 残 1。(数字が互いに矛盾しないようにしておく＝AI が「置き済みの分」を説明できる)
  * 佐藤 花子: 質問に出ていない生徒(回答に名前が出たら止まることを確かめる)。
  */
 export const QUESTION_AI_EVAL_STUDENT_LEDGER: NormalizedDeveloperReportStudentLedger = {
@@ -18,10 +19,10 @@ export const QUESTION_AI_EVAL_STUDENT_LEDGER: NormalizedDeveloperReportStudentLe
     {
       studentId: 's001', name: '山田 太郎', subject: '数', makeupBalance: 2,
       makeupRemaining: ['2026-10-02#2|休み', '2026-10-09#2|休み'],
-      attended: ['2026-09-18#2|regular', '2026-09-25#2|regular'],
-      absent: ['2026-10-02#2|regular', '2026-10-09#2|regular'],
+      attended: ['2026-09-11#2|regular', '2026-09-18#2|regular'],
+      absent: ['2026-09-25#2|regular', '2026-10-02#2|regular', '2026-10-09#2|regular'],
       absentNoMakeup: [],
-      placed: ['2026-10-20#3|makeup|2026-10-02|2', '2026-10-23#2|regular', '2026-10-30#2|regular'],
+      placed: ['2026-10-20#3|makeup|2026-09-25|2', '2026-10-23#2|regular', '2026-10-30#2|regular'],
     },
     {
       studentId: 's002', name: '佐藤 花子', subject: '英', makeupBalance: 1,

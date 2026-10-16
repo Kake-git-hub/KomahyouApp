@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.619 (2026-10-16)
+
+- docs: 質問 AI 回答の評価 5 回目(run 38914946917・週の印つき・2 モデル × 23 問)の結果を引き継ぎ資料に記録(Q22 は両モデルとも正解・Haiku は Q20 で謝罪語を書き機械検査で 1 件止まった・Sonnet 約 112 円／Haiku 約 5.4 円)。評価用の台帳の数字の矛盾(置き済みの振替の元コマが未消化にも残っていた)を直した(コード変更なし・テストのみ) (docs/handoff-question-ai-answer.md, functions/src/questionAiEvalCases.ts, functions/src/questionAiStudentDigest.test.ts)
+
 ## v1.5.618 (2026-10-16)
 
 - fix: v1.5.617 の週の印のテストで、同じ週の過ぎた日(月曜)を〔過去〕と期待していた誤りを直した(実装は〔今週〕が正しい。v1.5.617 の CI が赤になったため) (functions/src/questionAiStudentDigest.test.ts)
