@@ -360,14 +360,14 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                     <span className="verification-checklist-item-id">{item.id}</span>
                     {text(item.title)}
                   </div>
-                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">前提</span>{text(item.prep)}</p> : null}
-                  <div className="verification-checklist-label">操作</div>
+                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p> : null}
+                  <div className="verification-checklist-label">やること</div>
                   <ol className="verification-checklist-steps">
                     {item.steps.map((step) => <li key={step}>{text(step)}</li>)}
                   </ol>
                   {item.check && item.check.length > 0 ? (
                     <>
-                      <div className="verification-checklist-label">見るところ</div>
+                      <div className="verification-checklist-label">OKの目安</div>
                       <ul className="verification-checklist-check">
                         {item.check.map((line) => <li key={line}>{text(line)}</li>)}
                       </ul>

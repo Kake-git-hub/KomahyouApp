@@ -34,6 +34,13 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(references.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('項目の中の見出しは「準備」「やること」「OKの目安」(第62版・オーナー指示「確認リストの日本語が難しい」)', () => {
+    expect(PANEL_TSX).toContain('<span className="verification-checklist-label">準備</span>')
+    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">やること</div>')
+    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">OKの目安</div>')
+    for (const old of ['>前提<', '>操作<', '>見るところ<']) expect(PANEL_TSX).not.toContain(old)
+  })
+
   it('送信は既存の「要望・報告」経路(source: board / category: request)を使う', () => {
     expect(APP_TSX).toContain("return submit({ source: 'board', category: 'request', note, attachments })")
     expect(APP_TSX).toContain('submitDeveloperReportRef.current = submitDeveloperReport')

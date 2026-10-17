@@ -73,10 +73,39 @@ describe('確認リストの項目定義', () => {
     }
   })
 
+  // 第62版(2026-10-17・オーナー指示「確認リストの日本語が難しいのでもっとわかりやすくして」): 開発の内輪の言葉を文面へ戻さない。
+  // 画面にある文字(ボタン名・メッセージ)は「」で引用してそのまま書いてよいので、「」の中は検査から外す。
+  it('文面に内輪の言葉(盤面・四択・モーダル・確認文・実機・突き合わせ・上段/下段)を使わない(「」で引いた画面の文字は除く)', () => {
+    const jargon = /盤面|四択|モーダル|確認文|実機|突き合わせ|上段|下段/u
+    for (const item of VERIFICATION_CHECKLIST.items) {
+      for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) {
+        const outsideQuotes = line.replace(/「[^「」]*(?:「[^「」]*」[^「」]*)*」/gu, '')
+        expect(outsideQuotes, `${item.id}: ${line}`).not.toMatch(jargon)
+      }
+    }
+  })
+
+  it('文面が名指しする別の項目(q-3・tp-48 など)は、今のリストに実在する(外した項目を前提にしない)', () => {
+    const ids = new Set(VERIFICATION_CHECKLIST.items.map((item) => item.id))
+    for (const item of VERIFICATION_CHECKLIST.items) {
+      for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) {
+        for (const match of line.matchAll(/\b(q|tp|sr|c)-(\d+)\b/gu)) expect(ids, `${item.id} が ${match[0]} を参照`).toContain(match[0])
+      }
+    }
+  })
+
+  it('第62版: 文面の言い換えの確認 c-7 を先頭に置く(版は据え置き)', () => {
+    const c7 = VERIFICATION_CHECKLIST.items[0]
+    expect(c7.id).toBe('c-7')
+    expect(c7.area).toBe('確認リスト')
+    expect(c7.check!.join(' / ')).toContain('「準備」「やること」「OKの目安」')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('c-7')
+  })
+
   it('第55版(v1.5.604・2026-10-15): 受付 20261015-151056959-a8890098 で OK だった c-5・tp-47・tp-53・tp-54 を外し、結果待ちの q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 を残す', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第56版(2026-10-16): 虫眼鏡の絞り込み sr-1〜sr-3 を足した(版は据え置き)。第57版(同日): AI 自動回答の Claude API 切り替え qa-ai-1 を足した(版は据え置き)。第58版(同日): AI 回答の確認用の質問 20 問 qa-q01〜qa-q20 を足した(版は据え置き)。第59版(同日夜): Sonnet・他責の言い回し禁止・説明書拡充の確認 qa-ai-2 を足した(版は据え置き)。第60版(同日夜): 妥協案 B・二重回答の確認 qa-ai-3・qa-q21〜23 を足した(版は据え置き)。第61版(同日夜): Haiku 確定・すぐ表示＋メール・訂正回答の qa-ai-3(書き換え)・qa-ai-4 を足した(版は据え置き)。第61版(同日夜): Haiku 確定・すぐ表示＋メール・訂正回答の qa-ai-3(書き換え)・qa-ai-4 を足した(版は据え置き)。
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
+    expect(ids).toEqual(['c-7', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-55', 'tp-56', 'tp-57', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
     // 第54版の結果(2026-10-15・受付 20261015-151056959-a8890098)で OK → 外す。
     for (const okId of ['c-5', 'tp-47', 'tp-53', 'tp-54']) expect(ids, okId).not.toContain(okId)
     // 第54版の結果(2026-10-15・受付 20261015-133308495-046ae8de)で OK → 外す。
@@ -110,7 +139,7 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
     // 第47版: 今の緑の机(10/16(金) 5限の机 2)を名指し。上段を先に休みにすると机が 1 行に戻って下段でなくなるので、下段→上段の順。
     expect(byId.get('tp-15')!.prep).toContain('10/16(金) 5限の机 2')
-    expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下段の\{\{student:s079\}\}.*次に上段の\{\{student:s085\}\}/u)
+    expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下の行の\{\{student:s079\}\}.*次に上の行の\{\{student:s085\}\}/u)
     // 第54版(2026-10-15): 基本仕様の確認 tp-55〜57 は v1.5.602 で追加。
     for (const id of ['tp-55', 'tp-56', 'tp-57']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.602')
     // オーナー指示「未消化数が変化しないこと・日程表とコマ表に差異がないこと・コマ表から意図してない変更が発生してないこと(基本仕様のデバッグ)」: テスト教室にも出す。
@@ -120,8 +149,8 @@ describe('確認リストの項目定義', () => {
     }
     expect(byId.get('tp-55')!.title).toContain('未消化振替・未消化講習の残数が変わらない')
     expect(byId.get('tp-55')!.check!.join(' / ')).toContain('生徒ごとに保存前と同じ')
-    expect(byId.get('tp-56')!.title).toContain('コマ表(盤面)と生徒日程表・講師日程表の内容が一致する')
-    expect(byId.get('tp-56')!.check!.join(' / ')).toContain('盤面に無いコマが日程表にだけ出たり')
+    expect(byId.get('tp-56')!.title).toContain('コマ表と生徒日程表・講師日程表の内容が同じになる')
+    expect(byId.get('tp-56')!.check!.join(' / ')).toContain('コマ表に無い授業が日程表にだけ出たり')
     expect(byId.get('tp-57')!.title).toContain('意図しない変更が起きない')
     expect(byId.get('tp-57')!.check!.join(' / ')).toContain('反映開始日より前の週の机は、どちらの保存でも変わらない')
     // #75 の段 2(tp-48〜51)はまだ結果が無いので残す(文面は据え置き)。
@@ -135,7 +164,7 @@ describe('確認リストの項目定義', () => {
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
     expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
-    expect(byId.get('q-6')!.check!.join(' / ')).toContain('四択のどれかを押した時点で')
+    expect(byId.get('q-6')!.check!.join(' / ')).toContain('4つのボタンのどれかを押した時点で')
     expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
     expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
     // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
