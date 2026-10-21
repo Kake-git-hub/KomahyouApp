@@ -922,7 +922,15 @@ export function resolveAdoptExistingWithdrawSeats(desk: Pick<DeskCell, 'lesson'>
 
 export type TemplatePendingCollapseResult =
   | { ok: true; nextDesk: DeskCell }
-  | { ok: false; reason: 'both-rows-live' | 'status-overflow' | 'memo-overflow' | 'duplicate-student' }
+  | { ok: false; reason: 'both-rows-live' | 'status-overflow' | 'memo-overflow' | 'duplicate-student' | 'teacher-duplicate' }
+
+/** Q41-6/-7（INV-01）: そのコマの別の机に同じ講師が居るか（表示名・講師 ID・呼び名の対応で見る）。1 行に戻る経路・既存を採用・再保存の 3 か所が同じ判定を使う。 */
+export function isTeacherElsewhereInCell(cell: Pick<SlotCell, 'desks'>, deskId: string, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>, resolveAliases: TeacherAliasResolver = defaultTeacherAliases) {
+  const keys = new Set<string>()
+  for (const key of [teacher.teacher.trim(), teacher.teacherAssignmentTeacherId?.trim() ?? '']) if (key) for (const alias of resolveAliases(key)) keys.add(alias)
+  if (keys.size === 0) return false
+  return cell.desks.some((desk) => desk.id !== deskId && desk.teacher.trim() !== '' && (keys.has(desk.teacher.trim()) || (desk.teacherAssignmentTeacherId ? keys.has(desk.teacherAssignmentTeacherId.trim()) : false)))
+}
 
 /**
  * 保留（2 行）を 1 行に戻す（Q28）。どちらかの行に生きている生徒がいないときだけ合流できる。
@@ -946,11 +954,14 @@ export function computePendingDeskCollapse(desk: DeskCell, pending: Pick<Templat
    * 上段が空になって下段が机へ戻るときは机の講師を手置き講師に戻す。'adopt'＝「既存を採用」。合流の可否は従来どおりで、戻した机の講師を手置き講師にする。
    */
   lowerTeacher?: 'auto' | 'adopt'
+  /** Q41-7（INV-01）: 戻す手置き講師が同じコマの別の机に居るか（居れば auto では合流しない）。 */
+  teacherElsewhere?: (teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => boolean
 } = {}): TemplatePendingCollapseResult {
   const upperLive = liveStudents(desk.lesson)
   const lowerLive = liveStudents(pending.lower.lesson)
   const lowerTeacherMode = options.lowerTeacher ?? 'auto'
   if (lowerTeacherMode === 'auto' && pending.lower.teacher && upperLive.length > 0 && lowerLive.length > 0) return { ok: false, reason: 'both-rows-live' }
+  if (lowerTeacherMode === 'auto' && pending.lower.teacher && upperLive.length === 0 && lowerLive.length > 0 && options.teacherElsewhere?.(pending.lower.teacher)) return { ok: false, reason: 'teacher-duplicate' }
   let baseLesson: DeskLesson | undefined
   if (upperLive.length > 0 && lowerLive.length > 0) {
     const merged = mergeLowerStudentsIntoFreeSeats(desk, pending.lower.lesson!, upperLive, options)
@@ -1590,9 +1601,17 @@ function applyTemplateDiffToCell(context: {
   // 1 行の机として机に残る「テンプレ以外の生きている生徒」（Q21-11 の重複判定の相手）。
   // 席ごとの突き合わせで空いた席に残した既存の生徒も 1 行側で生きるので数える（2026-09-30）。
   // Q38 でテンプレの机に任せる手動追加の通常授業は数えない（数えると Q21-11 がテンプレ側を外し、生徒がどこにも無くなる）。
+  // Q41（2026-10-21・regression-reviewer M-3）: 手置き講師の机（講師ごと保留）では残した席の生徒も下段へ移るので、1 行で生きる生徒には数えない。
+  const isManualTeacherOverlapDesk = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, plan: TemplateDeskSeatPlan | null) => {
+    if (!plan || plan.overflow || liveStudents(templateDesk.lesson).length === 0) return false
+    const existingTeacher = decision.kind === 'pending-rebase' && decision.pending.lower.teacher ? decision.pending.lower.teacher : desk
+    if (decision.kind !== 'pending' && !(decision.kind === 'pending-rebase' && decision.pending.lower.teacher)) return false
+    return resolveManualTeacherOverlap({ existingTeacher, templateDesk, handPlacedStudents: [...plan.kept, ...liveStudents({ id: '', studentSlots: plan.lowerSlots })], resolveAliases: context.teacherAliases })
+  }
   const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): StudentEntry[] => {
     if (decision.kind === 'keep') return liveStudents(stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(deskIndex)))
     const plan = planSeatsFor(desk, decision, templateDesk, deskIndex)
+    if (isManualTeacherOverlapDesk(desk, decision, templateDesk, plan)) return []
     return plan && !plan.overflow ? plan.kept : []
   }
 
@@ -1835,33 +1854,57 @@ function applyTemplateDiffToCell(context: {
       return withTeacher
     }
     const lower = cloneTemplatePendingLower(pending.lower)
-    // Q41-8（保留中の再保存）: 下段に手置き講師が居る机。新しいテンプレ机の講師で 4 分岐（同じ講師→テンプレの講師・講師なし→手置き講師を机へ・
-    // 講師だけ→暫定でテンプレの講師〔Q41-12 (1)〕・別の講師＋生徒→下段の講師を維持）。
+    // Q41-8（保留中の再保存・regression-reviewer H-1/M-1 で改定）: 下段に手置き講師が居る机。判定は作成時と同じ権威関数 resolveManualTeacherOverlap
+    // （手で置いた生徒＝残した席＋下段の生徒。Q34-2 で全員採用されれば居ない）で、新しいテンプレ机の講師により 4 分岐:
+    //   同じ講師→テンプレの講師（下段の講師は消える）／講師なし→手置き講師を机へ（別の机に同じ講師が居れば戻さず置き換え側）／
+    //   別の講師＋生徒で手で置いた生徒が居る→下段の講師ごと維持（残した席の生徒も下段へ＝作成時と同じく Q34-4 を当てない）／それ以外（講師だけのテンプレ机・手で置いた生徒なし）→テンプレの講師（件数に数える）。
     let rebasedWithTeacher = withTeacher
+    let overlapRebase = false
     if (pending.lower.teacher) {
       const lowerTeacher = pending.lower.teacher
       if (manualTeacherReplacedHere) dropReplacedNote()
+      const handPlacedOnRebase = [...plan.kept, ...liveStudents({ id: '', studentSlots: plan.lowerSlots })]
       if (!templateDesk.teacher.trim()) {
-        rebasedWithTeacher = applyTeacherFields(desk, lowerTeacher)
+        if (isTeacherElsewhereInCell(cell, desk.id, lowerTeacher, context.teacherAliases)) {
+          summary.manualTeacherReplaced += 1
+          context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: lowerTeacher.teacher, templateTeacher: '', dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+        } else {
+          rebasedWithTeacher = applyTeacherFields(desk, lowerTeacher)
+        }
         delete lower.teacher
       } else if (isSameTeacherByAliases(lowerTeacher.teacher, templateDesk.teacher, context.teacherAliases)) {
         delete lower.teacher
-      } else if (liveStudents(templateDesk.lesson).length === 0) {
+      } else if (resolveManualTeacherOverlap({ existingTeacher: lowerTeacher, templateDesk, handPlacedStudents: handPlacedOnRebase, resolveAliases: context.teacherAliases })) {
+        overlapRebase = true
+        summary.manualTeacherPending += 1
+        context.teacherNotes.push({ kind: 'teacher-pending', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+      } else {
         delete lower.teacher
         summary.manualTeacherReplaced += 1
         context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
-      } else {
-        summary.manualTeacherPending += 1
-        context.teacherNotes.push({ kind: 'teacher-pending', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
       }
     }
     const lowerBaseLesson = pending.lower.lesson ?? desk.lesson
-    if (!isEmptyPair(plan.lowerSlots) && lowerBaseLesson) lower.lesson = { ...cloneLesson(lowerBaseLesson), studentSlots: plan.lowerSlots }
+    if (overlapRebase && lowerBaseLesson) {
+      // 残した席の生徒も元の席のまま下段へ（上段はテンプレだけ）。
+      const overlapSlots: StudentPair = [...plan.lowerSlots] as StudentPair
+      for (const student of plan.kept) {
+        // 残した席の生徒の元の席は上段（机）か下段（保留）のどちらか。
+        const seatInUpper = (desk.lesson?.studentSlots ?? [null, null]).findIndex((candidate) => candidate === student)
+        const seat = seatInUpper >= 0 ? seatInUpper : (pending.lower.lesson?.studentSlots ?? [null, null]).findIndex((candidate) => candidate === student)
+        if (seat >= 0 && !overlapSlots[seat]) overlapSlots[seat] = student
+        else placeIntoPair(overlapSlots, Math.max(0, seat), student)
+      }
+      if (!isEmptyPair(overlapSlots)) lower.lesson = { ...cloneLesson(lowerBaseLesson), studentSlots: overlapSlots }
+      else delete lower.lesson
+    } else if (!isEmptyPair(plan.lowerSlots) && lowerBaseLesson) lower.lesson = { ...cloneLesson(lowerBaseLesson), studentSlots: plan.lowerSlots }
     else delete lower.lesson
     const keptBaseLesson = desk.lesson ?? pending.lower.lesson
-    const rebasedUpperLesson: DeskLesson | undefined = upperLesson
-      ? { ...upperLesson, studentSlots: plan.upperSlots }
-      : (plan.kept.length > 0 && keptBaseLesson ? detachManagedLessonIdentity({ ...cloneLesson(keptBaseLesson), studentSlots: plan.upperSlots }, desk.id) : undefined)
+    const rebasedUpperLesson: DeskLesson | undefined = overlapRebase
+      ? upperLesson
+      : upperLesson
+        ? { ...upperLesson, studentSlots: plan.upperSlots }
+        : (plan.kept.length > 0 && keptBaseLesson ? detachManagedLessonIdentity({ ...cloneLesson(keptBaseLesson), studentSlots: plan.upperSlots }, desk.id) : undefined)
     const seated = seatUpperWithDeskRecords({
       upperLesson: rebasedUpperLesson,
       keptStatus: collectStatusItems(desk.statusSlots, () => true),

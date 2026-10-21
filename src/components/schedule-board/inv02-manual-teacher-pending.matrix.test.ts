@@ -250,6 +250,96 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
   })
 })
 
+describe('regression-reviewer 2026-10-21（H-1/H-2/M-1〜M-4）', () => {
+  it('H-1: 席が空いている形（A が席 1）で同じテンプレをもう一度保存しても、下段＝A＋講師 B のまま（残した席の生徒を Q34-4 で上段へ寄せない）・件数は pending の内数', () => {
+    const saved = save(boardWith(MAKEUP_A, 1), NEW_ROWS)
+    const key = key0(saved.nextWeeks)
+    const again = save(saved.nextWeeks[0], NEW_ROWS, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences)
+    expect(again.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    expect(ids({ id: 'x', teacher: '', lesson: again.nextPendingDesks[key]?.lower.lesson })).toEqual([null, 'sA'])
+    expect(desk0(again.nextWeeks).teacher).toBe('田村')
+    expect(ids(desk0(again.nextWeeks))).toEqual(['sC', null])
+    expect(again.summary.manualTeacherPending).toBe(1)
+    expect(again.summary.manualTeacherPending).toBeLessThanOrEqual(again.summary.pending)
+    const third = save(again.nextWeeks[0], NEW_ROWS, again.nextPendingDesks, [...saved.addedSuppressedRegularLessonOccurrences, ...again.addedSuppressedRegularLessonOccurrences])
+    expect(third.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+  })
+
+  it('H-2: 保留中に B を別の机へ手で置いた後、上段が空いても自動では 1 行に戻らない（講師の一意性・理由 teacher-duplicate）', () => {
+    const saved = save(boardWith(MAKEUP_A, 1), NEW_ROWS)
+    const key = key0(saved.nextWeeks)
+    const withBElsewhere = [mutateDesk(saved.nextWeeks[0], 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual' }))]
+    const removed = withBElsewhere.map((w) => w.map((c) => (c.id !== CELL_ID ? c : { ...c, desks: c.desks.map((d, i) => (i !== 0 ? d : { ...d, lesson: undefined })) })))
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: withBElsewhere, previousTemplatePendingDesks: saved.nextPendingDesks, weeks: removed, templatePendingDesks: saved.nextPendingDesks })
+    expect(settled.collapsedKeys).toEqual([])
+    expect(settled.nextTemplatePendingDesks[key]).toBeDefined()
+    expect(desk0(settled.nextWeeks).teacher).toBe('田村')
+    const collapse = computePendingDeskCollapse(desk0(removed), saved.nextPendingDesks[key], { teacherElsewhere: () => true })
+    expect(collapse.ok).toBe(false)
+    if (!collapse.ok) expect(collapse.reason).toBe('teacher-duplicate')
+    // 再保存の「講師なし」分岐でも、B が別の机に居れば机へ戻さない（置き換え側に数える）
+    const resaved = save(withBElsewhere[0], [], saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences)
+    expect(desk0(resaved.nextWeeks).teacher).not.toBe('倉島')
+    expect(resaved.summary.manualTeacherReplaced).toBe(1)
+  })
+
+  it('M-1: 再保存で手で置いた生徒が全員テンプレに採用される（同じ生徒×科目×種別）と、B は外れて manualTeacherReplaced に数える', () => {
+    const saved = save(boardWith(MANUAL_A, 1), NEW_ROWS)
+    const key = key0(saved.nextWeeks)
+    expect(saved.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    // 新テンプレ: 田村＋C＋A（A は手動追加の通常授業と同じ中身＝Q34-2 の採用）
+    const adoptingRows = [row('r0', 'tD', 'sC', 'sA'), row('r1', 'tF')]
+    const again = save(saved.nextWeeks[0], adoptingRows, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences)
+    expect(again.nextPendingDesks[key]).toBeUndefined()
+    expect(desk0(again.nextWeeks).teacher).toBe('田村')
+    expect(again.summary.manualTeacherPending).toBe(0)
+    expect(again.summary.manualTeacherReplaced).toBe(1)
+    expect(again.studentNotes.filter((note) => note.kind.startsWith('teacher-')).map((note) => note.kind)).toEqual(['teacher-replaced'])
+  })
+
+  it('M-2: 下段がメモだけの席で席ごとの「既存を採用」をしても、講師は戻さず「戻しました」とも言わない', () => {
+    const saved = save(boardWith(MAKEUP_A, 0), NEW_ROWS)
+    const key = key0(saved.nextWeeks)
+    const withMemo = { ...saved.nextPendingDesks, [key]: { ...saved.nextPendingDesks[key], lower: { ...saved.nextPendingDesks[key].lower, memoSlots: [null, '持ち物'] as [string | null, string | null] } } }
+    const result = resolve('adopt-existing', saved.nextWeeks, withMemo, 1)
+    expect(result.status).toBe('applied')
+    if (result.status !== 'applied') return
+    expect(desk0(result.nextWeeks).teacher).toBe('田村')
+    expect(result.message).not.toContain('戻しました')
+  })
+
+  it('M-4: 席ごとの「既存を採用」の後、残る席の保留は講師を持たない', () => {
+    // 下段 2 席: A（席 0・振替）と X（席 1・講習）
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: { id: `${desk.id}_hand`, studentSlots: [MAKEUP_A, entry('sX', { lessonType: 'special', specialSessionId: 's' })] } }))
+    const saved = save(week, NEW_ROWS)
+    const key = key0(saved.nextWeeks)
+    expect(saved.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    const result = resolve('adopt-existing', saved.nextWeeks, saved.nextPendingDesks, 0)
+    expect(result.status).toBe('applied')
+    if (result.status !== 'applied') return
+    expect(desk0(result.nextWeeks).teacher).toBe('倉島')
+    const rest = result.nextTemplatePendingDesks[key]
+    if (rest) expect(rest.lower.teacher).toBeUndefined()
+  })
+
+  it('M-3: Q41 の机の残した席の生徒は Q21-11 の「1 行で生きる生徒」に数えない（別の机のテンプレの同じ生徒を外さない）', () => {
+    // 机 0 = B＋振替 A（席 1）。テンプレ: 机 0 に D＋C、机 1 に F＋通常の A。
+    const rows = [row('r0', 'tD', 'sC'), row('r1', 'tF', 'sA')]
+    const saved = save(boardWith(MAKEUP_A, 1), rows)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(ids(cellOf(saved.nextWeeks).desks[1])).toEqual(['sA', null])
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
+  })
+
+  it('兄弟: テンプレ足場の講師（manual でない）の机に手で置いた生徒が居ても、下段に講師は入らない（従来の保留）', () => {
+    const week = mutateDesk(buildWeek([row('r0', 'tF'), row('r1', 'tF')]), 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [MAKEUP_A, null] } }))
+    expect(desk0([week]).manualTeacher).toBeFalsy()
+    const saved = save(week, NEW_ROWS)
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toBeUndefined()
+    expect(saved.summary.manualTeacherPending + saved.summary.manualTeacherReplaced).toBe(0)
+  })
+})
+
 describe('Q41-9 兄弟（従来どおり）', () => {
   it('手置き講師だけ（手で置いた生徒なし）: D に替わる（件数 manualTeacherReplaced=1・理由の行）。2 行にしない', () => {
     const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...MANUAL_TEACHER_B }))
