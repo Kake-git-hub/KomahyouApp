@@ -17,9 +17,12 @@
 //
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
-import type { DeskLesson, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import type { DeskCell, DeskLesson, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
-/** 保留の下段（既存側の生徒側）。講師は持たない（Q24-1・Q21-9）。 */
+/** 下段が持つ手置き講師（Q41・2026-10-21・オーナー決定 B）。保存前の机の講師フィールドの写し。表示と「既存を採用」の復元にだけ使う（INV-13）。 */
+export type TemplatePendingLowerTeacher = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>
+
+/** 保留の下段（既存側の生徒側）。講師は原則持たない（Q24-1・Q21-9）。例外＝Q41 の手置き講師（`teacher`）。 */
 export type TemplatePendingLower = {
   /** 保存前の机の生きている生徒（lesson.studentSlots）。生きている生徒がいなければ undefined。 */
   lesson?: DeskLesson
@@ -30,6 +33,12 @@ export type TemplatePendingLower = {
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   /** 下段のメモ。 */
   memoSlots?: [string | null, string | null]
+  /**
+   * Q41（2026-10-21・オーナー決定 B）: 手置き講師の机に手で置いた生徒が居て、テンプレが別の講師（＋生徒）を同じ机に置くとき、
+   * 手置き講師を下段に残す（講師の重複として緑で見せる）。講師日程表・給与・PDF・警告など週データの消費者には出ない（INV-13）。
+   * 「既存を採用」で机の講師に戻す。下段が空になれば消える。
+   */
+  teacher?: TemplatePendingLowerTeacher
 }
 
 export type TemplatePendingDesk = {
@@ -75,7 +84,38 @@ export function cloneTemplatePendingLower(lower: TemplatePendingLower): Template
     ...(lower.lesson ? { lesson: { ...lower.lesson, studentSlots: cloneStudentSlots(lower.lesson.studentSlots) } } : {}),
     ...(lower.statusSlots ? { statusSlots: cloneStatusSlots(lower.statusSlots) } : {}),
     ...(lower.memoSlots ? { memoSlots: [lower.memoSlots[0], lower.memoSlots[1]] as [string | null, string | null] } : {}),
+    ...(lower.teacher ? { teacher: { ...lower.teacher } } : {}),
   }
+}
+
+const LOWER_TEACHER_SOURCES = new Set(['manual', 'manual-replaced', 'schedule-registration', 'deleted'])
+
+/** 読込時の正規化: 下段の講師は名前が空でない object だけ受け付ける（形が壊れた値は捨てる＝Q24-5 の「形が壊れた値だけ落とす」）。 */
+export function normalizeTemplatePendingLowerTeacher(value: unknown): TemplatePendingLowerTeacher | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.teacher !== 'string' || !record.teacher.trim()) return undefined
+  const source = typeof record.teacherAssignmentSource === 'string' && LOWER_TEACHER_SOURCES.has(record.teacherAssignmentSource) ? record.teacherAssignmentSource as TemplatePendingLowerTeacher['teacherAssignmentSource'] : undefined
+  return {
+    teacher: record.teacher,
+    manualTeacher: typeof record.manualTeacher === 'boolean' ? record.manualTeacher : undefined,
+    teacherAssignmentSource: source,
+    teacherAssignmentSessionId: typeof record.teacherAssignmentSessionId === 'string' ? record.teacherAssignmentSessionId : undefined,
+    teacherAssignmentTeacherId: typeof record.teacherAssignmentTeacherId === 'string' ? record.teacherAssignmentTeacherId : undefined,
+  }
+}
+
+/** そのコマの保留の下段が持つ手置き講師の名前（Q41-5: 講習の講師自動割当・QR 自己修復が「そのコマに居る」と数える）。 */
+export function collectTemplatePendingLowerTeacherNames(map: TemplatePendingDeskMap | null | undefined, cellId: string): string[] {
+  if (!hasTemplatePendingDesks(map)) return []
+  const names: string[] = []
+  for (const [key, entry] of Object.entries(map)) {
+    const parsed = parseTemplatePendingDeskKey(key)
+    if (!parsed || parsed.cellId !== cellId) continue
+    const name = entry.lower.teacher?.teacher.trim()
+    if (name) names.push(name)
+  }
+  return names
 }
 
 export function cloneTemplatePendingDeskMap(map: TemplatePendingDeskMap | null | undefined): TemplatePendingDeskMap {
@@ -119,6 +159,8 @@ export function normalizeTemplatePendingDeskMap(value: unknown): TemplatePending
       const memo = lowerRecord.memoSlots as [unknown, unknown]
       lower.memoSlots = [typeof memo[0] === 'string' ? memo[0] : null, typeof memo[1] === 'string' ? memo[1] : null]
     }
+    const teacher = normalizeTemplatePendingLowerTeacher(lowerRecord.teacher)
+    if (teacher) lower.teacher = teacher
     result[key] = {
       lower,
       effectiveStartDate: typeof entry.effectiveStartDate === 'string' ? entry.effectiveStartDate : '',

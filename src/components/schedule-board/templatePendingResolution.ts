@@ -159,6 +159,8 @@ function normalizeLower(lower: TemplatePendingLower): TemplatePendingLower {
   if (lower.lesson && liveStudentsOf(lower.lesson).length > 0) next.lesson = lower.lesson
   if (lower.statusSlots && (lower.statusSlots[0] || lower.statusSlots[1])) next.statusSlots = lower.statusSlots
   if (lower.memoSlots && (lower.memoSlots[0] != null || lower.memoSlots[1] != null)) next.memoSlots = lower.memoSlots
+  // Q41: 下段の講師は生徒・記録・メモの操作で消えない（下段そのものが空になって 1 行へ戻るときに外れる）。
+  if (lower.teacher?.teacher.trim()) next.teacher = lower.teacher
   return next
 }
 
@@ -216,6 +218,8 @@ export function splitTemplatePendingLowerSeat(lower: TemplatePendingLower, seatI
       slots[keep] = memo
       next.memoSlots = slots
     }
+    // Q41: 講師は机に 1 人なので両方の分け前に写す（押した席を机へ戻すときも、残る席の保留にも手置き講師が残る）。
+    if (lower.teacher) next.teacher = { ...lower.teacher }
     return normalizeLower(next)
   }
   return { seatLower: pick(seatIndex), restLower: pick(other) }

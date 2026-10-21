@@ -14,6 +14,16 @@
 
 ## 未リリース
 
+- feat(INV-02/INV-13/INV-01/INV-03): **手で置いた講師の机に手で置いた生徒(振替・講習・手動追加)が居るとき、テンプレが別の講師＋生徒を同じ机に置くと、講師も緑の下の行に残す(講師の重複として表す)**
+  (オーナー決定 B 2026-10-21・テスト教室 tp-56 case3/tp-57(3)・§H Q41＝Q21-9 例外 3・決定記録 #44・開発用教室のみ＝フラグ `templateDiffApply`)。手で置いた生徒は席の空きに関係なく全員下段へ(黙って別の講師の担当にしない)。
+  権威関数 `resolveManualTeacherOverlap`(手置き講師＝削除記録→QR の順に除いた manual/manual-replaced/manualTeacher・テンプレに別の講師と生徒・手で置いた生徒 1 人以上)。保留の下段に `teacher`(保存前の講師フィールドの写し・
+  正規化と複製と席の分割で持ち回る)。表示: 講師欄の下に緑の行(PDF はクローンから `.sa-pending-lower` を外すので出ない＝INV-13・講師日程表にも出ない)。「手入力データを採用」で机の講師を手置き講師に戻す(席ごとでも机の講師は 1 人＝暫定)・
+  同じコマの別の机にその講師が居れば止める(講師の一意性)。「テンプレ授業を採用」で下段ごと消える。上段が空いて下段が机へ戻るときも手置き講師に戻る。両方の行に生徒が居る間は自動で合流しない。
+  保留中の再保存は 4 分岐(同じ講師→テンプレの講師・講師なし→手置き講師・講師だけ→テンプレの講師〔暫定〕・別の講師＋生徒→維持)。講習の講師自動割当は下段の講師を「そのコマに居る」と数える。
+  確認文・保存後に「重ねて保留(緑)にする机: n机」「テンプレの講師に替える机: n机」と講師の名前つきの理由(見出しを「テンプレの生徒・講師の扱いの理由」に)。
+  暫定 5 点(Q41-12)はオーナー確認待ち。テスト: 新規 `inv02-manual-teacher-pending.matrix.test.ts`(振替／講習／手動追加 × ぶつかる／空席・既存を採用・席ごと・一意性・テンプレを採用・上段が空く・再保存 4 分岐・兄弟 5 形・往復の正規化・不動点)、
+  `templateDiffApply.test.ts` 条件 5 の期待を Q41 へ。確認リスト tp-59 追加・tp-57(3) を更新 (templatePendingDesks.ts / templatePendingResolution.ts / templateDiffApply.ts / ScheduleBoardScreen.tsx / BoardGrid.tsx / verificationChecklist.ts / developmentStatusLedger.ts / docs/spec-template-behavior.md / docs/spec-invariants.md / docs/spec-developer-report.md)
+
 - feat(INV-06/INV-05): **丸ごと振替した日に足した生徒を、振替先の同じ机に置けないときは同じコマの別の机(講師が居て保留でなく空席)へ置く**(オーナー確定 2026-10-21・既知の限界 L-5 の (a)・§H Q40-2 改定)。
   未消化に回すと、振替元の日に移送済みの振替がある生徒では未消化 origin が同じ日付へのフォールバック消化で食われて残数が増えなかった。確認の画面の理由に「同じ机が使えないので別の机」。
   残るのは「そのコマに置ける机が 1 つも無い」形だけ(Q40-8 L-5 を更新・オーナー判断待ち)。確認リスト tp-49 を書き直し (templateTransferFollow.ts / ScheduleBoardScreen.tsx / templateDiffApply.ts / テスト 3 本)
