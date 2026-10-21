@@ -146,7 +146,7 @@ function status(studentId: string, statusKind: StudentStatusEntry['status'], ove
 }
 
 function applyDiff(week: SlotCell[], newRows: RegularLessonRow[] = NEW_ROWS) {
-  return computeTemplateDiffApplyForBoard({
+  return computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks: [week],
     classroomSettings: settings(),
     teachers,

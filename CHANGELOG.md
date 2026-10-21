@@ -14,6 +14,29 @@
 
 ## 未リリース
 
+## v1.5.622 (2026-10-21)
+
+- fix(INV-05/INV-06/INV-12/INV-03/INV-02): **テスト教室の確認リスト v1.5.604(受付 20261020-092527755-56bbf675)の要改善 2 件を修正**(spec-template-behavior §H 決定記録 40〜43)。
+  (1) tp-48: 同じ科目を同じ曜日の別の時限にも持つ生徒を、丸ごと振替した日のコマにテンプレで足すと、Q40-3 の精算済み判定(M-1「別の時限に抑止キーがあれば精算済み」)が 3限のキーで 4限の分を精算済みと誤認し、
+  置かず・未消化にせず・−1 もせずに授業が消えていた(操作痕跡 2026-10-17 07:53 とスナップショットで確認)。regression-reviewer の再検査(H-A)でキー単位の判定はキー 1 本が何件分にも効く(時限変更の後に同じ科目を
+  別の時限に足す等で再発)と分かったので、精算済みを**件数方式**の権威関数 `resolveWholeDayTransferSettlement`(同じ時限のキー／その日の授業を説明できる件数〔生きている通常授業・出欠/移動元の記録・
+  記録と対にならない振替・在庫の origin・−1 の純減〕の余り)にし、配置計画 `planWholeDayTransferPlacements`(新パラメータ `settled`＝同じ集合・省略不可)と Q35-8 の −1 の両方が同じ集合を使う。
+  数え方は監査と共通の `templateLessonAccounting.ts`。入口 `computeTemplateDiffApplyForBoard` は `scheduleCountAdjustments`(読むだけ)を必須で受け、在庫の正本を保存前の盤面・台帳で 1 回引いて渡す。
+  INV-02 の例外文(範囲の粒度)は改定案として spec-invariants に注記(オーナー承認待ち)。監査で新たに見えた既知の限界 L-5(振替元の日に移送済みの振替がある生徒を置けない形で足すと、
+  未消化の origin が同じ日付へのフォールバック消化で食われる)は §H Q40-8 に記し、オーナー判断(別の机へ置く／−1／在庫側の変更)待ち。
+  (2) tp-51: 「時限を変える → 科目を変える」の順に保存すると、旧時限を振替元に持つ旧科目の振替が Q40-1 の範囲(曜日×時限)の外になり根拠が無いのに消えず、10/20 の無関係な保存で初めて消えていた。範囲を根拠と同じ日単位(曜日)に揃えた(`isSourceInScope`)。
+  テスト: `templateTransferFollow.test.ts`(精算済み判定 4 形・置く形・日単位の範囲)・新規 `inv06-template-save-sequences.matrix.test.ts`(下記) (templateDiffApply.ts / templateTransferFollow.ts / ScheduleBoardScreen.tsx)
+- feat: **テンプレ保存の確認の画面に「テンプレの生徒を置かない／動かす理由」を生徒の名前つきで出す**(同受付 tp-48「これ以外は機能していない」・tp-56 case1「通常授業はどこに消えたのか」)。Q21-11(同じコマに同じ生徒)・Q40-2(振替先へ置く／未消化と理由)・
+  Q40-3(精算済み)・Q35-8(置かず −1)・Q40-1(振替を消す)の 5 系統を、保存本体と同じ試し実行の結果(`studentNotes`)から最大 12 行＋「ほか n 件」で出す。件数の行はそのまま。確認リスト tp-58 (templateDiffApply.ts `TemplateDiffStudentNote` / `buildTemplateDiffStudentNoteLines` / ScheduleBoardScreen.tsx / templatePendingDesks.wiring.test.ts)
+- test: **再発防止を人手の確認リストでなく自動監査に**(オーナー指示 2026-10-21「不具合がでない、もしくは事前にテストし発見する方法を」)。①仕様の形に依らない保存則の純関数 `auditTemplateLessonAccounting`
+  (`templateLessonAccountingOracle.ts`: 新テンプレの各 生徒×科目×日付 の授業が 置いた通常授業／その日を振替元とする振替／在庫の origin／−1／同じコマの別種の授業／出欠記録 のどれでも説明できなければ「無言の消失」、振替元に根拠の無い振替は「根拠の無い振替」)。
+  ②シーケンス監査 `inv06-template-save-sequences.matrix.test.ts`: tp-48・tp-51 の実例(改定前の形は監査が検出することも固定)と、テンプレ操作 7 種(外す・同じ科目を別の時限にも持つ生徒を足す・時限変更・科目変更・講師変更・別の生徒を足す・何も変えない)の
+  **全順序ペア 49 通り**を 1 手ずつ保存し、毎手 監査ゼロ違反・台帳へ積むのは置けなかった分だけ(INV-06)・同じコマに同じ生徒 1 か所(INV-12)・再マージの不動点(INV-03)・**同じテンプレの再保存が何も変えない**(冪等)を検査。盤面の作り方は共有フィクスチャ `templateTransferFollow.fixture.ts`。
+  これらは `npm run test:unit` ＝ CI の毎 push で走る。置かない判定を足すときは監査が通る形で足す(通らなければ授業を消している)。spec-invariants INV-05/INV-06 に監査を明記
+- docs: **確認リスト第63版(v1.5.622)**: テスト教室の結果で OK の tp-55 を外す。tp-48(足す生徒は同じ曜日の別の時限に同じ科目を持つ生徒で・名前つきの行)・tp-49(「振替元が休日」の手順を「休日設定で元の日を休みにしてから」に・休日のときの見え方)・
+  tp-51(時限変更の後に続けて科目変更でも同じ)を書き直し、**tp-57(3) の「手で置いた講師は消えない」は仕様 Q21-9(机の講師はテンプレに揃える)と矛盾していたので仕様に合わせた**(テスト教室 tp-56 case3 の要改善は仕様どおりの挙動。臨時出勤の手置き講師を例外にするかはオーナー判断待ち・Q21-9 注記)。
+  tp-58(生徒ごとの理由)を追加。テスト教室に出すのは tp-48〜51・tp-56〜58。進行中テーマ台帳(template-diff-apply / user-request-issue-75)・spec-developer-report E-2 を追随 (verificationChecklist.ts・test / developmentStatusLedger.ts / docs/spec-template-behavior.md / docs/spec-invariants.md / docs/spec-developer-report.md)
+
 ## v1.5.621 (2026-10-17)
 
 - docs: 確認リストの文面を全項目わかりやすく言い換え(オーナー指示「確認リストの日本語が難しい」)。盤面→コマ表・四択→4つのボタン・モーダル→画面・確認文→確認の画面の文・振替元/振替先→元の日/移した先の日・上段/下段→上の行/下の行、長い1文を短く分け、外した tp-37・tp-53 への参照を削除。パネルの見出しを 前提/操作/見るところ → 準備/やること/OKの目安 に。確認項目 c-7 を追加(id・版 v1.5.604 は据え置き=下書き・結果はそのまま)。qa-q の見るところは AI 評価の 23 問と同じ文面に揃えて言い換え。内輪の言葉と消えた項目への参照を戻さないテストを追加 (src/utils/verificationChecklist.ts / VerificationChecklistPanel.tsx / functions/src/questionAiEvalCases.ts)

@@ -1602,7 +1602,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
   }))
   function saveAndRemerge(week: SlotCell[], rows: RegularLessonRow[], options: { suppressed?: string[]; classroom?: ClassroomSettings; compare?: 'strict' | 'content' } = {}) {
     const classroom = options.classroom ?? diffSettings({ templateFreezeBeforeDate: DATE })
-    const saved = computeTemplateDiffApplyForBoard({
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week], classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows,
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
     })

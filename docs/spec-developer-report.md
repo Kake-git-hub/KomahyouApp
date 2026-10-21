@@ -92,7 +92,7 @@
   `VerificationChecklistPanel.wiring.test.ts` で固定）。
 - **テスト教室にはテンプレ関係の項目だけ出す（2026-10-15 オーナー指示「テスト教室には、テンプレ関係の確認リストだけ残して。開発用教室はすべて残して」）**:
   App が `resolveVerificationChecklistAudience`（開発用教室＝development・テスト教室＝sandbox）を決めてパネルに渡し、パネルは
-  `selectVerificationChecklistItems` で絞る。sandbox に出すのは `VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS`（第 55 版〔v1.5.604〕: tp-48〜51 と基本仕様の確認 tp-55〜57。id は版ごとに入れ替わる）＝特定の教室のデータに依らない
+  `selectVerificationChecklistItems` で絞る。sandbox に出すのは `VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS`（第 63 版〔v1.5.622〕: tp-48〜51・基本仕様の確認 tp-56〜57・確認の画面の生徒ごとの理由 tp-58。tp-55 はテスト教室で OK〔受付 20261020-092527755-56bbf675〕。id は版ごとに入れ替わる）＝特定の教室のデータに依らない
   テンプレ関係の項目だけ（生徒プレースホルダを使う項目・開発用教室の盤面を前提にする項目は載せない。テスト教室の生徒は開発用教室と違うので、
   名前の差し込みが「名前不明(ID)」になるため）。進捗・送信本文・Markdown も絞った項目で数える。
 - **テスト教室でも同じ定義（`VERIFICATION_CHECKLIST`）から出る**（2026-10-15 オーナー指示「テスト教室でテスト担当にもチェックさせる」）。

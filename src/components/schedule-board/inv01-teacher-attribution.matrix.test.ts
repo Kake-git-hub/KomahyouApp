@@ -874,7 +874,7 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
 
   // 保存 → 盤面の再マージ 2 回 → 日程表（boardOnly）。newRows は保存した新テンプレ（日程表の regularLessons にも渡す＝旧担当フォールバックの検査）。
   function saveToSchedule(week: SlotCell[], newRows: RegularLessonRow[]) {
-    const saved = computeTemplateDiffApplyForBoard({
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week], classroomSettings: diffSettings, teachers, students, regularLessons: newRows,
       effectiveStartDate: FRI, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-07-20T00:00:00.000Z', manualMakeupAdjustments: {},
     })

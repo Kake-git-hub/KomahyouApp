@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -163,6 +163,8 @@ type TemplateSaveConfirmState = {
   // 機能フラグ templateDiffApply が ON の教室だけ: 差分反映を試し実行した件数（spec-template-behavior Q32-1）。
   // 保存本体と同じ関数（computeTemplateDiffApplyForBoard）・同じ入力で数える＝確認文と保存結果が食い違わない。
   diffSummary?: TemplateDiffApplySummary
+  /** 2026-10-21: 確認の画面に出す生徒ごとの理由（試し実行の結果・名前つき）。 */
+  studentNotes?: TemplateDiffStudentNote[]
   // Q39（オーナー案 2026-10-14・Issue #75）: 前回保存したテンプレとの差（変更点一覧）と、突き合わせる範囲（変えたコマだけ／すべて）。
   // 絞り込み（slotFilter）そのものは持たず、試し実行も保存本体も同じ計画関数（buildTemplateDiffSavePlan）が applyScope から作り直す
   // （Q32-1 と同じ流儀＝確認文と保存結果が食い違わない）。todayKey は過去日の警告用（Q39-5）。
@@ -2620,10 +2622,21 @@ export function computeTemplateDiffApplyForBoard(input: {
   manualMakeupAdjustments: MakeupOriginMap
   /** Q40: 抑止した origin（在庫の正本と同じ入力で有効な origin を引くため）。省略時は無し。 */
   suppressedMakeupOrigins?: MakeupOriginMap
+  /** Q40-3（2026-10-21）: 希望回数の補正。精算済み判定が「その日の −1 の純減」を説明に数える。読むだけ。省略不可。 */
+  scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[]
 }) {
+  // Q40-3（2026-10-21 H-A）: 精算済み判定の材料。在庫の正本は保存前の盤面・台帳で 1 回だけ引く（この保存で置く振替はまだ無い）。
+  const wholeDayTransferSettlement = {
+    originDatesByKey: collectMakeupOriginDatesByKey({
+      students: input.students, regularLessons: input.regularLessons, classroomSettings: input.classroomSettings, weeks: input.weeks,
+      manualAdjustments: input.manualMakeupAdjustments, suppressedOrigins: input.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(input.students),
+      today: resolveTemplateDiffToday(input.createdAt), includeAbsentMakeupOrigins: true, templatePendingDesks: input.templatePendingDesks,
+    }),
+    scheduleCountAdjustments: input.scheduleCountAdjustments,
+  }
   // Q39-9（regression-reviewer H-1）: 変えた机に関わる生徒の同日移動の写しが範囲の外の時限に居る日は、その日を全コマにする（Q36 は日単位の規則）。
   // 入口で 1 回だけ盤面（保存前の上段・下段）を見て決め、Q36 の反復・保存直後の再マージの重ね合わせの両方に同じ絞り込みを渡す。
-  const params = { ...input, slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter }) }
+  const params = { ...input, wholeDayTransferSettlement, slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter }) }
   // Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写し（同日移動・元の日付へ戻した）が、新テンプレの同じ生徒×科目と
   // 重複する／テンプレに無い／席で新テンプレの別の生徒とぶつかるときは、写しを外して**その日のその生徒×科目の抑止キーも外し**、
   // テンプレの授業が元の位置へ戻った形でもう一度突き合わせる（外したキーで抑止前の管理セルが変わるので、管理セルを作り直して反復する。
@@ -2652,8 +2665,18 @@ export function computeTemplateDiffApplyForBoard(input: {
       effectiveStartDate: params.effectiveStartDate, slotFilter: params.slotFilter,
     })
     const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals)
-    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, prepareStudentForMove, buildMovedSourceStatusEntry })
+    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry })
     const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)))
+    // 2026-10-21: 確認の画面に出す「生徒ごとの理由」（名前つき）。件数だけでは「誰がなぜ置かれないか」が追えない（テスト教室 tp-48/tp-56）。
+    const noteName = (student: StudentEntry) => student.name
+    const studentNotes: TemplateDiffStudentNote[] = [
+      ...run.diff.skippedDuplicates.map((item): TemplateDiffStudentNote => ({ kind: 'duplicate-skipped', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: item.slotNumber })),
+      ...follow.placed.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-placed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: formatTemplateDiffMonthDay(item.targetDateKey) })),
+      ...follow.stocked.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-stocked', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: describeWholeDayTransferStockReason(item.reason) })),
+      ...follow.settled.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-settled', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber })),
+      ...wholeDayTransferCountAdjustments.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-count-adjusted', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: null })),
+      ...orphaned.removals.map((item): TemplateDiffStudentNote => ({ kind: 'orphan-removed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: `振替先 ${formatTemplateDiffMonthDay(item.targetDateKey)}` })),
+    ]
     // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の次の反復の絞り込みは入口のまま＝反復ごとに範囲が広がらない・regression-reviewer M-1）。
     const settleSlotFilter = extendTemplateDiffSlotFilterWithCells(params.slotFilter, new Set([...removal.touchedCellIds, ...follow.touchedCellIds]))
     const settledSuppressed = [...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]
@@ -2692,6 +2715,8 @@ export function computeTemplateDiffApplyForBoard(input: {
         wholeDayTransferStocked: follow.stocked,
         /** Q40-2: 保存が台帳（manualMakeupAdjustments）へ積む origin（振替元が休日でない未消化だけ＝INV-06 の唯一の例外）。 */
         manualMakeupOriginAdditions: follow.stocked.filter((item) => item.ledger).map((item) => ({ student: item.student, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber })),
+        /** 2026-10-21: 確認の画面に出す生徒ごとの理由（名前つき）。 */
+        studentNotes,
       }
     }
     for (const revert of vanished) protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))
@@ -2711,6 +2736,7 @@ function runTemplateDiffApplyWithCopyReverts(params: {
   templatePendingDesks: TemplatePendingDeskMap
   createdAt: string
   slotFilter?: TemplateDiffSlotFilter | null
+  wholeDayTransferSettlement: { originDatesByKey: Record<string, string[]>; scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[] }
 }, protectedCopies: ReadonlySet<string>) {
   let weeks = params.weeks
   let pendingDesks = params.templatePendingDesks
@@ -2729,6 +2755,7 @@ function runTemplateDiffApplyWithCopyReverts(params: {
     // 削除記録(表示名か講師 ID)とテンプレ机の講師(表示名)を同じ講師として突き合わせる(Q21-9 例外 2 の改定・2026-10-14)。
     teacherAliases: buildTeacherAliasResolver(params.teachers),
     slotFilter: params.slotFilter,
+    wholeDayTransferSettlement: params.wholeDayTransferSettlement,
   })
   let diff = compute()
   const iterationLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
@@ -7458,6 +7485,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const diff = computeTemplateDiffApplyForBoard({
       weeks,
       classroomSettings: nextClassroomSettings,
+      scheduleCountAdjustments,
       teachers,
       students,
       regularLessons: normalizedTemplateRegularLessons,
@@ -10679,7 +10707,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         // Q39（オーナー案 2026-10-14）: 前回保存したテンプレ（編集を開いたときに読み込んだもの）と比べ、変えたコマだけを突き合わせるのを既定にする。
         // 変えたコマが 0（何も変えずに保存）・比べる前回が無い・机の数が違うときは従来どおり全コマ。
         const plan = buildTemplateDiffSavePlan(template, '')
-        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })
+        setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, studentNotes: plan.diff.studentNotes, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })
       } catch (error) {
         // 試し実行で例外が出たら保存の確認に進まず理由を出す(以前は同期で投げていた＝同じく保存には進まない)。
         setStatusMessage(`テンプレの差分を確認できませんでした: ${error instanceof Error ? error.message : String(error)}`)
@@ -15484,7 +15512,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 </div>
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }} data-testid="template-save-confirm-message">
                   {templateSaveConfirm.diffSummary
-                    ? buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey })
+                    ? buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })
                     : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
                 </div>
                 {templateSaveConfirm.definitionDiff && !templateSaveConfirm.definitionDiff.allSlots && templateSaveConfirm.definitionDiff.changedSlotKeys.length > 0 ? (
