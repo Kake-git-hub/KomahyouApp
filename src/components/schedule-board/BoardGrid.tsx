@@ -7,7 +7,7 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
+import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent, resolveTemplatePendingBandSeat } from './templatePendingResolution'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -827,6 +827,21 @@ function BoardGridComponent({
                           >
                             {cell.isOpenDay ? desk.teacher : ''}
                           </div>
+                          {/* Q41（2026-10-21・オーナー決定 B）: 下段の手置き講師。生徒の下段と同じ緑・同じクラス（PDF はクローンから .sa-pending-lower を外す＝INV-13）。 */}
+                          {cell.isOpenDay && pendingEntry?.lower.teacher ? (
+                            <div
+                              className="sa-pending-lower sa-pending-lower-teacher"
+                              title="保留中の下段（手で置いた講師）。押すと保留の机のメニューを開きます。"
+                              data-testid={`pending-lower-teacher-${cell.id}-${deskIndex}`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                onTemplatePendingLowerClick?.(cell.id, deskIndex, resolveTemplatePendingBandSeat(pendingEntry.lower), event.clientX, event.clientY)
+                              }}
+                              onMouseDown={(event) => event.stopPropagation()}
+                            >
+                              <div className="sa-pending-lower-inner sa-teacher-name">{pendingEntry.lower.teacher.teacher}</div>
+                            </div>
+                          ) : null}
                         </td>,
                         renderStudentCell(
                           cell,

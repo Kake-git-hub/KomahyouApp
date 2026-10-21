@@ -627,7 +627,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(result.summary.collapsedOnCreate).toBe(1)
   })
 
-  it('条件 5：印あり＋中身が違う＝保留。上段はテンプレ、下段に生きている生徒・表示専用の記録・メモ、会計記録は机に残る。講師は下段に入らない', () => {
+  it('条件 5：印あり＋中身が違う＝保留。上段はテンプレ、下段に生きている生徒・表示専用の記録・メモ、会計記録は机に残る。手置き講師＋手で置いた生徒の机は講師も下段へ（Q41）', () => {
     let week = buildWeek(OLD_ROWS)
     week = mutateDesk(week, 0, (desk) => ({
       ...desk,
@@ -654,8 +654,11 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(pending.lower.memoSlots).toEqual([null, '持ち物'])
     expect(pending.lower.statusSlots).toBeUndefined()
     expect(pending.effectiveStartDate).toBe(EFFECTIVE)
-    expect(Object.keys(pending.lower)).not.toContain('teacher')
+    // Q41（オーナー決定 B・2026-10-21）: この机は手置き講師（佐藤）＋手で置いた生徒（振替 M）にテンプレの別の講師（鈴木）＋生徒が入る形なので、
+    // 下段に手置き講師を持つ（講師の重複として緑で見せる）。改定前は「講師は下段に入らない」だった（inv02-manual-teacher-pending.matrix.test.ts）。
+    expect(pending.lower.teacher).toMatchObject({ teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' })
     expect(result.summary.pending).toBe(1)
+    expect(result.summary.manualTeacherPending).toBe(1)
   })
 
   it('条件 6(e)(f)：削除記録の机は**同じ講師**なら戻らない。削除記録だけ＋テンプレ空＝消す／テンプレに同じ講師だけ＝講師なしのまま 1 行', () => {
@@ -1041,15 +1044,15 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     ]
     const message = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: notes })
     expect(message).toContain('丸ごと振替した日に足した生徒1名を振替先へ置きます（空きが無い1名は未消化振替へ）')
-    expect(message).toContain('テンプレの生徒を置かない／動かす理由:')
+    expect(message).toContain('テンプレの生徒・講師の扱いの理由:')
     expect(message).toContain('・10/7 5限 青木（数）: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。')
     expect(message).toContain('・10/7 5限 千葉（数）: 丸ごと振替した日なので、振替先（10/8）の同じ机へ振替として置きます。')
-    expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（同じ机が満席）ため、未消化振替にします。')
+    expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（同じ机が満席で、同じコマに置ける机も無い）ため、未消化振替にします。')
     expect(message).toContain('・10/7 3限 江藤（国）: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。')
     expect(message).toContain('・10/8 藤井（理）: 丸ごと振替した日なので置かず、希望回数を −1 します。')
     expect(message).toContain('・10/7 5限 後藤（社）: 振替元の授業がテンプレから無くなったため、この振替を消します（振替先 10/8）。')
     // 件数の行は従来どおり、理由の行は「実行しますか？」より前
-    expect(message.indexOf('テンプレの生徒を置かない／動かす理由:')).toBeLessThan(message.indexOf('実行しますか？'))
+    expect(message.indexOf('テンプレの生徒・講師の扱いの理由:')).toBeLessThan(message.indexOf('実行しますか？'))
     expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: [] })).not.toContain('理由:')
     expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary)).not.toContain('理由:')
     const many = Array.from({ length: 15 }, (_, index): TemplateDiffStudentNote => ({ kind: 'duplicate-skipped', studentName: `生徒${index}`, subject: '数', dateKey: '2026-10-07', slotNumber: 5 }))

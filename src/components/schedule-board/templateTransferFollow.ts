@@ -261,6 +261,8 @@ export type WholeDayTransferPlacement = {
   targetCellId: string
   deskId: string
   seatIndex: number
+  /** 同じ机番号の机に置けず、同じコマの別の机（講師が居て保留でなく空席）へ置いた（Q40-2 改定・オーナー確定 2026-10-21 L-5 (a)）。 */
+  fallbackDesk: boolean
 }
 
 export type WholeDayTransferStocked = {
@@ -269,6 +271,10 @@ export type WholeDayTransferStocked = {
   sourceSlotNumber: number
   /** true ＝ 台帳に origin を 1 件積む（振替元が休日でない）。false ＝ 休日・定休日なので自動の不足 origin に任せる。 */
   ledger: boolean
+  /**
+   * no-seat / no-teacher / pending-desk ＝ 同じ机番号の机に置けなかった理由（同じコマの別の机も全部置けない）。duplicate ＝ 同じコマに同じ生徒が生きている。
+   * no-target-cell ＝ 振替先のコマが無い。
+   */
   reason: 'no-seat' | 'no-teacher' | 'pending-desk' | 'duplicate' | 'no-target-cell'
 }
 
@@ -363,22 +369,43 @@ export function planWholeDayTransferPlacements(params: {
     const targetCellId = cellByDateSlot.get(dateSlotKey(destination.dateKey, destination.slotNumber))
     const targetCell = targetCellId ? cellById.get(targetCellId) : undefined
     if (!targetCell) { stock(item, 'no-target-cell'); continue }
-    const targetDesk = targetCell.desks[item.deskIndex]
-    if (!targetDesk) { stock(item, 'no-seat'); continue }
-    // 講師のいない机には置かない（講師日程表に出ない授業を作らない・監査 M-4）。
-    if (!targetDesk.teacher.trim()) { stock(item, 'no-teacher'); continue }
-    if (params.pendingDesks[buildTemplatePendingDeskKey(targetCell.id, targetDesk.id)]) { stock(item, 'pending-desk'); continue }
     const identity = studentIdentity(item.student)
     if (targetCell.desks.some((desk) => liveStudentsOf(desk).some((student) => studentIdentity(student) === identity))) { stock(item, 'duplicate'); continue }
-    const seatIndex = isSeatFree(targetDesk, item.seatIndex) ? item.seatIndex : (isSeatFree(targetDesk, item.seatIndex === 0 ? 1 : 0) ? (item.seatIndex === 0 ? 1 : 0) : -1)
-    if (seatIndex < 0) { stock(item, 'no-seat'); continue }
+    // 置ける机か（講師が居る〔講師日程表に出ない授業を作らない・監査 M-4〕・保留でない・空席がある）。置けない理由を返す。
+    const freeSeatOf = (desk: DeskCell) => (isSeatFree(desk, item.seatIndex) ? item.seatIndex : (isSeatFree(desk, item.seatIndex === 0 ? 1 : 0) ? (item.seatIndex === 0 ? 1 : 0) : -1))
+    const judge = (desk: DeskCell | undefined): { seatIndex: number } | WholeDayTransferStocked['reason'] => {
+      if (!desk) return 'no-seat'
+      if (!desk.teacher.trim()) return 'no-teacher'
+      if (params.pendingDesks[buildTemplatePendingDeskKey(targetCell.id, desk.id)]) return 'pending-desk'
+      const seatIndex = freeSeatOf(desk)
+      return seatIndex < 0 ? 'no-seat' : { seatIndex }
+    }
+    // 同じ机番号の机を優先（丸ごと振替の 1 対 1 の写像）。置けなければ同じコマの別の机（机番号の順）＝オーナー確定 2026-10-21（既知の限界 L-5 (a)）:
+    // 未消化にすると、振替元の日に移送済みの振替がある生徒では未消化 origin が同じ日付へのフォールバック消化で食われて残数が増えないため、盤面に見える形を優先する。
+    const sameDesk = targetCell.desks[item.deskIndex]
+    const sameDeskJudge = judge(sameDesk)
+    let targetDesk: DeskCell | undefined
+    let seatIndex = -1
+    let fallbackDesk = false
+    if (typeof sameDeskJudge !== 'string') { targetDesk = sameDesk; seatIndex = sameDeskJudge.seatIndex }
+    else {
+      for (const desk of targetCell.desks) {
+        if (desk === sameDesk) continue
+        const verdict = judge(desk)
+        if (typeof verdict === 'string') continue
+        targetDesk = desk; seatIndex = verdict.seatIndex; fallbackDesk = true
+        break
+      }
+    }
+    if (!targetDesk || seatIndex < 0) { stock(item, typeof sameDeskJudge === 'string' ? sameDeskJudge : 'no-seat'); continue }
 
     const moved = params.prepareStudentForMove({ ...item.student, id: `transfer_${item.dateKey}_${item.slotNumber}_${item.deskIndex}_${item.seatIndex}` }, item.dateKey, item.slotNumber, destination.dateKey)
     const slots = [...(targetDesk.lesson?.studentSlots ?? [null, null])] as StudentPair
     slots[seatIndex] = moved
-    const nextTargetDesk: DeskCell = { ...targetDesk, lesson: targetDesk.lesson ? { ...targetDesk.lesson, studentSlots: slots } : { id: `daymove_${item.dateKey}_${item.slotNumber}_${item.deskIndex}`, studentSlots: slots } }
-    replaceCell({ ...targetCell, desks: targetCell.desks.map((desk) => (desk === targetDesk ? nextTargetDesk : desk)) })
-    placed.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: targetDesk.id, seatIndex })
+    const placedDesk = targetDesk
+    const nextTargetDesk: DeskCell = { ...placedDesk, lesson: placedDesk.lesson ? { ...placedDesk.lesson, studentSlots: slots } : { id: `daymove_${item.dateKey}_${item.slotNumber}_${item.deskIndex}`, studentSlots: slots } }
+    replaceCell({ ...targetCell, desks: targetCell.desks.map((desk) => (desk === placedDesk ? nextTargetDesk : desk)) })
+    placed.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: placedDesk.id, seatIndex, fallbackDesk })
     handledKeys.add(buildWholeDayTransferHandledKey(item.student, item.dateKey))
     handledCount += 1
 

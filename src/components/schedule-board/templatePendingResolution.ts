@@ -11,7 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell } from './templateDiffApply'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -159,6 +159,8 @@ function normalizeLower(lower: TemplatePendingLower): TemplatePendingLower {
   if (lower.lesson && liveStudentsOf(lower.lesson).length > 0) next.lesson = lower.lesson
   if (lower.statusSlots && (lower.statusSlots[0] || lower.statusSlots[1])) next.statusSlots = lower.statusSlots
   if (lower.memoSlots && (lower.memoSlots[0] != null || lower.memoSlots[1] != null)) next.memoSlots = lower.memoSlots
+  // Q41-6/-7: 下段の講師は、下段に生きている生徒が居る間だけ持つ（生徒が全部外れたら講師も外れる。メモ・記録だけの下段に講師だけ出さない）。
+  if (lower.teacher?.teacher.trim() && next.lesson) next.teacher = lower.teacher
   return next
 }
 
@@ -218,7 +220,10 @@ export function splitTemplatePendingLowerSeat(lower: TemplatePendingLower, seatI
     }
     return normalizeLower(next)
   }
-  return { seatLower: pick(seatIndex), restLower: pick(other) }
+  // Q41-6（regression-reviewer M-4）: 講師は押した席の分け前（机へ戻す側）だけが持つ。残る席の保留は講師を持たない従来の保留になる（机の講師が手置き講師に戻った後に下段にも同じ講師が出ない）。
+  const seatLower = pick(seatIndex)
+  if (lower.teacher && seatLower.lesson) seatLower.teacher = { ...lower.teacher }
+  return { seatLower, restLower: pick(other) }
 }
 
 /** 下段に中身（生きている生徒・出欠記録・メモ）が 1 つでもあるか。 */
@@ -301,6 +306,8 @@ export function describeTemplatePendingCollapseFailure(reason: Extract<TemplateP
       return '同じコマに同じ生徒が 2 か所で生きることになるため 1 行に戻せません。先に上段側を片づけてください。'
     case 'both-rows-live':
       return '下段の生徒を戻す席（元の席）が空いていないため 1 行に戻せません。上段の生徒を削除・移動するか、「テンプレを採用」で片づけてください。'
+    case 'teacher-duplicate':
+      return '下段の手で置いた講師が同じコマの別の机に居るため 1 行に戻せません。先にそちらの机を片づけるか、「テンプレを採用」で片づけてください。'
   }
 }
 
@@ -343,6 +350,8 @@ export function settleTemplatePendingDesk(params: {
   const collapse = computePendingDeskCollapse(location.desk, entry, {
     liveStudentsElsewhere: collectLiveStudentsElsewhereInCell(location.cell, location.desk.id),
     dateKey: location.cell.dateKey,
+    // Q41-7（INV-01）: 戻す手置き講師が同じコマの別の机に居れば合流しない。
+    teacherElsewhere: (teacher) => isTeacherElsewhereInCell(location.cell, location.desk.id, teacher),
   })
   if (!collapse.ok) return upperLive > 0 && lowerLive > 0 ? { status: 'unchanged' } : { status: 'kept', reason: collapse.reason }
   const nextTemplatePendingDesks = { ...params.templatePendingDesks }

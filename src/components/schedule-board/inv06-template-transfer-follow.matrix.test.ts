@@ -48,10 +48,12 @@ const OLD_ROWS = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', 
 const resolveStudentKey = (student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => student.managedStudentId ?? student.name
 /** 振替先の机の生徒 2 の席を埋める手動追加の通常授業（根拠を失った振替ではない＝消えない）。 */
 const MANUAL_D: StudentEntry = { id: 'sD_manual', name: '土屋', managedStudentId: 'sD', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', manualAdded: true }
+const MANUAL_E: StudentEntry = { id: 'sE_manual', name: '江藤', managedStudentId: 'sE', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', manualAdded: true }
+/** 木 5限 の机 0 と机 1 の生徒 2 の席を両方埋める（同じ机も、L-5 (a) の別の机も満席＝未消化になる形・2026-10-21）。 */
 function fillSeat2WithManual(weeks: SlotCell[][]): SlotCell[][] {
   return weeks.map((week) => week.map((cell) => (cell.id !== THU_CELL ? cell : {
     ...cell,
-    desks: cell.desks.map((desk, index) => (index !== 0 || !desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: [desk.lesson.studentSlots[0], MANUAL_D] as [StudentEntry | null, StudentEntry | null] } })),
+    desks: cell.desks.map((desk, index) => (!desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: [desk.lesson.studentSlots[0], index === 0 ? MANUAL_D : MANUAL_E] as [StudentEntry | null, StudentEntry | null] } })),
   })))
 }
 
@@ -175,7 +177,7 @@ describe('INV-06 × Q40-2: 丸ごと振替した日（振替元）に足した�
     expect(saved.summary.wholeDayTransferPlacedStudents).toBe(0)
     expect(saved.manualMakeupOriginAdditions).toEqual([])
     expect(saved.summary.orphanedMakeupsRemoved).toBe(0)
-    expect(liveIds(saved.nextWeeks, THU_CELL).sort()).toEqual(['sA', 'sB', 'sD'])
+    expect(liveIds(saved.nextWeeks, THU_CELL).sort()).toEqual(['sA', 'sB', 'sD', 'sE'])
     expect(cellOf(saved.nextWeeks, WED_CELL).desks[0].statusSlots?.[0]).toMatchObject({ status: 'moved', managedStudentId: 'sA' })
     // 休日の自動発生で C の未消化は 1（台帳に積まなくても出る）。A・B は移送された振替が自動発生を消化して 0 のまま
     const after = balances(saved.nextWeeks, newRows, board.ledgers, holidaySettings)
