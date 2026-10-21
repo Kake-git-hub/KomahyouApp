@@ -1044,7 +1044,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(message).toContain('テンプレの生徒を置かない／動かす理由:')
     expect(message).toContain('・10/7 5限 青木（数）: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。')
     expect(message).toContain('・10/7 5限 千葉（数）: 丸ごと振替した日なので、振替先（10/8）の同じ机へ振替として置きます。')
-    expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（同じ机が満席）ため、未消化振替にします。')
+    expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（同じ机が満席で、同じコマに置ける机も無い）ため、未消化振替にします。')
     expect(message).toContain('・10/7 3限 江藤（国）: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。')
     expect(message).toContain('・10/8 藤井（理）: 丸ごと振替した日なので置かず、希望回数を −1 します。')
     expect(message).toContain('・10/7 5限 後藤（社）: 振替元の授業がテンプレから無くなったため、この振替を消します（振替先 10/8）。')

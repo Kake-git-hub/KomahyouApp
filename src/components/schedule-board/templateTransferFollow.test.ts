@@ -262,10 +262,17 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(thu.desks[1]).toBe(weeks[0][1].desks[1])
   })
 
-  it('テンプレの席が埋まっていればもう一方の席。両方埋まっていれば未消化（休日でないので台帳へ）、休日なら自動発生に任せる', () => {
+  it('テンプレの席が埋まっていればもう一方の席。同じ机が満席なら同じコマの別の机（講師が居て空席）へ。それも無ければ未消化（休日でないので台帳へ）、休日なら自動発生に任せる', () => {
     const otherSeat = run(board(desk('t5d1', '鈴木', [null, makeupOf('sB_mk', '馬場', WED, labelWed5)])))
     expect(otherSeat.placed[0]?.seatIndex).toBe(0)
-    const full = board(desk('t5d1', '鈴木', [makeupOf('sB_mk', '馬場', WED, labelWed5), student('sD_m', '土屋', { manualAdded: true })]))
+    expect(otherSeat.placed[0]?.fallbackDesk).toBe(false)
+    // L-5 (a)（オーナー確定 2026-10-21）: 同じ机が満席 → 同じコマの別の机（t5d2・佐藤）の席へ
+    const fullSameDesk = board(desk('t5d1', '鈴木', [makeupOf('sB_mk', '馬場', WED, labelWed5), student('sD_m', '土屋', { manualAdded: true })]))
+    const fallback = run(fullSameDesk)
+    expect(fallback.placed).toEqual([expect.objectContaining({ deskId: 't5d2', seatIndex: 1, fallbackDesk: true })])
+    expect(fallback.stocked).toHaveLength(0)
+    // 別の机も置けない（講師が居ない）→ 未消化。理由は同じ机の理由（満席）
+    const full = fullSameDesk.map((week) => week.map((entry) => (entry.id === `${THU}_5` ? { ...entry, desks: [entry.desks[0], desk('t5d2', '')] } : entry)))
     const stocked = run(full)
     expect(stocked.placed).toHaveLength(0)
     expect(stocked.stocked).toEqual([expect.objectContaining({ sourceDateKey: WED, sourceSlotNumber: 5, ledger: true, reason: 'no-seat' })])
@@ -290,16 +297,23 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(wed.desks[0].statusSlots?.[1]).toMatchObject({ status: 'moved', managedStudentId: 'sC' })
   })
 
-  it('講師のいない机には置かない（監査 M-4・講師日程表に出ない授業を作らない）＝未消化', () => {
-    const noTeacher = run(board(desk('t5d1', '', [makeupOf('sB_mk', '馬場', WED, labelWed5), null])))
+  it('講師のいない机には置かない（監査 M-4・講師日程表に出ない授業を作らない）。同じコマに講師の居る別の机があればそちらへ、無ければ未消化', () => {
+    const fallback = run(board(desk('t5d1', '', [makeupOf('sB_mk', '馬場', WED, labelWed5), null])))
+    expect(fallback.placed).toEqual([expect.objectContaining({ deskId: 't5d2', fallbackDesk: true })])
+    const noTeacherAnywhere = board(desk('t5d1', '', [makeupOf('sB_mk', '馬場', WED, labelWed5), null])).map((week) => week.map((entry) => (entry.id === `${THU}_5` ? { ...entry, desks: [entry.desks[0], desk('t5d2', '')] } : entry)))
+    const noTeacher = run(noTeacherAnywhere)
     expect(noTeacher.placed).toHaveLength(0)
     expect(noTeacher.stocked[0]).toMatchObject({ reason: 'no-teacher', ledger: true })
   })
 
   it('保留（2 行）の机・同じコマに同じ生徒が生きている・振替先のセルが無いときは未消化。移動元記録が無い日と別の時限で精算済みの生徒は触らない', () => {
     const weeks = board()
-    const pending = run(weeks, { pendingDesks: { [buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')]: { lower: {}, effectiveStartDate: WED, createdAt: 'x' } } })
+    // 同じ机が保留で、別の机（t5d2）も保留 → 未消化（理由は同じ机の理由）。別の机が空いていれば L-5 (a) でそちらへ。
+    const bothPending = { [buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')]: { lower: {}, effectiveStartDate: WED, createdAt: 'x' }, [buildTemplatePendingDeskKey(`${THU}_5`, 't5d2')]: { lower: {}, effectiveStartDate: WED, createdAt: 'x' } }
+    const pending = run(weeks, { pendingDesks: bothPending })
     expect(pending.stocked[0]?.reason).toBe('pending-desk')
+    const pendingSameDeskOnly = run(weeks, { pendingDesks: { [buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')]: { lower: {}, effectiveStartDate: WED, createdAt: 'x' } } })
+    expect(pendingSameDeskOnly.placed).toEqual([expect.objectContaining({ deskId: 't5d2', fallbackDesk: true })])
     const duplicate = run(board(desk('t5d1', '鈴木', [makeupOf('sB_mk', '馬場', WED, labelWed5), null]), [movedB, null]).map((week) => week.map((entry) => (entry.id === `${THU}_5` ? { ...entry, desks: [entry.desks[0], desk('t5d2', '佐藤', [student('sC_x', '千葉'), null])] } : entry))))
     expect(duplicate.stocked[0]?.reason).toBe('duplicate')
     const noTarget = run([[weeks[0][0]]])

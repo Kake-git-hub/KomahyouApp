@@ -2671,7 +2671,7 @@ export function computeTemplateDiffApplyForBoard(input: {
     const noteName = (student: StudentEntry) => student.name
     const studentNotes: TemplateDiffStudentNote[] = [
       ...run.diff.skippedDuplicates.map((item): TemplateDiffStudentNote => ({ kind: 'duplicate-skipped', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: item.slotNumber })),
-      ...follow.placed.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-placed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: formatTemplateDiffMonthDay(item.targetDateKey) })),
+      ...follow.placed.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-placed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: `${formatTemplateDiffMonthDay(item.targetDateKey)}${item.fallbackDesk ? '・同じ机が使えないので別の机' : ''}` })),
       ...follow.stocked.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-stocked', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: describeWholeDayTransferStockReason(item.reason) })),
       ...follow.settled.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-settled', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber })),
       ...wholeDayTransferCountAdjustments.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-count-adjusted', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: null })),
