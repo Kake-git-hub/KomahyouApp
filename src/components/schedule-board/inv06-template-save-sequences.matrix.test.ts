@@ -152,7 +152,11 @@ describe('既知の限界 L-5（2026-10-21）: 振替元の日に既に振替（
   it('監査が「無言の消失」1 件（A×数×水）だけを返し、台帳には origin が 1 件積まれている（決まったら expectNoViolation に戻す）', () => {
     const BASE = [...OLD_ROWS.slice(0, 2), row('r2', 't3', '', '', 4)]
     const NEXT = [...BASE, row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })]
-    const { saved, state } = step(initialState(BASE), BASE, NEXT)
+    // 木 4限 を満席にする（オーナー指示 2026-10-21: 講師が居なくても空席なら置くので、残る形は満席だけ）
+    const fill = (student: string, index: number) => ({ id: `${student}_${index}`, name: student, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', manualAdded: true } as const)
+    const state0 = initialState(BASE)
+    state0.weeks = state0.weeks.map((week) => week.map((cell) => (cell.id !== `${THU}_4` ? cell : { ...cell, desks: cell.desks.map((desk, index) => ({ ...desk, lesson: { id: `full_${index}`, studentSlots: [fill('X', index * 2), fill('Y', index * 2 + 1)] } })) })))
+    const { saved, state } = step(state0, BASE, NEXT)
     expect(saved.summary.wholeDayTransferStockedStudents).toBe(1)
     expect(saved.studentNotes.map((note) => note.kind)).toEqual(['transfer-stocked'])
     expect(state.ledgers['sA__数']).toHaveLength(1)

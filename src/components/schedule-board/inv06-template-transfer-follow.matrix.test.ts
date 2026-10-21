@@ -433,18 +433,19 @@ describe('INV-06 × Q40 regression-reviewer 再検査（2026-10-15・H-A/M-A/M-B
     expect(cellOf(saved.nextWeeks, THU_CELL).desks[0].lesson?.studentSlots[0]?.name).toBe('青木')
   })
 
-  it('L-1/M-4 同じ生徒を同じ日の 2 コマに足した: 置けた 1 件＋講師のいない机で未消化 1 件（台帳へ）＝「置かず振替を優先」は件数で引いて 0・−1 なし', () => {
+  it('L-1 同じ生徒を同じ日の 2 コマに足した: 2 件とも置く（木 3限 は講師のいない机だが置く＝オーナー指示 2026-10-21・旧 M-4 を改定）。「置かず振替を優先」は件数で引いて 0・−1 なし・台帳は不変', () => {
     const board = transferredBoard()
     const newRows = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4), row('r3', 't3', 'sC', '', 3, { slotNumber: 3 })]
     const saved = save(board.weeks, newRows, board.suppressed, { manualMakeupAdjustments: board.ledgers })
-    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(1)
-    expect(saved.summary.wholeDayTransferStockedStudents).toBe(1)
-    expect(saved.wholeDayTransferStocked[0]).toMatchObject({ reason: 'no-teacher', ledger: true, sourceDateKey: WED, sourceSlotNumber: 3 })
+    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(2)
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(0)
+    expect(saved.wholeDayTransferPlaced.map((item) => ({ slot: item.sourceSlotNumber, teacherless: item.teacherless }))).toEqual(expect.arrayContaining([{ slot: 5, teacherless: false }, { slot: 3, teacherless: true }]))
     expect(saved.summary.wholeDayTransferSkippedStudents).toBe(0)
     expect(saved.wholeDayTransferCountAdjustments).toEqual([])
-    expect(saved.manualMakeupOriginAdditions).toEqual([expect.objectContaining({ dateKey: WED, slotNumber: 3 })])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
     expect(liveIds(saved.nextWeeks, THU_CELL).filter((id) => id === 'sC')).toHaveLength(1)
-    expect(liveIds(saved.nextWeeks, `${THU}_3`)).toEqual([])
+    expect(liveIds(saved.nextWeeks, `${THU}_3`)).toEqual(['sC'])
+    expect(cellOf(saved.nextWeeks, `${THU}_3`).desks[0].teacher).toBe('')
     expectFixpoint(saved, newRows, board.suppressed)
   })
 })
