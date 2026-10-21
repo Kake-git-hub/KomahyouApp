@@ -2076,9 +2076,9 @@ export function buildTemplateDiffStudentNoteLines(notes: readonly TemplateDiffSt
 /** 未消化にした理由の表示（Q40-2）。 */
 export function describeWholeDayTransferStockReason(reason: 'no-seat' | 'no-teacher' | 'pending-desk' | 'duplicate' | 'no-target-cell') {
   switch (reason) {
-    case 'no-seat': return '同じ机が満席で、同じコマに置ける机も無い'
-    case 'no-teacher': return '同じ机に講師がいなくて、同じコマに置ける机も無い'
-    case 'pending-desk': return '同じ机が保留（緑）で、同じコマに置ける机も無い'
+    case 'no-seat': return '振替先のコマが満席'
+    case 'no-teacher': return '振替先のコマが満席'
+    case 'pending-desk': return '振替先のコマが満席'
     case 'duplicate': return '同じコマに同じ生徒がいる'
     case 'no-target-cell': return '振替先のコマが無い'
     default: return ''
