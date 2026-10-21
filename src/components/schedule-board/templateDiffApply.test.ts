@@ -27,6 +27,9 @@ import {
 import {
   buildFullySuppressedManagedDesk,
   buildTemplateDiffConfirmMessage,
+  buildTemplateDiffStudentNoteLines,
+  describeWholeDayTransferStockReason,
+  type TemplateDiffStudentNote,
   buildTemplateDiffSavedMessage,
   buildTemplateOccurrenceKey,
   computePendingDeskCollapse,
@@ -1022,6 +1025,36 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
+  })
+
+  it('2026-10-21: 確認文に「生徒ごとの理由」を名前つきで出す（件数の行はそのまま・12 行を超えると「ほか n 件」・無ければ見出しも出ない）', () => {
+    const summary = { ...createEmptyTemplateDiffApplySummary(), skippedDuplicateStudents: 1, wholeDayTransferPlacedStudents: 1, wholeDayTransferStockedStudents: 1 }
+    const notes: TemplateDiffStudentNote[] = [
+      { kind: 'duplicate-skipped', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 5 },
+      { kind: 'transfer-placed', studentName: '千葉', subject: '数', dateKey: '2026-10-07', slotNumber: 5, detail: '10/8' },
+      { kind: 'transfer-stocked', studentName: '土屋', subject: '英', dateKey: '2026-10-07', slotNumber: 3, detail: describeWholeDayTransferStockReason('no-seat') },
+      { kind: 'transfer-settled', studentName: '江藤', subject: '国', dateKey: '2026-10-07', slotNumber: 3 },
+      { kind: 'transfer-count-adjusted', studentName: '藤井', subject: '理', dateKey: '2026-10-08', slotNumber: null },
+      { kind: 'orphan-removed', studentName: '後藤', subject: '社', dateKey: '2026-10-07', slotNumber: 5, detail: '振替先 10/8' },
+    ]
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: notes })
+    expect(message).toContain('丸ごと振替した日に足した生徒1名を振替先へ置きます（空きが無い1名は未消化振替へ）')
+    expect(message).toContain('テンプレの生徒を置かない／動かす理由:')
+    expect(message).toContain('・10/7 5限 青木（数）: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。')
+    expect(message).toContain('・10/7 5限 千葉（数）: 丸ごと振替した日なので、振替先（10/8）の同じ机へ振替として置きます。')
+    expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（同じ机が満席）ため、未消化振替にします。')
+    expect(message).toContain('・10/7 3限 江藤（国）: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。')
+    expect(message).toContain('・10/8 藤井（理）: 丸ごと振替した日なので置かず、希望回数を −1 します。')
+    expect(message).toContain('・10/7 5限 後藤（社）: 振替元の授業がテンプレから無くなったため、この振替を消します（振替先 10/8）。')
+    // 件数の行は従来どおり、理由の行は「実行しますか？」より前
+    expect(message.indexOf('テンプレの生徒を置かない／動かす理由:')).toBeLessThan(message.indexOf('実行しますか？'))
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: [] })).not.toContain('理由:')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, summary)).not.toContain('理由:')
+    const many = Array.from({ length: 15 }, (_, index): TemplateDiffStudentNote => ({ kind: 'duplicate-skipped', studentName: `生徒${index}`, subject: '数', dateKey: '2026-10-07', slotNumber: 5 }))
+    const lines = buildTemplateDiffStudentNoteLines(many)
+    expect(lines).toHaveLength(14)
+    expect(lines[13]).toBe('・ほか 3 件')
+    expect(buildTemplateDiffStudentNoteLines(undefined)).toEqual([])
   })
 
   it('条件 25：確認文の試し実行と保存本体は同じ入力で同じ件数になる（同じ関数）', () => {

@@ -13,8 +13,8 @@
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
-import { isCellInTemplateDiffScope, resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
+import { isWholeDayTransferSettled, studentSubjectKey, type TemplateDiffTemplateCell, type TemplateLessonLookup } from './templateDiffApply'
+import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
@@ -41,6 +41,8 @@ function studentIdentity(student: Pick<StudentEntry, 'managedStudentId' | 'name'
 
 export type OrphanedMakeupRemoval = {
   cellId: string
+  /** 振替が置かれていたコマの日付（確認の画面の「振替先 M/D」用・2026-10-21）。 */
+  targetDateKey: string
   deskId: string
   seatIndex: number
   student: StudentEntry
@@ -85,10 +87,14 @@ export function removeTemplateTransferMakeupOrigin(originMap: MakeupOriginLedger
   return { ...originMap, [key]: nextDates }
 }
 
-/** 振替元（日×時限）が「テンプレで変えたコマ」の範囲に入るか。時限が分からない振替元は、その曜日のどれかの時限が範囲なら入る。 */
-function isSourceInScope(sourceDateKey: string, sourceSlotNumber: number | null, filter: TemplateDiffSlotFilter | null | undefined) {
+/**
+ * 振替元の**日**が「テンプレで変えたコマ」の範囲に入るか（その曜日のどれかの時限が範囲なら入る・日単位）。
+ * 2026-10-21 改定（テスト教室 tp-51）: 以前は振替元の時限が分かるときだけ曜日×時限で判定していたが、根拠 (a)(b) は日単位なので範囲も日単位に揃える。
+ * 時限で絞ると「時限を変える → 科目を変える」の 2 回目の保存（変えたコマ＝新しい時限だけ）で、旧時限を振替元に持つ旧科目の振替が範囲の外に
+ * なり、根拠が無いのに消えず、後日の無関係な保存（同じ曜日の旧時限を触る保存）で初めて消えていた（確認文にも「消します」が出ない）。
+ */
+function isSourceInScope(sourceDateKey: string, _sourceSlotNumber: number | null, filter: TemplateDiffSlotFilter | null | undefined) {
   if (!filter) return true
-  if (sourceSlotNumber != null) return isCellInTemplateDiffScope({ dateKey: sourceDateKey, slotNumber: sourceSlotNumber }, filter)
   if (filter.fullBeforeDate && sourceDateKey < filter.fullBeforeDate) return true
   if (filter.fullDates?.has(sourceDateKey)) return true
   const dayOfWeek = resolveDayOfWeekFromDateKey(sourceDateKey)
@@ -176,7 +182,7 @@ export function collectOrphanedMakeups(params: {
         const sourceSlotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? null
         if (!isSourceInScope(sourceDateKey, sourceSlotNumber, params.slotFilter)) return
         if (hasBasis(student, sourceDateKey)) return
-        removals.push({ cellId: cell.id, deskId: desk.id, seatIndex, student, sourceDateKey, sourceSlotNumber })
+        removals.push({ cellId: cell.id, targetDateKey: cell.dateKey, deskId: desk.id, seatIndex, student, sourceDateKey, sourceSlotNumber })
       })
     }
   }
@@ -266,10 +272,14 @@ export type WholeDayTransferStocked = {
   reason: 'no-seat' | 'no-teacher' | 'pending-desk' | 'duplicate' | 'no-target-cell'
 }
 
+/** 精算済みとして触らなかった生徒（確認の画面に理由を出すため・2026-10-21）。 */
+export type WholeDayTransferSettled = { student: StudentEntry; sourceDateKey: string; sourceSlotNumber: number }
+
 export type WholeDayTransferFollowPlan = {
   weeks: SlotCell[][]
   placed: WholeDayTransferPlacement[]
   stocked: WholeDayTransferStocked[]
+  settled: WholeDayTransferSettled[]
   /** 希望回数 −1 から外す生徒（`${生徒×科目}__${日付}`）。置いた／未消化にした生徒。 */
   handledKeys: Set<string>
   /** 置いた／未消化にした件数（確認文の「置かず振替を優先 k 名」から引く数。同じ生徒が同じ日に 2 回スキップされても件数で数える・L-1）。 */
@@ -310,10 +320,12 @@ export function planWholeDayTransferPlacements(params: {
   /** 反映日。振替先が反映日より前（後ろ向きの丸ごと振替）なら触らない（INV-10・監査 H-4）。 */
   effectiveStartDate: string
   /**
-   * 保存前から持っている通常授業の抑止キー。同じ生徒×科目×日付のキーが**別の時限**で積まれている生徒は、丸ごと振替の処分（−1 済み）か移送
-   * （振替として別日で行う）で精算済みなので触らない（Q35-8 M-1 と同じ二重計上の防止）。
+   * 保存前から持っている通常授業の抑止キー。精算済み（同じ時限のキー＝処分済み／別の時限のキーで新テンプレがその時限に持たない＝時限変更の写し）の
+   * 生徒は触らない（権威関数 isWholeDayTransferSettled・Q35-8 の −1 と同じ判定・2026-10-21 改定）。
    */
   suppressedRegularLessonOccurrences: readonly string[]
+  /** 新テンプレ（抑止前の raw）がその日×時限にその生徒×科目を持つか（buildTemplateLessonLookup）。精算済み判定の (2) に使う。省略不可（省略できると改定前の誤認に戻る）。 */
+  templateHasLessonAt: TemplateLessonLookup
   prepareStudentForMove: (student: StudentEntry, sourceDateKey: string, sourceSlotNumber: number, targetDateKey: string) => StudentEntry
   buildMovedSourceStatusEntry: (params: { student: StudentEntry; sourceCell: SlotCell; sourceDesk: DeskCell; destinationDateKey: string; destinationSlotNumber: number }) => StudentStatusEntry
 }): WholeDayTransferFollowPlan {
@@ -322,7 +334,7 @@ export function planWholeDayTransferPlacements(params: {
   const handledKeys = new Set<string>()
   let handledCount = 0
   const touchedCellIds = new Set<string>()
-  if (params.skipped.length === 0) return { weeks: params.weeks, placed, stocked, handledKeys, handledCount, touchedCellIds }
+  if (params.skipped.length === 0) return { weeks: params.weeks, placed, stocked, settled: [], handledKeys, handledCount, touchedCellIds }
 
   // セルは参照で持ち替える（触ったセルだけ新しいオブジェクトに）。
   const cellById = new Map<string, SlotCell>()
@@ -337,13 +349,12 @@ export function planWholeDayTransferPlacements(params: {
     handledCount += 1
   }
 
-  const accountedOnDate = (student: StudentEntry, dateKey: string) => {
-    const prefix = `${studentSubjectKey(student)}__${dateKey}__`
-    return params.suppressedRegularLessonOccurrences.some((key) => key.startsWith(prefix))
-  }
-
+  const settled: WholeDayTransferSettled[] = []
   for (const item of params.skipped) {
-    if (accountedOnDate(item.student, item.dateKey)) continue
+    if (isWholeDayTransferSettled({ student: item.student, dateKey: item.dateKey, slotNumber: item.slotNumber, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, templateHasLessonAt: params.templateHasLessonAt })) {
+      settled.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber })
+      continue
+    }
     const destination = resolveWholeDayTransferDestination(params.weeks, item.dateKey, item.slotNumber)
     // 移動元記録が無い日（振替先の日そのもの／2026-09-16 より前の古い丸ごと振替の振替元）は、振替先の日と区別できないので従来どおり Q35-8（置かず −1）に任せる。
     // 振替先の日は丸ごと振替の処分（全コマ削除と同一裁定＝通常授業は −1）と同じ扱いが筋。オーナー確定 K の「未消化扱い」は振替元の日（記録あり）で置けないときに当てる
@@ -389,12 +400,12 @@ export function planWholeDayTransferPlacements(params: {
     }
   }
 
-  if (touchedCellIds.size === 0) return { weeks: params.weeks, placed, stocked, handledKeys, handledCount, touchedCellIds }
+  if (touchedCellIds.size === 0) return { weeks: params.weeks, placed, stocked, settled, handledKeys, handledCount, touchedCellIds }
   const weeks = params.weeks.map((week) => {
     const next = week.map((cell) => cellById.get(cell.id) ?? cell)
     return next.some((cell, index) => cell !== week[index]) ? next : week
   })
-  return { weeks, placed, stocked, handledKeys, handledCount, touchedCellIds }
+  return { weeks, placed, stocked, settled, handledKeys, handledCount, touchedCellIds }
 }
 
 /** 保存直後の再マージの重ね合わせを、追従で触ったセルにも当てるための絞り込み。絞り込みが無い（全コマ）ならそのまま。 */

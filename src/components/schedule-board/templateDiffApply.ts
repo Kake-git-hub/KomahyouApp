@@ -45,6 +45,47 @@ export function buildTemplateOccurrenceKey(student: Pick<StudentEntry, 'managedS
   return `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__${slotNumber}`
 }
 
+/** 新テンプレ（抑止前の管理セル raw）が「その日×その時限にその生徒×科目の通常授業を持つか」。Q40-3 の精算済み判定が使う。 */
+export type TemplateLessonLookup = (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject'>, dateKey: string, slotNumber: number) => boolean
+
+/** raw（抑止前）の管理セルから日付×時限×生徒×科目の集合を作る（休日のコマは raw が空＝持たない。休日の日はそもそも Q35 のスキップ対象に出ない）。 */
+export function buildTemplateLessonLookup(templateCells: readonly TemplateDiffTemplateCell[]): TemplateLessonLookup {
+  const keys = new Set<string>()
+  for (const entry of templateCells) {
+    for (const desk of entry.raw.desks) for (const student of liveStudents(desk.lesson)) keys.add(buildTemplateOccurrenceKey(student, entry.raw.dateKey, entry.raw.slotNumber))
+  }
+  return (student, dateKey, slotNumber) => keys.has(buildTemplateOccurrenceKey(student, dateKey, slotNumber))
+}
+
+/**
+ * Q40-3（M-1 改定・2026-10-21 テスト教室 tp-48）: 丸ごと振替した日に置かなかったテンプレの生徒が、保存前からある通常授業の抑止キーで
+ * **精算済み**（置く・未消化・−1 のどれも要らない）と見なせるか。権威関数（Q40-2 の配置計画と Q35-8 の −1 の両方がこれを使う＝判定を 2 か所に分けない）。
+ *
+ * 精算済み＝次のどちらか:
+ *   (1) **同じ時限**のキーが保存前からある … 前の保存（置いた／未消化にした／−1 した）か丸ごと振替そのものが処分済み（再保存の冪等性）。
+ *   (2) **別の時限**のキーがあり、新テンプレがその日×その時限にこの生徒×科目を**持たない** … 時限だけ変えた写し（旧時限の分は移送済みの振替が持つ・監査 H-1）。
+ * 旧ルール「別の時限にキーがあれば精算済み」は、同じ科目を同じ曜日の別の時限にも持つ生徒（算 3限＋算 4限）を足したとき、3限のキーで 4限の分を
+ * 精算済みと誤認し、置かず・未消化にせず・−1 もせずに授業が消えていた（INV-05/INV-06・テスト教室 2026-10-17 の実例）。新テンプレがまだ
+ * その時限に授業を持つキーは「別の授業の処分」であって、この時限の分の精算ではない。
+ */
+export function isWholeDayTransferSettled(params: {
+  student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject'>
+  dateKey: string
+  slotNumber: number
+  suppressedRegularLessonOccurrences: readonly string[]
+  templateHasLessonAt: TemplateLessonLookup
+}): boolean {
+  const prefix = `${params.student.managedStudentId ?? params.student.name}__${params.student.subject}__${params.dateKey}__`
+  for (const key of params.suppressedRegularLessonOccurrences) {
+    if (!key.startsWith(prefix)) continue
+    const keySlot = Number(key.slice(prefix.length))
+    if (!Number.isFinite(keySlot)) continue
+    if (keySlot === params.slotNumber) return true
+    if (!params.templateHasLessonAt(params.student, params.dateKey, keySlot)) return true
+  }
+  return false
+}
+
 // 同じ生徒か（Q23-1：managedStudentId 優先・無ければ名前）。mergeManagedDeskLesson の同一性判定と同じ流儀。
 export function isSameTemplateStudent(left: Pick<StudentEntry, 'managedStudentId' | 'name'>, right: Pick<StudentEntry, 'managedStudentId' | 'name'>) {
   if (left.managedStudentId && right.managedStudentId) return left.managedStudentId === right.managedStudentId
@@ -1040,6 +1081,8 @@ export type ComputeTemplateDiffApplyResult = {
   addedSuppressedRegularLessonOccurrences: string[]
   /** Q35 で置かなかったテンプレの生徒（テンプレの机番号・席つき）。入口の Q40-2 が振替先へ置くのに使う。 */
   wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }>
+  /** Q21-11 で上段に置かなかった生徒（同じコマの別の 1 行の机に同じ生徒が生きている）。確認の画面に名前と理由を出すため（2026-10-21・tp-56 case1）。 */
+  skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }>
   /**
    * Q35 で置かなかった生徒のうち、希望回数を −1 する生徒×日付（Q35-8・オーナー決定 2026-10-02）。判定は「既存を採用」と同じ
    * resolveAdoptExistingCountAdjustments（保存後の同じ日の実配置に同じ生徒×科目が生きていなければ −1）。保存が
@@ -1213,6 +1256,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   const addedSuppressed = new Set<string>()
   const existingSuppressed = new Set(params.suppressedRegularLessonOccurrences)
   const wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }> = []
+  const skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }> = []
   const sameDayMoveCopyReverts: SameDayMoveCopyRevert[] = []
   // Q36 H-1（regression-reviewer 2026-10-03）: その日に同じ生徒×科目の**会計を持つ出欠記録**（休み・振無休・出席）がある生徒は写しとしない。
   // 在庫から振替を元の日付に置いたコマは `normalizeLessonPlacement` で regular＋makeupSourceDate＝その日になり、写しと同じ形になるが、
@@ -1284,6 +1328,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
         summary,
         addedSuppressed,
         wholeDayTransferSkipped,
+        skippedDuplicates,
         sameDayMoveCopyReverts,
         templatePlacedOnDate: templatePlacedByDate.get(cell.dateKey),
         templateRawOnDate: templateRawByDate.get(cell.dateKey),
@@ -1294,15 +1339,13 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   })
 
   // Q35-8: 置かなかった生徒の希望回数（日ごとに「既存を採用」と同じ判定）。
-  // 二重計上の防止（regression-reviewer M-1）: 同じ生徒×科目×日付の抑止キーが**別の時限**で保存前から積まれている生徒は、その日の分を
-  // 丸ごと振替の処分（−1 済み）か移送（振替として別日で行う）で精算済みなので −1 しない（時限だけ変えたテンプレで −2 にならない）。
-  const accountedOnDate = (student: StudentEntry, dateKey: string) => {
-    const prefix = `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__`
-    return params.suppressedRegularLessonOccurrences.some((key) => key.startsWith(prefix))
-  }
+  // 二重計上の防止（regression-reviewer M-1・2026-10-21 改定）: 保存前からの抑止キーで精算済み（同じ時限のキー＝処分済み／別の時限のキーで新テンプレが
+  // その時限に持たない＝時限変更の写し）の生徒は −1 しない。判定は権威関数 isWholeDayTransferSettled（Q40-2 の配置計画と同じ）。
+  const templateHasLessonAt = buildTemplateLessonLookup(params.templateCells)
+  const settled = (item: { student: StudentEntry; dateKey: string; slotNumber: number }) => isWholeDayTransferSettled({ student: item.student, dateKey: item.dateKey, slotNumber: item.slotNumber, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, templateHasLessonAt })
   const skippedDates = [...new Set(wholeDayTransferSkipped.map((item) => item.dateKey))]
   const wholeDayTransferCountAdjustments = skippedDates.flatMap((dateKey) => resolveAdoptExistingCountAdjustments({
-    withdrawnTemplateStudents: wholeDayTransferSkipped.filter((item) => item.dateKey === dateKey && !accountedOnDate(item.student, dateKey)).map((item) => item.student),
+    withdrawnTemplateStudents: wholeDayTransferSkipped.filter((item) => item.dateKey === dateKey && !settled(item)).map((item) => item.student),
     dateKey,
     placementsAfterAdoption: nextWeeks.flat(),
   }))
@@ -1315,6 +1358,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
     addedSuppressedRegularLessonOccurrences: [...addedSuppressed],
     wholeDayTransferCountAdjustments,
     wholeDayTransferSkipped,
+    skippedDuplicates,
     sameDayMoveCopyReverts,
   }
 }
@@ -1331,6 +1375,7 @@ function applyTemplateDiffToCell(context: {
   summary: TemplateDiffApplySummary
   addedSuppressed: Set<string>
   wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }>
+  skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }>
   sameDayMoveCopyReverts: SameDayMoveCopyRevert[]
   /** Q36: その日に新テンプレが置く生徒×科目 → 置くコマ ID（抑止後）。 */
   templatePlacedOnDate: ReadonlyMap<string, ReadonlySet<string>> | undefined
@@ -1508,6 +1553,7 @@ function applyTemplateDiffToCell(context: {
   skippedByDesk.forEach((removed) => {
     for (const student of removed) {
       summary.skippedDuplicateStudents += 1
+      context.skippedDuplicates.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
       const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
       if (!context.existingSuppressed.has(key)) context.addedSuppressed.add(key)
     }
@@ -1786,6 +1832,65 @@ export type TemplateDiffConfirmContext = {
   scopeNote?: TemplateDiffScopeNote
   /** Q39-5: 反映開始日が今日より前なら警告を出す（保存は止めない）。 */
   todayKey?: string
+  /** 2026-10-21: テンプレの生徒を置かない／動かす生徒の名前と理由（件数だけでは「どこへ消えたか」が分からない・テスト教室 tp-48/tp-56）。 */
+  studentNotes?: readonly TemplateDiffStudentNote[]
+}
+
+/**
+ * 確認の画面に出す「生徒ごとの理由」（2026-10-21・テスト教室の確認 tp-48「これ以外は機能していない」・tp-56 case1「通常授業はどこに消えたのか」）。
+ * 保存がテンプレの生徒を**置かない／別の形にする**判定は Q21-11（同じコマに同じ生徒）・Q35（丸ごと振替した日）・Q40-2（振替先へ置く／未消化）・
+ * Q40-3（精算済み）・Q40-1（根拠を失った振替を消す）の 5 系統あり、件数の合計だけでは室長もテスト担当も「誰が・なぜ」を追えない。
+ * 名前つきで出すことで、黙って消える形（改定前の M-1 の誤認など）が確認の画面の時点で見える。
+ */
+export type TemplateDiffStudentNote = {
+  kind: 'duplicate-skipped' | 'transfer-placed' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed'
+  studentName: string
+  subject: string
+  dateKey: string
+  slotNumber: number | null
+  /** 追加情報（振替先の日付・未消化の理由など）。 */
+  detail?: string
+}
+
+const TEMPLATE_DIFF_STUDENT_NOTE_LIMIT = 12
+
+function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
+  const where = `${formatMonthDay(note.dateKey)}${note.slotNumber != null ? ` ${note.slotNumber}限` : ''}`
+  const who = `${note.studentName}（${note.subject}）`
+  switch (note.kind) {
+    case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。`
+    case 'transfer-placed': return `${where} ${who}: 丸ごと振替した日なので、振替先${note.detail ? `（${note.detail}）` : ''}の同じ机へ振替として置きます。`
+    case 'transfer-stocked': return `${where} ${who}: 丸ごと振替した日ですが振替先に置けない${note.detail ? `（${note.detail}）` : ''}ため、未消化振替にします。`
+    case 'transfer-settled': return `${where} ${who}: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。`
+    case 'transfer-count-adjusted': return `${where} ${who}: 丸ごと振替した日なので置かず、希望回数を −1 します。`
+    case 'orphan-removed': return `${where} ${who}: 振替元の授業がテンプレから無くなったため、この振替を消します${note.detail ? `（${note.detail}）` : ''}。`
+    default: return `${where} ${who}`
+  }
+}
+
+/** 確認の画面の「生徒ごとの理由」の行。多いときは先頭 12 件＋「ほか n 件」。 */
+export function buildTemplateDiffStudentNoteLines(notes: readonly TemplateDiffStudentNote[] | undefined, limit = TEMPLATE_DIFF_STUDENT_NOTE_LIMIT): string[] {
+  if (!notes || notes.length === 0) return []
+  const shown = notes.slice(0, limit).map((note) => `・${describeTemplateDiffStudentNote(note)}`)
+  const rest = notes.length - shown.length
+  return ['テンプレの生徒を置かない／動かす理由:', ...shown, ...(rest > 0 ? [`・ほか ${rest} 件`] : [])]
+}
+
+/** 未消化にした理由の表示（Q40-2）。 */
+export function describeWholeDayTransferStockReason(reason: 'no-seat' | 'no-teacher' | 'pending-desk' | 'duplicate' | 'no-target-cell') {
+  switch (reason) {
+    case 'no-seat': return '同じ机が満席'
+    case 'no-teacher': return '同じ机に講師がいない'
+    case 'pending-desk': return '同じ机が保留（緑）'
+    case 'duplicate': return '同じコマに同じ生徒がいる'
+    case 'no-target-cell': return '振替先のコマが無い'
+    default: return ''
+  }
+}
+
+/** 確認文の日付表記（M/D）。生徒ごとの理由の行でも使う。 */
+export function formatTemplateDiffMonthDay(dateKey: string) {
+  return formatMonthDay(dateKey)
 }
 
 function formatMonthDay(dateKey: string) {
@@ -1833,6 +1938,7 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     ...(summary.manualRegularAdoptedByCellTemplate > 0 ? [`手動追加の通常授業${summary.manualRegularAdoptedByCellTemplate}名はテンプレと同じ内容なのでテンプレの机に合わせます。`] : []),
     ...(summary.orphanedMakeupsRemoved > 0 ? [`テンプレから外した生徒の振替${summary.orphanedMakeupsRemoved}件を消します（振替元の授業が無くなるため）。`] : []),
     ...(summary.wholeDayTransferPlacedStudents + summary.wholeDayTransferStockedStudents > 0 ? [`丸ごと振替した日に足した生徒${summary.wholeDayTransferPlacedStudents}名を振替先へ置きます（空きが無い${summary.wholeDayTransferStockedStudents}名は未消化振替へ）。`] : []),
+    ...(context?.studentNotes && context.studentNotes.length > 0 ? ['', ...buildTemplateDiffStudentNoteLines(context.studentNotes)] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
     '',
