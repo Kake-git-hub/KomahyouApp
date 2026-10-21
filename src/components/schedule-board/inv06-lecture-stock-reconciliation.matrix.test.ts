@@ -224,7 +224,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     const newRows = options.templateFillsBothSeats === false
       ? [rowOf('r0', 't2', 'sC'), rowOf('r1', 't1', '')]
       : [rowOf('r0', 't2', 'sC', 'sA'), rowOf('r1', 't1', '')]
-    const diff = computeTemplateDiffApplyForBoard({
+    const diff = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week],
       classroomSettings: settingsOf({ templateFreezeBeforeDate: DATE }),
       teachers: diffTeachers,
@@ -266,7 +266,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // manualMakeupOriginAdditions だけは保存が台帳へ積む依頼（INV-06 の唯一の例外・丸ごと振替した日に足した生徒で振替先に空きが無く休日でない分）で、
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
@@ -311,7 +311,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // manualMakeupOriginAdditions だけは保存が台帳へ積む依頼（INV-06 の唯一の例外・丸ごと振替した日に足した生徒で振替先に空きが無く休日でない分）で、
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })

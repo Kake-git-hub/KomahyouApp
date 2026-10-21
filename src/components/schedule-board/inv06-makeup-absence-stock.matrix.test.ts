@@ -1188,7 +1188,7 @@ describe('INV-06 拡張: テンプレ差分反映の保存前後で未消化振�
   }
 
   function save(week: SlotCell[], settings: ClassroomSettings, rows: RegularLessonRow[], suppressed: string[] = []) {
-    return computeTemplateDiffApplyForBoard({
+    return computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week],
       classroomSettings: settings,
       teachers: [teacher],
@@ -1365,7 +1365,7 @@ describe('INV-06 拡張: 保留（2 行）の解決操作で在庫が動く量�
       desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '田中講師', lesson: { id: 'hand-placed', studentSlots: params.lowerStudents } } : desk)),
     }))
     const weeks = params.previousWeek ? [params.previousWeek, board] : [board]
-    const diff = computeTemplateDiffApplyForBoard({
+    const diff = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks,
       classroomSettings: settings,
       teachers: [teacher],

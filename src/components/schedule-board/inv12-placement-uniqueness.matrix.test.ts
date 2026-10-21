@@ -345,7 +345,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     const rows = options.rows ?? NEW_ROWS
     const suppressed = options.suppressed ?? []
     const savedSettings = settings({ templateFreezeBeforeDate: DATE, deskCount: options.deskCount ?? 3 })
-    const saved = computeTemplateDiffApplyForBoard({
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week],
       classroomSettings: savedSettings,
       teachers: teacherRows,
@@ -540,7 +540,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: mkLesson('moved_sA_x', [copyOfA, null]) } : desk)))
     const keyA5 = buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5)
     const savedSettings = settings({ templateFreezeBeforeDate: DATE })
-    const saved = computeTemplateDiffApplyForBoard({
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z', manualMakeupAdjustments: {},
     })
@@ -572,7 +572,7 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     })[0]
     const week = loaded.map((cell) => (cell.id === `${DATE}_3` ? { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: mkLesson('moved_sA_3', [copyOfA, null]) } : desk)) } : cell))
     const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
-    const save = (slotFilter: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']) => computeTemplateDiffApplyForBoard({
+    const save = (slotFilter: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']) => computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-14T10:00:00.000Z', manualMakeupAdjustments: {}, slotFilter,
     })

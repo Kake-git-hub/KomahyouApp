@@ -47,7 +47,7 @@ function projectDesks(weeks: SlotCell[][]) {
 }
 /** 同じテンプレをもう一度保存（変えたコマ 0＝全コマ）しても、置く・未消化・消す・−1 が出ず盤面も変わらない（冪等）。 */
 function expectIdempotentResave(state: SavedState, rows: RegularLessonRow[], label: string) {
-  const again = save(state.weeks, rows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks })
+  const again = save(state.weeks, rows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments })
   expect({ placed: again.summary.wholeDayTransferPlacedStudents, stocked: again.summary.wholeDayTransferStockedStudents, orphans: again.summary.orphanedMakeupsRemoved, minus: again.wholeDayTransferCountAdjustments.length, ledgerAdd: again.manualMakeupOriginAdditions.length, ledgerRemove: again.manualMakeupOriginRemovals.length }, label)
     .toEqual({ placed: 0, stocked: 0, orphans: 0, minus: 0, ledgerAdd: 0, ledgerRemove: 0 })
   expect(projectDesks(again.nextWeeks), label).toEqual(projectDesks(state.weeks))
@@ -57,7 +57,7 @@ function initialState(rows: RegularLessonRow[]): SavedState {
   return { weeks: board.weeks, suppressed: board.suppressed, ledgers: board.ledgers, scheduleCountAdjustments: board.scheduleCountAdjustments, pendingDesks: {} }
 }
 function step(state: SavedState, previousRows: RegularLessonRow[], nextRows: RegularLessonRow[]) {
-  const saved = save(state.weeks, nextRows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, slotFilter: slotFilterBetween(previousRows, nextRows) })
+  const saved = save(state.weeks, nextRows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments, slotFilter: slotFilterBetween(previousRows, nextRows) })
   return { saved, state: applySaveToState(state, saved) }
 }
 
@@ -142,18 +142,50 @@ describe('tp-51（2026-10-17 テスト教室）: 時限を変える → 科目�
   })
 })
 
+describe('既知の限界 L-5（2026-10-21・オーナー判断待ち）: 振替元の日に既に振替（移送済み）がある生徒を、振替先に置けない形で足すと、未消化の origin が同じ日付へのフォールバック消化で食われる', () => {
+  // A は水 5限 を木 5限 へ移送済み。水 4限（木 4限 に講師が居ない）にも A の数を足すと、置けないので台帳に origin（水 4限）を積むが、
+  // 在庫の消化（consumeMatchingOriginTokens）は時限が合わなくても同じ日付の origin へフォールバックするため、移送済みの振替（振替元 水 5限）がこの origin を食う。
+  // 結果: 台帳には積まれるが残数は増えず、4限の分の授業は盤面にも在庫にも無い。確認の画面には「未消化振替にします（同じ机に講師がいない）」が出る。
+  // 監査はこれを「無言の消失」として検出する（期待 2・説明 1）。直し方はオーナー判断（進行中テーマ台帳 template-diff-apply の (c)）: 振替先の同じコマの別の机へ置く／
+  // 置けないときは Q35-8 と同じ −1 にする／在庫の消化を時限つきの origin には日付フォールバックさせない、のいずれか。決まるまで**この形だけ**を許容し、ほかの違反は許さない。
+  it('監査が「無言の消失」1 件（A×数×水）だけを返し、台帳には origin が 1 件積まれている（決まったら expectNoViolation に戻す）', () => {
+    const BASE = [...OLD_ROWS.slice(0, 2), row('r2', 't3', '', '', 4)]
+    const NEXT = [...BASE, row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })]
+    const { saved, state } = step(initialState(BASE), BASE, NEXT)
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(1)
+    expect(saved.studentNotes.map((note) => note.kind)).toEqual(['transfer-stocked'])
+    expect(state.ledgers['sA__数']).toHaveLength(1)
+    const violations = audit(state, NEXT)
+    expect(violations.map((item) => ({ kind: item.kind, studentId: item.studentId, subject: item.subject, dateKey: item.dateKey, expected: item.expected, explained: item.explained })))
+      .toEqual([{ kind: 'missing', studentId: 'sA', subject: '数', dateKey: WED, expected: 2, explained: 1 }])
+    expect(balances(state.weeks, NEXT, state.ledgers)['sA__数'] ?? 0).toBe(0)
+  })
+})
+
 describe('操作の全ペア（順序つき）で保存則・冪等・不動点を検査する', () => {
   // 丸ごと振替した水 5限（A・B）に対するテンプレ操作。木 3限には講師だけの足場（置ける形）、水 3限には C の数（同じ科目を別の時限に持つ形）。
-  const SCAFFOLD = [row('r2', 't3', '', '', 4), row('r4', 't4', '', '', 4, { slotNumber: 3 }), row('r3', 't4', 'sC', '', 3, { slotNumber: 3 })]
+  // 水 4限にも講師だけの足場（高橋）: 丸ごと振替で木 4限へ移るので、4限に足した生徒を置ける形になる（置けない形は下の「既知の限界 L-5」で別に見る）。
+  const SCAFFOLD = [row('r2', 't3', '', '', 4), row('r4', 't4', '', '', 4, { slotNumber: 3 }), row('r3', 't4', 'sC', '', 3, { slotNumber: 3 }), row('r6', 't4', '', '', 3, { slotNumber: 4 })]
   type Op = { name: string; apply: (rows: RegularLessonRow[]) => RegularLessonRow[] }
   const replaceRow = (rows: RegularLessonRow[], id: string, next: RegularLessonRow | null) => rows.flatMap((item) => (item.id === id ? (next ? [next] : []) : [item]))
+  /** A（student1 に sA を持つ行）を探して書き換える。A が 2 行に居ることは無い（3限の行 r7 へ移すときは元の行から外す）。 */
+  const rowOfA = (rows: RegularLessonRow[]) => rows.find((item) => item.student1Id === 'sA')
+  const withoutA = (rows: RegularLessonRow[]) => rows.map((item) => (item.student1Id === 'sA' ? { ...item, student1Id: '', subject1: '' } : item))
+  const insertBefore = (rows: RegularLessonRow[], id: string, next: RegularLessonRow) => {
+    const index = rows.findIndex((item) => item.id === id)
+    return index < 0 ? [...rows, next] : [...rows.slice(0, index), next, ...rows.slice(index)]
+  }
   const OPS: Op[] = [
-    { name: 'A を外す', apply: (rows) => replaceRow(rows, 'r0', row('r0', 't1')) },
+    { name: 'A を外す', apply: (rows) => withoutA(rows) },
     { name: 'C を 5限 机 0 の生徒 2 に足す（同じ科目を 3限にも持つ）', apply: (rows) => replaceRow(rows, 'r0', { ...rows.find((item) => item.id === 'r0')!, student2Id: 'sC', subject2: '数' }) },
-    { name: 'A を 5限 → 3限 へ', apply: (rows) => replaceRow(rows, 'r0', { ...rows.find((item) => item.id === 'r0')!, slotNumber: 3 }) },
-    { name: 'A の科目を英へ', apply: (rows) => replaceRow(rows, 'r0', { ...rows.find((item) => item.id === 'r0')!, subject1: rows.find((item) => item.id === 'r0')!.student1Id ? '英' : '' }) },
+    // A だけを 3限へ（行 r7・水 3限 の机 1＝C の机 r3 の次）。r0 に C が居ても C は 5限に残る（行ごと動かすと C が 3限に 2 回＝衝突 origin になる）。
+    { name: 'A を 5限 → 3限 へ', apply: (rows) => { const current = rowOfA(rows); if (!current || current.slotNumber === 3) return rows; return insertBefore(withoutA(rows).filter((item) => item.id !== 'r7'), 'r6', row('r7', 't1', 'sA', '', 3, { slotNumber: 3, subject1: current.subject1 })) } },
+    { name: 'A の科目を英へ', apply: (rows) => { const current = rowOfA(rows); return current ? replaceRow(rows, current.id, { ...current, subject1: '英' }) : rows } },
     { name: 'B の机の講師を替える', apply: (rows) => replaceRow(rows, 'r1', { ...rows.find((item) => item.id === 'r1')!, teacherId: 't4' }) },
     { name: 'D を 5限 机 1 の生徒 2 に足す', apply: (rows) => replaceRow(rows, 'r1', { ...rows.find((item) => item.id === 'r1')!, student2Id: 'sD', subject2: '数' }) },
+    // regression-reviewer H-A（2026-10-21）: 時限を変えた生徒に、同じ科目を同じ曜日の別の時限で足す。4限の行は足場 r6 より前＝水 4限 机 0（振替先 木 4限 机 0 の講師は移送された高橋）。
+    { name: 'A の数を 4限にも足す（行を足す）', apply: (rows) => (rows.some((item) => item.id === 'r5') ? rows : insertBefore(rows, 'r6', row('r5', 't3', 'sA', '', 3, { slotNumber: 4 }))) },
+    { name: 'A を 5限 → 3限 へ ＋ 4限にも足す（1 回の保存で 2 つ）', apply: (rows) => { const current = rowOfA(rows); const moved = !current || current.slotNumber === 3 ? rows : insertBefore(withoutA(rows).filter((item) => item.id !== 'r7'), 'r6', row('r7', 't1', 'sA', '', 3, { slotNumber: 3, subject1: current.subject1 })); return moved.some((item) => item.id === 'r5') ? moved : insertBefore(moved, 'r6', row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })) } },
     { name: '何も変えない', apply: (rows) => rows },
   ]
   const BASE = [...OLD_ROWS.slice(0, 2), ...SCAFFOLD]
@@ -167,8 +199,15 @@ describe('操作の全ペア（順序つき）で保存則・冪等・不動点�
         const nextRows = op.apply(rows)
         const { saved, state: nextState } = step(state, rows, nextRows)
         const label = `${index + 1} 手目: ${op.name}`
-        // INV-06: 台帳へ積むのは「置けなかった」生徒の分だけ（休日でない）。
-        expect(saved.manualMakeupOriginAdditions.length, label).toBe(saved.wholeDayTransferStocked.filter((item) => item.ledger).length)
+        // INV-06: 未消化振替の残数の増減は、保存が台帳へ積んだ／取り下げた分だけ（置く・消す・精算済みは在庫中立）。生徒×科目ごとに前後の差で見る。
+        const before = balances(state.weeks, rows, state.ledgers, settings(), {}, state.pendingDesks)
+        const after = balances(nextState.weeks, nextRows, nextState.ledgers, settings(), {}, nextState.pendingDesks)
+        const ledgerDelta = new Map<string, number>()
+        for (const addition of saved.manualMakeupOriginAdditions) { const key = `${addition.student.managedStudentId}__${addition.student.subject}`; ledgerDelta.set(key, (ledgerDelta.get(key) ?? 0) + 1) }
+        for (const removal of saved.manualMakeupOriginRemovals) ledgerDelta.set(removal.stockKey, (ledgerDelta.get(removal.stockKey) ?? 0) - 1)
+        for (const key of new Set([...Object.keys(before), ...Object.keys(after), ...ledgerDelta.keys()])) {
+          expect((after[key] ?? 0) - (before[key] ?? 0), `${label} ${key} の残数の差`).toBe(ledgerDelta.get(key) ?? 0)
+        }
         // INV-12: 同じ日に同じ生徒が 2 か所に生きない（上段）。
         for (const cell of nextState.weeks.flat()) {
           const ids = liveIds(nextState.weeks, cell.id)

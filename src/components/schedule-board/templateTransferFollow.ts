@@ -13,7 +13,7 @@
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { isWholeDayTransferSettled, studentSubjectKey, type TemplateDiffTemplateCell, type TemplateLessonLookup } from './templateDiffApply'
+import { studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -320,12 +320,10 @@ export function planWholeDayTransferPlacements(params: {
   /** 反映日。振替先が反映日より前（後ろ向きの丸ごと振替）なら触らない（INV-10・監査 H-4）。 */
   effectiveStartDate: string
   /**
-   * 保存前から持っている通常授業の抑止キー。精算済み（同じ時限のキー＝処分済み／別の時限のキーで新テンプレがその時限に持たない＝時限変更の写し）の
-   * 生徒は触らない（権威関数 isWholeDayTransferSettled・Q35-8 の −1 と同じ判定・2026-10-21 改定）。
+   * 精算済みの生徒（権威関数 resolveWholeDayTransferSettlement が決めた集合。skipped と同じ要素参照）。触らない（置かず・未消化にせず・−1 もしない＝Q35-8 と同じ判定・2026-10-21）。
+   * 省略不可（省略できると全員を置こうとして再保存で二重になる）。
    */
-  suppressedRegularLessonOccurrences: readonly string[]
-  /** 新テンプレ（抑止前の raw）がその日×時限にその生徒×科目を持つか（buildTemplateLessonLookup）。精算済み判定の (2) に使う。省略不可（省略できると改定前の誤認に戻る）。 */
-  templateHasLessonAt: TemplateLessonLookup
+  settled: ReadonlySet<WholeDayTransferSkippedStudent>
   prepareStudentForMove: (student: StudentEntry, sourceDateKey: string, sourceSlotNumber: number, targetDateKey: string) => StudentEntry
   buildMovedSourceStatusEntry: (params: { student: StudentEntry; sourceCell: SlotCell; sourceDesk: DeskCell; destinationDateKey: string; destinationSlotNumber: number }) => StudentStatusEntry
 }): WholeDayTransferFollowPlan {
@@ -351,7 +349,7 @@ export function planWholeDayTransferPlacements(params: {
 
   const settled: WholeDayTransferSettled[] = []
   for (const item of params.skipped) {
-    if (isWholeDayTransferSettled({ student: item.student, dateKey: item.dateKey, slotNumber: item.slotNumber, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, templateHasLessonAt: params.templateHasLessonAt })) {
+    if (params.settled.has(item)) {
       settled.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber })
       continue
     }

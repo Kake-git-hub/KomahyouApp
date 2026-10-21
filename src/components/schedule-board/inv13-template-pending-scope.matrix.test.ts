@@ -195,7 +195,7 @@ const COLUMNS: LowerColumn[] = [
 function buildPendingBoard(column: LowerColumn) {
   let week = buildWeek(OLD_ROWS)
   for (const [index, update] of Object.entries(column.desks)) week = mutateDesk(week, Number(index), update)
-  const diff = computeTemplateDiffApplyForBoard({
+  const diff = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks: [week],
     classroomSettings: settings(),
     teachers,
@@ -499,7 +499,7 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
   let week = buildWeek(OLD_ROWS)
   week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [null, MAKEUP_M] }, statusSlots: [status('sA', 'absent', { teacherName: '田中' }), null] }))
   const beforeState: BoardState = { weeks: [week], pending: {} }
-  const diff = computeTemplateDiffApplyForBoard({
+  const diff = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks: [week],
     classroomSettings: settings(),
     teachers,
@@ -539,7 +539,7 @@ describe('INV-13 マトリクス: 机に残した会計記録（欠席）は保�
     let crowded = buildWeek(OLD_ROWS)
     crowded = mutateDesk(crowded, 1, (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'absent', { lessonType: 'makeup', makeupSourceDate: '2026-09-16', makeupSourceLabel: '9/16(水) 5限', teacherName: '田中' }), null] }))
     const before: BoardState = { weeks: [crowded], pending: {} }
-    const saved = computeTemplateDiffApplyForBoard({
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [crowded], classroomSettings: settings(), teachers, students, regularLessons: NEW_ROWS_TWO_IN_DESK1,
       effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z', manualMakeupAdjustments: {},
     })

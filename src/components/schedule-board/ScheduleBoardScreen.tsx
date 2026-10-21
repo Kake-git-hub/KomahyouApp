@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, buildTemplateLessonLookup, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -2622,10 +2622,21 @@ export function computeTemplateDiffApplyForBoard(input: {
   manualMakeupAdjustments: MakeupOriginMap
   /** Q40: 抑止した origin（在庫の正本と同じ入力で有効な origin を引くため）。省略時は無し。 */
   suppressedMakeupOrigins?: MakeupOriginMap
+  /** Q40-3（2026-10-21）: 希望回数の補正。精算済み判定が「その日の −1 の純減」を説明に数える。読むだけ。省略不可。 */
+  scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[]
 }) {
+  // Q40-3（2026-10-21 H-A）: 精算済み判定の材料。在庫の正本は保存前の盤面・台帳で 1 回だけ引く（この保存で置く振替はまだ無い）。
+  const wholeDayTransferSettlement = {
+    originDatesByKey: collectMakeupOriginDatesByKey({
+      students: input.students, regularLessons: input.regularLessons, classroomSettings: input.classroomSettings, weeks: input.weeks,
+      manualAdjustments: input.manualMakeupAdjustments, suppressedOrigins: input.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(input.students),
+      today: resolveTemplateDiffToday(input.createdAt), includeAbsentMakeupOrigins: true, templatePendingDesks: input.templatePendingDesks,
+    }),
+    scheduleCountAdjustments: input.scheduleCountAdjustments,
+  }
   // Q39-9（regression-reviewer H-1）: 変えた机に関わる生徒の同日移動の写しが範囲の外の時限に居る日は、その日を全コマにする（Q36 は日単位の規則）。
   // 入口で 1 回だけ盤面（保存前の上段・下段）を見て決め、Q36 の反復・保存直後の再マージの重ね合わせの両方に同じ絞り込みを渡す。
-  const params = { ...input, slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter }) }
+  const params = { ...input, wholeDayTransferSettlement, slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter }) }
   // Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写し（同日移動・元の日付へ戻した）が、新テンプレの同じ生徒×科目と
   // 重複する／テンプレに無い／席で新テンプレの別の生徒とぶつかるときは、写しを外して**その日のその生徒×科目の抑止キーも外し**、
   // テンプレの授業が元の位置へ戻った形でもう一度突き合わせる（外したキーで抑止前の管理セルが変わるので、管理セルを作り直して反復する。
@@ -2654,7 +2665,7 @@ export function computeTemplateDiffApplyForBoard(input: {
       effectiveStartDate: params.effectiveStartDate, slotFilter: params.slotFilter,
     })
     const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals)
-    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, templateHasLessonAt: buildTemplateLessonLookup(run.templateCells), prepareStudentForMove, buildMovedSourceStatusEntry })
+    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry })
     const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)))
     // 2026-10-21: 確認の画面に出す「生徒ごとの理由」（名前つき）。件数だけでは「誰がなぜ置かれないか」が追えない（テスト教室 tp-48/tp-56）。
     const noteName = (student: StudentEntry) => student.name
@@ -2725,6 +2736,7 @@ function runTemplateDiffApplyWithCopyReverts(params: {
   templatePendingDesks: TemplatePendingDeskMap
   createdAt: string
   slotFilter?: TemplateDiffSlotFilter | null
+  wholeDayTransferSettlement: { originDatesByKey: Record<string, string[]>; scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[] }
 }, protectedCopies: ReadonlySet<string>) {
   let weeks = params.weeks
   let pendingDesks = params.templatePendingDesks
@@ -2743,6 +2755,7 @@ function runTemplateDiffApplyWithCopyReverts(params: {
     // 削除記録(表示名か講師 ID)とテンプレ机の講師(表示名)を同じ講師として突き合わせる(Q21-9 例外 2 の改定・2026-10-14)。
     teacherAliases: buildTeacherAliasResolver(params.teachers),
     slotFilter: params.slotFilter,
+    wholeDayTransferSettlement: params.wholeDayTransferSettlement,
   })
   let diff = compute()
   const iterationLimit = countSameDayMovedCopiesOnBoard(params.weeks, params.templatePendingDesks) + 1
@@ -7472,6 +7485,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const diff = computeTemplateDiffApplyForBoard({
       weeks,
       classroomSettings: nextClassroomSettings,
+      scheduleCountAdjustments,
       teachers,
       students,
       regularLessons: normalizedTemplateRegularLessons,

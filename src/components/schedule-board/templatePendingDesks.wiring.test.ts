@@ -320,8 +320,10 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, studentNotes: plan.diff.studentNotes, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })")
     // 2026-10-21: 確認の画面には件数に加えて生徒ごとの理由（名前つき）を出す（試し実行の結果をそのまま渡す＝保存本体と同じ入力）。
     expect(BOARD_TSX).toContain("buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })")
-    // Q40-3（2026-10-21）: 配置計画へ渡す精算済み判定の材料は新テンプレの raw（buildTemplateLessonLookup）。省略できない。
-    expect(BOARD_TSX).toContain("templateHasLessonAt: buildTemplateLessonLookup(run.templateCells)")
+    // Q40-3（2026-10-21 H-A）: 精算済みの集合は本体（resolveWholeDayTransferSettlement）が決め、配置計画は同じ集合を参照で受ける。材料の在庫の正本は保存前の盤面・台帳で引き、希望回数の補正は読むだけ。
+    expect(BOARD_TSX).toContain("settled: new Set(run.diff.wholeDayTransferSettled)")
+    expect(BOARD_TSX).toContain("wholeDayTransferSettlement: params.wholeDayTransferSettlement,")
+    expect(BOARD_TSX).toContain("      scheduleCountAdjustments,\n      teachers,")
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, new Date().toISOString(), { applyScope: options?.applyScope })")
     // 2026-10-15（確認リスト v1.5.596 tp-44/tp-46 メモ「選択肢は不要で、自動的に変更のあったコマだけ反映。何も変更なかったときだけ全コマ」）:
     // 確認モーダルの範囲のラジオ（変えたコマだけ／すべてのコマ）は外し、範囲は計画関数の既定（resolveDefaultTemplateDiffApplyScope）だけで決まる。

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { ClassroomSettings } from '../../types/appState'
+import type { ClassroomSettings, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import {
   buildManagedOccurrenceKey,
@@ -187,8 +187,10 @@ function applyDiff(params: {
   suppressed?: string[]
   pending?: TemplatePendingDeskMap
   classroomSettings?: ClassroomSettings
+  /** Q40-3（2026-10-21）: 希望回数の補正（精算済み判定が −1 の純減を説明に数える）。 */
+  scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
 }) {
-  const result = computeTemplateDiffApplyForBoard({
+  const result = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: params.scheduleCountAdjustments ?? [],
     weeks: [params.week],
     classroomSettings: params.classroomSettings ?? newSettings(),
     teachers,
@@ -551,7 +553,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   it('条件 1・INV-10：反映日より前のセル・週は参照ごと不変', () => {
     const week = buildWeek(OLD_ROWS)
     const previousWeek = week.map((cell) => ({ ...cell, dateKey: cell.dateKey.replace('2026-10', '2026-09'), id: `prev_${cell.id}` }))
-    const result = computeTemplateDiffApplyForBoard({
+    const result = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [previousWeek, week],
       classroomSettings: newSettings(),
       teachers,
@@ -1347,7 +1349,7 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
       expect(index).toBeGreaterThanOrEqual(0)
       return board.slice(index, index + length)
     }
-    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 9000)
+    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 12000) // 2026-10-21: 精算済み判定の材料と生徒ごとの理由が入口に増えたので範囲を広げた
     // Q36（2026-10-03）: 保存と同じ抑止＝保存前の抑止から写しの分を外し（suppressed）、Q21-11 / Q35 で足した分を加える
     expect(entryFn).toContain('[...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]')
     expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed })')
@@ -1371,7 +1373,7 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
       weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: OLD_ROWS, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed,
     })
     expect(templateCells.find((entry) => entry.applied.id === CELL_ID)?.scaffoldTeachersStripped).toBe(true)
-    const result = computeTemplateDiffApply({ weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed, pendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z' })
+    const result = computeTemplateDiffApply({ wholeDayTransferSettlement: { originDatesByKey: {}, scheduleCountAdjustments: [] }, weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed, pendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z' })
     expect(result.summary.skippedDuplicateStudents).toBe(0)
     expect(result.summary.wholeDayTransferSkippedStudents).toBe(2)
     expect(deskOf(result.nextWeeks, 1)).toMatchObject({ teacher: '', manualTeacher: false })
@@ -1460,9 +1462,10 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
   })
 
   // regression-reviewer M-1（2026-10-02・INV-05）: 丸ごと振替の振替先で処分済み（−1 済み・抑止キー A__数__D'__5）の A の時限だけを 5 → 4 限に変えると、
-  // 新しいキー A__数__D'__4 は抑止されていないので Q35 が A を外す。ここで −1 すると合計 −2 になるため、同じ生徒×科目×日付の抑止キーが
-  // 別の時限で既にある生徒は −1 しない（その日の分は処分か移送で精算済み）。
-  it('Q35-8: 時限だけ変えたテンプレ（同じ生徒×科目×日付の抑止キーが別の時限に既にある）では希望回数を −1 しない（二重計上の防止）', () => {
+  // 新しいキー A__数__D'__4 は抑止されていないので Q35 が A を外す。ここで −1 すると合計 −2 になる。
+  // 2026-10-21（H-A 再改定）: 「別の時限にキーがある」ではなく、その日の授業がもう説明されている（処分の −1 が scheduleCountAdjustments に積まれている）から −1 しない。
+  // 旧データで −1 の記録だけ無い形は、同じ時限のキー（条件 (1)）が無い限り −1 される（1 回だけ・次の保存からはキーで精算済み）。
+  it('Q35-8: 時限だけ変えたテンプレ（処分の −1 が記録済み）では希望回数を −1 しない（二重計上の防止）', () => {
     // 振替先の姿: A は Phase A の処分で −1 済み（抑止キー A__数__D'__5）で、その日に A は生きていない（移送されたのは B の振替だけ）。
     let week = transferredWeek()
     week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [entry('sB', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), null] } }))
@@ -1470,9 +1473,16 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
     const slot4Cell = `${DATE}_4`
     const week4 = week.map((cell) => (cell.id !== slot4Cell ? cell : { ...cell, desks: cell.desks.map((desk) => ({ id: desk.id, teacher: '' })) }))
     const rowsSlot4 = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
-    const result = applyDiff({ week: week4, newRows: rowsSlot4, suppressed: wholeDaySuppressed })
+    const disposed: ScheduleCountAdjustmentEntry[] = [{ studentKey: 'sA', subject: '数', countKind: 'regular', dateKey: DATE, delta: -1 }]
+    const result = applyDiff({ week: week4, newRows: rowsSlot4, suppressed: wholeDaySuppressed, scheduleCountAdjustments: disposed })
     expect(countLiveInCell(result.nextWeeks, 'sA')).toBe(0)
     expect(result.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(result.wholeDayTransferSettled.map((item) => item.student.managedStudentId)).toEqual(['sA'])
+    // −1 の記録が無ければ説明が足りないので −1 する（旧データの 1 回だけの補正）。次の保存からは同じ時限のキーで精算済み。
+    const withoutRecord = applyDiff({ week: week4, newRows: rowsSlot4, suppressed: wholeDaySuppressed })
+    expect(withoutRecord.wholeDayTransferCountAdjustments.map((item) => item.student.managedStudentId)).toEqual(['sA'])
+    const resaved = applyDiff({ week: week4, newRows: rowsSlot4, suppressed: [...wholeDaySuppressed, ...withoutRecord.addedSuppressedRegularLessonOccurrences] })
+    expect(resaved.summary.wholeDayTransferSkippedStudents).toBe(0)
     expect(result.addedSuppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sA'), DATE, 4)])
     expect(result.wholeDayTransferCountAdjustments).toEqual([])
     expect(result.summary.wholeDayTransferCountAdjusted).toBe(0)
@@ -1752,7 +1762,7 @@ describe('Q36: 同日移動の写しはテンプレに合わせる（オーナ�
     const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'moved_sA_z', studentSlots: [copyOfA(), null] } }))
     const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sC', '数')]
     const templateCells = buildTemplateDiffTemplateCells({ weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: newRows, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [KEY_A_SLOT5] })
-    const single = computeTemplateDiffApply({ weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [KEY_A_SLOT5], pendingDesks: {}, createdAt: 'x' })
+    const single = computeTemplateDiffApply({ wholeDayTransferSettlement: { originDatesByKey: {}, scheduleCountAdjustments: [] }, weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [KEY_A_SLOT5], pendingDesks: {}, createdAt: 'x' })
     expect(single.sameDayMoveCopyReverts.map((item) => [item.student.managedStudentId, item.row, item.seat, item.reason])).toEqual([['sA', 'upper', 0, 'collided']])
     expect(single.summary.sameDayMoveCopiesReverted).toBe(0)
     // 単体では従来どおり保留（下段に写し）。入口が外して反復すると保留は消える（上のテスト）。
@@ -2122,7 +2132,7 @@ describe('Q38: 手動追加の通常授業とテンプレの同じ生徒×科目
 describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合わせる', () => {
   // 新テンプレ: 机0=鈴木(C)（水 5限の中身が変わる）
   const NEW_ROWS = [row('r0', 't2', 'sC', '数')]
-  const applyWithFilter = (week: SlotCell[], slotFilter: TemplateDiffSlotFilter | undefined) => computeTemplateDiffApplyForBoard({
+  const applyWithFilter = (week: SlotCell[], slotFilter: TemplateDiffSlotFilter | undefined) => computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks: [week],
     classroomSettings: newSettings(),
     teachers,
@@ -2206,7 +2216,7 @@ describe('Q39: テンプレで変えたコマ（曜日×時限）だけ突き合
   // 室長が保存する盤面は読み込み時の再マージを通った正規形（空机に manualTeacher:false など）。同日移動の実データの形＝5 限の A は抑止で消え、3 限に写し。
   const loadedWeek = (suppressed: string[] = []) => remerge([buildWeek(OLD_ROWS)], OLD_ROWS, suppressed)[0]
   const weekWithCopyAtSlot3 = () => mutateDesk(loadedWeek([KEY_A_SLOT5]), 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_3', studentSlots: [entry('sA', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }), null] } }), SLOT3_CELL_ID)
-  const runScoped = (week: SlotCell[], newRows: RegularLessonRow[], slotFilter: TemplateDiffSlotFilter | undefined, pending: TemplatePendingDeskMap = {}) => computeTemplateDiffApplyForBoard({
+  const runScoped = (week: SlotCell[], newRows: RegularLessonRow[], slotFilter: TemplateDiffSlotFilter | undefined, pending: TemplatePendingDeskMap = {}) => computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: newRows, effectiveStartDate: EFFECTIVE,
     suppressedRegularLessonOccurrences: [KEY_A_SLOT5], templatePendingDesks: pending, createdAt: 'x', manualMakeupAdjustments: {}, slotFilter,
   })

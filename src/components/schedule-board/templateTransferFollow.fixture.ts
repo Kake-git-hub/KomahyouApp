@@ -70,10 +70,10 @@ export function transferredBoard(rows = OLD_ROWS, classroomSettings = settings()
   return { weeks, suppressed: result.nextSuppressedRegularLessonOccurrences, ledgers: result.nextManualMakeupAdjustments, scheduleCountAdjustments: result.nextScheduleCountAdjustments }
 }
 
-export type SaveOptions = { classroomSettings?: ClassroomSettings; slotFilter?: TemplateDiffSlotFilter | null; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedMakeupOrigins?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: TemplatePendingDeskMap }
+export type SaveOptions = { scheduleCountAdjustments?: readonly ScheduleCountAdjustmentEntry[]; classroomSettings?: ClassroomSettings; slotFilter?: TemplateDiffSlotFilter | null; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedMakeupOrigins?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: TemplatePendingDeskMap }
 export function save(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], options: SaveOptions = {}) {
   return computeTemplateDiffApplyForBoard({
-    weeks, classroomSettings: options.classroomSettings ?? settings(), teachers, students, regularLessons: rows, effectiveStartDate: options.effectiveStartDate ?? EFFECTIVE,
+    weeks, scheduleCountAdjustments: options.scheduleCountAdjustments ?? [], classroomSettings: options.classroomSettings ?? settings(), teachers, students, regularLessons: rows, effectiveStartDate: options.effectiveStartDate ?? EFFECTIVE,
     suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: options.templatePendingDesks ?? {}, createdAt: '2026-10-01T10:00:00.000Z', slotFilter: options.slotFilter, manualMakeupAdjustments: options.manualMakeupAdjustments ?? {},
     suppressedMakeupOrigins: options.suppressedMakeupOrigins,
   })

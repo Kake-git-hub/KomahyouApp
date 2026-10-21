@@ -14,10 +14,14 @@
 
 ## 未リリース
 
-- fix(INV-05/INV-06/INV-12/INV-03): **テスト教室の確認リスト v1.5.604(受付 20261020-092527755-56bbf675)の要改善 2 件を修正**(spec-template-behavior §H 決定記録 40〜43)。
+- fix(INV-05/INV-06/INV-12/INV-03/INV-02): **テスト教室の確認リスト v1.5.604(受付 20261020-092527755-56bbf675)の要改善 2 件を修正**(spec-template-behavior §H 決定記録 40〜43)。
   (1) tp-48: 同じ科目を同じ曜日の別の時限にも持つ生徒を、丸ごと振替した日のコマにテンプレで足すと、Q40-3 の精算済み判定(M-1「別の時限に抑止キーがあれば精算済み」)が 3限のキーで 4限の分を精算済みと誤認し、
-  置かず・未消化にせず・−1 もせずに授業が消えていた(操作痕跡 2026-10-17 07:53 とスナップショットで確認)。精算済みを権威関数 `isWholeDayTransferSettled`(同じ時限のキー／別の時限のキーで新テンプレがその時限に持たない)にし、
-  配置計画 `planWholeDayTransferPlacements`(新パラメータ `templateHasLessonAt`＝`buildTemplateLessonLookup(raw)`・省略不可)と Q35-8 の −1 の両方が使う。
+  置かず・未消化にせず・−1 もせずに授業が消えていた(操作痕跡 2026-10-17 07:53 とスナップショットで確認)。regression-reviewer の再検査(H-A)でキー単位の判定はキー 1 本が何件分にも効く(時限変更の後に同じ科目を
+  別の時限に足す等で再発)と分かったので、精算済みを**件数方式**の権威関数 `resolveWholeDayTransferSettlement`(同じ時限のキー／その日の授業を説明できる件数〔生きている通常授業・出欠/移動元の記録・
+  記録と対にならない振替・在庫の origin・−1 の純減〕の余り)にし、配置計画 `planWholeDayTransferPlacements`(新パラメータ `settled`＝同じ集合・省略不可)と Q35-8 の −1 の両方が同じ集合を使う。
+  数え方は監査と共通の `templateLessonAccounting.ts`。入口 `computeTemplateDiffApplyForBoard` は `scheduleCountAdjustments`(読むだけ)を必須で受け、在庫の正本を保存前の盤面・台帳で 1 回引いて渡す。
+  INV-02 の例外文(範囲の粒度)は改定案として spec-invariants に注記(オーナー承認待ち)。監査で新たに見えた既知の限界 L-5(振替元の日に移送済みの振替がある生徒を置けない形で足すと、
+  未消化の origin が同じ日付へのフォールバック消化で食われる)は §H Q40-8 に記し、オーナー判断(別の机へ置く／−1／在庫側の変更)待ち。
   (2) tp-51: 「時限を変える → 科目を変える」の順に保存すると、旧時限を振替元に持つ旧科目の振替が Q40-1 の範囲(曜日×時限)の外になり根拠が無いのに消えず、10/20 の無関係な保存で初めて消えていた。範囲を根拠と同じ日単位(曜日)に揃えた(`isSourceInScope`)。
   テスト: `templateTransferFollow.test.ts`(精算済み判定 4 形・置く形・日単位の範囲)・新規 `inv06-template-save-sequences.matrix.test.ts`(下記) (templateDiffApply.ts / templateTransferFollow.ts / ScheduleBoardScreen.tsx)
 - feat: **テンプレ保存の確認の画面に「テンプレの生徒を置かない／動かす理由」を生徒の名前つきで出す**(同受付 tp-48「これ以外は機能していない」・tp-56 case1「通常授業はどこに消えたのか」)。Q21-11(同じコマに同じ生徒)・Q40-2(振替先へ置く／未消化と理由)・

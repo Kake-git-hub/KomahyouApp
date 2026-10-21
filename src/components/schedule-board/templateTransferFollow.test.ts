@@ -8,7 +8,7 @@ import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import type { TemplateDiffTemplateCell } from './templateDiffApply'
 import { buildOriginToken, type ManualMakeupOrigin } from './makeupStock'
-import { buildTemplateLessonLookup, isWholeDayTransferSettled } from './templateDiffApply'
+import { resolveWholeDayTransferSettlement } from './templateDiffApply'
 import {
   collectOrphanedMakeups,
   planWholeDayTransferPlacements,
@@ -177,31 +177,57 @@ describe('collectOrphanedMakeups（Q40-1）', () => {
   })
 })
 
-describe('isWholeDayTransferSettled（Q40-3 M-1 改定・2026-10-21 テスト教室 tp-48）', () => {
+describe('resolveWholeDayTransferSettlement（Q40-3・2026-10-21 テスト教室 tp-48 → regression-reviewer H-A）', () => {
   const C = student('sC_t', '千葉')
-  const has = (slots: number[]) => (_student: unknown, dateKey: string, slotNumber: number) => dateKey === WED && slots.includes(slotNumber)
-  const settled = (keys: string[], templateSlots: number[], slotNumber = 5) => isWholeDayTransferSettled({ student: C, dateKey: WED, slotNumber, suppressedRegularLessonOccurrences: keys, templateHasLessonAt: has(templateSlots) })
-  it('キーが無ければ精算済みでない', () => {
-    expect(settled([], [5])).toBe(false)
-    expect(settled([`sC__英__${WED}__5`, `sC__数__${THU}__5`], [5])).toBe(false)
+  const movedC5 = status(C, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 })
+  const skippedAt = (slotNumber: number) => ({ student: C, dateKey: WED, slotNumber, deskIndex: 0, seatIndex: 0 })
+  /** 水 5限 の C を木 5限 へ移送済み（記録＋振替）の盤面。 */
+  const transferred = () => [[
+    cell(WED, 5, [desk('w5d1', '', undefined, [movedC5, null]), desk('w5d2', '')]),
+    cell(THU, 5, [desk('t5d1', '鈴木', [makeupOf('sC_mk', '千葉', WED, labelWed5), null]), desk('t5d2', '佐藤')]),
+  ]]
+  const template = (...slots: number[]) => slots.map((slotNumber) => templateCellOf(WED, slotNumber, [desk(`w${slotNumber}d1`, '田中', [C, null])]))
+  const resolve = (items: ReturnType<typeof skippedAt>[], extra: Partial<Parameters<typeof resolveWholeDayTransferSettlement>[1]> = {}) =>
+    resolveWholeDayTransferSettlement(items, { weeks: transferred(), pendingDesks: {}, templateCells: template(5), suppressedRegularLessonOccurrences: [], originDatesByKey: {}, scheduleCountAdjustments: [], ...extra })
+
+  it('(1) 同じ時限のキーが保存前からあれば精算済み（前の保存か丸ごと振替が処分済み＝再保存の冪等性）', () => {
+    const item = skippedAt(5)
+    expect(resolve([item], { suppressedRegularLessonOccurrences: [`sC__数__${WED}__5`] }).has(item)).toBe(true)
+    expect(resolve([item], { suppressedRegularLessonOccurrences: [`sC__英__${WED}__5`, `sC__数__${THU}__5`] }).has(item)).toBe(true) // 説明（移送済みの振替）があるので (2) で精算済み
   })
-  it('(1) 同じ時限のキー＝前の保存か丸ごと振替が処分済み（再保存の冪等性）', () => {
-    expect(settled([`sC__数__${WED}__5`], [5])).toBe(true)
+  it('(2) 時限変更（5→3限）: 移送済みの振替が説明になるので新しい時限の分は精算済み（H-1・新時限へ二重に置かない）', () => {
+    const item = skippedAt(3)
+    expect(resolve([item], { templateCells: template(3), suppressedRegularLessonOccurrences: [`sC__数__${WED}__5`] }).has(item)).toBe(true)
   })
-  it('(2) 別の時限のキーで、新テンプレがその時限に持たない＝時限変更の写し（移送済みの振替が持つ・H-1）', () => {
-    expect(settled([`sC__数__${WED}__4`], [5])).toBe(true)
+  it('tp-48: 同じ科目を 3限にも持つ生徒を 5限に足す＝3限は移送済み（説明 1）・テンプレの授業 2 → 5限の分は説明が無いので精算済みでない（置く）', () => {
+    const weeks = [[
+      cell(WED, 3, [desk('w3d1', '', undefined, [status(C, WED, 3, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 3 }), null])]),
+      cell(WED, 5, [desk('w5d1', '', undefined), desk('w5d2', '')]),
+      cell(THU, 3, [desk('t3d1', '鈴木', [makeupOf('sC_mk3', '千葉', WED, '2026/10/7(水) 3限'), null])]),
+    ]]
+    const item = skippedAt(5)
+    expect(resolve([item], { weeks, templateCells: template(3, 5), suppressedRegularLessonOccurrences: [`sC__数__${WED}__3`] }).has(item)).toBe(false)
   })
-  it('別の時限のキーでも、新テンプレがその時限にまだ持つなら「別の授業の処分」＝この時限の分は精算されていない（算 3限＋算 4限の形）', () => {
-    expect(settled([`sC__数__${WED}__3`], [3, 5])).toBe(false)
-    // 3限は持つ・4限は持たない: 4限のキーが時限変更の写しなので精算済み
-    expect(settled([`sC__数__${WED}__3`, `sC__数__${WED}__4`], [3, 5])).toBe(true)
+  it('H-A 再現 1: 1 回の保存で 5→3限 と 4限にも足す＝説明は 1（5限の振替）なので時限の小さい 3限だけ精算済み・4限は置く', () => {
+    const items = [skippedAt(4), skippedAt(3)]
+    const settled = resolve(items, { templateCells: template(3, 4), suppressedRegularLessonOccurrences: [`sC__数__${WED}__5`] })
+    expect(settled.has(items[1])).toBe(true)
+    expect(settled.has(items[0])).toBe(false)
   })
-  it('buildTemplateLessonLookup は raw（抑止前）の管理セルから日付×時限×生徒×科目を引く', () => {
-    const lookup = buildTemplateLessonLookup([templateCellOf(WED, 3, [desk('w3d1', '田中', [C, null])]), templateCellOf(WED, 5, [desk('w5d1', '田中', [A, null])])])
-    expect(lookup(C, WED, 3)).toBe(true)
-    expect(lookup(C, WED, 5)).toBe(false)
-    expect(lookup(A, WED, 5)).toBe(true)
-    expect(lookup({ ...C, subject: '英' }, WED, 3)).toBe(false)
+  it('H-A 再現 2: 5→3限 で保存した後に 4限にも足す＝3限は抑止済み（置かなかった以外のテンプレの授業 1）で説明 1 を使い切る → 4限は置く', () => {
+    const item = skippedAt(4)
+    expect(resolve([item], { templateCells: template(3, 4), suppressedRegularLessonOccurrences: [`sC__数__${WED}__5`, `sC__数__${WED}__3`] }).has(item)).toBe(false)
+  })
+  it('説明が無ければ精算済みでない。希望回数 −1 の純減・在庫の origin・同じコマの別種の授業は説明になる', () => {
+    const empty = [[cell(WED, 5, [desk('w5d1', ''), desk('w5d2', '')])]]
+    const item = skippedAt(5)
+    expect(resolve([item], { weeks: empty }).has(item)).toBe(false)
+    expect(resolve([item], { weeks: empty, scheduleCountAdjustments: [{ studentKey: 'sC', subject: '数', countKind: 'regular', dateKey: WED, delta: -1 }] }).has(item)).toBe(true)
+    // +1 で戻した分は打ち消す
+    expect(resolve([item], { weeks: empty, scheduleCountAdjustments: [{ studentKey: 'sC', subject: '数', countKind: 'regular', dateKey: WED, delta: -1 }, { studentKey: 'sC', subject: '数', countKind: 'regular', dateKey: WED, delta: 1 }] }).has(item)).toBe(false)
+    expect(resolve([item], { weeks: empty, originDatesByKey: { sC__数: [buildOriginToken(WED, 5)] } }).has(item)).toBe(true)
+    const withMakeupSameSlot = [[cell(WED, 5, [desk('w5d1', '田中', [makeupOf('sC_mk', '千葉', '2026-09-30', undefined, { manualAdded: true }), null]), desk('w5d2', '')])]]
+    expect(resolve([item], { weeks: withMakeupSameSlot }).has(item)).toBe(true)
   })
 })
 
@@ -214,7 +240,7 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
   ]]
   const skippedC = { student: student('sC_t', '千葉'), dateKey: WED, slotNumber: 5, deskIndex: 0, seatIndex: 1 }
   const run = (weeks: SlotCell[][], extra: Partial<Parameters<typeof planWholeDayTransferPlacements>[0]> = {}) => planWholeDayTransferPlacements({
-    weeks, skipped: [skippedC], pendingDesks: {}, classroomSettings: settings(), effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templateHasLessonAt: () => false, prepareStudentForMove, buildMovedSourceStatusEntry, ...extra,
+    weeks, skipped: [skippedC], pendingDesks: {}, classroomSettings: settings(), effectiveStartDate: EFFECTIVE, settled: new Set(), prepareStudentForMove, buildMovedSourceStatusEntry, ...extra,
   })
 
   it('振替先の同じ時限・同じ机番号の空いた席へ振替として置き、振替元に「休)→ 先」の記録を残す。希望回数 −1 の対象から外す', () => {
@@ -284,23 +310,19 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(noRecord.stocked).toHaveLength(0)
     expect(noRecord.handledKeys.size).toBe(0)
     expect(noRecord.handledCount).toBe(0)
-    const accounted = run(weeks, { suppressedRegularLessonOccurrences: ['sC__数__2026-10-07__3'] })
+    const accounted = run(weeks, { settled: new Set([skippedC]) })
     expect(accounted.placed).toHaveLength(0)
     expect(accounted.stocked).toHaveLength(0)
     expect(accounted.handledKeys.size).toBe(0)
     expect(accounted.settled.map((item) => item.student.managedStudentId)).toEqual(['sC'])
   })
 
-  it('別の時限のキーがあっても新テンプレがその時限にまだ持つなら精算済みでない＝置く（2026-10-21・テスト教室 tp-48: 算 3限＋算 4限の生徒を足した形）', () => {
+  it('精算済みの集合に入っていない生徒は置く。集合は要素参照で見る（2026-10-21・判定は resolveWholeDayTransferSettlement が 1 か所で行う）', () => {
     const weeks = board()
-    const placed = run(weeks, { suppressedRegularLessonOccurrences: ['sC__数__2026-10-07__3'], templateHasLessonAt: (_student, dateKey, slotNumber) => dateKey === WED && slotNumber === 3 })
+    const placed = run(weeks, { settled: new Set([{ ...skippedC }]) })
     expect(placed.placed).toHaveLength(1)
     expect(placed.settled).toHaveLength(0)
     expect(placed.handledKeys.has(`sC__数__${WED}`)).toBe(true)
-    // 同じ時限のキー（前の保存が置いた分）があれば二重に置かない
-    const again = run(weeks, { suppressedRegularLessonOccurrences: ['sC__数__2026-10-07__3', 'sC__数__2026-10-07__5'], templateHasLessonAt: () => true })
-    expect(again.placed).toHaveLength(0)
-    expect(again.settled).toHaveLength(1)
   })
 
   it('後ろ向きの丸ごと振替（振替先が反映日より前）は触らない（監査 H-4・INV-10）＝従来どおり Q35-8', () => {
