@@ -1702,9 +1702,13 @@ function applyTemplateDiffToCell(context: {
       const noteIndex = context.teacherNotes.findIndex((note) => note.kind === 'teacher-replaced' && note.dateKey === cell.dateKey && note.slotNumber === cell.slotNumber && note.teacherName === desk.teacher)
       if (noteIndex >= 0) context.teacherNotes.splice(noteIndex, 1)
     }
-    if (manualTeacherReplacedHere) {
+    // 理由の行。「残す」の机（テンプレ机が講師だけ＝Q41-12 (1)）では、テンプレの講師の担当で机に残る手で置いた生徒の名前を下で足す。
+    const replacedNote: TemplateDiffTeacherNote | null = manualTeacherReplacedHere
+      ? { kind: 'teacher-replaced', teacherName: desk.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber, keptStudentNames: [] }
+      : null
+    if (replacedNote) {
       summary.manualTeacherReplaced += 1
-      context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: desk.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+      context.teacherNotes.push(replacedNote)
     }
     const withTeacher = applyTeacherFields(desk, teacher.teacherFields)
     const upperLesson = templateLessonOf(templateDesk)
@@ -1724,7 +1728,10 @@ function applyTemplateDiffToCell(context: {
       summary.kept += 1
       // Q38: テンプレが同じコマの別の机に置く手動追加の通常授業は、ここでも外してテンプレの机に任せる（抑止キーは積まない）。
       summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
-      return withSlots(withTeacher, stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(index)), desk.statusSlots, desk.memoSlots)
+      const keptLesson = stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(index))
+      // Q41-12 (1): 講師だけのテンプレ机で手置き講師が替わる机。机に残る手で置いた生徒（印あり）の名前を理由の行に出す。
+      if (replacedNote) replacedNote.keptStudentNames = liveStudents(keptLesson).map((student) => student.name)
+      return withSlots(withTeacher, keptLesson, desk.statusSlots, desk.memoSlots)
     }
 
     if (decision.kind === 'adopt') {
@@ -1881,7 +1888,8 @@ function applyTemplateDiffToCell(context: {
       } else {
         delete lower.teacher
         summary.manualTeacherReplaced += 1
-        context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+        // 講師だけのテンプレ机（Q41-8 の暫定）: 下段の生徒は机へ戻り新しいテンプレの講師の担当になる。手で置いた生徒が全員採用された形は空。
+        context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber, keptStudentNames: handPlacedOnRebase.map((student) => student.name) })
       }
     }
     const lowerBaseLesson = pending.lower.lesson ?? desk.lesson
@@ -2036,6 +2044,12 @@ export type TemplateDiffStudentNote = {
   slotNumber: number | null
   /** 追加情報（振替先の日付・未消化の理由など）。 */
   detail?: string
+  /**
+   * 講師の行（teacher-replaced）だけ: テンプレの講師の担当で机に残る、手で置いた生徒の名前（Q41-11「生徒 A は D の担当になります」）。
+   * 空＝手で置いた生徒が居ない（講師だけ・記録／メモだけ・全員テンプレに採用）。テスト教室 2026-10-22: 講師だけのテンプレ机（Q41-12 (1)）で
+   * 未消化講習を手で置いた机にも「手で置いた生徒が居ないため」と出て、講習が手置きと認識されていないと誤解させた。理由は「テンプレの机が講師だけ」。
+   */
+  keptStudentNames?: string[]
 }
 
 /** Q41: 確認の画面に出す講師ごとの理由。 */
@@ -2045,6 +2059,8 @@ export type TemplateDiffTeacherNote = {
   templateTeacher: string
   dateKey: string
   slotNumber: number
+  /** teacher-replaced で、テンプレの講師の担当として机に残る手で置いた生徒（講師だけのテンプレ机＝Q41-12 (1)）。空なら手で置いた生徒が居ない。 */
+  keptStudentNames?: string[]
 }
 
 const TEMPLATE_DIFF_STUDENT_NOTE_LIMIT = 12
@@ -2054,7 +2070,15 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
   const who = note.subject ? `${note.studentName}（${note.subject}）` : `講師 ${note.studentName}`
   switch (note.kind) {
     case 'teacher-pending': return `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、手で置いた生徒と一緒に下の行に残して保留（緑）にします。`
-    case 'teacher-replaced': return `${where} ${who}: 手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師${note.detail ? `（${note.detail}）` : ''}に替わります。`
+    case 'teacher-replaced': {
+      const templateTeacher = note.detail ? `テンプレの講師（${note.detail}）` : 'テンプレの講師'
+      // Q41-12 (1)（暫定・オーナー確定 2026-10-21）: テンプレの机が講師だけ（生徒なし）なら、手で置いた生徒が居ても講師はテンプレに揃い、生徒はその講師の担当で机に残る。
+      // 理由を「手で置いた生徒が居ないため」と出すと手置きの振替・講習が認識されていないように読める（テスト教室 2026-10-22）ので、形ごとに分ける。
+      if (note.keptStudentNames && note.keptStudentNames.length > 0) {
+        return `${where} ${who}: 手で置いた講師ですが、テンプレのこの机が講師だけ（生徒なし）のため${templateTeacher}に替わります。手で置いた ${note.keptStudentNames.join('・')} は${note.detail || 'テンプレの講師'}の担当で机に残ります。`
+      }
+      return `${where} ${who}: 手で置いた講師ですが、手で置いた生徒が居ないため${templateTeacher}に替わります。`
+    }
     case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。`
     case 'transfer-placed': return `${where} ${who}: 丸ごと振替した日なので、振替先${note.detail ? `（${note.detail}）` : ''}の同じ机へ振替として置きます。`
     case 'transfer-stocked': return `${where} ${who}: 丸ごと振替した日ですが振替先に置けない${note.detail ? `（${note.detail}）` : ''}ため、未消化振替にします。`

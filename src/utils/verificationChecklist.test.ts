@@ -53,6 +53,8 @@ function draftWith(entries: Array<[string, 'ok' | 'needs-fix', string?]>, otherN
   return otherNotes ? setVerificationChecklistOtherNotes(draft, otherNotes) : draft
 }
 
+const byIdOf = <T extends { id: string }>(items: readonly T[]) => new Map(items.map((item) => [item.id, item]))
+
 describe('確認リストの項目定義', () => {
   it('id が一意', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
@@ -133,7 +135,9 @@ describe('確認リストの項目定義', () => {
     // 第54版(2026-10-15): OK 済み 10 件を外したので v1.5.602 へ。第55版(同日): OK 済み 4 件を外したので次にデプロイされる版 v1.5.604 へ上げる。
     // 第63版(2026-10-21): OK 済み tp-55 を外し tp-48/51/57 の文面を直したので次にデプロイされる版 v1.5.622 へ上げる(tp-48/tp-51 は再確認が要る)。
     // 第64版(2026-10-22): 並べ替えで生徒2→生徒1へ寄せた席が再マージで戻らない bs-1 を足し、次にデプロイされる版 v1.5.625 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.625')
+    // 第65版(2026-10-22): 講師だけのテンプレ机の理由の文言(tp-59 の確認を書き換え)で、次にデプロイされる版 v1.5.627 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.627')
+    expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-59')?.check ?? []).some((line) => line.includes('テンプレのこの机が講師だけ'))).toBe(true)
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
@@ -249,8 +253,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.625')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.625')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.627')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.627')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -322,7 +326,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.625]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.627]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
