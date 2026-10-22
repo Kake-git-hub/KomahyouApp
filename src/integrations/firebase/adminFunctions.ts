@@ -6,6 +6,7 @@ import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
 import type { OperationEvent } from '../../utils/operationLog'
+import type { OperationTraceEntry } from '../../utils/operationTrace'
 import type { DeveloperReportRequestBody } from '../../utils/developerReport'
 import type { StudentLessonLedger } from '../../utils/studentLessonLedger'
 import type { StudentLessonHistoryResponse } from '../../utils/lessonHistory'
@@ -117,6 +118,9 @@ type SaveClassroomSnapshotRequest = {
   lessonLedger?: StudentLessonLedger
   // 保存した端末のアプリ版数と UA(2026-09-04)。古いキャッシュの版で操作していた報告を切り分ける監査項目。
   client?: { appVersion: string; userAgent: string }
+  // 操作痕跡(2026-10-22 案 2)。前回保存以降の「盤面が変わる全確定・undo/redo・保存・別タブ」の要約(新しい方から最大 300 件)。
+  // サーバーが classroomSnapshots/{id}/operationTraces/{saveId} へ残す(保持 90 日)。詳細は src/utils/operationTrace.ts。
+  operationTrace?: OperationTraceEntry[]
 }
 
 export type SaveClassroomSnapshotOptions = {

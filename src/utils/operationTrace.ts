@@ -34,6 +34,8 @@ export type OperationTraceKind =
   | 'navigation'
   /** 自動処理（起動時自己修復・QR提出反映など） */
   | 'auto'
+  /** 画面で捕まえた例外(window.onerror / unhandledrejection / React ErrorBoundary・2026-10-22 案 3)。clientErrorCapture.ts が記録する */
+  | 'error'
 
 export type OperationTraceEntry = {
   /** ISO 時刻（クライアント時計） */
@@ -43,13 +45,21 @@ export type OperationTraceEntry = {
   summary: string
 }
 
-/** 保持する件数の上限。報告1件に同梱しても Firestore 文書(1MiB)に収まる量にする。 */
-export const OPERATION_TRACE_LIMIT = 300
+/**
+ * 端末内に保持する件数の上限。2026-10-22(案 2)に 300 → 1000 へ拡大(「昨日おかしかった」をより長く遡れるように)。
+ * 報告に同梱するのは新しい方から DEVELOPER_REPORT_TRACE_LIMIT(300)件、保存に相乗りさせるのは前回保存以降(最大 300 件)なので、
+ * Firestore 文書(1MiB)の予算はこの値に依らない。localStorage は 1000 件 × 最大 400 字 ≒ 400KB で 5MB の枠に収まる。
+ */
+export const OPERATION_TRACE_LIMIT = 1000
+/** 1 回の保存に相乗りさせる件数の上限(新しい方から)。サーバー functions/src/operationTraces.ts と同じ値。 */
+export const OPERATION_TRACE_SAVE_LIMIT = 300
 /** 1件の要約の最大長。差分が巨大でも1行に抑える。 */
 export const OPERATION_TRACE_SUMMARY_LIMIT = 400
 /** 盤面差分で列挙する机の上限。超えた分は「他N件」にまとめる。 */
 export const OPERATION_TRACE_DIFF_ITEM_LIMIT = 6
 const STORAGE_KEY_PREFIX = 'operation-trace:'
+/** 保存に相乗りさせた最後の痕跡の時刻(教室ごと)。再読み込みを跨いで「前回保存以降」を正しく切り出すため localStorage にも置く。 */
+const SAVED_MARKER_KEY_PREFIX = 'operation-trace-saved:'
 
 export function appendOperationTrace(
   buffer: OperationTraceEntry[],
@@ -264,19 +274,89 @@ export function peekOperationTrace(classroomId: string): OperationTraceEntry[] {
   return [...ensureBuffer(classroomId)]
 }
 
+// ---------------------------------------------------------------------------
+// 保存への相乗り(2026-10-22 案 2・spec-developer-report §D)
+// 「前回保存以降」の痕跡を保存リクエストに載せ、サーバーが classroomSnapshots/{id}/operationTraces/{saveId} へ残す。
+// 印(最後に載せた痕跡の時刻)は保存が成功したときだけ進める(失敗した保存の分は次の保存にもう一度乗る)。
+// ---------------------------------------------------------------------------
+
+const savedMarkerByClassroomId = new Map<string, string>()
+
+function savedMarkerKey(classroomId: string) {
+  return `${SAVED_MARKER_KEY_PREFIX}${classroomId}`
+}
+
+function readSavedMarker(classroomId: string): string {
+  const cached = savedMarkerByClassroomId.get(classroomId)
+  if (typeof cached === 'string') return cached
+  let marker = ''
+  const storage = resolveStorage()
+  if (storage) {
+    try {
+      marker = storage.getItem(savedMarkerKey(classroomId)) ?? ''
+    } catch {
+      marker = ''
+    }
+  }
+  savedMarkerByClassroomId.set(classroomId, marker)
+  return marker
+}
+
+/**
+ * 前回保存以降の痕跡(古い順・新しい方から最大 limit 件)を純粋に切り出す。
+ * 印が無い(初回・別端末)ときは手元の痕跡の新しい方から limit 件(一度だけ重複して届くことは許容。文書 id は saveId なので上書きにはならない)。
+ */
+export function selectOperationTraceSinceMarker(entries: readonly OperationTraceEntry[], marker: string, limit: number = OPERATION_TRACE_SAVE_LIMIT): OperationTraceEntry[] {
+  const since = marker ? entries.filter((entry) => entry.at > marker) : [...entries]
+  return since.length > limit ? since.slice(since.length - limit) : since
+}
+
+/** 保存リクエストに載せる分を切り出す(バッファは消さない・印も進めない。進めるのは保存成功後の markOperationTraceSaved)。 */
+export function collectOperationTraceSinceLastSave(classroomId: string, limit: number = OPERATION_TRACE_SAVE_LIMIT): OperationTraceEntry[] {
+  try {
+    if (!classroomId) return []
+    return selectOperationTraceSinceMarker(ensureBuffer(classroomId), readSavedMarker(classroomId), limit)
+  } catch {
+    return []
+  }
+}
+
+/** 保存が成功したら、載せた痕跡の最後の時刻を印として残す(メモリ＋localStorage)。載せた分が無ければ何もしない。 */
+export function markOperationTraceSaved(classroomId: string, sentEntries: readonly OperationTraceEntry[]): void {
+  try {
+    if (!classroomId || sentEntries.length === 0) return
+    const last = sentEntries[sentEntries.length - 1].at
+    const current = readSavedMarker(classroomId)
+    if (current && last <= current) return
+    savedMarkerByClassroomId.set(classroomId, last)
+    const storage = resolveStorage()
+    if (!storage) return
+    try {
+      storage.setItem(savedMarkerKey(classroomId), last)
+    } catch {
+      // 容量超過など。印が残らなくても次回に重複して届くだけ(文書 id は saveId)。
+    }
+  } catch {
+    // noop
+  }
+}
+
 /** アカウント切替時などに呼ぶ（メモリだけ捨てる。localStorage の痕跡は教室キーで分かれているので残してよい）。 */
 export function clearOperationTraceMemory(): void {
   buffersByClassroomId.clear()
+  savedMarkerByClassroomId.clear()
   currentClassroomId = ''
 }
 
 /** テスト用: 指定教室の痕跡をメモリ・localStorage 両方から消す。 */
 export function resetOperationTrace(classroomId: string): void {
   buffersByClassroomId.delete(classroomId)
+  savedMarkerByClassroomId.delete(classroomId)
   const storage = resolveStorage()
   if (!storage) return
   try {
     storage.removeItem(storageKey(classroomId))
+    storage.removeItem(savedMarkerKey(classroomId))
   } catch {
     // noop
   }

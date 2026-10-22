@@ -29,6 +29,8 @@ describe('reportAnswers: 送信時の「回答待ち」文書(docs/spec-develope
   it('テスト送信と確認リストは室長側の文書を作らない。開発者が本番教室から送った報告も作らない(開発用教室なら作る)', () => {
     expect(shouldCreateReportAnswerDoc({ isTest: false, isVerificationChecklist: false })).toBe(true)
     expect(shouldCreateReportAnswerDoc({ isTest: true })).toBe(false)
+    // 画面エラーの自動報告(2026-10-22 案 3)は室長の質問ではないので履歴に出さない。
+    expect(shouldCreateReportAnswerDoc({ isTest: false, isVerificationChecklist: false, isAutoErrorReport: true })).toBe(false)
     expect(shouldCreateReportAnswerDoc({ isVerificationChecklist: true })).toBe(false)
     expect(shouldCreateReportAnswerDoc({ reporterRole: 'developer', isDevelopmentClassroom: false })).toBe(false)
     expect(shouldCreateReportAnswerDoc({ reporterRole: 'developer', isDevelopmentClassroom: true })).toBe(true)

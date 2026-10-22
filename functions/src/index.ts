@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { getFirestore, Timestamp } from 'firebase-admin/firestore'
+import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { onDocumentWritten } from 'firebase-functions/v2/firestore'
@@ -58,8 +58,11 @@ import {
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
+import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
+import { buildSaveFailureAlertMail, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
+import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
-import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportMailSkipReason, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
+import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { buildOtherClassroomNameWords, describeQuestionAiError, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
@@ -79,12 +82,19 @@ import {
   shouldKeepWorkspaceIncidentBackup,
   toQuarterHourlyDateKeyJst,
   WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS,
+  buildClassroomSaveHistoryStoragePath,
+  CLASSROOM_SAVE_HISTORY_PREFIX,
+  CLASSROOM_SAVE_HISTORY_RETENTION_DAYS,
+  shouldKeepClassroomSaveHistory,
   type WorkspaceAutoBackupKind,
 } from './workspaceBackupSchedule'
 import {
   buildRetentionTargets,
+  CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT,
+  CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS,
   INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS,
   resolveRetentionCutoffIso,
+  RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS,
   RETENTION_CLEANUP_PAGE_LIMIT,
   RETENTION_CLEANUP_TIME_BUDGET_MS,
   runBudgetedDeletionSweep,
@@ -251,6 +261,10 @@ type ClassroomLatestRollbackStorageDoc = {
   capturedAt: string
   snapshot: FirebaseClassroomSnapshotDoc
 }
+
+// 保存ごとの教室版履歴(classroom-save-history/・2026-10-22 案 1)。直前ロールバックと同じ形に版数を足したもの
+// (tools/snapshot-diff.mjs が同じ読み方で両方を読める)。
+type ClassroomSaveHistoryStorageDoc = ClassroomLatestRollbackStorageDoc & { version: number }
 
 type GoogleDriveFileMetadata = {
   id?: string
@@ -891,6 +905,57 @@ async function writeLatestClassroomRollback(params: {
   return true
 }
 
+/**
+ * 版履歴を書くか(純関数・テストで固定)。after に教室データが無ければ書かない。before があり、版数も保存時刻も同じなら
+ * メタだけの更新(例: 自動バックアップの印)なので書かない。版数か保存時刻が進んでいれば保存なので書く(内容が同じ再保存も 1 回の保存として残す)。
+ */
+function shouldWriteClassroomSaveHistory(before: FirebaseClassroomSnapshotDoc | null, after: FirebaseClassroomSnapshotDoc): boolean {
+  const hasPayload = Boolean(after.data && typeof after.data === 'object') || (after.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING && typeof after.compressedData === 'string' && after.compressedData.length > 0)
+  if (!hasPayload) return false
+  if (!before) return true
+  return before.version !== after.version || before.savedAt !== after.savedAt
+}
+
+// 保存ごとの教室版履歴(2026-10-22 オーナー採用「即時対応のための案 1」・docs/spec-save-restore.md §8-1 #14)。
+// classroomSnapshots の書き込みで **新しい版(after)** を classroom-save-history/{ws}/{classroomId}/ へ gzip で追記する。
+// - 直前ロールバック(before を latest.json に 1 世代上書き)とは別物。復元 UI は読まない(調査専用・tools/snapshot-diff.mjs で読む)。
+//   15 分毎バックアップでは拾えない「保存と保存の間」を、保存 1 回 1 本で 90 日ぶん辿れるようにする。
+// - 内容が前と同じ書き込み(メタだけの更新・同じ内容の再保存)は書かない。
+// - ★失敗は呼び出し側で握る(直前ロールバック=手動復旧の最後の砦 の書き込みを巻き添えにしない)。
+// - 保持 90 日(CLASSROOM_SAVE_HISTORY_RETENTION_DAYS)。掃除は runSaveAttemptCleanup の pruneClassroomSaveHistory。
+async function writeClassroomSaveHistory(params: {
+  workspaceKey: string
+  classroomId: string
+  beforeSnapshot?: FirebaseClassroomSnapshotDoc | null
+  afterSnapshot: FirebaseClassroomSnapshotDoc
+}) {
+  if (!shouldWriteClassroomSaveHistory(params.beforeSnapshot ?? null, params.afterSnapshot)) return false
+
+  const capturedAt = new Date().toISOString()
+  const savedAt = params.afterSnapshot.savedAt ?? capturedAt
+  const version = typeof params.afterSnapshot.version === 'number' ? params.afterSnapshot.version : 0
+  const storagePath = buildClassroomSaveHistoryStoragePath(params.workspaceKey, params.classroomId, savedAt, version)
+  // after 文書は既に保存形式(data または gzip-base64 の compressedData)なので、作り直さずそのまま包む(M-5: CPU とメモリを半分に)。
+  const storageDoc: ClassroomSaveHistoryStorageDoc = {
+    classroomId: params.classroomId,
+    sourceSavedAt: savedAt,
+    capturedAt,
+    version,
+    snapshot: params.afterSnapshot,
+  }
+
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  await bucket.file(storagePath).save(compressBackupJson(serializeWorkspaceBackupJson(storageDoc)), {
+    resumable: false,
+    contentType: 'application/gzip',
+    metadata: {
+      cacheControl: 'private, max-age=0, no-transform',
+    },
+  })
+  logger.info(`[SaveHistory] Saved classroom save history: workspace=${params.workspaceKey}, classroom=${params.classroomId}, savedAt=${savedAt}, version=${version}, path=${storagePath}`)
+  return true
+}
+
 function deserializeBoardState(boardState: FirebasePersistedBoardState | Record<string, unknown> | null | undefined) {
   if (!boardState || typeof boardState !== 'object') return null
 
@@ -999,6 +1064,39 @@ async function persistOperationEvents(params: {
   } catch (error) {
     logger.error(`[OperationLog] Failed to persist ${params.events.length} events for classroom=${params.classroomId} saveId=${params.saveId}`, error)
     return 0
+  }
+}
+
+// 保存に相乗りした操作痕跡(2026-10-22 案 2)を classroomSnapshots/{id}/operationTraces/{saveId} へ残す。
+// - 文書 id は saveId。保存の再送(冪等リプレイ)で同じ痕跡が来ても同じ内容で上書きされるだけ。
+// - 版履歴(classroom-save-history/・案 1)と同じ saveId・savedAt・版数で突き合わせられる。
+// - ★失敗しても保存本体は成功のまま(操作ログと同じ方針)。保持 90 日(OPERATION_TRACE_RETENTION_DAYS)。
+async function persistOperationTrace(params: {
+  snapshotRef: FirebaseFirestore.DocumentReference
+  entries: NormalizedDeveloperReportTraceEntry[]
+  classroomId: string
+  saveId: string
+  savedAt: string
+  snapshotVersion: number | undefined
+  updatedBy: string
+  client?: { appVersion: string; userAgent: string }
+}) {
+  if (params.entries.length === 0) return false
+  try {
+    await params.snapshotRef.collection('operationTraces').doc(params.saveId).set(buildOperationTraceDoc({
+      classroomId: params.classroomId,
+      saveId: params.saveId,
+      savedAt: params.savedAt,
+      snapshotVersion: params.snapshotVersion,
+      updatedBy: params.updatedBy,
+      client: params.client,
+      entries: params.entries,
+      recordedAt: new Date().toISOString(),
+    }))
+    return true
+  } catch (error) {
+    logger.error(`[OperationTrace] Failed to persist ${params.entries.length} trace entries for classroom=${params.classroomId} saveId=${params.saveId}`, error)
+    return false
   }
 }
 
@@ -1581,6 +1679,101 @@ export const updateWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
   }
 })
 
+// 保存失敗・版数衝突の監視メール(2026-10-22 案 6・docs/runbooks/monitoring.md §3)。
+// 利用者報告のメール即時通知と同じ SMTP 設定(REPORT_MAIL_*)で開発者へ送る。教室ごとに 1 時間に 1 通
+// (workspaces/{ws}/saveFailureAlerts/{classroomId})。発生回数は送らなくても数える。
+// ★ここで何が起きても保存の応答(利用者への文言)には影響させない: 例外は全部ここで握り、待ち時間も
+//   SAVE_FAILURE_ALERT_TIMEOUT_MS(5 秒)で打ち切る(regression-reviewer M-1: SMTP が止まった晩に保存の失敗応答が
+//   deadline-exceeded に化けて版数衝突の案内が出なくなる経路を塞ぐ)。
+async function notifySaveFailureByMail(params: {
+  kind: SaveFailureAlertKind
+  workspaceKey: string
+  classroomId: string
+  saveId: string
+  savedAt: string
+  updatedBy: string
+  client: { appVersion: string; userAgent: string }
+  detail?: string
+}) {
+  try {
+    const sent = await withTimeout(notifySaveFailureByMailUnbounded(params), SAVE_FAILURE_ALERT_TIMEOUT_MS, null)
+    if (sent === null) logger.warn(`[SaveFailureAlert] Timed out after ${SAVE_FAILURE_ALERT_TIMEOUT_MS}ms kind=${params.kind} classroom=${params.classroomId}`)
+    return sent === true
+  } catch (error) {
+    logger.error(`[SaveFailureAlert] Failed kind=${params.kind} classroom=${params.classroomId}: ${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
+async function notifySaveFailureByMailUnbounded(params: {
+  kind: SaveFailureAlertKind
+  workspaceKey: string
+  classroomId: string
+  saveId: string
+  savedAt: string
+  updatedBy: string
+  client: { appVersion: string; userAgent: string }
+  detail?: string
+}): Promise<boolean> {
+  try {
+    if (!isMailTransportConfigured(REPORT_MAIL_SMTP_URL, REPORT_MAIL_TO)) {
+      logger.warn(`[SaveFailureAlert] Mail is not configured; skipped kind=${params.kind} classroom=${params.classroomId}`)
+      return false
+    }
+    const workspaceRef = firestore.collection('workspaces').doc(params.workspaceKey)
+    const throttleRef = workspaceRef.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(params.classroomId)
+    const nowIso = new Date().toISOString()
+    const throttleSnapshot = await throttleRef.get()
+    const throttleData = (throttleSnapshot.data() ?? {}) as { lastSentAt?: string; occurrenceCount?: number }
+    await throttleRef.set({
+      classroomId: params.classroomId,
+      lastOccurredAt: nowIso,
+      lastKind: params.kind,
+      occurrenceCount: FieldValue.increment(1),
+    }, { merge: true })
+    if (!shouldSendSaveFailureAlert({ lastSentAtIso: throttleData.lastSentAt, nowMs: Date.parse(nowIso) })) {
+      logger.info(`[SaveFailureAlert] Throttled kind=${params.kind} classroom=${params.classroomId} lastSentAt=${throttleData.lastSentAt ?? ''}`)
+      return false
+    }
+    await throttleRef.set({ lastSentAt: nowIso }, { merge: true })
+    let classroomName = ''
+    try {
+      const classroomSnapshot = await workspaceRef.collection('classrooms').doc(params.classroomId).get()
+      classroomName = typeof classroomSnapshot.data()?.name === 'string' ? String(classroomSnapshot.data()?.name) : ''
+    } catch (error) {
+      logger.warn(`[SaveFailureAlert] Failed to read classroom name classroom=${params.classroomId}`, error)
+    }
+    const mail = buildSaveFailureAlertMail({
+      kind: params.kind,
+      workspaceKey: params.workspaceKey,
+      classroomId: params.classroomId,
+      classroomName,
+      saveId: params.saveId,
+      savedAt: params.savedAt,
+      occurredAt: nowIso,
+      updatedBy: params.updatedBy,
+      appVersion: params.client.appVersion,
+      userAgent: params.client.userAgent,
+      detail: params.detail,
+      occurrenceCount: (typeof throttleData.occurrenceCount === 'number' ? throttleData.occurrenceCount : 0) + 1,
+      projectId: process.env.GCLOUD_PROJECT ?? 'komahyouapp-prod',
+    })
+    const transport = createTransport({ url: REPORT_MAIL_SMTP_URL, ...SAVE_FAILURE_ALERT_SMTP_TIMEOUTS })
+    const fromAddress = REPORT_MAIL_FROM || decodeURIComponent(new URL(REPORT_MAIL_SMTP_URL).username)
+    await transport.sendMail({
+      from: `コマ表アプリ 監視 <${fromAddress}>`,
+      to: REPORT_MAIL_TO,
+      subject: mail.subject,
+      text: mail.text,
+    })
+    logger.info(`[SaveFailureAlert] Sent kind=${params.kind} workspace=${params.workspaceKey} classroom=${params.classroomId} saveId=${params.saveId}`)
+    return true
+  } catch (error) {
+    logger.error(`[SaveFailureAlert] Failed kind=${params.kind} classroom=${params.classroomId}: ${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
 async function saveClassroomSnapshotFromCallable(request: CallableRequest, options?: { developmentOnly?: boolean }) {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
@@ -1595,6 +1788,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const incomingOperationEvents = normalizeOperationEvents(rawData.operationEvents, { fallbackIso: savedAt })
   // 保存した端末のアプリ版数と UA(2026-09-04)。「古いキャッシュの版で操作していた」を切り分けるための監査項目。
   const incomingClient = normalizeClientInfo(rawData.client)
+  // 操作痕跡(相乗り・任意・2026-10-22 案 2)。前回保存以降の盤面の全確定・undo/redo など。旧クライアントは送らない。
+  const incomingOperationTrace = normalizeSaveOperationTrace(rawData.operationTrace, { fallbackIso: savedAt })
   // 生徒授業台帳(相乗り・任意)。旧クライアントは送らない。壊れていれば null(保存本体は通す)。
   const incomingLessonLedger = normalizeLessonLedger(rawData.lessonLedger, { fallbackIso: savedAt })
 
@@ -1643,6 +1838,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
         savedAt: existingAttempt.savedAt || savedAt,
         updatedBy: memberRef.id,
       })
+      await persistOperationTrace({
+        snapshotRef,
+        entries: incomingOperationTrace,
+        classroomId,
+        saveId,
+        savedAt: existingAttempt.savedAt || savedAt,
+        snapshotVersion: typeof existingAttempt.snapshotVersion === 'number' ? existingAttempt.snapshotVersion : undefined,
+        updatedBy: memberRef.id,
+        client: incomingClient,
+      })
       return {
         classroomId,
         savedAt: existingAttempt.savedAt || savedAt,
@@ -1666,10 +1871,28 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   }
   const previousSnapshot = await snapshotRef.get()
   const previousSnapshotData = previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null
-  await assertNoSnapshotDataLoss({
-    previousSnapshot: previousSnapshotData,
-    nextPayload: sanitizedPayload,
-  })
+  try {
+    await assertNoSnapshotDataLoss({
+      previousSnapshot: previousSnapshotData,
+      nextPayload: sanitizedPayload,
+    })
+  } catch (error) {
+    // 破壊防止ガードが働いた(= 端末側の教室データが空だった疑い)ときだけ開発者へ知らせ、従来どおり拒否する(案 6)。
+    // 前回文書の解凍失敗など別の例外は種類が違うので送らない(L-7)。どちらも元の例外をそのまま投げ直す。
+    if (error instanceof HttpsError && error.code === 'failed-precondition') {
+      await notifySaveFailureByMail({
+        kind: 'data-loss-guard',
+        workspaceKey,
+        classroomId,
+        saveId,
+        savedAt,
+        updatedBy: memberRef.id,
+        client: incomingClient,
+        detail: error.message,
+      })
+    }
+    throw error
+  }
 
   // A1: 楽観ロック。別端末が先に更新していれば(版数不一致)古いベースなので拒否する。
   const versionDecision = resolveOptimisticVersionDecision({
@@ -1678,6 +1901,17 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     isReplay,
   })
   if (!versionDecision.ok) {
+    // 多端末の同時編集の疑い。開発者へ知らせてから従来どおり拒否する(案 6・利用者への文言は不変)。
+    await notifySaveFailureByMail({
+      kind: 'stale-version',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail: `サーバー版数=${versionDecision.previousVersion} / 送信版数=${versionDecision.incomingBaseVersion}`,
+    })
     throw new HttpsError(
       'failed-precondition',
       `${STALE_SNAPSHOT_ERROR_MARKER}:別の端末でこの教室のデータが更新されています(サーバー版数=${versionDecision.previousVersion}/送信版数=${versionDecision.incomingBaseVersion})。最新を読み込むため、画面を再読み込みしてください。`,
@@ -1730,6 +1964,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
       errorMessage: 'Firebase保存後の読み戻し検証に失敗しました。',
     }), { merge: true })
     // 保存記録(saveAttempts)の errorMessage には開発者向けの原因文を残し、画面には平易な文言を出す。
+    await notifySaveFailureByMail({
+      kind: 'readback-failed',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail: `payloadHash=${payloadHash} readbackHash=${readbackHash || '(空)'}`,
+    })
     throw new HttpsError('internal', '保存後の確認に失敗しました。もう一度保存してください。', { reason: 'readback-verification-failed' })
   }
 
@@ -1758,6 +2002,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     saveId,
     savedAt,
     updatedBy: memberRef.id,
+  })
+  await persistOperationTrace({
+    snapshotRef,
+    entries: incomingOperationTrace,
+    classroomId,
+    saveId,
+    savedAt,
+    snapshotVersion: nextVersion,
+    updatedBy: memberRef.id,
+    client: incomingClient,
   })
 
   return {
@@ -1887,12 +2141,14 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
   const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
   const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
+  // 画面エラーの自動報告(2026-10-22 案 3): メールは送るが Issue は作らない(同じエラーが複数端末から届いて Issue が増えるのを防ぐ)。
+  const isAutoErrorReport = isAutoErrorReportNote(report.note)
 
-  // 添付画像(確認リストのスクリーンショット・2026-10-14)。教室データと同じフォルダへ 1 枚ずつ保存し、保存できた分だけ文書に残す
-  // (1 枚の失敗で報告全体を落とさない)。画像本体は Firestore に入れない。
-  // ★受け付けるのは開発用教室(確認リストの送信元)だけ。一般の質問・要望モーダルには画像の入口が無い(spec §C)ので、本番教室から
-  //   届いた attachments は捨てる(Storage に最大 6MB を置かせない・regression-reviewer 指摘)。
-  const attachments = isDevelopmentClassroom ? normalizeDeveloperReportAttachments(rawData.attachments) : []
+  // 添付画像(確認リストのスクリーンショット・2026-10-14／一般の質問・要望モーダル・2026-10-22 オーナー決定)。教室データと同じフォルダへ
+  // 1 枚ずつ保存し、保存できた分だけ文書に残す(1 枚の失敗で報告全体を落とさない)。画像本体は Firestore に入れない。
+  // ★枚数は教室で分ける: 開発用教室(確認リスト)は 8 枚、それ以外の教室(一般モーダル「画面を撮る」「画像を選ぶ」)は 3 枚
+  //   (resolveDeveloperReportAttachmentLimit)。2026-10-14〜22 の間は本番教室の attachments を捨てていた(入口が無かったため)。
+  const attachments = normalizeDeveloperReportAttachments(rawData.attachments, { limit: resolveDeveloperReportAttachmentLimit(isDevelopmentClassroom) })
   const storedAttachments: Array<{ label: string; name: string; mimeType: string; byteLength: number; storagePath: string }> = []
   for (const [index, attachment] of attachments.entries()) {
     try {
@@ -1921,6 +2177,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     category: report.category,
     isTest: report.isTest,
     isVerificationChecklist,
+    isAutoErrorReport,
     note: report.note,
     reportedAt: report.reportedAt,
     recordedAt,
@@ -1943,16 +2200,16 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     attachmentCount: attachments.length,
     // テスト扱い(#テスト)は Issue 起票をしない: 通知ワークフローは notifiedAt==null だけを拾うので、ここで埋めておく。
     // 確認リストも同様に Issue を作らない(開発者がツールで読んで修正する)。
-    notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,
-    notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : null,
+    notifiedAt: report.isTest || isVerificationChecklist || isAutoErrorReport ? recordedAt : null,
+    notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : isAutoErrorReport ? 'auto-error' : null,
     issueNumber: null,
     aiAnswerPending: answerWithAi,
   })
-  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength} attachments=${storedAttachments.length}/${attachments.length}`)
+  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} autoError=${isAutoErrorReport} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength} attachments=${storedAttachments.length}/${attachments.length}`)
 
   // 室長側の「これまでの質問と回答」履歴(spec-developer-report §G-5・2026-09-28): 回答待ちの軽量文書を教室ごとのパスへ作る。
   // 教室データ・操作痕跡・送信者は載せない。失敗しても報告本体は成功のまま(履歴に出ないだけ・回答時に作り直される)。
-  if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role, isDevelopmentClassroom })) {
+  if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, isAutoErrorReport, reporterRole: member.role, isDevelopmentClassroom })) {
     try {
       await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
         .set(buildPendingReportAnswerDoc({ reportId, classroomId, category: report.category, source: report.source, note: report.note, reportedAt: report.reportedAt, recordedAt }, recordedAt))
@@ -2060,6 +2317,18 @@ export const notifyDeveloperReportByMail = onDocumentWritten({
     projectId: process.env.GCLOUD_PROJECT ?? 'komahyouapp-prod',
     storageBucket: STORAGE_BUCKET,
   })
+  // 添付画像の 1 枚目(1MB まで)をメールに付ける(オーナー決定 2026-10-22)。読めなくても本文は送る(置き場所は本文にある)。
+  const mailAttachment = selectDeveloperReportMailAttachment(data.attachments)
+  const mailAttachments: Array<{ filename: string; content: Buffer; contentType: string }> = []
+  if (mailAttachment) {
+    try {
+      const [content] = await storage.bucket(STORAGE_BUCKET).file(mailAttachment.storagePath).download()
+      // 添付名は利用者入力(name)でなく Storage の保存名(例 r1-img1.jpg・MIME で決めた拡張子)から作る(regression-reviewer M-4)。
+      mailAttachments.push({ filename: mailAttachment.fileName, content, contentType: mailAttachment.mimeType })
+    } catch (error) {
+      logger.warn(`[DeveloperReportMail] Failed to load attachment for report=${reportId} path=${mailAttachment.storagePath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   try {
     const transport = createTransport(REPORT_MAIL_SMTP_URL)
     const fromAddress = REPORT_MAIL_FROM || decodeURIComponent(new URL(REPORT_MAIL_SMTP_URL).username)
@@ -2068,8 +2337,9 @@ export const notifyDeveloperReportByMail = onDocumentWritten({
       to: REPORT_MAIL_TO,
       subject: mail.subject,
       text: mail.text,
+      ...(mailAttachments.length > 0 ? { attachments: mailAttachments } : {}),
     })
-    await snapshot.ref.set({ mailSentAt: new Date().toISOString(), mailTo: REPORT_MAIL_TO }, { merge: true })
+    await snapshot.ref.set({ mailSentAt: new Date().toISOString(), mailTo: REPORT_MAIL_TO, ...(mailAttachments.length > 0 ? { mailAttachmentPath: mailAttachment?.storagePath ?? '' } : {}) }, { merge: true })
     logger.info(`[DeveloperReportMail] Sent report=${reportId} to=${REPORT_MAIL_TO}`)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -2383,19 +2653,39 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
   const beforeSnapshot = event.data?.before.data() as FirebaseClassroomSnapshotDoc | undefined
   const afterSnapshot = event.data?.after.data() as FirebaseClassroomSnapshotDoc | undefined
 
-  if (!beforeSnapshot) return
-
-  try {
-    await writeLatestClassroomRollback({
-      workspaceKey: event.params.workspaceKey,
-      classroomId: event.params.classroomId,
-      beforeSnapshot,
-      afterSnapshot,
-    })
-  } catch (error) {
-    logger.error(`[LatestRollback] Failed to mirror previous classroom snapshot: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
-    throw error
+  // ★順序(regression-reviewer M-5): 直前ロールバック(手動復旧の最後の砦)を**先に**書く。版履歴を先に待つと、版履歴が
+  //   時間切れ・OOM で止まったとき直前ロールバックまで書かれない。直前ロールバックの失敗は従来どおり最後に投げ直す。
+  let rollbackError: unknown = null
+  if (beforeSnapshot) {
+    try {
+      await writeLatestClassroomRollback({
+        workspaceKey: event.params.workspaceKey,
+        classroomId: event.params.classroomId,
+        beforeSnapshot,
+        afterSnapshot,
+      })
+    } catch (error) {
+      logger.error(`[LatestRollback] Failed to mirror previous classroom snapshot: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
+      rollbackError = error
+    }
   }
+
+  // 保存ごとの教室版履歴(案 1・2026-10-22)。新しい版があれば追記する。失敗はログだけ(直前ロールバックを巻き添えにしない)。
+  // 初回保存(before なし)も 1 本目として残す。
+  if (afterSnapshot) {
+    try {
+      await writeClassroomSaveHistory({
+        workspaceKey: event.params.workspaceKey,
+        classroomId: event.params.classroomId,
+        beforeSnapshot,
+        afterSnapshot,
+      })
+    } catch (error) {
+      logger.error(`[SaveHistory] Failed to write classroom save history: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
+    }
+  }
+
+  if (rollbackError) throw rollbackError
 })
 
 // 旧「直前のFirebase保存へ戻す」ダウンロード callable(downloadLatestClassroomRollback)は
@@ -2410,11 +2700,14 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
 // 2026-07-09: 初回デプロイ時に cloudscheduler.jobs.update の403でスケジューラー紐付けだけ失敗し、
 // 関数はACTIVEだがトリガー無しの状態で取り残された(権限付与後の再デプロイが「変更なし」でスキップされたため)。
 // このコメントは再デプロイを強制してスケジューラージョブを作り直すための実質的な差分。
+// 2026-10-22: 別会社 10 教室の追加(合計 15 教室前後)に備えて 300 秒/1GiB → 540 秒/2GiB へ増強
+// (spec-multi-tenant §7-16「15 教室前後で枠切れ」の見込み。全 workspace を 1 回の実行で直列に回すため、
+//  教室数に比例して時間とメモリが伸びる)。恒久対策の「会社(workspace)ごとの分割実行」は別 Issue(§1 の計画)。
 export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
   schedule: WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
-  timeoutSeconds: 300,
-  memory: '1GiB',
+  timeoutSeconds: 540,
+  memory: '2GiB',
 }, async () => {
   // 静音時間帯(JST 3:15〜8:45)は取得をスキップして回数を抑える(3:00の日次アンカーは取得する)。
   // 手動トリガー(triggerWorkspaceServerAutoBackup)はこのスキップの対象外(オーナーが明示実行するため)。
@@ -2441,6 +2734,8 @@ const SAVE_ATTEMPT_CLEANUP_SCHEDULE = process.env.SAVE_ATTEMPT_CLEANUP_SCHEDULE 
 const OPERATION_EVENT_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.OPERATION_EVENT_RETENTION_DAYS)) || 365)
 // 生徒授業台帳の保持期間。「1年分を振り返れる」(オーナー指示 2026-09-04)を年度末でも満たすよう **2 年**。
 const LESSON_LEDGER_RETENTION_DAYS = Math.max(400, Math.trunc(Number(process.env.LESSON_LEDGER_RETENTION_DAYS)) || 730)
+// 保存に相乗りした操作痕跡(operationTraces・2026-10-22 案 2)。版履歴(classroom-save-history)と同じ 90 日。
+const OPERATION_TRACE_RETENTION_DAYS = Math.max(7, Math.trunc(Number(process.env.OPERATION_TRACE_RETENTION_DAYS)) || 90)
 // 保護者からの連絡(classroomSnapshots/{id}/parentMessages)の保持期間。docs/spec-parent-portal.md §E-2 で **365 日**。
 // 下限 30 日は「室長が未確認のまま消える」事故を env の打ち間違いで起こさないため。
 const PARENT_MESSAGE_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.PARENT_MESSAGE_RETENTION_DAYS)) || 365)
@@ -2539,16 +2834,51 @@ async function pruneWorkspaceIncidentBackups(nowMs: number) {
   })
 }
 
+// 保存ごとの教室版履歴(classroom-save-history/・保持 90 日・2026-10-22 案 1)の間引き。
+// incident backup と同じ作法(作成時刻は GCS の timeCreated を正とし、読めないものは残す・独立した時間予算)。
+async function pruneClassroomSaveHistory(nowMs: number) {
+  const bucket = storage.bucket(STORAGE_BUCKET)
+
+  return runBudgetedDeletionSweep<IncidentBackupFile>({
+    loadPage: async (pageToken) => {
+      const [files, nextQuery] = await bucket.getFiles({
+        prefix: `${CLASSROOM_SAVE_HISTORY_PREFIX}/`,
+        maxResults: CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT,
+        autoPaginate: false,
+        pageToken,
+      }) as unknown as [IncidentBackupFile[], { pageToken?: string } | null]
+
+      const expired = files.filter((file) => !shouldKeepClassroomSaveHistory({
+        createdAtMs: Date.parse(file.metadata?.timeCreated ?? '') || 0,
+        nowMs,
+      }))
+      return { items: expired, nextPageToken: nextQuery?.pageToken }
+    },
+    deleteItem: async (file) => {
+      try {
+        await file.delete()
+        return true
+      } catch (error) {
+        logger.warn(`[SaveHistoryPrune] Failed to delete ${file.name}: ${error instanceof Error ? error.message : String(error)}`)
+        return false
+      }
+    },
+    startedAtMs: nowMs,
+    timeBudgetMs: CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS,
+  })
+}
+
 async function runSaveAttemptCleanup() {
   const startedAtMs = Date.now()
   const cutoffIsoByTarget: Record<RetentionTargetKey, string> = {
     saveAttempts: resolveRetentionCutoffIso(startedAtMs, SAVE_ATTEMPT_RETENTION_DAYS),
     operationEvents: resolveRetentionCutoffIso(startedAtMs, OPERATION_EVENT_RETENTION_DAYS),
+    operationTraces: resolveRetentionCutoffIso(startedAtMs, OPERATION_TRACE_RETENTION_DAYS),
     lessonLedgerDays: resolveRetentionCutoffIso(startedAtMs, LESSON_LEDGER_RETENTION_DAYS),
     parentMessages: resolveRetentionCutoffIso(startedAtMs, PARENT_MESSAGE_RETENTION_DAYS),
     parentPortalRateLimits: resolveRetentionCutoffIso(startedAtMs, PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS),
   }
-  const deletedByTarget: Record<RetentionTargetKey, number> = { saveAttempts: 0, operationEvents: 0, lessonLedgerDays: 0, parentMessages: 0, parentPortalRateLimits: 0 }
+  const deletedByTarget: Record<RetentionTargetKey, number> = { saveAttempts: 0, operationEvents: 0, operationTraces: 0, lessonLedgerDays: 0, parentMessages: 0, parentPortalRateLimits: 0 }
 
   // ★Storage の間引きを先に行う(独立した時間予算)。Firestore 巡回の後ろに置くと滞留分が永久に減らない。
   let incidentPrune = { deleted: 0, failed: 0, pagesLoaded: 0, stoppedByBudget: false }
@@ -2557,10 +2887,17 @@ async function runSaveAttemptCleanup() {
   } catch (error) {
     logger.error('[SaveAttemptCleanup] Failed to prune workspace incident backups', error)
   }
+  // 保存ごとの教室版履歴(90 日)。incident backup と同じく独立した予算で、Firestore 巡回より先に走らせる。
+  let saveHistoryPrune = { deleted: 0, failed: 0, pagesLoaded: 0, stoppedByBudget: false }
+  try {
+    saveHistoryPrune = await pruneClassroomSaveHistory(Date.now())
+  } catch (error) {
+    logger.error('[SaveAttemptCleanup] Failed to prune classroom save history', error)
+  }
 
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   const firestoreSweepStartedAtMs = Date.now()
-  let stoppedByBudget = incidentPrune.stoppedByBudget
+  let stoppedByBudget = incidentPrune.stoppedByBudget || saveHistoryPrune.stoppedByBudget
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
@@ -2594,7 +2931,7 @@ async function runSaveAttemptCleanup() {
     }
   }
 
-  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''})`
+  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.operationTraces} operationTraces (< ${cutoffIsoByTarget.operationTraces}, retentionDays=${OPERATION_TRACE_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''}), ${saveHistoryPrune.deleted} classroom save-history files (retentionDays=${CLASSROOM_SAVE_HISTORY_RETENTION_DAYS})`
   if (stoppedByBudget) {
     // ★予算で打ち切った = まだ滞留している。3ヶ月気づかなかった障害の再発を早く見つけるため error で出す。
     logger.error(`${summary} — 予算上限で打ち切りました(滞留が残っています)。翌日以降の実行で続きを消します。`)
@@ -2609,19 +2946,23 @@ async function runSaveAttemptCleanup() {
     deletedOperationEvents: deletedByTarget.operationEvents,
     operationEventCutoffIso: cutoffIsoByTarget.operationEvents,
     operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS,
+    deletedOperationTraces: deletedByTarget.operationTraces,
+    operationTraceRetentionDays: OPERATION_TRACE_RETENTION_DAYS,
     deletedLessonLedgerDays: deletedByTarget.lessonLedgerDays,
     deletedParentMessages: deletedByTarget.parentMessages,
     deletedParentPortalRateLimits: deletedByTarget.parentPortalRateLimits,
     deletedIncidentBackups: incidentPrune.deleted,
     incidentBackupDryRun: INCIDENT_BACKUP_PRUNE_DRY_RUN,
+    deletedClassroomSaveHistoryFiles: saveHistoryPrune.deleted,
     stoppedByBudget,
   }
 }
 
+// timeoutSeconds は 3 つの時間予算(incident 90 秒＋版履歴 60 秒＋Firestore 180 秒)に余裕を持たせた 540 秒(2026-10-22・300 から延長)。
 export const cleanupOldSaveAttempts = onSchedule({
   schedule: SAVE_ATTEMPT_CLEANUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
-  timeoutSeconds: 300,
+  timeoutSeconds: RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS,
   memory: '512MiB',
 }, async () => {
   await runSaveAttemptCleanup()

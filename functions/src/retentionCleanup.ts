@@ -46,6 +46,14 @@ export const RETENTION_CLEANUP_TIME_BUDGET_MS = 180_000
 // ★これを Firestore と共有すると、Firestore 側が予算を使い切った晩は Storage 側が
 //   毎回1ページだけ見て打ち切り、次の晩もまた1ページ目から読み直す = 46.8GB が永久に減らない。
 export const INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS = 90_000
+// 保存ごとの教室版履歴(classroom-save-history/・保持 90 日・2026-10-22 案 1)の間引きに使ってよい時間。
+// incident backup と同じ理由で Firestore 巡回とは独立に持つ。関数の timeoutSeconds は 540 に上げてある
+// (90 + 60 + 180 = 330 秒 < 540)。
+export const CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS = 60_000
+// 版履歴の一覧取得の 1 ページ。GCS の上限 1000。15 教室 × 1 日 30 保存 × 90 日 ≒ 4 万本を毎晩なめるので大きめにする。
+export const CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT = 1000
+// 定期掃除関数(cleanupOldSaveAttempts)の timeoutSeconds。3 つの時間予算の合計がこれを超えないことをテストで固定する。
+export const RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS = 540
 
 const HOUR_IN_MS = 60 * 60 * 1000
 
@@ -70,7 +78,7 @@ export function chunkItems<T>(items: readonly T[], size: number): T[][] {
 // ★ここを取り違えると掃除が静かに0件になる(しかも operationEvents=1年 / lessonLedgerDays=2年 は
 //   実際に消え始めるのが1年以上先なので、誤りが1年間発覚しない)。
 //   対応表そのものをテストで固定するため、index.ts に直書きせずデータとしてここに置く。
-export type RetentionTargetKey = 'saveAttempts' | 'operationEvents' | 'lessonLedgerDays' | 'parentMessages' | 'parentPortalRateLimits'
+export type RetentionTargetKey = 'saveAttempts' | 'operationEvents' | 'operationTraces' | 'lessonLedgerDays' | 'parentMessages' | 'parentPortalRateLimits'
 
 export type RetentionTarget = {
   key: RetentionTargetKey
@@ -84,6 +92,8 @@ export function buildRetentionTargets(): RetentionTarget[] {
     { key: 'saveAttempts', collectionId: 'saveAttempts', timestampField: 'createdAt' },
     // 操作ログ。recordedAt = サーバー受領時刻(クライアント時計に依存しない)。
     { key: 'operationEvents', collectionId: 'operationEvents', timestampField: 'recordedAt' },
+    // 保存に相乗りした操作痕跡(2026-10-22 案 2・保持 90 日)。recordedAt = サーバー受領時刻。
+    { key: 'operationTraces', collectionId: 'operationTraces', timestampField: 'recordedAt' },
     // 生徒授業台帳。recordedAt = サーバー受領時刻。
     { key: 'lessonLedgerDays', collectionId: 'lessonLedgerDays', timestampField: 'recordedAt' },
     // 保護者からの連絡(docs/spec-parent-portal.md §E-2・保持 365 日)。createdAt = 関数が採番した ISO 文字列。

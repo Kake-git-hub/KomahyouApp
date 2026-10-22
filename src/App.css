@@ -5707,6 +5707,86 @@ tr.sa-group-row td {
   color: #1f3350;
 }
 
+/* 添付画像(2026-10-22 オーナー決定 A): 「画面を撮る」＋「画像を選ぶ」(＋貼り付け)・3 枚まで。寸法は --developer-report-unit 基準。 */
+.developer-report-attachments-section {
+  display: grid;
+  gap: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-attachment {
+  margin: 0;
+  width: calc(200 * var(--developer-report-unit));
+  border: 1px solid #d7e2f1;
+  border-radius: calc(8 * var(--developer-report-unit));
+  padding: calc(4 * var(--developer-report-unit));
+  background: #f8fafc;
+}
+
+.developer-report-attachment img {
+  display: block;
+  width: 100%;
+  max-height: calc(130 * var(--developer-report-unit));
+  object-fit: contain;
+  background: #fff;
+}
+
+.developer-report-attachment figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(6 * var(--developer-report-unit));
+  margin-top: calc(2 * var(--developer-report-unit));
+  font-size: calc(13 * var(--developer-report-unit));
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.developer-report-attachment figcaption .link-button {
+  font-size: calc(13 * var(--developer-report-unit));
+  flex-shrink: 0;
+}
+
+.developer-report-attach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-attach-actions .developer-report-capture {
+  font-size: calc(15 * var(--developer-report-unit));
+  padding: calc(9 * var(--developer-report-unit)) calc(16 * var(--developer-report-unit));
+  border-radius: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-attach {
+  display: inline-flex;
+  align-items: center;
+  height: calc(40 * var(--developer-report-unit));
+  padding: 0 calc(14 * var(--developer-report-unit));
+  border: 1px dashed #1a73e8;
+  border-radius: calc(8 * var(--developer-report-unit));
+  color: #1a73e8;
+  font-size: calc(15 * var(--developer-report-unit));
+  font-weight: 700;
+  cursor: pointer;
+  background: #fff;
+}
+
+.developer-report-attach:hover {
+  background: #eef4ff;
+}
+
+.developer-report-attach input[type='file'] {
+  display: none;
+}
+
 /* 開発用教室だけに出す確認リスト(2026-09-12)。画面最前面(右下)に固定。
    本番教室では App.tsx がマウントしないので、このスタイルも出番がない。
    z-index は既存の最前面(QR提出通知 1002 / 丸ごと振替バナー 1002)より上に置く。

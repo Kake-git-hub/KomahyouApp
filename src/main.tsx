@@ -4,6 +4,7 @@ import './index.css'
 import packageJson from '../package.json'
 import { startMemoryDiagnostics } from './utils/memoryDiagnostics'
 import { OfflineGate } from './components/OfflineGate'
+import { AppErrorBoundary } from './components/common/AppErrorBoundary'
 
 // ?memlog=1 のときだけメモリ診断ログを開始する（通常は何もしない）。
 startMemoryDiagnostics()
@@ -143,7 +144,10 @@ if (isSubmissionDebug()) {
   import('./App').then(({ default: App }) => {
     createRoot(document.getElementById('root')!).render(
       <StrictMode>
-        <App />
+        {/* 描画エラーの受け皿(2026-10-22 案 3): 白画面のまま固まらず、案内を出して開発者へ自動報告する。 */}
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
         <OfflineGate />
         <div className="app-version-badge">v{packageJson.version}</div>
       </StrictMode>,

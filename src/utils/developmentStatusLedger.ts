@@ -115,6 +115,16 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── 実装済み・確認リスト結果待ち ──────────────────────────────────────────
+  {
+    id: 'rapid-response-foundation',
+    title: '即時対応の基盤(保存ごとの版履歴・操作痕跡の保存同梱・自動エラー報告・保存失敗メール・差分ツール・質問要望の画像添付)',
+    stage: 'awaiting-checklist',
+    summary: 'オーナー採用(2026-10-22「即時対応のための案(優先順)に従いすべて採用」・別会社 10 教室の追加に備える)。案 1: 保存ごとの教室版履歴(Storage classroom-save-history/{ws}/{教室}/・gzip・90 日・mirrorLatestClassroomRollback が追記)。案 2: 保存リクエストに前回保存以降の操作痕跡を相乗り(operationTraces/{saveId}・90 日・端末内保持 300→1000 件)。案 3: window.onerror / unhandledrejection / React ErrorBoundary を捕まえて痕跡(kind error)＋自動報告(メールのみ・Issue なし・1 タブ 3 通まで)。案 5: tools/snapshot-diff.mjs(2 時点の教室データを生徒・机単位で比べる)。案 6: 保存失敗(版数衝突・読み戻し失敗・破壊防止ガード)の即時メール(教室ごと 1 時間 1 通)。スクショ添付(オーナー決定 A): 盤面＝「画面を撮る」＋「画像を選ぶ」＋貼り付け、日程表＝「画像を選ぶ」だけ、3 枚まで、メールに 1 枚目 1MB まで添付。15 分毎バックアップ関数を 540 秒/2GiB へ増強。ブランチ ccr-90a9c65f-i1xp3l(未マージ)。',
+    checklistItemIds: ['rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2'],
+    nextAction: 'staging(Actions「Deploy to Staging」・functions 込み)でオーナーが rp-1〜rp-3・sv-1・sv-2 を確認 → main へマージ(hosting / functions の CI が緑か確認) → 本番で「#テスト」付きの送信 1 回で画像とメールを確認。sv-1 は Claude が読み取り専用トークンで版履歴と operationTraces を確かめる。',
+    references: ['docs/spec-developer-report.md §C/§D-2/§D-3', 'docs/spec-save-restore.md §8-1 #14〜#16', 'docs/runbooks/monitoring.md §3/§5〜§7', 'functions/src/saveFailureAlert.ts', 'functions/src/operationTraces.ts', 'src/utils/clientErrorCapture.ts', 'src/components/developer-report/screenCapture.ts', 'tools/snapshot-diff.mjs'],
+    updatedOn: '2026-10-22',
+  },
 
   // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────
   {
@@ -195,6 +205,15 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── 未着手(計画あり) ────────────────────────────────────────────────────────
+  {
+    id: 'backup-per-workspace',
+    title: '15 分毎バックアップ関数の会社(workspace)ごとの分割実行(別会社 10 教室の追加に備える恒久対策)',
+    stage: 'planned',
+    summary: '全 workspace を 1 回の実行で直列に回すため、教室数に比例して時間とメモリが伸びる(spec-multi-tenant §7-16「15 教室前後で枠切れ」の見込み)。2026-10-22 に 300 秒/1GiB → 540 秒/2GiB へ増強して当面の枠を確保した。恒久対策は workspace ごとの別実行(1 社 1 タスク)か教室ごとの gzip 書き出しにし、復元 UI の一覧の読み方を揃える。',
+    nextAction: 'Claude: 2 社目の受け入れ(second-company-onboarding)の前に Issue #77 の案で設計 → 実装 → staging で 2 社ぶんの実行時間とメモリを実測。',
+    references: ['Issue #77', 'docs/spec-multi-tenant.md §7-16', 'docs/plan-2026-09-15-multi-company-architecture.md §6-13', 'functions/src/index.ts createWorkspaceServerQuarterHourlyBackups'],
+    updatedOn: '2026-10-22',
+  },
   {
     id: 'second-company-onboarding',
     title: '2 社目の受け入れ準備(P-1〜P-8・P-11 実装済み / P-9 予行演習・P-0・請求許可者 第 2 段が残り)',

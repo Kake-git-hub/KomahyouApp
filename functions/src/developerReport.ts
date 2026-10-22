@@ -36,8 +36,21 @@ export const DEVELOPER_REPORT_TRACE_KINDS = [
   'schedule-message',
   'navigation',
   'auto',
+  // 画面で捕まえた例外(2026-10-22 案 3・src/utils/clientErrorCapture.ts)。
+  'error',
 ] as const
 export type DeveloperReportTraceKind = (typeof DEVELOPER_REPORT_TRACE_KINDS)[number]
+
+/**
+ * 画面エラーの自動報告(2026-10-22 案 3)の目印。クライアント src/utils/clientErrorCapture.ts CLIENT_ERROR_AUTO_REPORT_MARKER と二重管理
+ * (テストで一致を固定)。本文の先頭行がこれで始まる報告は isAutoErrorReport=true: メールは送るが GitHub Issue は作らない
+ * (同じエラーが複数端末から届いて Issue が増えるのを防ぐ。開発ダッシュボードの「通知済みだが Issue なし」に出る)。
+ */
+export const DEVELOPER_REPORT_AUTO_ERROR_MARKER = '[自動エラー報告]'
+
+export function isAutoErrorReportNote(note: string): boolean {
+  return note.split('\n')[0]?.trimStart().startsWith(DEVELOPER_REPORT_AUTO_ERROR_MARKER) === true
+}
 
 export type NormalizedDeveloperReportTraceEntry = {
   at: string
@@ -308,6 +321,18 @@ export const DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES = 1_500_000
 export const DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES = 6_000_000
 export const DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT = 40
 export const DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT = 120
+/**
+ * 一般の「質問・要望」モーダル(盤面・日程表)の枚数(オーナー決定 2026-10-22「3 枚に絞る」)。確認リスト(開発用教室)は 8 枚のまま。
+ * クライアント src/utils/developerReport.ts と二重管理(テストで一致を固定)。
+ */
+export const DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT = 3
+/** メールに添付する画像は 1 枚目だけ・1MB まで(オーナー決定 2026-10-22)。残りは Storage の置き場所を本文に書く。 */
+export const DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES = 1_000_000
+
+/** 受け付ける枚数。開発用教室(確認リストの送信元)は 8 枚、それ以外の教室(一般モーダル)は 3 枚。 */
+export function resolveDeveloperReportAttachmentLimit(isDevelopmentClassroom: boolean): number {
+  return isDevelopmentClassroom ? DEVELOPER_REPORT_ATTACHMENT_LIMIT : DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT
+}
 const DEVELOPER_REPORT_ATTACHMENT_EXTENSIONS: Record<DeveloperReportAttachmentMimeType, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
 export type NormalizedDeveloperReportAttachment = {
@@ -321,6 +346,21 @@ export type NormalizedDeveloperReportAttachment = {
 
 const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 
+/**
+ * 画像の先頭バイト(マジックバイト)。MIME の自己申告(data URL の接頭辞)だけでは任意のバイト列を画像として置けるので、
+ * サーバーは中身の先頭も確かめる(regression-reviewer M-4・2026-10-22)。WEBP は RIFF????WEBP。
+ */
+export const IMAGE_MAGIC_BYTES: Readonly<Record<DeveloperReportAttachmentMimeType, ReadonlyArray<{ offset: number; bytes: readonly number[] }>>> = {
+  'image/jpeg': [{ offset: 0, bytes: [0xff, 0xd8, 0xff] }],
+  'image/png': [{ offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] }],
+  'image/webp': [{ offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, { offset: 8, bytes: [0x57, 0x45, 0x42, 0x50] }],
+}
+
+/** 先頭バイトが MIME に合うか。head は base64 の先頭 24 文字(18 バイト)を復号したもので足りる。 */
+export function matchesImageMagicBytes(mimeType: DeveloperReportAttachmentMimeType, head: Uint8Array): boolean {
+  return IMAGE_MAGIC_BYTES[mimeType].every((rule) => rule.bytes.every((byte, index) => head[rule.offset + index] === byte))
+}
+
 export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReportAttachmentMimeType; base64: string; byteLength: number } | null {
   if (typeof dataUrl !== 'string') return null
   const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl)
@@ -330,16 +370,21 @@ export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReport
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
   const byteLength = (base64.length / 4) * 3 - padding
   if (byteLength <= 0) return null
-  return { mimeType: match[1] as DeveloperReportAttachmentMimeType, base64, byteLength }
+  const mimeType = match[1] as DeveloperReportAttachmentMimeType
+  // 中身の先頭が MIME に合わないもの(HTML・実行ファイルを画像と称したもの)は捨てる(M-4)。
+  if (!matchesImageMagicBytes(mimeType, Buffer.from(base64.slice(0, 24), 'base64'))) return null
+  return { mimeType, base64, byteLength }
 }
 
 /** 添付画像を正規化する。壊れた要素・上限超えはその要素だけ捨てる(クライアントと同じ規則)。 */
-export function normalizeDeveloperReportAttachments(raw: unknown): NormalizedDeveloperReportAttachment[] {
+export function normalizeDeveloperReportAttachments(raw: unknown, options: { limit?: number } = {}): NormalizedDeveloperReportAttachment[] {
   if (!Array.isArray(raw)) return []
+  // 枚数の上限は呼び出し側で絞れる(一般モーダルは 3 枚)。ただし全体の上限 8 枚は超えない。
+  const limit = Math.max(0, Math.min(DEVELOPER_REPORT_ATTACHMENT_LIMIT, Math.trunc(options.limit ?? DEVELOPER_REPORT_ATTACHMENT_LIMIT)))
   const result: NormalizedDeveloperReportAttachment[] = []
   let total = 0
   for (const item of raw) {
-    if (result.length >= DEVELOPER_REPORT_ATTACHMENT_LIMIT) break
+    if (result.length >= limit) break
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const candidate = item as { label?: unknown; name?: unknown; dataUrl?: unknown }
     const parsed = parseImageDataUrl(candidate.dataUrl)
@@ -394,6 +439,8 @@ export type DeveloperReportMailSource = {
   category?: string
   isTest?: boolean
   isVerificationChecklist?: boolean
+  /** 画面エラーの自動報告(2026-10-22 案 3)。件名に【自動エラー報告】を付け、本文で Issue を作らない旨を知らせる。 */
+  isAutoErrorReport?: boolean
   note?: string
   reportedAt?: string
   recordedAt?: string
@@ -406,6 +453,8 @@ export type DeveloperReportMailSource = {
   recentOperations?: Array<{ at: string; kind: string; summary: string }>
   recentOperationCount?: number
   snapshotStoragePath?: string
+  /** 添付画像(文書の attachments[]・画像本体は Storage)。1 枚目(1MB まで)をメールに添付する(2026-10-22)。 */
+  attachments?: DeveloperReportMailAttachmentSource[]
   /** AI 即時回答(開発用教室の質問・spec §G-7)。2026-10-16 夜からメールは AI の結果が書かれてから送るので、本文に載せる。 */
   aiAnswerPending?: boolean
   aiAnswer?: string
@@ -434,6 +483,37 @@ export function shouldSendDeveloperReportMailOnWrite(before: DeveloperReportMail
   return before.aiAnswerPending === true
 }
 
+export type DeveloperReportMailAttachmentSource = { label?: string; name?: string; mimeType?: string; byteLength?: number; storagePath?: string }
+
+/** メールに添付する画像(1 枚目だけ・1MB まで・保存先が分かるもの)。無ければ null(本文に置き場所だけ書く)。 */
+export function selectDeveloperReportMailAttachment(
+  attachments: DeveloperReportMailAttachmentSource[] | undefined,
+  maxBytes: number = DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES,
+): { name: string; fileName: string; mimeType: string; storagePath: string; byteLength: number } | null {
+  const first = attachments?.[0]
+  if (!first || typeof first.storagePath !== 'string' || !first.storagePath) return null
+  const byteLength = typeof first.byteLength === 'number' && Number.isFinite(first.byteLength) ? first.byteLength : Number.POSITIVE_INFINITY
+  if (byteLength > maxBytes) return null
+  // fileName はメールの添付名。利用者入力の name ではなく Storage の保存名(…-img1.jpg・MIME で決めた拡張子)を使う(M-4)。
+  const fileName = first.storagePath.split('/').pop() || 'image'
+  return { name: first.name?.trim() || 'image', fileName, mimeType: first.mimeType?.trim() || 'application/octet-stream', storagePath: first.storagePath, byteLength }
+}
+
+/** 添付画像の節(枚数・1 枚目を添付したか・各画像の置き場所)。添付が無ければ空。 */
+export function buildDeveloperReportMailAttachmentLines(report: Pick<DeveloperReportMailSource, 'attachments'>, options: { storageBucket: string }): string[] {
+  const attachments = report.attachments ?? []
+  if (attachments.length === 0) return []
+  const selected = selectDeveloperReportMailAttachment(attachments)
+  return [
+    `■ 添付画像: ${attachments.length} 枚`,
+    selected
+      ? `1 枚目(${selected.name}・${Math.max(1, Math.round(selected.byteLength / 1024))}KB)をこのメールに添付しています。`
+      : `1 枚目が ${Math.round(DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES / 1_000_000)}MB を超える(または保存先が無い)ため、メールには付けていません。`,
+    ...attachments.map((attachment, index) => `  ${index + 1}. ${attachment.name?.trim() || 'image'}${attachment.label?.trim() ? ` [${attachment.label.trim()}]` : ''} gs://${options.storageBucket}/${attachment.storagePath ?? '(保存失敗)'}`),
+    '',
+  ]
+}
+
 const SOURCE_LABELS: Record<string, string> = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
 const CATEGORY_LABELS: Record<string, string> = { bug: '不具合・おかしい', request: '追加してほしい・要望', question: '使い方の質問' }
 /** メールに載せる操作痕跡の件数(新しい方から)。全件は Firestore 文書で読む。 */
@@ -455,7 +535,7 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   // AI がすぐ回答して室長に表示済みの質問は【質問/AI回答済】(2026-10-16 夜)。開発者が回答すべき質問(AI 失敗・対象外)は【質問】のまま。
   const isQuestion = report.category === 'question'
   const aiAnswered = isQuestion && Boolean(report.aiAnswer?.trim())
-  const subject = `${report.isTest ? '【テスト】' : ''}${isQuestion ? (aiAnswered ? '【質問/AI回答済】' : '【質問】') : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
+  const subject = `${report.isTest ? '【テスト】' : ''}${report.isAutoErrorReport ? '【自動エラー報告】' : ''}${isQuestion ? (aiAnswered ? '【質問/AI回答済】' : '【質問】') : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
   const docPath = `workspaces/${options.workspaceKey}/developerReports/${report.reportId}`
   const consoleUrl = `https://console.firebase.google.com/project/${options.projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
   const contextLines = Object.entries(report.scheduleContext ?? {})
@@ -465,7 +545,9 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   const shownOperations = operations.slice(-DEVELOPER_REPORT_MAIL_TRACE_LINES)
   const lines: string[] = [
     report.isTest ? '※ 内容に #テスト が含まれるためテスト扱いです。GitHub Issue は作られません。' : '',
-    '利用者が画面の「要望・報告」ボタンから送った内容です。',
+    report.isAutoErrorReport
+      ? '※ 画面のエラーをアプリが自動で送った報告です(利用者の操作による送信ではありません)。GitHub Issue は作られません(開発ダッシュボードの「通知済みだが Issue なし」に出ます)。同じエラーは 1 タブ 1 回(再読み込みを跨いで)・1 タブ 3 通までに絞っています。'
+      : '利用者が画面の「要望・報告」ボタンから送った内容です。',
     '',
     `教室: ${classroom} (${report.classroomId})`,
     `種類: ${category}`,
@@ -479,6 +561,7 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
     '■ 内容',
     report.note?.trim() ? report.note.trim() : '(なし)',
     '',
+    ...buildDeveloperReportMailAttachmentLines(report, { storageBucket: options.storageBucket }),
     ...(isQuestion ? buildDeveloperReportMailAiAnswerLines(report) : []),
     '■ 進め方(オーナー指示 2026-09-04)',
     '勝手に修正を始めない。切り分け・整理までにとどめ、修正の着手は開発者(オーナー)が確認して許可してから。',

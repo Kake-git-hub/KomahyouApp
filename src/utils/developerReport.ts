@@ -48,6 +48,11 @@ export const DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES = 1_500_000
 export const DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES = 6_000_000
 export const DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT = 40
 export const DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT = 120
+/**
+ * 一般の「質問・要望」モーダル(盤面・日程表)に付けられる枚数(オーナー決定 2026-10-22「3 枚に絞る」)。
+ * 確認リストは従来の 8 枚(DEVELOPER_REPORT_ATTACHMENT_LIMIT)のまま。サーバー functions/src/developerReport.ts と二重管理。
+ */
+export const DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT = 3
 
 export type DeveloperReportAttachment = {
   /** 何の画像か(確認リストでは項目 id。例 tp-38)。 */
@@ -78,12 +83,14 @@ export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReport
  * 添付画像を正規化する(純関数)。壊れた要素はその要素だけ捨て、1 枚の上限・枚数・合計の上限を超えた分も捨てる
  * (1 枚の不正で報告全体を失敗させない)。サーバーも同じ規則で検証する。
  */
-export function normalizeDeveloperReportAttachments(raw: unknown): DeveloperReportAttachment[] {
+export function normalizeDeveloperReportAttachments(raw: unknown, options: { limit?: number } = {}): DeveloperReportAttachment[] {
   if (!Array.isArray(raw)) return []
+  // 枚数の上限は呼び出し側で絞れる(一般モーダルは 3 枚)。ただし全体の上限 8 枚は超えない。
+  const limit = Math.max(0, Math.min(DEVELOPER_REPORT_ATTACHMENT_LIMIT, Math.trunc(options.limit ?? DEVELOPER_REPORT_ATTACHMENT_LIMIT)))
   const result: DeveloperReportAttachment[] = []
   let total = 0
   for (const item of raw) {
-    if (result.length >= DEVELOPER_REPORT_ATTACHMENT_LIMIT) break
+    if (result.length >= limit) break
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const candidate = item as { label?: unknown; name?: unknown; dataUrl?: unknown }
     const parsed = parseImageDataUrl(candidate.dataUrl)
@@ -98,6 +105,46 @@ export function normalizeDeveloperReportAttachments(raw: unknown): DeveloperRepo
     })
   }
   return result
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 一般の「質問・要望」モーダルの添付(2026-10-22 オーナー決定: 盤面＝「画面を撮る」＋「画像を選ぶ／貼る」、日程表＝「画像を選ぶ」だけ、3 枚まで)。
+// モーダルが持つ一覧の形(id・バイト数つき)と、足す／外す／送信形へ落とす純関数。DOM(縮小・撮影)は別モジュール。
+// ───────────────────────────────────────────────────────────────────────────
+export type DeveloperReportModalAttachment = DeveloperReportAttachment & { id: string; byteLength: number }
+
+/** 画像を 1 枚足す。上限(枚数・1 枚・合計)に当たれば足さず、利用者向けの理由を返す。 */
+export function addDeveloperReportModalAttachment(
+  current: readonly DeveloperReportModalAttachment[],
+  candidate: { id: string; label: string; name: string; dataUrl: string },
+  limit: number = DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT,
+): { attachments: DeveloperReportModalAttachment[]; error: string | null } {
+  if (current.length >= limit) return { attachments: [...current], error: DEVELOPER_REPORT_UI_TEXT.attachLimitError(limit) }
+  const parsed = parseImageDataUrl(candidate.dataUrl)
+  if (!parsed) return { attachments: [...current], error: DEVELOPER_REPORT_UI_TEXT.attachReadError }
+  if (parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES) return { attachments: [...current], error: DEVELOPER_REPORT_UI_TEXT.attachTooLargeError }
+  const total = current.reduce((sum, item) => sum + item.byteLength, 0)
+  if (total + parsed.byteLength > DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES) return { attachments: [...current], error: DEVELOPER_REPORT_UI_TEXT.attachTotalError }
+  return {
+    attachments: [...current, {
+      id: candidate.id,
+      label: candidate.label.trim().slice(0, DEVELOPER_REPORT_ATTACHMENT_LABEL_LIMIT),
+      name: candidate.name.trim().slice(0, DEVELOPER_REPORT_ATTACHMENT_NAME_LIMIT) || 'image',
+      mimeType: parsed.mimeType,
+      dataUrl: candidate.dataUrl,
+      byteLength: parsed.byteLength,
+    }],
+    error: null,
+  }
+}
+
+export function removeDeveloperReportModalAttachment(current: readonly DeveloperReportModalAttachment[], id: string): DeveloperReportModalAttachment[] {
+  return current.filter((item) => item.id !== id)
+}
+
+/** 送信形(id・バイト数を落とす)。 */
+export function toDeveloperReportAttachments(current: readonly DeveloperReportModalAttachment[]): DeveloperReportAttachment[] {
+  return current.map(({ label, name, mimeType, dataUrl }) => ({ label, name, mimeType, dataUrl }))
 }
 
 export type DeveloperReportRequestBody = {
@@ -178,6 +225,19 @@ export const DEVELOPER_REPORT_UI_TEXT = {
   /** AI 即時回答を待っている間の送信ボタン文言 */
   sendingAi: '送信中…（回答を作成しています）',
   close: '閉じる',
+  /** 添付画像(2026-10-22 オーナー決定): 盤面は「画面を撮る」＋「画像を選ぶ」(＋貼り付け)、日程表は「画像を選ぶ」だけ。3 枚まで。 */
+  attachLabel: `画像（任意・${DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT} 枚まで）`,
+  captureButton: '画面を撮る',
+  capturing: '撮影中…',
+  chooseImage: '画像を選ぶ',
+  removeImage: '外す',
+  attachHintBoard: '「画面を撮る」でいまのコマ表の画面がそのまま付きます。スクリーンショットを貼り付け（Ctrl+V）しても付きます。',
+  attachHintSchedule: 'スクリーンショットを撮って「画像を選ぶ」から付けられます。',
+  attachLimitError: (limit: number | string) => `画像は ${limit} 枚までです。`,
+  attachReadError: '画像として読めませんでした。',
+  attachTooLargeError: '画像が大きすぎます（1 枚 1.5MB まで）。',
+  attachTotalError: '画像の合計が大きすぎます（1 通 6MB まで）。',
+  captureError: '画面を撮れませんでした。スクリーンショットを撮って「画像を選ぶ」から付けてください。',
 } as const
 
 /** モーダルを開いたときに選ばれている種類（並びの先頭＝質問。オーナー指示 2026-09-14）。盤面・日程表タブ共通。 */
@@ -238,14 +298,17 @@ export const SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE = 'schedule-developer
  * 日程表タブからの報告メッセージを検証する。type が違えば null。
  * note の必須判定は呼び出し側（validateDeveloperReportNote）が担う。
  */
-export function parseScheduleDeveloperReportMessage(message: unknown): { note: string; category: DeveloperReportCategory; scheduleContext?: DeveloperReportScheduleContext } | null {
+export function parseScheduleDeveloperReportMessage(message: unknown): { note: string; category: DeveloperReportCategory; scheduleContext?: DeveloperReportScheduleContext; attachments?: DeveloperReportAttachment[] } | null {
   if (!message || typeof message !== 'object') return null
-  const candidate = message as { type?: unknown; note?: unknown; category?: unknown; context?: unknown }
+  const candidate = message as { type?: unknown; note?: unknown; category?: unknown; context?: unknown; attachments?: unknown }
   if (candidate.type !== SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE) return null
+  // 添付(2026-10-22): 日程表タブで「画像を選ぶ」から付けた画像(data URL)。埋め込み JS は信頼境界の外なので、ここで同じ規則(3 枚・サイズ)で正規化する。
+  const attachments = normalizeDeveloperReportAttachments(candidate.attachments, { limit: DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT })
   return {
     note: normalizeDeveloperReportNote(candidate.note),
     category: normalizeDeveloperReportCategory(candidate.category),
     scheduleContext: normalizeDeveloperReportScheduleContext(candidate.context),
+    ...(attachments.length > 0 ? { attachments } : {}),
   }
 }
 

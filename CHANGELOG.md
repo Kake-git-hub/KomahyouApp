@@ -14,6 +14,23 @@
 
 ## 未リリース
 
+## v1.5.626 (2026-10-22)
+
+- feat: **即時対応の基盤(別会社 10 教室の追加に備える・オーナー採用 2026-10-22「即時対応のための案(優先順)に従いすべて採用」)**。
+  案 1 **保存ごとの教室版履歴**: `classroomSnapshots` の書き込みトリガ(`mirrorLatestClassroomRollback`)で新しい版を Storage `classroom-save-history/{ws}/{教室}/v{版数 8 桁}-{保存時刻}.json.gz` へ gzip で追記(保持 90 日・`pruneClassroomSaveHistory` が独立予算 60 秒で間引き)。直前ロールバック(1 世代上書き)は先に書き、据え置き。
+  案 2 **操作痕跡の保存同梱**: 保存リクエストに前回保存以降の痕跡(新しい方から 300 件)を `operationTrace` として相乗りさせ、サーバーが `classroomSnapshots/{id}/operationTraces/{saveId}` へ残す(保持 90 日・書けなくても保存は成功)。印は保存成功時だけ進める(`collectOperationTraceSinceLastSave` / `markOperationTraceSaved`)。端末内の保持を 300 → 1000 件。
+  案 3 **画面エラーの自動捕捉**: `window.onerror` / `unhandledrejection` / React `AppErrorBoundary`(main.tsx)を `clientErrorCapture.ts` で捕まえ、痕跡(kind `error`・両側の種別一覧に追加)＋「質問・要望」と同じ経路で自動報告(先頭行 `[自動エラー報告]`・サーバーは `isAutoErrorReport` でメールのみ・Issue なし・回答待ち文書も作らない)。同じエラー 1 回・1 タブ 3 通まで。描画例外は室長向けの案内＋再読み込み。
+  案 5 **差分ツール** `tools/snapshot-diff.mjs`: ワークスペースバックアップ／直前ロールバック／版履歴／利用者報告の gz を 2 本渡すと、名簿・講師・通常授業・講習・盤面(机単位)の差を日本語で列挙(読み取り専用・ネットワーク不使用)。
+  案 6 **保存失敗の監視メール**: `saveClassroomSnapshot` の版数衝突・読み戻し失敗・破壊防止ガードで、利用者報告と同じ SMTP 設定の開発者メールを即時送信(教室ごと 1 時間 1 通・`workspaces/{ws}/saveFailureAlerts/{教室}`・失敗は保存の応答に影響させない・`functions/src/saveFailureAlert.ts`)。
+  案 4 **Firestore PITR** は手順を runbook に追加し、同日オーナーが有効化(台帳の行は消した)。確認リスト第64版 rp-1〜rp-3・sv-1・sv-2(項目の版は v1.5.626・リストの版は v1.5.622 据え置き)。台帳 `rapid-response-foundation` / `backup-per-workspace`(恒久対策は Issue #77)。
+  regression-reviewer(同日)の指摘を反映: M-1 保存失敗メールは 5 秒で打ち切り SMTP にも上限(保存の失敗応答を変えない)・M-2 自動報告の歯止めを sessionStorage に残す(再読み込みを跨ぐ)＋同じエラーの痕跡は 5 件まで・M-3 起票スクリプトも自動エラー報告を Issue にしない(デプロイの時間差対策)・M-4 添付はマジックバイトを検査しメールの添付名は保存名から作る・M-5 直前ロールバックを先に書き after 文書をそのまま包む・L-1 文字つきの貼り付けは文字として入れる・L-4 版履歴の名前は版数先頭・L-6 案内文の断定を避け英語の例外文を出さない・L-7 破壊防止ガードのメールは failed-precondition のときだけ
+  (functions/src/index.ts / workspaceBackupSchedule.ts / retentionCleanup.ts / operationTraces.ts / saveFailureAlert.ts / developerReport.ts / reportAnswers.ts / src/utils/operationTrace.ts / clientErrorCapture.ts / src/components/common/AppErrorBoundary.tsx / src/main.tsx / src/App.tsx / adminFunctions.ts / tools/snapshot-diff.mjs / docs)
+- feat: **「質問・要望」モーダルに画像を付けられる(オーナー決定 2026-10-22: 盤面＝「画面を撮る」＋「画像を選ぶ」＋貼り付け(Ctrl+V)、日程表タブ＝「画像を選ぶ」だけ、3 枚まで、メールに 1 枚目を 1MB まで添付)**。
+  「画面を撮る」は html2canvas でいま見えている範囲だけを撮り(モーダルと確認リストは写さない・`screenCapture.ts`)、長辺 1600px の JPEG に縮める。日程表タブは埋め込み JS で縮小して postMessage で本体へ渡し、本体 `parseScheduleDeveloperReportMessage` が同じ規則で再検証。
+  サーバーは全教室から添付を受け付け、枚数だけ教室で分ける(開発用教室の確認リスト 8 枚・それ以外 3 枚・`resolveDeveloperReportAttachmentLimit`)。`notifyDeveloperReportByMail` が 1 枚目(≤1MB)を Storage から読んで添付し、本文に「添付画像: n 枚」と置き場所を書く。spec §C 改定・説明書 §10 (DeveloperReportModal.tsx / scheduleHtml.ts / developerReport.ts 両側 / index.ts / App.css)
+- chore: **15 分毎バックアップ関数を 300 秒/1GiB → 540 秒/2GiB へ増強**(別会社 10 教室の追加で合計 15 教室前後・spec-multi-tenant §7-16 の枠切れ見込みに備える)。定期掃除関数も 540 秒へ(3 つの Storage/Firestore 予算 90+60+180 秒を収める) (functions/src/index.ts / retentionCleanup.ts)
+- docs: spec-developer-report §A/§C/§D-2/§D-3/§E、spec-save-restore §8-1 #14〜#16、runbooks/monitoring §3/§5〜§7(保存失敗メール・自動エラー報告・版履歴と差分ツール・PITR 有効化手順)、user-manual §10(画像の付け方・エラー時の案内)
+
 ## v1.5.625 (2026-10-22)
 
 - fix(INV-02): **「上に詰めて並べ替え」「同席番で並べ替え」で、生徒2のセルにしか生徒がおらず生徒1が空いている机は生徒2から生徒1へ寄せ、その結果がリロード・再マージで戻らないようにした**(オーナー指示 2026-10-22・全教室・フラグなし・軽微のため staging 省略で即時マージ)。
