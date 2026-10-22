@@ -340,18 +340,19 @@ describe('保存ごとの教室版履歴(2026-10-22 案 1)', () => {
     expect(CLASSROOM_SAVE_HISTORY_PREFIX).toBe('classroom-save-history')
   })
 
-  it('置き場所は 教室フォルダ/保存時刻-v版数.json.gz で、名前に : と . を含まない(名前順 = 時系列順)', () => {
+  it('置き場所は 教室フォルダ/v版数(8 桁)-保存時刻.json.gz で、名前に : と . を含まない(名前順 = 保存順)', () => {
     const path = buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.123Z', 42)
-    expect(path).toBe('classroom-save-history/main/cls1/2026-10-22T06-32-10-123Z-v42.json.gz')
+    expect(path).toBe('classroom-save-history/main/cls1/v00000042-2026-10-22T06-32-10-123Z.json.gz')
     expect(path.split('/').pop()!.replace(/\.json\.gz$/u, '')).not.toMatch(/[:.]/u)
-    // 時系列順に並ぶ(文字列比較で前後が決まる)。
-    const earlier = buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:09.999Z', 41)
+    // 版数順に並ぶ(端末の時計が前後していても、サーバーの版数が順序を決める・L-4)。
+    const earlier = buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:11.000Z', 41)
     expect(earlier < path).toBe(true)
+    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.000Z', 100) > path).toBe(true)
   })
 
-  it('版数が読めない旧文書は v0、読めない時刻は epoch へ丸める(例外にしない)', () => {
-    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.000Z', undefined)).toContain('-v0.json.gz')
-    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', 'not-a-date', 3)).toBe('classroom-save-history/main/cls1/1970-01-01T00-00-00-000Z-v3.json.gz')
+  it('版数が読めない旧文書は v00000000、読めない時刻は epoch へ丸める(例外にしない)', () => {
+    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.000Z', undefined)).toContain('/v00000000-')
+    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', 'not-a-date', 3)).toBe('classroom-save-history/main/cls1/v00000003-1970-01-01T00-00-00-000Z.json.gz')
     expect(toStorageSafeTimestampKey('2026-10-22T06:32:10.123Z')).toBe('2026-10-22T06-32-10-123Z')
   })
 

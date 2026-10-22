@@ -16,6 +16,10 @@ import { recordOperationTrace } from './operationTrace'
 
 export const CLIENT_ERROR_AUTO_REPORT_MARKER = '[自動エラー報告]'
 export const CLIENT_ERROR_AUTO_REPORT_SESSION_LIMIT = 3
+/** 同じエラーを痕跡に残す回数の上限(L-2)。interval の中で繰り返す例外が 1000 件の痕跡を押し流さないようにする。 */
+export const CLIENT_ERROR_TRACE_LIMIT_PER_KEY = 5
+/** 歯止め(重複キー・送った数)の置き場所。再読み込みを跨いで同じタブで効く(M-2: 案内画面の「再読み込み」で歯止めが消えない)。 */
+export const CLIENT_ERROR_GATE_STORAGE_KEY = 'client-error-auto-report:v1'
 export const CLIENT_ERROR_MESSAGE_LIMIT = 300
 export const CLIENT_ERROR_STACK_LIMIT = 1200
 
@@ -153,10 +157,56 @@ export function isClientErrorAutoReportNote(note: string): boolean {
 export type ClientErrorAutoReportGateState = {
   seenKeys: Set<string>
   sentCount: number
+  /** 痕跡に残した回数(キーごと・メモリだけ)。 */
+  traceCounts: Map<string, number>
 }
 
 export function createClientErrorAutoReportGateState(): ClientErrorAutoReportGateState {
-  return { seenKeys: new Set<string>(), sentCount: 0 }
+  return { seenKeys: new Set<string>(), sentCount: 0, traceCounts: new Map<string, number>() }
+}
+
+type GateStorage = Pick<Storage, 'getItem' | 'setItem'>
+
+function resolveGateStorage(): GateStorage | null {
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage) return null
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+/** 保存した歯止め(JSON)を読む。壊れていれば空。純関数(storage は引数)。 */
+export function loadClientErrorAutoReportGateState(storage: GateStorage | null): ClientErrorAutoReportGateState {
+  const state = createClientErrorAutoReportGateState()
+  if (!storage) return state
+  try {
+    const raw = storage.getItem(CLIENT_ERROR_GATE_STORAGE_KEY)
+    if (!raw) return state
+    const parsed = JSON.parse(raw) as { keys?: unknown; sentCount?: unknown }
+    if (Array.isArray(parsed.keys)) for (const key of parsed.keys) if (typeof key === 'string') state.seenKeys.add(key)
+    if (typeof parsed.sentCount === 'number' && Number.isFinite(parsed.sentCount)) state.sentCount = Math.max(0, Math.trunc(parsed.sentCount))
+  } catch {
+    // 壊れた保存は無視(歯止めが無い状態から始める)。
+  }
+  return state
+}
+
+export function saveClientErrorAutoReportGateState(storage: GateStorage | null, state: ClientErrorAutoReportGateState): void {
+  if (!storage) return
+  try {
+    storage.setItem(CLIENT_ERROR_GATE_STORAGE_KEY, JSON.stringify({ keys: [...state.seenKeys].slice(-50), sentCount: state.sentCount }))
+  } catch {
+    // 容量超過など。残らなければ再読み込み後に 1 通ずつ増えるだけ。
+  }
+}
+
+/** 痕跡に残してよいか(同じキーは CLIENT_ERROR_TRACE_LIMIT_PER_KEY 回まで)。状態を進める。 */
+export function decideClientErrorTrace(state: ClientErrorAutoReportGateState, key: string, limit: number = CLIENT_ERROR_TRACE_LIMIT_PER_KEY): boolean {
+  const count = state.traceCounts.get(key) ?? 0
+  if (count >= limit) return false
+  state.traceCounts.set(key, count + 1)
+  return true
 }
 
 /** 送ってよければ true を返し、状態を進める(重複・上限なら false で状態は変えない)。 */
@@ -180,16 +230,24 @@ export type ClientErrorAutoReporter = {
 }
 
 let autoReporter: ClientErrorAutoReporter | null = null
-let gateState = createClientErrorAutoReportGateState()
+let gateState: ClientErrorAutoReportGateState | null = null
+/** 再入の歯止め: 送信口の中で再び例外が起きても、この入口を重ねて走らせない。 */
+let handling = false
+
+function ensureGateState(): ClientErrorAutoReportGateState {
+  if (!gateState) gateState = loadClientErrorAutoReportGateState(resolveGateStorage())
+  return gateState
+}
 
 export function setClientErrorAutoReporter(reporter: ClientErrorAutoReporter | null): void {
   autoReporter = reporter
 }
 
-/** テスト用: 歯止めと送信口を初期状態へ。 */
+/** テスト用: 歯止めと送信口を初期状態へ(sessionStorage の保存は消さない。テストは stub を差し替える)。 */
 export function resetClientErrorCaptureState(): void {
   autoReporter = null
-  gateState = createClientErrorAutoReportGateState()
+  gateState = null
+  handling = false
 }
 
 export type ClientErrorHandleOutcome = 'ignored' | 'traced-only' | 'deduped' | 'reported'
@@ -199,16 +257,23 @@ export type ClientErrorHandleOutcome = 'ignored' | 'traced-only' | 'deduped' | '
  * (エラー処理の中でさらに落ちると本体のエラーを隠す)。
  */
 export function handleCapturedClientError(info: ClientErrorInfo): ClientErrorHandleOutcome {
+  if (handling) return 'ignored'
+  handling = true
   try {
     if (isIgnorableClientError(info)) return 'ignored'
-    try {
-      recordOperationTrace('error', buildClientErrorTraceSummary(info))
-    } catch {
-      // 痕跡の失敗で報告を止めない。
+    const state = ensureGateState()
+    const key = buildClientErrorDedupeKey(info)
+    if (decideClientErrorTrace(state, key)) {
+      try {
+        recordOperationTrace('error', buildClientErrorTraceSummary(info))
+      } catch {
+        // 痕跡の失敗で報告を止めない。
+      }
     }
     const reporter = autoReporter
     if (!reporter) return 'traced-only'
-    if (!decideClientErrorAutoReport(gateState, buildClientErrorDedupeKey(info))) return 'deduped'
+    if (!decideClientErrorAutoReport(state, key)) return 'deduped'
+    saveClientErrorAutoReportGateState(resolveGateStorage(), state)
     const note = buildClientErrorAutoReportNote(info, reporter.context())
     try {
       void Promise.resolve(reporter.submit(note)).catch(() => { /* 送れなくても痕跡には残っている */ })
@@ -218,6 +283,8 @@ export function handleCapturedClientError(info: ClientErrorInfo): ClientErrorHan
     return 'reported'
   } catch {
     return 'ignored'
+  } finally {
+    handling = false
   }
 }
 

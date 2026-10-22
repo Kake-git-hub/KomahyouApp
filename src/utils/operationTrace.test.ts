@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from '../components/schedule-board/types'
@@ -250,5 +252,42 @@ describe('operationTrace: 保存への相乗り(2026-10-22 案 2・前回保存�
     const sent = collectOperationTraceSinceLastSave('c3')
     markOperationTraceSaved('c3', sent)
     expect(collectOperationTraceSinceLastSave('c3')).toEqual([])
+  })
+})
+
+describe('operationTrace: 教室をまたがない(INV-08 の兄弟・保存への相乗り)', () => {
+  beforeEach(() => {
+    clearOperationTraceMemory()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('c1 の痕跡は collect(c2) に混ざらず、c1 の印を進めても c2 の切り出しは変わらない', () => {
+    installStorage()
+    setOperationTraceClassroomId('c1')
+    recordOperationTrace('board-commit', 'c1 の操作')
+    setOperationTraceClassroomId('c2')
+    recordOperationTrace('undo', 'c2 の操作')
+    const c1 = collectOperationTraceSinceLastSave('c1')
+    const c2 = collectOperationTraceSinceLastSave('c2')
+    expect(c1.map((e) => e.summary)).toEqual(['c1 の操作'])
+    expect(c2.map((e) => e.summary)).toEqual(['c2 の操作'])
+    markOperationTraceSaved('c1', c1)
+    expect(collectOperationTraceSinceLastSave('c1')).toEqual([])
+    expect(collectOperationTraceSinceLastSave('c2').map((e) => e.summary)).toEqual(['c2 の操作'])
+  })
+
+  it('App.tsx の配線: 痕跡は空でないときだけ送り、印は保存成功(callable の後)でだけ進める(失敗の catch では進めない)', () => {
+    const app = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
+    expect(app).toContain("...(operationTrace.length > 0 ? { operationTrace } : {}),")
+    const call = app.indexOf('result = await saveClassroomSnapshotViaFunction({')
+    const mark = app.indexOf('markOperationTraceSaved(targetClassroom.id, operationTrace)')
+    const restore = app.indexOf('restoreOperationEvents(targetClassroom.id, operationEvents)')
+    expect(call).toBeGreaterThan(-1)
+    expect(mark).toBeGreaterThan(call)
+    // 失敗側の catch(操作ログを戻す場所)より前にあり、catch の中には無い。
+    expect(mark).toBeLessThan(restore)
+    expect(app.slice(restore - 400, restore + 200)).not.toContain('markOperationTraceSaved(')
   })
 })

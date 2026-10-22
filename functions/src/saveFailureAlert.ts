@@ -12,6 +12,25 @@
 //  - 本文に生徒名は入らない(教室名・保存 ID・版数・端末情報・原因文だけ)。
 
 export const SAVE_FAILURE_ALERT_MIN_INTERVAL_MS = 60 * 60 * 1000
+/**
+ * メール通知に使ってよい時間の上限(regression-reviewer M-1・2026-10-22)。保存の callable は 120 秒で、
+ * nodemailer の既定(接続 2 分・ソケット 10 分)のまま待つと SMTP が止まった晩に保存の失敗応答が deadline-exceeded に化け、
+ * 利用者に出る文言(版数衝突の案内など)が変わってしまう。上限を過ぎたら送らずに本来の失敗応答へ進む。
+ */
+export const SAVE_FAILURE_ALERT_TIMEOUT_MS = 5_000
+/** SMTP 接続の各段の上限(nodemailer transport options)。上の全体上限より短くして、個々の待ちで全体を食い切らない。 */
+export const SAVE_FAILURE_ALERT_SMTP_TIMEOUTS = { connectionTimeout: 3_000, greetingTimeout: 3_000, socketTimeout: 4_000 } as const
+
+/** 約束を時間で打ち切る。時間切れは fallback を返す(例外にしない)。タイマーは必ず片づける。 */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(0, timeoutMs))
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
 export const SAVE_FAILURE_ALERT_COLLECTION = 'saveFailureAlerts'
 
 export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard'] as const
@@ -85,8 +104,8 @@ export function buildSaveFailureAlertMail(input: SaveFailureAlertMailInput): { s
     `保存 ID: ${input.saveId}`,
     `実行者(UID): ${input.updatedBy || '(不明)'}`,
     `端末: 版 ${input.appVersion || '(不明)'} / ${input.userAgent || '(UA 不明)'}`,
-    typeof input.occurrenceCount === 'number' ? `この教室の発生回数(直近の通知以降を含む累計): ${input.occurrenceCount}` : '',
-    input.detail ? `詳細: ${input.detail}` : '',
+    typeof input.occurrenceCount === 'number' ? `この教室の発生回数(直近の通知以降を含む累計): ${input.occurrenceCount}` : null,
+    input.detail ? `詳細: ${input.detail}` : null,
     '',
     '■ 確かめること',
     SAVE_FAILURE_ALERT_HINTS[input.kind],
@@ -98,5 +117,6 @@ export function buildSaveFailureAlertMail(input: SaveFailureAlertMailInput): { s
     `関数ログ: Actions「Read Cloud Functions logs」(saveClassroomSnapshot・${toJstLabel(input.occurredAt)} 前後)`,
     `Firestore コンソール: https://console.firebase.google.com/project/${input.projectId}/firestore`,
   ]
-  return { subject, text: lines.filter((line) => line !== '').join('\n') }
+  // 区切りの空行は残し、条件で出さない行(null)だけを落とす(L-11)。
+  return { subject, text: lines.filter((line): line is string => line !== null).join('\n') }
 }

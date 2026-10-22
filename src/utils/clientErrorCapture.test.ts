@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CLIENT_ERROR_AUTO_REPORT_MARKER,
   CLIENT_ERROR_AUTO_REPORT_SESSION_LIMIT,
+  CLIENT_ERROR_GATE_STORAGE_KEY,
   CLIENT_ERROR_MESSAGE_LIMIT,
+  CLIENT_ERROR_TRACE_LIMIT_PER_KEY,
+  decideClientErrorTrace,
+  loadClientErrorAutoReportGateState,
+  saveClientErrorAutoReportGateState,
   buildClientErrorAutoReportNote,
   buildClientErrorDedupeKey,
   buildClientErrorTraceSummary,
@@ -168,5 +173,89 @@ describe('handleCapturedClientError(入口)と installClientErrorCapture(window 
     expect(seen).toEqual(['window-error:ev error', 'unhandled-rejection:rejected', 'unhandled-rejection:(詳細なし)'])
     uninstall()
     expect(listeners.size).toBe(0)
+  })
+})
+
+describe('歯止めの永続化(M-2)・再入(テスト案 4)・痕跡の間引き(L-2)', () => {
+  beforeEach(() => {
+    resetClientErrorCaptureState()
+    clearOperationTraceMemory()
+    setOperationTraceClassroomId('c1')
+  })
+  afterEach(() => {
+    resetClientErrorCaptureState()
+    clearOperationTraceMemory()
+    vi.unstubAllGlobals()
+  })
+
+  function installSessionStorage(initial: Record<string, string> = {}) {
+    const store = new Map<string, string>(Object.entries(initial))
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+    }
+    vi.stubGlobal('window', { sessionStorage: storage, localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } })
+    return store
+  }
+
+  it('load/save: 保存した重複キーと送った数を戻し、壊れていれば空から始める', () => {
+    const storage = { getItem: () => JSON.stringify({ keys: ['a', 'b'], sentCount: 2 }), setItem: () => {} }
+    const state = loadClientErrorAutoReportGateState(storage)
+    expect([...state.seenKeys]).toEqual(['a', 'b'])
+    expect(state.sentCount).toBe(2)
+    expect(loadClientErrorAutoReportGateState({ getItem: () => '{broken', setItem: () => {} }).sentCount).toBe(0)
+    expect(loadClientErrorAutoReportGateState(null).seenKeys.size).toBe(0)
+    const saved: string[] = []
+    saveClientErrorAutoReportGateState({ getItem: () => null, setItem: (_k, v) => { saved.push(v) } }, state)
+    expect(JSON.parse(saved[0])).toEqual({ keys: ['a', 'b'], sentCount: 2 })
+    // setItem が投げても落ちない(容量超過)。
+    expect(() => saveClientErrorAutoReportGateState({ getItem: () => null, setItem: () => { throw new Error('quota') } }, state)).not.toThrow()
+  })
+
+  it('再読み込み(メモリの状態を捨てる)を跨いでも、同じエラーは送らず、上限 3 通も引き継ぐ', () => {
+    const store = installSessionStorage()
+    const submit = vi.fn((_note: string) => Promise.resolve({ ok: true }))
+    setClientErrorAutoReporter({ submit, context: () => context })
+    const info = describeClientError({ source: 'react-render', error: new Error('render boom') })
+    expect(handleCapturedClientError(info)).toBe('reported')
+    expect(store.has(CLIENT_ERROR_GATE_STORAGE_KEY)).toBe(true)
+    // 再読み込み相当: モジュールの状態だけ捨てる(sessionStorage は残る)。
+    resetClientErrorCaptureState()
+    setClientErrorAutoReporter({ submit, context: () => context })
+    expect(handleCapturedClientError(info)).toBe('deduped')
+    expect(handleCapturedClientError(describeClientError({ source: 'window-error', error: new Error('two') }))).toBe('reported')
+    expect(handleCapturedClientError(describeClientError({ source: 'window-error', error: new Error('three') }))).toBe('reported')
+    resetClientErrorCaptureState()
+    setClientErrorAutoReporter({ submit, context: () => context })
+    expect(handleCapturedClientError(describeClientError({ source: 'window-error', error: new Error('four') }))).toBe('deduped')
+    expect(submit).toHaveBeenCalledTimes(3)
+  })
+
+  it('送信口の中で入口が再び呼ばれても重ねて走らない(無限ループにならない)', () => {
+    installSessionStorage()
+    let nested: string | null = null
+    setClientErrorAutoReporter({
+      submit: () => {
+        nested = handleCapturedClientError(describeClientError({ source: 'unhandled-rejection', error: new Error('nested') }))
+        throw new Error('sync failure inside submit')
+      },
+      context: () => context,
+    })
+    expect(handleCapturedClientError(describeClientError({ source: 'window-error', error: new Error('outer') }))).toBe('reported')
+    expect(nested).toBe('ignored')
+    // 入口が終わったあとは通常どおり受け付ける。
+    expect(handleCapturedClientError(describeClientError({ source: 'window-error', error: new Error('after') }))).toBe('reported')
+  })
+
+  it('同じエラーの痕跡は 5 件までで、以後は痕跡に残さない(履歴を押し流さない)', () => {
+    installSessionStorage()
+    expect(CLIENT_ERROR_TRACE_LIMIT_PER_KEY).toBe(5)
+    const state = createClientErrorAutoReportGateState()
+    for (let index = 0; index < 5; index += 1) expect(decideClientErrorTrace(state, 'k')).toBe(true)
+    expect(decideClientErrorTrace(state, 'k')).toBe(false)
+    expect(decideClientErrorTrace(state, 'other')).toBe(true)
+    const info = describeClientError({ source: 'window-error', error: new Error('loop') })
+    for (let index = 0; index < 8; index += 1) handleCapturedClientError(info)
+    expect(peekOperationTrace('c1').filter((entry) => entry.kind === 'error')).toHaveLength(5)
   })
 })

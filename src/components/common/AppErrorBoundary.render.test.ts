@@ -10,13 +10,15 @@ import { APP_ERROR_FALLBACK_TEXT, AppErrorBoundary, AppErrorFallback } from './A
 
 describe('AppErrorFallback(室長向けの案内)', () => {
   it('題名・案内・再読み込みボタンを描き、内部語を出さない', () => {
-    const html = renderToString(createElement(AppErrorFallback, { message: 'TypeError: x', onReload: () => {} }))
+    const html = renderToString(createElement(AppErrorFallback, { onReload: () => {} }))
     expect(html).toContain(APP_ERROR_FALLBACK_TEXT.title)
     expect(html).toContain(APP_ERROR_FALLBACK_TEXT.lead)
     expect(html).toContain('data-testid="app-error-reload"')
-    // SSR は式の境界に <!-- --> を挟むので、文面の存在だけを見る。
-    expect(html).toContain('TypeError: x')
-    for (const word of ['ErrorBoundary', 'developerReports', 'operationTrace']) expect(html).not.toContain(word)
+    // 届くのは教室を開いているときだけなので、断定しない(L-6)。英語の例外文は出さない。
+    expect(APP_ERROR_FALLBACK_TEXT.lead).toContain('教室を開いていれば')
+    for (const word of ['ErrorBoundary', 'developerReports', 'operationTrace', 'TypeError']) expect(html).not.toContain(word)
+    const source = readFileSync(fileURLToPath(new URL('./AppErrorBoundary.tsx', import.meta.url)), 'utf8')
+    expect(source).not.toContain('this.state.error.message')
   })
 
   it('例外が無ければ子をそのまま描く', () => {

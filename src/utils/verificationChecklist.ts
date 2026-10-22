@@ -76,7 +76,8 @@ export type VerificationChecklistAudience = 'development' | 'sandbox'
  * 第63版(2026-10-21): テスト教室の結果(受付 20261020-092527755-56bbf675)で tp-55 は OK → 外す。tp-48/tp-51 の修正(Q40-3 の精算済み判定・Q40-1 の範囲を日単位)、
  * tp-57(3) の文を仕様(Q21-9)に合わせて書き直し、確認の画面の「生徒ごとの理由」tp-58 を足した。
  * 第64版(2026-10-22・オーナー採用「即時対応のための案(優先順)をすべて採用」＋スクショ添付 A): 質問・要望の画像添付 rp-1〜rp-3、
- *   保存ごとの版履歴と操作痕跡の保存同梱 sv-1、保存失敗の監視メール sv-2 を足した(版を v1.5.625 へ。第63版の結果待ち項目は残す)。
+ *   保存ごとの版履歴と操作痕跡の保存同梱 sv-1、保存失敗の監視メール sv-2 を足した。版(VERSION)は v1.5.622 のまま据え置く
+ *   (項目を足すだけなので、第63版の結果待ち項目の下書きを消さない・CLAUDE.md「確認中の版へ項目を足すだけなら版は据え置く」)。
  */
 export const VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS: readonly string[] = ['tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-56', 'tp-57', 'tp-58', 'tp-59']
 
@@ -91,7 +92,7 @@ export function selectVerificationChecklistItems(
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.625'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.622'
 
 /**
  * 確認項目の正本(2026-09-12 初版・v1.5.504 で第2版・v1.5.506 で第3版・v1.5.508 で第4版・v1.5.509 で第5版)。

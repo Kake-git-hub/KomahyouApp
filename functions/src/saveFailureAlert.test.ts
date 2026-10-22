@@ -6,6 +6,9 @@ import {
   SAVE_FAILURE_ALERT_COLLECTION,
   SAVE_FAILURE_ALERT_KINDS,
   SAVE_FAILURE_ALERT_MIN_INTERVAL_MS,
+  SAVE_FAILURE_ALERT_SMTP_TIMEOUTS,
+  SAVE_FAILURE_ALERT_TIMEOUT_MS,
+  withTimeout,
   buildSaveFailureAlertMail,
   isSaveFailureAlertKind,
   shouldSendSaveFailureAlert,
@@ -93,13 +96,30 @@ describe('index.ts の配線(ソース走査)', () => {
     expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(3)
   })
 
-  it('メールの失敗は保存の応答に影響させない(関数内で握る・throw しない)', () => {
+  it('メールの失敗は保存の応答に影響させない(関数内で握る・throw しない)。待ち時間は 5 秒で打ち切り、SMTP にも上限を付ける(M-1)', () => {
     const body = indexTs.slice(indexTs.indexOf('async function notifySaveFailureByMail('), indexTs.indexOf('async function saveClassroomSnapshotFromCallable'))
     expect(body).toContain('catch (error)')
     expect(body).not.toContain('throw')
+    expect(body).toContain('withTimeout(notifySaveFailureByMailUnbounded(params), SAVE_FAILURE_ALERT_TIMEOUT_MS, null)')
+    expect(body).toContain('createTransport({ url: REPORT_MAIL_SMTP_URL, ...SAVE_FAILURE_ALERT_SMTP_TIMEOUTS })')
+    // 破壊防止ガードのメールは failed-precondition(ガードが働いた)のときだけ(L-7)。元の例外は必ず投げ直す。
+    expect(save).toContain("if (error instanceof HttpsError && error.code === 'failed-precondition') {")
+    expect(save).toMatch(/kind: 'data-loss-guard',[\s\S]*?\}\)\s*\}\s*throw error/u)
     // 間引きの判定と発生回数の記録は教室ごとの文書(saveFailureAlerts/{classroomId})。
     expect(body).toContain('.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(params.classroomId)')
     expect(body).toContain('shouldSendSaveFailureAlert(')
     expect(body).toContain('FieldValue.increment(1)')
+  })
+})
+
+describe('withTimeout(メール通知の待ち時間の上限・M-1)', () => {
+  it('時間内に終われば結果、過ぎたら fallback(例外にしない)。全体上限は保存の callable(120 秒)より十分短く、SMTP の各段より長い', async () => {
+    expect(SAVE_FAILURE_ALERT_TIMEOUT_MS).toBe(5_000)
+    expect(SAVE_FAILURE_ALERT_TIMEOUT_MS).toBeLessThan(120_000 / 4)
+    for (const value of Object.values(SAVE_FAILURE_ALERT_SMTP_TIMEOUTS)) expect(value).toBeLessThanOrEqual(SAVE_FAILURE_ALERT_TIMEOUT_MS)
+    await expect(withTimeout(Promise.resolve(true), 1_000, null)).resolves.toBe(true)
+    const never = new Promise<boolean>(() => {})
+    await expect(withTimeout(never, 10, null)).resolves.toBeNull()
+    await expect(withTimeout(Promise.reject(new Error('x')), 1_000, null)).rejects.toThrow('x')
   })
 })

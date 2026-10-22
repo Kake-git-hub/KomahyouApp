@@ -72,6 +72,8 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
   const [validationError, setValidationError] = useState<string | null>(null)
   // 添付画像(2026-10-22 オーナー決定: 盤面＝「画面を撮る」＋「画像を選ぶ」＋貼り付け・3 枚まで)。送信時に送信形へ落として渡す。
   const [attachments, setAttachments] = useState<DeveloperReportModalAttachment[]>([])
+  // 連続で足すとき(複数ファイル・貼り付け)の現在値。setState の更新関数が同期に走る前提に頼らない(regression-reviewer L-5)。
+  const attachmentsRef = useRef<DeveloperReportModalAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -96,16 +98,12 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
     onSubmit(note, category, toDeveloperReportAttachments(attachments))
   }
 
-  // 1 枚足す。上限(枚数・1 枚・合計)は純関数が見る。state の更新は関数形式で重ねる(連続貼り付けで前の分を失わない)。
+  // 1 枚足す。上限(枚数・1 枚・合計)は純関数が見る。現在値は ref で持ち回る(連続貼り付けで前の分を失わない・更新関数の同期実行に頼らない)。
   const pushAttachment = useCallback((candidate: { label: string; name: string; dataUrl: string }) => {
-    let error: string | null = null
-    setAttachments((current) => {
-      const result = addDeveloperReportModalAttachment(current, { id: createChecklistAttachmentId(), ...candidate })
-      error = result.error
-      return result.attachments
-    })
-    // setAttachments の更新関数は同期に走る(React 18/19 とも)。ここで error を読んで理由を出す。
-    setAttachmentError(error)
+    const result = addDeveloperReportModalAttachment(attachmentsRef.current, { id: createChecklistAttachmentId(), ...candidate })
+    attachmentsRef.current = result.attachments
+    setAttachments(result.attachments)
+    setAttachmentError(result.error)
   }, [])
 
   const addImageFiles = useCallback(async (files: ArrayLike<File> | null | undefined, label: string) => {
@@ -133,7 +131,9 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
   }, [onCaptureScreen, pushAttachment])
 
   const removeAttachment = useCallback((id: string) => {
-    setAttachments((current) => removeDeveloperReportModalAttachment(current, id))
+    const next = removeDeveloperReportModalAttachment(attachmentsRef.current, id)
+    attachmentsRef.current = next
+    setAttachments(next)
     setAttachmentError(null)
   }, [])
 
@@ -250,9 +250,11 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
               aria-invalid={validationError ? true : undefined}
               data-testid="developer-report-note"
               onPaste={(event) => {
-                // スクリーンショットの貼り付け(Ctrl+V)。画像が無い貼り付けは文字として通常どおり入る。
+                // スクリーンショットの貼り付け(Ctrl+V)。文字も一緒に載っている貼り付け(Excel/Word からのコピーは画像形式も付く)は
+                // 文字として入れる(L-1)。画像だけのときだけ添付へ回す。
                 const files = event.clipboardData?.files
-                if (files && files.length > 0 && pickChecklistImageFiles(files).length > 0) {
+                const text = event.clipboardData?.getData('text/plain') ?? ''
+                if (files && files.length > 0 && text.trim() === '' && pickChecklistImageFiles(files).length > 0) {
                   event.preventDefault()
                   void addImageFiles(files, '貼り付け')
                 }

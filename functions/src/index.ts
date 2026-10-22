@@ -59,7 +59,7 @@ import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from '.
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
-import { buildSaveFailureAlertMail, SAVE_FAILURE_ALERT_COLLECTION, shouldSendSaveFailureAlert, type SaveFailureAlertKind } from './saveFailureAlert'
+import { buildSaveFailureAlertMail, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
@@ -905,6 +905,17 @@ async function writeLatestClassroomRollback(params: {
   return true
 }
 
+/**
+ * 版履歴を書くか(純関数・テストで固定)。after に教室データが無ければ書かない。before があり、版数も保存時刻も同じなら
+ * メタだけの更新(例: 自動バックアップの印)なので書かない。版数か保存時刻が進んでいれば保存なので書く(内容が同じ再保存も 1 回の保存として残す)。
+ */
+function shouldWriteClassroomSaveHistory(before: FirebaseClassroomSnapshotDoc | null, after: FirebaseClassroomSnapshotDoc): boolean {
+  const hasPayload = Boolean(after.data && typeof after.data === 'object') || (after.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING && typeof after.compressedData === 'string' && after.compressedData.length > 0)
+  if (!hasPayload) return false
+  if (!before) return true
+  return before.version !== after.version || before.savedAt !== after.savedAt
+}
+
 // 保存ごとの教室版履歴(2026-10-22 オーナー採用「即時対応のための案 1」・docs/spec-save-restore.md §8-1 #14)。
 // classroomSnapshots の書き込みで **新しい版(after)** を classroom-save-history/{ws}/{classroomId}/ へ gzip で追記する。
 // - 直前ロールバック(before を latest.json に 1 世代上書き)とは別物。復元 UI は読まない(調査専用・tools/snapshot-diff.mjs で読む)。
@@ -918,30 +929,19 @@ async function writeClassroomSaveHistory(params: {
   beforeSnapshot?: FirebaseClassroomSnapshotDoc | null
   afterSnapshot: FirebaseClassroomSnapshotDoc
 }) {
-  const afterPayload = readStoredSnapshotPayload(params.afterSnapshot)
-  if (!afterPayload) return false
-  const beforePayload = readStoredSnapshotPayload(params.beforeSnapshot ?? null)
-  if (beforePayload && stringifySnapshotPayload(beforePayload) === stringifySnapshotPayload(afterPayload)) {
-    return false
-  }
+  if (!shouldWriteClassroomSaveHistory(params.beforeSnapshot ?? null, params.afterSnapshot)) return false
 
   const capturedAt = new Date().toISOString()
   const savedAt = params.afterSnapshot.savedAt ?? capturedAt
   const version = typeof params.afterSnapshot.version === 'number' ? params.afterSnapshot.version : 0
   const storagePath = buildClassroomSaveHistoryStoragePath(params.workspaceKey, params.classroomId, savedAt, version)
+  // after 文書は既に保存形式(data または gzip-base64 の compressedData)なので、作り直さずそのまま包む(M-5: CPU とメモリを半分に)。
   const storageDoc: ClassroomSaveHistoryStorageDoc = {
     classroomId: params.classroomId,
     sourceSavedAt: savedAt,
     capturedAt,
     version,
-    snapshot: createStoredSnapshotDoc({
-      payload: afterPayload,
-      savedAt,
-      updatedBy: params.afterSnapshot.updatedBy ?? 'system',
-      updatedAt: params.afterSnapshot.updatedAt ?? savedAt,
-      schemaVersion: params.afterSnapshot.schemaVersion ?? 1,
-      version,
-    }),
+    snapshot: params.afterSnapshot,
   }
 
   const bucket = storage.bucket(STORAGE_BUCKET)
@@ -1682,7 +1682,9 @@ export const updateWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
 // 保存失敗・版数衝突の監視メール(2026-10-22 案 6・docs/runbooks/monitoring.md §3)。
 // 利用者報告のメール即時通知と同じ SMTP 設定(REPORT_MAIL_*)で開発者へ送る。教室ごとに 1 時間に 1 通
 // (workspaces/{ws}/saveFailureAlerts/{classroomId})。発生回数は送らなくても数える。
-// ★ここで何が起きても保存の応答(利用者への文言)には影響させない: 例外は全部ここで握る。
+// ★ここで何が起きても保存の応答(利用者への文言)には影響させない: 例外は全部ここで握り、待ち時間も
+//   SAVE_FAILURE_ALERT_TIMEOUT_MS(5 秒)で打ち切る(regression-reviewer M-1: SMTP が止まった晩に保存の失敗応答が
+//   deadline-exceeded に化けて版数衝突の案内が出なくなる経路を塞ぐ)。
 async function notifySaveFailureByMail(params: {
   kind: SaveFailureAlertKind
   workspaceKey: string
@@ -1693,6 +1695,26 @@ async function notifySaveFailureByMail(params: {
   client: { appVersion: string; userAgent: string }
   detail?: string
 }) {
+  try {
+    const sent = await withTimeout(notifySaveFailureByMailUnbounded(params), SAVE_FAILURE_ALERT_TIMEOUT_MS, null)
+    if (sent === null) logger.warn(`[SaveFailureAlert] Timed out after ${SAVE_FAILURE_ALERT_TIMEOUT_MS}ms kind=${params.kind} classroom=${params.classroomId}`)
+    return sent === true
+  } catch (error) {
+    logger.error(`[SaveFailureAlert] Failed kind=${params.kind} classroom=${params.classroomId}: ${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
+async function notifySaveFailureByMailUnbounded(params: {
+  kind: SaveFailureAlertKind
+  workspaceKey: string
+  classroomId: string
+  saveId: string
+  savedAt: string
+  updatedBy: string
+  client: { appVersion: string; userAgent: string }
+  detail?: string
+}): Promise<boolean> {
   try {
     if (!isMailTransportConfigured(REPORT_MAIL_SMTP_URL, REPORT_MAIL_TO)) {
       logger.warn(`[SaveFailureAlert] Mail is not configured; skipped kind=${params.kind} classroom=${params.classroomId}`)
@@ -1736,7 +1758,7 @@ async function notifySaveFailureByMail(params: {
       occurrenceCount: (typeof throttleData.occurrenceCount === 'number' ? throttleData.occurrenceCount : 0) + 1,
       projectId: process.env.GCLOUD_PROJECT ?? 'komahyouapp-prod',
     })
-    const transport = createTransport(REPORT_MAIL_SMTP_URL)
+    const transport = createTransport({ url: REPORT_MAIL_SMTP_URL, ...SAVE_FAILURE_ALERT_SMTP_TIMEOUTS })
     const fromAddress = REPORT_MAIL_FROM || decodeURIComponent(new URL(REPORT_MAIL_SMTP_URL).username)
     await transport.sendMail({
       from: `コマ表アプリ 監視 <${fromAddress}>`,
@@ -1855,17 +1877,20 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
       nextPayload: sanitizedPayload,
     })
   } catch (error) {
-    // 破壊防止ガードが働いた = 端末側の教室データが空だった疑い。開発者へ知らせてから従来どおり拒否する(案 6)。
-    await notifySaveFailureByMail({
-      kind: 'data-loss-guard',
-      workspaceKey,
-      classroomId,
-      saveId,
-      savedAt,
-      updatedBy: memberRef.id,
-      client: incomingClient,
-      detail: error instanceof Error ? error.message : String(error),
-    })
+    // 破壊防止ガードが働いた(= 端末側の教室データが空だった疑い)ときだけ開発者へ知らせ、従来どおり拒否する(案 6)。
+    // 前回文書の解凍失敗など別の例外は種類が違うので送らない(L-7)。どちらも元の例外をそのまま投げ直す。
+    if (error instanceof HttpsError && error.code === 'failed-precondition') {
+      await notifySaveFailureByMail({
+        kind: 'data-loss-guard',
+        workspaceKey,
+        classroomId,
+        saveId,
+        savedAt,
+        updatedBy: memberRef.id,
+        client: incomingClient,
+        detail: error.message,
+      })
+    }
     throw error
   }
 
@@ -2298,7 +2323,8 @@ export const notifyDeveloperReportByMail = onDocumentWritten({
   if (mailAttachment) {
     try {
       const [content] = await storage.bucket(STORAGE_BUCKET).file(mailAttachment.storagePath).download()
-      mailAttachments.push({ filename: mailAttachment.name, content, contentType: mailAttachment.mimeType })
+      // 添付名は利用者入力(name)でなく Storage の保存名(例 r1-img1.jpg・MIME で決めた拡張子)から作る(regression-reviewer M-4)。
+      mailAttachments.push({ filename: mailAttachment.fileName, content, contentType: mailAttachment.mimeType })
     } catch (error) {
       logger.warn(`[DeveloperReportMail] Failed to load attachment for report=${reportId} path=${mailAttachment.storagePath}: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -2627,8 +2653,25 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
   const beforeSnapshot = event.data?.before.data() as FirebaseClassroomSnapshotDoc | undefined
   const afterSnapshot = event.data?.after.data() as FirebaseClassroomSnapshotDoc | undefined
 
-  // 保存ごとの教室版履歴(案 1・2026-10-22)。新しい版があれば追記する。直前ロールバックの成否と独立に書き、
-  // 失敗はログだけ(直前ロールバックを巻き添えにしない)。初回保存(before なし)も 1 本目として残す。
+  // ★順序(regression-reviewer M-5): 直前ロールバック(手動復旧の最後の砦)を**先に**書く。版履歴を先に待つと、版履歴が
+  //   時間切れ・OOM で止まったとき直前ロールバックまで書かれない。直前ロールバックの失敗は従来どおり最後に投げ直す。
+  let rollbackError: unknown = null
+  if (beforeSnapshot) {
+    try {
+      await writeLatestClassroomRollback({
+        workspaceKey: event.params.workspaceKey,
+        classroomId: event.params.classroomId,
+        beforeSnapshot,
+        afterSnapshot,
+      })
+    } catch (error) {
+      logger.error(`[LatestRollback] Failed to mirror previous classroom snapshot: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
+      rollbackError = error
+    }
+  }
+
+  // 保存ごとの教室版履歴(案 1・2026-10-22)。新しい版があれば追記する。失敗はログだけ(直前ロールバックを巻き添えにしない)。
+  // 初回保存(before なし)も 1 本目として残す。
   if (afterSnapshot) {
     try {
       await writeClassroomSaveHistory({
@@ -2642,19 +2685,7 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
     }
   }
 
-  if (!beforeSnapshot) return
-
-  try {
-    await writeLatestClassroomRollback({
-      workspaceKey: event.params.workspaceKey,
-      classroomId: event.params.classroomId,
-      beforeSnapshot,
-      afterSnapshot,
-    })
-  } catch (error) {
-    logger.error(`[LatestRollback] Failed to mirror previous classroom snapshot: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
-    throw error
-  }
+  if (rollbackError) throw rollbackError
 })
 
 // 旧「直前のFirebase保存へ戻す」ダウンロード callable(downloadLatestClassroomRollback)は

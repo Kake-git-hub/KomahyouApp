@@ -31,6 +31,7 @@ import {
   resolveDeveloperReportAttachmentLimit,
   selectDeveloperReportMailAttachment,
   buildDeveloperReportMailAttachmentLines,
+  matchesImageMagicBytes,
   parseImageDataUrl,
   normalizeDeveloperReportTrace,
   trimDeveloperReportTraceToBudget,
@@ -311,7 +312,13 @@ describe('developerReport(server): 確認リストはメール・Issue の対象
 })
 
 describe('developerReport(server): 添付画像(確認リストのスクショ・2026-10-14)', () => {
-  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 7).toString('base64')}`
+  // 画像の先頭バイト(マジックバイト)を正しく持つ data URL を作る(2026-10-22 からサーバーは中身の先頭も検査する)。
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => {
+    const magic = mime === 'image/png' ? [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] : mime === 'image/webp' ? [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50] : [0xff, 0xd8, 0xff]
+    const buffer = Buffer.alloc(Math.max(bytes, magic.length), 7)
+    Buffer.from(magic).copy(buffer, 0)
+    return `data:${mime};base64,${buffer.subarray(0, bytes).toString('base64')}`
+  }
 
   it('画像の data URL だけ受け付け、base64 本体とデコード後のバイト数を返す(クライアントと同じ判定)', () => {
     const parsed = parseImageDataUrl(dataUrlOfBytes(10))
@@ -390,7 +397,13 @@ describe('画面エラーの自動報告(2026-10-22 案 3)', () => {
 })
 
 describe('一般モーダルの添付画像(2026-10-22 オーナー決定: 3 枚・メールに 1 枚目 1MB まで)', () => {
-  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 7).toString('base64')}`
+  // 画像の先頭バイト(マジックバイト)を正しく持つ data URL を作る(2026-10-22 からサーバーは中身の先頭も検査する)。
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => {
+    const magic = mime === 'image/png' ? [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] : mime === 'image/webp' ? [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50] : [0xff, 0xd8, 0xff]
+    const buffer = Buffer.alloc(Math.max(bytes, magic.length), 7)
+    Buffer.from(magic).copy(buffer, 0)
+    return `data:${mime};base64,${buffer.subarray(0, bytes).toString('base64')}`
+  }
 
   it('枚数の上限はクライアントと同じ 3 枚。開発用教室(確認リスト)は 8 枚のまま', () => {
     expect(DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT).toBe(3)
@@ -407,13 +420,15 @@ describe('一般モーダルの添付画像(2026-10-22 オーナー決定: 3 枚
     expect(DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES).toBe(1_000_000)
     const small = { name: 'a.jpg', mimeType: 'image/jpeg', byteLength: 400_000, storagePath: 'developer-reports/main/c1/r1-img1.jpg' }
     const big = { name: 'b.jpg', mimeType: 'image/jpeg', byteLength: 1_000_001, storagePath: 'developer-reports/main/c1/r1-img1.jpg' }
-    expect(selectDeveloperReportMailAttachment([small, big])).toEqual({ name: 'a.jpg', mimeType: 'image/jpeg', storagePath: small.storagePath, byteLength: 400_000 })
+    expect(selectDeveloperReportMailAttachment([small, big])).toEqual({ name: 'a.jpg', fileName: 'r1-img1.jpg', mimeType: 'image/jpeg', storagePath: small.storagePath, byteLength: 400_000 })
     // 1 枚目が大きければ 2 枚目には進まない(「1 枚目だけ」)。
     expect(selectDeveloperReportMailAttachment([big, small])).toBeNull()
     expect(selectDeveloperReportMailAttachment([{ ...small, storagePath: '' }])).toBeNull()
     expect(selectDeveloperReportMailAttachment([{ ...small, byteLength: undefined }])).toBeNull()
     expect(selectDeveloperReportMailAttachment(undefined)).toBeNull()
     expect(selectDeveloperReportMailAttachment([{ ...small, name: '  ', mimeType: '' }])?.name).toBe('image')
+    // メールの添付名は利用者入力(name)ではなく Storage の保存名(M-4): 「悪意のある名前.html」を付けても r1-img1.jpg になる。
+    expect(selectDeveloperReportMailAttachment([{ ...small, name: 'evil.html' }])?.fileName).toBe('r1-img1.jpg')
   })
 
   it('本文の添付の節: 枚数・1 枚目を付けたか・各画像の置き場所。添付が無ければ節ごと無い', () => {
@@ -439,10 +454,38 @@ describe('一般モーダルの添付画像(2026-10-22 オーナー決定: 3 枚
     const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
     const notify = indexTs.slice(indexTs.indexOf('export const notifyDeveloperReportByMail = onDocumentWritten('), indexTs.indexOf('export const answerDeveloperReport = onCall('))
     expect(notify).toContain('const mailAttachment = selectDeveloperReportMailAttachment(data.attachments)')
+    expect(notify).toContain('filename: mailAttachment.fileName')
+    expect(notify).not.toContain('filename: mailAttachment.name')
     expect(notify).toContain('.file(mailAttachment.storagePath).download()')
     expect(notify).toContain("...(mailAttachments.length > 0 ? { attachments: mailAttachments } : {}),")
     // 読み込み失敗は warn だけ(try/catch)で、sendMail は別の try に進む。
     expect(notify.indexOf('Failed to load attachment')).toBeGreaterThan(-1)
     expect(notify.indexOf('Failed to load attachment')).toBeLessThan(notify.indexOf('transport.sendMail('))
+  })
+})
+
+describe('添付画像の中身の検査(マジックバイト・regression-reviewer M-4・2026-10-22)', () => {
+  const asDataUrl = (mime: string, bytes: number[]) => `data:${mime};base64,${Buffer.from([...bytes, ...Array.from({ length: 12 }, () => 7)]).toString('base64')}`
+
+  it('JPEG / PNG / WEBP の先頭バイトを確かめる', () => {
+    expect(matchesImageMagicBytes('image/jpeg', Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]))).toBe(true)
+    expect(matchesImageMagicBytes('image/jpeg', Uint8Array.from([0x3c, 0x68, 0x74, 0x6d]))).toBe(false)
+    expect(matchesImageMagicBytes('image/png', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true)
+    expect(matchesImageMagicBytes('image/png', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).toBe(false)
+    expect(matchesImageMagicBytes('image/webp', Uint8Array.from([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50]))).toBe(true)
+    expect(matchesImageMagicBytes('image/webp', Uint8Array.from([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x41, 0x56, 0x49, 0x20]))).toBe(false)
+  })
+
+  it('MIME を image/jpeg と称した HTML・空に近いバイト列は捨て、正しい先頭を持つ画像だけ通す', () => {
+    const html = asDataUrl('image/jpeg', [0x3c, 0x21, 0x44, 0x4f, 0x43]) // <!DOC
+    const jpeg = asDataUrl('image/jpeg', [0xff, 0xd8, 0xff, 0xe1])
+    const png = asDataUrl('image/png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const pngAsJpeg = asDataUrl('image/jpeg', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    expect(parseImageDataUrl(html)).toBeNull()
+    expect(parseImageDataUrl(pngAsJpeg)).toBeNull()
+    expect(parseImageDataUrl(jpeg)?.mimeType).toBe('image/jpeg')
+    expect(parseImageDataUrl(png)?.mimeType).toBe('image/png')
+    const kept = normalizeDeveloperReportAttachments([{ label: 'a', name: 'a', dataUrl: html }, { label: 'b', name: 'b', dataUrl: jpeg }])
+    expect(kept.map((item) => item.label)).toEqual(['b'])
   })
 })

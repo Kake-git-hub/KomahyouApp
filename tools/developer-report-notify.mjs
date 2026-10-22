@@ -64,6 +64,25 @@ export function parseRunQueryResponse(rows) {
     .sort((a, b) => String(a.recordedAt ?? '').localeCompare(String(b.recordedAt ?? '')))
 }
 
+/** 画面エラーの自動報告の目印(functions/src/developerReport.ts DEVELOPER_REPORT_AUTO_ERROR_MARKER と同じ)。先頭行だけを見る。 */
+export const AUTO_ERROR_REPORT_MARKER = '[自動エラー報告]'
+
+/**
+ * 自動エラー報告か。サーバーは isAutoErrorReport=true で記録し notifiedAt を埋めるので通常は来ないが、Hosting が先に出て
+ * Functions が旧版のまま(デプロイの時間差・失敗)だと notifiedAt=null のまま届く。その場合もここで止め、スタック・URL を含む本文を
+ * **公開 Issue にしない**(regression-reviewer M-3・2026-10-22)。
+ */
+export function isAutoErrorReport(report) {
+  if (report?.isAutoErrorReport === true) return true
+  const firstLine = String(report?.note ?? '').split('\n')[0] ?? ''
+  return firstLine.trimStart().startsWith(AUTO_ERROR_REPORT_MARKER)
+}
+
+/** Issue を作らずに通知済みにする PATCH 本文(notifiedAt と理由だけ)。 */
+export function buildMarkSkippedBody(reason, nowIso) {
+  return { fields: { notifiedAt: { stringValue: nowIso }, notifySkipped: { stringValue: reason } } }
+}
+
 export function buildRunQueryBody() {
   return {
     structuredQuery: {
@@ -208,11 +227,28 @@ export async function markNotified({ projectId, documentPath, accessToken, issue
   if (!response.ok) throw new Error(`Firestore markNotified failed: HTTP ${response.status} ${await response.text()}`)
 }
 
+export async function markSkipped({ projectId, documentPath, accessToken, reason, nowIso = new Date().toISOString(), fetchImpl = fetch }) {
+  const path = documentPath.startsWith('projects/') ? documentPath : `projects/${projectId}/databases/(default)/documents/${documentPath}`
+  const url = `https://firestore.googleapis.com/v1/${path}?updateMask.fieldPaths=notifiedAt&updateMask.fieldPaths=notifySkipped`
+  const response = await fetchImpl(url, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildMarkSkippedBody(reason, nowIso)),
+  })
+  if (!response.ok) throw new Error(`Firestore markSkipped failed: HTTP ${response.status} ${await response.text()}`)
+}
+
 /** 1回分の処理。起票→記録の順(記録に失敗しても次回は同じ Issue タイトルで再起票されるより、二重起票の方が安全側)。 */
 export async function notifyPendingReports(deps) {
   const reports = await fetchPendingReports(deps)
   const results = []
   for (const report of reports) {
+    if (isAutoErrorReport(report)) {
+      // 自動エラー報告は Issue にしない(メールは関数が送っている)。notifiedAt を埋めて次回から拾わない。
+      await markSkipped({ ...deps, documentPath: report.documentPath, reason: 'auto-error' })
+      results.push({ reportId: report.reportId, skipped: 'auto-error' })
+      continue
+    }
     const issue = await createIssue({ ...deps, title: buildIssueTitle(report), body: buildIssueBody(report, deps), labels: resolveIssueLabels(report) })
     await markNotified({ ...deps, documentPath: report.documentPath, issueNumber: issue.number, issueUrl: issue.url })
     results.push({ reportId: report.reportId, issueNumber: issue.number, issueUrl: issue.url })
@@ -237,7 +273,7 @@ async function main() {
   })
   const summary = results.length === 0
     ? '新しい利用者報告はありません。'
-    : results.map((r) => `- ${r.reportId} → ${r.issueUrl}`).join('\n')
+    : results.map((r) => (r.skipped ? `- ${r.reportId} → Issue なし(${r.skipped})` : `- ${r.reportId} → ${r.issueUrl}`)).join('\n')
   console.log(summary)
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## 利用者報告の通知\n\n${summary}\n`)

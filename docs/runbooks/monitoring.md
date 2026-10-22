@@ -69,12 +69,12 @@ GitHub 側の通知設定は不要（Issue はあくまで課題管理の記録�
 - 描画例外のときは室長に「画面の表示で問題が起きました／再読み込み」の案内が出る（`AppErrorBoundary`）。仕様 `docs/spec-developer-report.md` §D-2。
 
 ### 6. 保存ごとの版履歴・保存同梱の操作痕跡・差分ツール（2026-10-22 案 1・2・5）
-- 保存のたびに Storage `classroom-save-history/{ws}/{classroomId}/{保存時刻}-v{版数}.json.gz`（90 日）と Firestore
+- 保存のたびに Storage `classroom-save-history/{ws}/{classroomId}/v{版数 8 桁}-{保存時刻}.json.gz`（90 日・名前順＝保存順）と Firestore
   `classroomSnapshots/{id}/operationTraces/{saveId}`（前回保存以降の操作の要約・90 日）が残る。15 分バックアップでは拾えない「保存と保存の間」を辿れる。
 - 調査の手順（読み取り専用）:
   ```bash
   export FIRESTORE_ACCESS_TOKEN=$(node tools/prod-readonly-token.mjs)
-  gsutil ls gs://komahyouapp-prod.firebasestorage.app/classroom-save-history/<ws>/<classroomId>/      # 版の一覧(名前順=時系列)
+  gsutil ls gs://komahyouapp-prod.firebasestorage.app/classroom-save-history/<ws>/<classroomId>/      # 版の一覧(名前順=保存順)
   gsutil cp gs://.../<前>.json.gz gs://.../<後>.json.gz <スクラッチ領域>/                                # 2 本を落とす
   node tools/snapshot-diff.mjs <前>.json.gz <後>.json.gz                                              # 生徒・コマ(机)単位の差分
   ```

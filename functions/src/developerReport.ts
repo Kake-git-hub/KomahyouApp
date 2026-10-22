@@ -346,6 +346,21 @@ export type NormalizedDeveloperReportAttachment = {
 
 const IMAGE_DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 
+/**
+ * 画像の先頭バイト(マジックバイト)。MIME の自己申告(data URL の接頭辞)だけでは任意のバイト列を画像として置けるので、
+ * サーバーは中身の先頭も確かめる(regression-reviewer M-4・2026-10-22)。WEBP は RIFF????WEBP。
+ */
+export const IMAGE_MAGIC_BYTES: Readonly<Record<DeveloperReportAttachmentMimeType, ReadonlyArray<{ offset: number; bytes: readonly number[] }>>> = {
+  'image/jpeg': [{ offset: 0, bytes: [0xff, 0xd8, 0xff] }],
+  'image/png': [{ offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] }],
+  'image/webp': [{ offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, { offset: 8, bytes: [0x57, 0x45, 0x42, 0x50] }],
+}
+
+/** 先頭バイトが MIME に合うか。head は base64 の先頭 24 文字(18 バイト)を復号したもので足りる。 */
+export function matchesImageMagicBytes(mimeType: DeveloperReportAttachmentMimeType, head: Uint8Array): boolean {
+  return IMAGE_MAGIC_BYTES[mimeType].every((rule) => rule.bytes.every((byte, index) => head[rule.offset + index] === byte))
+}
+
 export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReportAttachmentMimeType; base64: string; byteLength: number } | null {
   if (typeof dataUrl !== 'string') return null
   const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl)
@@ -355,7 +370,10 @@ export function parseImageDataUrl(dataUrl: unknown): { mimeType: DeveloperReport
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
   const byteLength = (base64.length / 4) * 3 - padding
   if (byteLength <= 0) return null
-  return { mimeType: match[1] as DeveloperReportAttachmentMimeType, base64, byteLength }
+  const mimeType = match[1] as DeveloperReportAttachmentMimeType
+  // 中身の先頭が MIME に合わないもの(HTML・実行ファイルを画像と称したもの)は捨てる(M-4)。
+  if (!matchesImageMagicBytes(mimeType, Buffer.from(base64.slice(0, 24), 'base64'))) return null
+  return { mimeType, base64, byteLength }
 }
 
 /** 添付画像を正規化する。壊れた要素・上限超えはその要素だけ捨てる(クライアントと同じ規則)。 */
@@ -471,12 +489,14 @@ export type DeveloperReportMailAttachmentSource = { label?: string; name?: strin
 export function selectDeveloperReportMailAttachment(
   attachments: DeveloperReportMailAttachmentSource[] | undefined,
   maxBytes: number = DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES,
-): { name: string; mimeType: string; storagePath: string; byteLength: number } | null {
+): { name: string; fileName: string; mimeType: string; storagePath: string; byteLength: number } | null {
   const first = attachments?.[0]
   if (!first || typeof first.storagePath !== 'string' || !first.storagePath) return null
   const byteLength = typeof first.byteLength === 'number' && Number.isFinite(first.byteLength) ? first.byteLength : Number.POSITIVE_INFINITY
   if (byteLength > maxBytes) return null
-  return { name: first.name?.trim() || 'image', mimeType: first.mimeType?.trim() || 'application/octet-stream', storagePath: first.storagePath, byteLength }
+  // fileName はメールの添付名。利用者入力の name ではなく Storage の保存名(…-img1.jpg・MIME で決めた拡張子)を使う(M-4)。
+  const fileName = first.storagePath.split('/').pop() || 'image'
+  return { name: first.name?.trim() || 'image', fileName, mimeType: first.mimeType?.trim() || 'application/octet-stream', storagePath: first.storagePath, byteLength }
 }
 
 /** 添付画像の節(枚数・1 枚目を添付したか・各画像の置き場所)。添付が無ければ空。 */
@@ -526,7 +546,7 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   const lines: string[] = [
     report.isTest ? '※ 内容に #テスト が含まれるためテスト扱いです。GitHub Issue は作られません。' : '',
     report.isAutoErrorReport
-      ? '※ 画面のエラーをアプリが自動で送った報告です(利用者の操作による送信ではありません)。GitHub Issue は作られません(開発ダッシュボードの「通知済みだが Issue なし」に出ます)。同じエラーは 1 端末 1 回・1 タブ 3 通までに絞っています。'
+      ? '※ 画面のエラーをアプリが自動で送った報告です(利用者の操作による送信ではありません)。GitHub Issue は作られません(開発ダッシュボードの「通知済みだが Issue なし」に出ます)。同じエラーは 1 タブ 1 回(再読み込みを跨いで)・1 タブ 3 通までに絞っています。'
       : '利用者が画面の「要望・報告」ボタンから送った内容です。',
     '',
     `教室: ${classroom} (${report.classroomId})`,

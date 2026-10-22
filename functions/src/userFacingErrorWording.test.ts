@@ -47,3 +47,25 @@ describe('index.ts の利用者向けエラー文', () => {
     expect(source).toContain('logger.error(`[${functionName}] unexpected error`, { message, stack:')
   })
 })
+
+describe('保存失敗の監視メール(2026-10-22 案 6)を足しても利用者向けの失敗応答は不変', () => {
+  const save = source.slice(source.indexOf('async function saveClassroomSnapshotFromCallable'), source.indexOf('export const saveClassroomSnapshot = onCall('))
+
+  it('版数衝突: failed-precondition と STALE_SNAPSHOT_ERROR_MARKER つきの全文がそのまま', () => {
+    expect(save).toContain("`${STALE_SNAPSHOT_ERROR_MARKER}:別の端末でこの教室のデータが更新されています(サーバー版数=${versionDecision.previousVersion}/送信版数=${versionDecision.incomingBaseVersion})。最新を読み込むため、画面を再読み込みしてください。`")
+    const conflict = save.slice(save.indexOf('if (!versionDecision.ok) {'), save.indexOf('const nextVersion = versionDecision.nextVersion'))
+    expect(conflict.indexOf('await notifySaveFailureByMail(')).toBeLessThan(conflict.indexOf("throw new HttpsError(\n      'failed-precondition',"))
+  })
+
+  it('読み戻し失敗: internal と平易な文言がそのまま。メールは throw の前', () => {
+    expect(save).toContain("throw new HttpsError('internal', '保存後の確認に失敗しました。もう一度保存してください。', { reason: 'readback-verification-failed' })")
+    const readback = save.slice(save.indexOf("status: 'verification-failed',"), save.indexOf("reason: 'readback-verification-failed'"))
+    expect(readback).toContain("kind: 'readback-failed'")
+  })
+
+  it('破壊防止ガード: catch は元の例外をそのまま投げ直す(文言・コードは assertNoSnapshotDataLoss のまま)', () => {
+    const guard = save.slice(save.indexOf('await assertNoSnapshotDataLoss({'), save.indexOf('// A1: 楽観ロック'))
+    expect(guard.trimEnd().endsWith('throw error\n  }')).toBe(true)
+    expect(guard).not.toContain('new HttpsError(')
+  })
+})

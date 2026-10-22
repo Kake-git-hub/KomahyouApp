@@ -348,6 +348,13 @@ describe('developerReport: 一般モーダルの添付画像(2026-10-22 オー�
     expect(parsed?.attachments).toEqual([{ label: '画像を選ぶ', name: 'a.png', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(9) }])
     expect(parseScheduleDeveloperReportMessage({ ...base, attachments: Array.from({ length: 5 }, () => ({ label: 'l', name: 'n', dataUrl: dataUrlOfBytes(3) })) })?.attachments).toHaveLength(3)
     expect('attachments' in (parseScheduleDeveloperReportMessage(base) ?? {})).toBe(false)
+    // 許可していない MIME(svg・html・gif)は data URL の形でも捨てる(埋め込み JS は信頼境界の外)。
+    const forbidden = parseScheduleDeveloperReportMessage({ ...base, attachments: [
+      { label: 'x', name: 'x.svg', dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}` },
+      { label: 'x', name: 'x.html', dataUrl: `data:text/html;base64,${Buffer.from('<b>x</b>').toString('base64')}` },
+      { label: 'x', name: 'x.gif', dataUrl: dataUrlOfBytes(9, 'image/gif') },
+    ] })
+    expect('attachments' in (forbidden ?? {})).toBe(false)
   })
 
   it('文言: 盤面は「画面を撮る」の案内、日程表は「画像を選ぶ」の案内。モーダルの配線(ソース走査)', () => {

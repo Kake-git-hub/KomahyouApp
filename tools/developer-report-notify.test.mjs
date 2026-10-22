@@ -6,6 +6,8 @@ import {
   ISSUE_LABELS,
   resolveIssueLabels,
   buildIssueBody,
+  buildMarkSkippedBody,
+  isAutoErrorReport,
   buildIssueTitle,
   buildMarkNotifiedBody,
   buildRunQueryBody,
@@ -150,5 +152,42 @@ describe('通知の一巡(fetch を注入)', () => {
   it('Firestore が失敗したら例外(ワークフロー赤)にして黙って成功にしない', async () => {
     const fetchImpl = async () => ({ ok: false, status: 403, text: async () => 'denied' })
     await expect(notifyPendingReports({ projectId: 'p', workspaceKey: 'main', accessToken: 't', githubToken: 'g', repository: 'o/r', fetchImpl })).rejects.toThrow('HTTP 403')
+  })
+})
+
+describe('画面エラーの自動報告(2026-10-22 案 3・M-3): Issue を作らず通知済みにする', () => {
+  it('isAutoErrorReport はフラグか先頭行の目印で判定する', () => {
+    expect(isAutoErrorReport({ isAutoErrorReport: true, note: 'x' })).toBe(true)
+    expect(isAutoErrorReport({ note: '[自動エラー報告] 画面で想定外のエラー\nスタック: at x' })).toBe(true)
+    expect(isAutoErrorReport({ note: '  [自動エラー報告] 先頭の空白は許す' })).toBe(true)
+    expect(isAutoErrorReport({ note: 'ふつうの質問\n[自動エラー報告] 2 行目は違う' })).toBe(false)
+    expect(isAutoErrorReport({})).toBe(false)
+    expect(buildMarkSkippedBody('auto-error', '2026-10-22T07:00:00.000Z')).toEqual({ fields: { notifiedAt: { stringValue: '2026-10-22T07:00:00.000Z' }, notifySkipped: { stringValue: 'auto-error' } } })
+  })
+
+  it('旧サーバー経由で notifiedAt=null のまま届いた自動報告は、Issue を作らず notifiedAt と notifySkipped だけを書く(スタックを公開 Issue にしない)', async () => {
+    const calls = []
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : null })
+      if (url.includes(':runQuery')) {
+        return { ok: true, json: async () => [
+          { document: { name: 'projects/p/databases/(default)/documents/workspaces/main/developerReports/auto', fields: { ...sampleFields, reportId: { stringValue: 'auto' }, note: { stringValue: '[自動エラー報告] 画面で想定外のエラー\nスタック: at mergeManagedWeek (https://app/x.js:1:2)' } } } },
+          { document: { name: 'projects/p/databases/(default)/documents/workspaces/main/developerReports/normal', fields: { ...sampleFields, reportId: { stringValue: 'normal' }, recordedAt: { stringValue: '2026-09-04T03:04:07.000Z' } } } },
+        ] }
+      }
+      if (url.includes('api.github.com')) return { ok: true, json: async () => ({ number: 90, html_url: 'https://github.com/x/y/issues/90' }) }
+      return { ok: true, json: async () => ({}), text: async () => '' }
+    }
+    const results = await notifyPendingReports({ projectId: 'p', workspaceKey: 'main', accessToken: 't', githubToken: 'g', repository: 'x/y', fetchImpl })
+    expect(results).toEqual([
+      { reportId: 'auto', skipped: 'auto-error' },
+      { reportId: 'normal', issueNumber: 90, issueUrl: 'https://github.com/x/y/issues/90' },
+    ])
+    const issueCalls = calls.filter((call) => call.url.includes('api.github.com'))
+    expect(issueCalls).toHaveLength(1)
+    expect(JSON.stringify(issueCalls[0].body)).not.toContain('mergeManagedWeek')
+    const skipPatch = calls.find((call) => call.method === 'PATCH' && call.url.includes('/developerReports/auto?'))
+    expect(skipPatch.url).toContain('updateMask.fieldPaths=notifySkipped')
+    expect(skipPatch.body.fields.notifySkipped).toEqual({ stringValue: 'auto-error' })
   })
 })

@@ -9,12 +9,12 @@ import { describeClientError, handleCapturedClientError } from '../../utils/clie
 
 export const APP_ERROR_FALLBACK_TEXT = {
   title: '画面の表示で問題が起きました',
-  lead: '内容は開発者へ自動で届いています。「再読み込み」を押すと続けて使えます。',
+  lead: '問題の内容は、教室を開いていれば開発者へ自動で届きます。「再読み込み」を押すと続けて使えます。',
   note: '保存済みの内容は失われていません。保存していない変更があったときは、再読み込みのあとに画面で確かめてください。',
   reload: '再読み込み',
 } as const
 
-export function AppErrorFallback({ message, onReload }: { message: string; onReload: () => void }) {
+export function AppErrorFallback({ onReload }: { onReload: () => void }) {
   return (
     <div
       role="alertdialog"
@@ -48,7 +48,6 @@ export function AppErrorFallback({ message, onReload }: { message: string; onRel
       >
         {APP_ERROR_FALLBACK_TEXT.reload}
       </button>
-      {message ? <div style={{ fontSize: 12, color: '#7a8aa0', maxWidth: 720, overflowWrap: 'anywhere' }}>({message})</div> : null}
     </div>
   )
 }
@@ -72,7 +71,8 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErro
 
   render() {
     if (this.state.error) {
-      return <AppErrorFallback message={this.state.error.message} onReload={() => { window.location.reload() }} />
+      // 英語の例外文は室長に見せない(2026-10 文言方針 #525/#526)。原因は痕跡と自動報告に残っている。
+      return <AppErrorFallback onReload={() => { window.location.reload() }} />
     }
     return this.props.children
   }

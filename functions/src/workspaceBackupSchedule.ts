@@ -201,12 +201,13 @@ export function toStorageSafeTimestampKey(iso: string): string {
 }
 
 /**
- * 版履歴の置き場所。教室ごとのフォルダに「保存時刻-v版数.json.gz」で置く(名前順 = 時系列順)。
- * 版数が読めない旧文書は v0。
+ * 版履歴の置き場所。教室ごとのフォルダに「v版数(8 桁)-保存時刻.json.gz」で置く。
+ * 先頭を版数にするのは、保存時刻(savedAt)が端末の時計の自己申告で前後しうるため(regression-reviewer L-4)。
+ * 版数は楽観ロックでサーバーが単調増加させるので、名前順 = 保存順になる。版数が読めない旧文書は v00000000。
  */
 export function buildClassroomSaveHistoryStoragePath(workspaceKey: string, classroomId: string, savedAtIso: string, version: number | undefined): string {
   const safeVersion = typeof version === 'number' && Number.isFinite(version) && version >= 0 ? Math.trunc(version) : 0
-  return `${CLASSROOM_SAVE_HISTORY_PREFIX}/${workspaceKey}/${classroomId}/${toStorageSafeTimestampKey(savedAtIso)}-v${safeVersion}.json.gz`
+  return `${CLASSROOM_SAVE_HISTORY_PREFIX}/${workspaceKey}/${classroomId}/v${String(safeVersion).padStart(8, '0')}-${toStorageSafeTimestampKey(savedAtIso)}.json.gz`
 }
 
 /** 版履歴を残すか。incident backup と同じ規則(作成時刻が読めない・未来日時は必ず残す)で、保持だけ 90 日。 */
