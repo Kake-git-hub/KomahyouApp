@@ -247,6 +247,9 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
     const teacherOnly = resave([row('r0', 'tD'), row('r1', 'tF')])
     expect(teacherOnly.summary.manualTeacherReplaced).toBe(1)
     expect(desk0(teacherOnly.nextWeeks).teacher).toBe('田村')
+    // 理由の行は「講師だけのテンプレ机」の文（下段から机へ戻る A の名前つき）。「手で置いた生徒が居ない」とは言わない（テスト教室 2026-10-22）
+    expect(teacherOnly.studentNotes.filter((note) => note.kind === 'teacher-replaced').map((note) => note.keptStudentNames)).toEqual([['青木']])
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, teacherOnly.summary, { studentNotes: teacherOnly.studentNotes })).toContain('講師 倉島: 手で置いた講師ですが、テンプレのこの机が講師だけ（生徒なし）のためテンプレの講師（田村）に替わります。手で置いた 青木 は田村の担当で机に残ります。')
   })
 })
 
@@ -349,6 +352,9 @@ describe('Q41-9 兄弟（従来どおり）', () => {
     expect(saved.summary.manualTeacherPending).toBe(0)
     expect(saved.summary.manualTeacherReplaced).toBe(1)
     expect(saved.studentNotes.map((note) => note.kind)).toEqual(['teacher-replaced'])
+    // 手で置いた生徒が居ない形だけ「手で置いた生徒が居ないため」
+    expect(saved.studentNotes[0].keptStudentNames ?? []).toEqual([])
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })).toContain('講師 倉島: 手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師（田村）に替わります。')
   })
   it('同じ講師（テンプレも倉島）: 2 行になっても下段に講師は入らない（従来の保留）', () => {
     const week = boardWith(MAKEUP_A)
@@ -373,6 +379,24 @@ describe('Q41-9 兄弟（従来どおり）', () => {
     expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
     expect(saved.summary.manualTeacherReplaced).toBe(1)
   })
+  // テスト教室 2026-10-22（テスト担当）: 11/24(水) 5限 机 13 に講師 A と未消化講習の生徒 B を手で置き、テンプレで同じ机に講師 C だけを登録して保存すると
+  // 「手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師（C）に替わります」と出た＝講習の手置きが「手で置いた授業」と認識されていないように読める。
+  // 実際は Q41-12 (1)（講師だけのテンプレ机は対象外）の形。理由の行をその形の文（Q41-11「生徒 A は D の担当になります」）にし、誤読を塞ぐ。
+  for (const [label, student] of [['講習', SPECIAL_A], ['振替', MAKEUP_A], ['手動追加の通常授業', MANUAL_A]] as const) {
+    it(`講師だけのテンプレ机 × 手で置いた${label}: 理由の行は「テンプレのこの机が講師だけ」＋「A は D の担当で机に残る」。「手で置いた生徒が居ない」とは言わない`, () => {
+      const saved = save(boardWith(student), [row('r0', 'tD'), row('r1', 'tF')])
+      expect(desk0(saved.nextWeeks).teacher).toBe('田村')
+      expect(ids(desk0(saved.nextWeeks))).toEqual(['sA', null])
+      const teacherNotes = saved.studentNotes.filter((note) => note.kind.startsWith('teacher-'))
+      expect(teacherNotes.map((note) => [note.kind, note.studentName, note.detail, note.keptStudentNames])).toEqual([['teacher-replaced', '倉島', '田村', ['青木']]])
+      const message = buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })
+      expect(message).toContain('・10/7 5限 講師 倉島: 手で置いた講師ですが、テンプレのこの机が講師だけ（生徒なし）のためテンプレの講師（田村）に替わります。手で置いた 青木 は田村の担当で机に残ります。')
+      expect(message).not.toContain('手で置いた生徒が居ないため')
+      expect(message).toContain('手で置いた講師をテンプレの講師に替える机: 1机。')
+      // 保存本体の文の件数も同じ
+      expect(buildTemplateDiffSavedMessage(EFFECTIVE, saved.summary)).toContain('手で置いた講師をテンプレの講師に替えた机: 1机。')
+    })
+  }
   it('QR 自動割振りの講師: 例外 1 のまま（講師は残り、下段に講師は入らない）', () => {
     const week = boardWith(MAKEUP_A, 0, { teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'session_x', teacherAssignmentTeacherId: 'tB' })
     const saved = save(week, NEW_ROWS)
