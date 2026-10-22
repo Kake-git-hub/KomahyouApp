@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import {
   countUnreadReportAnswers,
+  REPORT_ANSWER_STATUS_LABELS,
+  REPORT_ANSWER_UI_TEXT,
   formatReportAnswerBadge,
   formatReportAnswerDateLabel,
   parseReportAnswerEntry,
@@ -25,13 +28,15 @@ const base = (overrides: Partial<ReportAnswerEntry> = {}): ReportAnswerEntry => 
   answeredAt: null,
   answerRevision: 0,
   readAt: null,
+  aiAnswer: null,
+  aiAnsweredAt: null,
   ...overrides,
 })
 
 describe('reportAnswers(室長側): 文書の読み取り', () => {
   it('必要な項目だけを読み、要約が無ければ本文から作る。壊れた文書は null', () => {
-    const entry = parseReportAnswerEntry('r1', { classroomId: 'C1', category: 'question', source: 'board', questionNote: 'a  b\nc', reportedAt: 'x', answer: '回答', answeredAt: 'y', answerRevision: 2, readAt: null })
-    expect(entry).toEqual({ id: 'r1', classroomId: 'C1', category: 'question', source: 'board', questionNote: 'a  b\nc', questionSummary: 'a b c', reportedAt: 'x', answer: '回答', answeredAt: 'y', answerRevision: 2, readAt: null })
+    const entry = parseReportAnswerEntry('r1', { classroomId: 'C1', category: 'question', source: 'board', questionNote: 'a  b\nc', reportedAt: 'x', answer: '回答', answeredAt: 'y', answerRevision: 2, readAt: null, aiAnswer: null, aiAnsweredAt: null })
+    expect(entry).toEqual({ id: 'r1', classroomId: 'C1', category: 'question', source: 'board', questionNote: 'a  b\nc', questionSummary: 'a b c', reportedAt: 'x', answer: '回答', answeredAt: 'y', answerRevision: 2, readAt: null, aiAnswer: null, aiAnsweredAt: null })
     expect(parseReportAnswerEntry('r1', { classroomId: 'C1' })).toBeNull()
     expect(parseReportAnswerEntry('r1', { questionNote: 'a' })).toBeNull()
     expect(parseReportAnswerEntry('', { classroomId: 'C1', questionNote: 'a' })).toBeNull()
@@ -60,6 +65,27 @@ describe('reportAnswers(室長側): 状態・未読件数・並び', () => {
     expect(resolveReportAnswerStatus(base({ answer: 'x', answeredAt: 't', readAt: 'u' }))).toBe('read')
     // 回答本文だけあって日時が無い壊れた doc は回答待ち扱い(未読バッジを出さない)
     expect(resolveReportAnswerStatus(base({ answer: 'x' }))).toBe('pending')
+  })
+
+  it('AI の自動回答だけがある=自動回答あり(回答待ちと言わない・未読に数えない)。開発者が回答すると未読/既読は従来どおり(オーナー指示 2026-10-22 qa-ai-1)', () => {
+    const aiOnly = base({ aiAnswer: 'AI の回答', aiAnsweredAt: 't0' })
+    expect(resolveReportAnswerStatus(aiOnly)).toBe('ai-answered')
+    expect(REPORT_ANSWER_STATUS_LABELS['ai-answered']).toBe('自動回答あり')
+    expect(countUnreadReportAnswers([aiOnly])).toBe(0)
+    expect(resolveDeveloperReportModalInitialTab(countUnreadReportAnswers([aiOnly]))).toBe('send')
+    expect(resolveReportAnswerStatus(base({ aiAnswer: 'AI の回答', aiAnsweredAt: 't0', answer: '訂正', answeredAt: 't1' }))).toBe('unread')
+    expect(resolveReportAnswerStatus(base({ aiAnswer: 'AI の回答', aiAnsweredAt: 't0', answer: '訂正', answeredAt: 't1', readAt: 't2' }))).toBe('read')
+    // 文書の読み取り: aiAnswer / aiAnsweredAt を読む。無ければ null。
+    expect(parseReportAnswerEntry('r1', { classroomId: 'C1', questionNote: 'q', aiAnswer: 'AI', aiAnsweredAt: 't0' })).toMatchObject({ aiAnswer: 'AI', aiAnsweredAt: 't0' })
+    expect(parseReportAnswerEntry('r1', { classroomId: 'C1', questionNote: 'q' })).toMatchObject({ aiAnswer: null, aiAnsweredAt: null })
+    // 画面の見出し: AI の回答は「自動回答」、その後の開発者の回答は「訂正・補足」。回答待ちの一文は開発者の回答も AI の回答も無いときだけ。
+    expect(REPORT_ANSWER_UI_TEXT.aiAnswerHead).toBe('自動回答（試験中・誤りがあることがあります）')
+    expect(REPORT_ANSWER_UI_TEXT.developerAnswerAfterAiHead).toBe('開発者からの回答（訂正・補足）')
+    const modal = readFileSync(new URL('../components/developer-report/DeveloperReportModal.tsx', import.meta.url), 'utf8')
+    expect(modal).toContain('data-testid="developer-report-history-ai-answer"')
+    expect(modal).toContain("{entry.aiAnswer ? REPORT_ANSWER_UI_TEXT.developerAnswerAfterAiHead : REPORT_ANSWER_UI_TEXT.developerAnswerHead}")
+    // 回答待ちの一文は status が pending のときだけ(自動回答ありでは出さない)。
+    expect(modal).toMatch(/status === 'pending' \? \(\s*<p className="developer-report-history-pending">\{REPORT_ANSWER_UI_TEXT\.pendingNote\}<\/p>/u)
   })
 
   it('バッジの件数は未読の回答だけを数える(回答待ち・既読は数えない)', () => {

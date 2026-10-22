@@ -4123,7 +4123,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var timeCell = rowIndex === 0 ? '<td class="dp-time" rowspan="' + deskCount + '">' + timeCellHtml + '</td>' : '';
           return '<tr>' + timeCell
             + '<td class="dp-seatno">' + (Number(desk.deskIndex) + 1) + '</td>'
-            + '<td class="dp-teacher">' + escapeHtml(desk.teacher || '') + '</td>'
+            + '<td class="dp-teacher">' + escapeHtml(desk.teacher === '講師未割当' || desk.teacher === '講師未設定' ? '' : (desk.teacher || '')) + '</td>'
             + renderDeskPickerSeatCellHtml(desk, seats[0])
             + renderDeskPickerSeatCellHtml(desk, seats[1])
             + '</tr>';

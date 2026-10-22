@@ -123,12 +123,14 @@ export function buildQuestionAiSystemPrompt(manualMarkdown: string = USER_MANUAL
     '9. 「」で囲んでボタン名・メニュー名として書けるのは、下の「案内できる内容」に出てくる名前だけ。無い名前を作って「」で書かない。',
     '10. 分からないことに推測の手順を書いてから「確認します」と付け足さない。分からない点はその部分だけを決まり文句で伝える。',
     '11. 決まり文句は「」で囲まず、ふつうの文として書く。',
+    `12. 答えられたときは回答だけで完結させる。答えに続けて、聞かれていない細かい点について「${QUESTION_AI_DEVELOPER_REPLY}」と書き足さない。決まり文句を使うのは、質問の中に案内できる内容だけでは答えられない部分があるときだけで、その部分についてだけ書く。`,
+    '13. 「質問は開発者にも届いています」「この内容は開発者にも届いています」のような添え書きを書かない(画面側が 1 回だけ添える。二重に出る)。',
     '',
     '# 書き方',
     '- 丁寧語で、結論から書いてください。手順は画面に出ている言葉(ボタン名・メニュー名)で番号付きで短く書いてください。',
     '- 案内できる内容に答えがあるときは、言い切ってください(「明確ではありません」「〜と思われます」のような弱い言い方をしない)。',
     '- Markdown の見出し・表・太字は使わず、プレーンテキストで書いてください。',
-    '- 開発者より別途回答する内容のときは「質問は開発者にも届いています」と添えてかまいません。',
+    '- 短く。答えられた質問に、まとめの一文・別途回答の約束・「開発者にも届いています」の添え書きを足さない(オーナー指示 2026-10-22「シンプルな回答にして」)。',
     '',
     '# 案内できる内容(このアプリの使い方。利用者には「あなたの知識」として伝える)',
     manualMarkdown,
@@ -203,6 +205,26 @@ export function buildQuestionAiUserMessage(input: {
   ].join('\n')
 }
 
+/**
+ * 回答文から「開発者にも届いています」系の添え書きを取り除く(オーナー指示 2026-10-22・確認リスト v1.5.625 qa-ai-4
+ * 「『開発者にも届いています』が 2 回繰り返されている。シンプルな回答にして」)。
+ * 画面側(src/utils/developerReport.ts DEVELOPER_REPORT_AI_ANSWER_TRAILER)が回答の後ろに 1 回だけ添えるので、AI 自身が書いた分は
+ * 指示(決まり 13)で止めたうえ、書いてしまったときもここで落として二重に出さない。文単位(「。」まで)で落とし、残りは変えない。
+ */
+export function stripQuestionAiRedundantNotes(answer: string): string {
+  const stripped = answer
+    .split('\n')
+    .map((line) => line
+      .split(/(?<=。)/u)
+      .filter((sentence) => !/開発者にも届い/u.test(sentence))
+      .join('')
+      .replace(/[ \u3000]+$/u, ''))
+    .join('\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
+  return stripped
+}
+
 /** 応答のテキストブロックだけを連結して回答文にする。空なら null。 */
 export function extractQuestionAiAnswerText(message: Pick<Anthropic.Message, 'content' | 'stop_reason'>): string | null {
   const text = message.content
@@ -256,7 +278,7 @@ export async function generateQuestionAiAnswer(
       messages: [{ role: 'user', content: buildQuestionAiUserMessage(input) }],
     })
     if (message.stop_reason === 'refusal') return { ok: false, error: 'AI がこの質問への回答を控えました' }
-    const answer = extractQuestionAiAnswerText(message)
+    const answer = stripQuestionAiRedundantNotes(extractQuestionAiAnswerText(message) ?? '')
     if (!answer) return { ok: false, error: 'AI から回答文が返りませんでした' }
     const violation = findQuestionAiAnswerViolation(answer, { otherClassroomNames: input.otherClassroomNames, otherStudentNames: input.otherStudentNames })
     if (violation) {

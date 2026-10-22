@@ -7,6 +7,7 @@ import { getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
 import type { LessonType, StudentStatusKind, TeacherType } from '../schedule-board/types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 
 type BoardShareScreenProps = {
   token: string
@@ -328,7 +329,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                 <section className="board-share-desk" key={desk.id}>
                   <div className="board-share-seat">{deskIndex + 1}</div>
                   <div className="board-share-desk-body">
-                    <div className="board-share-teacher">{desk.teacher && desk.teacher !== '講師未設定' && desk.teacher !== '講師未割当' ? desk.teacher : ''}</div>
+                    <div className="board-share-teacher">{formatDeskTeacherLabel(desk.teacher)}</div>
                     <div className="board-share-students">
                       {studentSlots.map(({ student, status }, studentIndex) => {
                         // 生徒がいる席では同じ index の出欠記録を使わない(盤面と同じ・resolveBoardShareSeatView 参照)。

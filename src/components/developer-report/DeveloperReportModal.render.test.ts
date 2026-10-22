@@ -20,6 +20,8 @@ const entry = (overrides: Partial<ReportAnswerEntry> = {}): ReportAnswerEntry =>
   answeredAt: null,
   answerRevision: 0,
   readAt: null,
+  aiAnswer: null,
+  aiAnsweredAt: null,
   ...overrides,
 })
 
@@ -60,6 +62,26 @@ describe('DeveloperReportModal の描画(履歴タブ)', () => {
     // 新しいものが上: 回答日時 9/28 の unread → 送信 9/27 の pending → 回答 9/26 の read
     expect(html.indexOf('講師の出勤表はどこ？')).toBeLessThan(html.indexOf('振替先を後から変えるには？'))
     expect(html.indexOf('振替先を後から変えるには？')).toBeLessThan(html.indexOf('既読の質問'))
+  })
+
+  it('AI の自動回答は開発者の回答が無くても黄色の枠で出し「回答待ち」とは言わない。開発者が回答すると「訂正・補足」として下に並ぶ(オーナー指示 2026-10-22 qa-ai-1)', () => {
+    const answers = [
+      entry({ id: 'ai-only', questionNote: '体験の追加方法は？', aiAnswer: '席をクリックして「体験授業」を選びます。', aiAnsweredAt: '2026-10-22T15:43:37.300Z' }),
+      entry({ id: 'ai-then-dev', questionNote: '成績の記録は？', aiAnswer: 'この点は開発者より別途回答いたします。', aiAnsweredAt: '2026-10-22T15:46:50.535Z', answer: '成績の記録機能はありません。', answeredAt: '2026-10-22T16:00:00.000Z', answerRevision: 1 }),
+    ]
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, answers, canMarkAnswersRead: true, onMarkAnswersRead: () => {} }))
+    // 開いた直後は未読 1 件(開発者の回答)なので履歴タブ。AI だけの質問は未読に数えないのでバッジは 1。
+    expect(html).toContain('data-testid="developer-report-history-ai-answer"')
+    expect(html).toContain('席をクリックして「体験授業」を選びます。')
+    expect(html).toContain('自動回答あり')
+    expect(html).toContain('自動回答（試験中・誤りがあることがあります）')
+    expect(html).not.toContain('回答待ち')
+    expect(html).not.toContain('developer-report-history-pending')
+    expect(html).toContain('開発者からの回答（訂正・補足）')
+    expect(html).toContain('成績の記録機能はありません。')
+    expect((html.match(/data-testid="developer-report-mark-read"/gu) ?? []).length).toBe(1)
+    // 同じ質問の中では AI の回答が上、開発者の回答が下。
+    expect(html.indexOf('この点は開発者より別途回答いたします。')).toBeLessThan(html.indexOf('成績の記録機能はありません。'))
   })
 
   it('開発者が本番教室を開いている(canMarkAnswersRead=false)ときは「確認しました」を出さない(室長の未読を消さない)', () => {

@@ -516,8 +516,12 @@ export function buildDeveloperReportMailAttachmentLines(report: Pick<DeveloperRe
 
 const SOURCE_LABELS: Record<string, string> = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
 const CATEGORY_LABELS: Record<string, string> = { bug: '不具合・おかしい', request: '追加してほしい・要望', question: '使い方の質問' }
-/** メールに載せる操作痕跡の件数(新しい方から)。全件は Firestore 文書で読む。 */
-export const DEVELOPER_REPORT_MAIL_TRACE_LINES = 60
+/**
+ * メールに載せる操作痕跡の件数(新しい方から・**不具合の報告だけ**)。全件は Firestore 文書・開発ダッシュボードで読む。
+ * 2026-10-22 オーナー指示(確認リスト v1.5.625 qa-ai-3「メールの内容に多くのことが書かれすぎていてわかりにくい。開発者が見るべきものだけにして」):
+ * 60 件 → 20 件に減らし、要望・質問には載せない(質問の原因調査には要らない)。
+ */
+export const DEVELOPER_REPORT_MAIL_TRACE_LINES = 20
 
 function toJstLabel(iso: string | undefined): string {
   const ms = Date.parse(iso ?? '')
@@ -534,28 +538,28 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   // 質問(2026-09-13)は件名に【質問】を付けて、不具合/要望と受信箱で見分けられるようにする(流れは同じ: ストック→メール→後で対応)。
   // AI がすぐ回答して室長に表示済みの質問は【質問/AI回答済】(2026-10-16 夜)。開発者が回答すべき質問(AI 失敗・対象外)は【質問】のまま。
   const isQuestion = report.category === 'question'
+  const isBug = report.category === 'bug'
   const aiAnswered = isQuestion && Boolean(report.aiAnswer?.trim())
   const subject = `${report.isTest ? '【テスト】' : ''}${report.isAutoErrorReport ? '【自動エラー報告】' : ''}${isQuestion ? (aiAnswered ? '【質問/AI回答済】' : '【質問】') : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
   const docPath = `workspaces/${options.workspaceKey}/developerReports/${report.reportId}`
-  const consoleUrl = `https://console.firebase.google.com/project/${options.projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
   const contextLines = Object.entries(report.scheduleContext ?? {})
     .filter(([, value]) => typeof value === 'string' && value.trim() !== '')
     .map(([key, value]) => `  - ${key}: ${value}`)
   const operations = report.recentOperations ?? []
-  const shownOperations = operations.slice(-DEVELOPER_REPORT_MAIL_TRACE_LINES)
+  const operationCount = report.recentOperationCount ?? operations.length
+  // 操作痕跡は不具合の報告だけ(新しい方から上限件数)。要望・質問の調査には要らないので載せない(2026-10-22 オーナー指示「開発者が見るべきものだけに」)。
+  const shownOperations = isBug ? operations.slice(-DEVELOPER_REPORT_MAIL_TRACE_LINES) : []
+  // 本文は「開発者がいま見るべきもの」だけ(2026-10-22)。Firestore コンソールの URL・gsutil コマンド・進め方の長文・
+  // 保存状態の行・要望/質問の操作痕跡は外した。全文(操作痕跡 全件・教室データ・AI の記録)は開発ダッシュボード(docs/spec-developer-report.md §E-3)で読む。
   const lines: string[] = [
-    report.isTest ? '※ 内容に #テスト が含まれるためテスト扱いです。GitHub Issue は作られません。' : '',
+    report.isTest ? '※ #テスト を含むためテスト扱い(GitHub Issue は作られません)。' : '',
     report.isAutoErrorReport
-      ? '※ 画面のエラーをアプリが自動で送った報告です(利用者の操作による送信ではありません)。GitHub Issue は作られません(開発ダッシュボードの「通知済みだが Issue なし」に出ます)。同じエラーは 1 タブ 1 回(再読み込みを跨いで)・1 タブ 3 通までに絞っています。'
-      : '利用者が画面の「要望・報告」ボタンから送った内容です。',
-    '',
-    `教室: ${classroom} (${report.classroomId})`,
-    `種類: ${category}`,
-    `報告元: ${SOURCE_LABELS[report.source ?? ''] ?? report.source ?? '(不明)'}`,
-    `報告時刻: ${toJstLabel(report.reportedAt)} (サーバー受領 ${toJstLabel(report.recordedAt)})`,
-    `アプリ版数: ${report.appVersion || '(不明)'}`,
-    `報告者: ${report.reporterRole || '(権限不明)'}${report.reporterEmail ? ` ${report.reporterEmail}` : ''}`,
-    `未保存の変更: ${report.boardDirty ? 'あり(保存前の状態を含む)' : 'なし'} / 最終保存 ${report.lastSavedAt ? toJstLabel(report.lastSavedAt) : '(不明)'}`,
+      ? '※ 画面のエラーをアプリが自動で送った報告です(利用者の操作ではありません。GitHub Issue は作られません。同じエラーは 1 タブ 1 回・3 通まで)。'
+      : '',
+    `教室: ${classroom}`,
+    `種類: ${category} / 報告元: ${SOURCE_LABELS[report.source ?? ''] ?? report.source ?? '(不明)'}`,
+    `時刻: ${toJstLabel(report.reportedAt)} / 版 ${report.appVersion || '(不明)'} / 報告者 ${report.reporterRole || '(権限不明)'}`,
+    ...(isBug ? [`未保存の変更: ${report.boardDirty ? 'あり(保存前の状態を含む)' : 'なし'} / 最終保存 ${report.lastSavedAt ? toJstLabel(report.lastSavedAt) : '(不明)'}`] : []),
     ...(contextLines.length > 0 ? ['日程表の表示条件:', ...contextLines] : []),
     '',
     '■ 内容',
@@ -563,30 +567,42 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
     '',
     ...buildDeveloperReportMailAttachmentLines(report, { storageBucket: options.storageBucket }),
     ...(isQuestion ? buildDeveloperReportMailAiAnswerLines(report) : []),
-    '■ 進め方(オーナー指示 2026-09-04)',
-    '勝手に修正を始めない。切り分け・整理までにとどめ、修正の着手は開発者(オーナー)が確認して許可してから。',
-    ...(isQuestion
-      ? ['質問(2026-10-16 夜): 開発用教室では AI がその場で回答し室長に表示済み(上の「AI の自動回答」)。訂正・補足が要れば開発者画面「質問への回答」から送る(室長の「質問・要望」ボタンに未読が付く)。AI が答えられなかった質問・対象外の教室の質問は、同じ画面から開発者が回答する(docs/spec-developer-report.md §G-7)。']
+    '■ 次にすること',
+    ...buildDeveloperReportMailNextStepLines(report),
+    '',
+    ...(isBug
+      ? [
+          `■ 直近の操作痕跡(新しい方から ${shownOperations.length} 件 / 全 ${operationCount} 件は開発ダッシュボードで)`,
+          ...(shownOperations.length > 0
+            ? [...shownOperations].reverse().map((entry) => `${toJstLabel(entry.at)} [${entry.kind}] ${entry.summary}`)
+            : ['(なし)']),
+          '',
+        ]
       : []),
-    '',
-    `■ 直近の操作痕跡(新しい方から ${shownOperations.length} 件 / 全 ${report.recentOperationCount ?? operations.length} 件は Firestore 文書で)`,
-    ...(shownOperations.length > 0
-      ? [...shownOperations].reverse().map((entry) => `${toJstLabel(entry.at)} [${entry.kind}] ${entry.summary}`)
-      : ['(なし)']),
-    '',
-    '■ 詳細の置き場所',
-    `Firestore: ${docPath}`,
-    consoleUrl,
-    report.snapshotStoragePath
-      ? `教室データ(gzip JSON): gs://${options.storageBucket}/${report.snapshotStoragePath}\n  gsutil cp "gs://${options.storageBucket}/${report.snapshotStoragePath}" ./report.json.gz && gunzip -f ./report.json.gz`
-      : '教室データ: (保存されていません。関数ログ [DeveloperReport] を確認)',
+    `受付番号: ${report.reportId}(全文・操作痕跡 ${operationCount} 件・教室データは開発者画面の「開発ダッシュボード」で / Firestore ${docPath})`,
+    ...(report.snapshotStoragePath ? [] : ['教室データ: (保存されていません。関数ログ [DeveloperReport] を確認)']),
   ]
   return { subject, text: lines.filter((line) => line !== '').join('\n') }
 }
 
 /**
+ * 「次にすること」(1〜2 行)。進め方の長文(オーナー指示 2026-09-04「勝手に修正を始めない」)は 1 行に詰めた(中身は同じ)。
+ * - 質問で AI が回答済み: 訂正・補足が要るときだけ開発者画面「質問への回答」から送る。
+ * - 質問で AI が答えられなかった・呼んでいない: 開発者画面「質問への回答」から回答する。
+ * - 不具合・要望: 切り分けまで。修正の着手はオーナーが確認して許可してから(勝手に修正を始めない)。
+ */
+export function buildDeveloperReportMailNextStepLines(report: Pick<DeveloperReportMailSource, 'category' | 'aiAnswer'>): string[] {
+  if (report.category === 'question') {
+    return report.aiAnswer?.trim()
+      ? ['室長には AI の回答が表示済み。訂正・補足が要るときだけ、開発者画面「質問への回答」から送る(室長の「質問・要望」ボタンに未読が付く)。']
+      : ['開発者画面「質問への回答」から回答する(室長には「開発者より別途回答いたします」と表示済み)。']
+  }
+  return ['切り分け・整理まで。修正の着手は開発者(オーナー)が確認して許可してから(勝手に修正を始めない・2026-09-04)。']
+}
+
+/**
  * 質問のメールに載せる AI の自動回答の節(2026-10-16 夜)。室長に何が表示されたかを開発者がそのまま読めるようにする。
- * - 回答あり: 回答文(室長に表示済み)。
+ * - 回答あり: 回答文(室長に表示済み)。見出しは短く(2026-10-22「開発者が見るべきものだけに」)。
  * - 失敗・止めた: 理由と、止めた元の文(室長には見せていない)。室長には「自動回答を作れませんでした。開発者より別途回答いたします」が出ている。
  * - どちらも無い(本番教室・確認リストなど AI を呼んでいない): その旨。
  */
@@ -595,7 +611,7 @@ export function buildDeveloperReportMailAiAnswerLines(report: DeveloperReportMai
   const model = report.aiAnswerModel ? `・${report.aiAnswerModel}` : ''
   const students = report.aiAnswerDigestStudents && report.aiAnswerDigestStudents.length > 0 ? `・数字を渡した生徒 ${report.aiAnswerDigestStudents.join(' / ')}` : ''
   if (answer) {
-    return ['■ AI の自動回答(室長の画面にすぐ表示済み' + model + students + ')', answer, '']
+    return ['■ AI の自動回答(室長に表示済み' + model + students + ')', answer, '']
   }
   if (report.aiAnswerError) {
     return [
@@ -605,7 +621,7 @@ export function buildDeveloperReportMailAiAnswerLines(report: DeveloperReportMai
       '',
     ]
   }
-  return ['■ AI の自動回答: なし(この教室では AI を呼んでいない。室長には「回答は開発者が確認してからお返しします」と案内済み)', '']
+  return ['■ AI の自動回答: なし(この教室では AI を呼んでいない)', '']
 }
 
 /** SMTP URL(例: smtps://user%40gmail.com:app-password@smtp.gmail.com:465)が使える形か。空や不正なら送らない。 */

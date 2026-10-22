@@ -1,6 +1,7 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import type { DeskLesson, SlotCell, StudentEntry } from './types'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 
 const hasStudent = (student: StudentEntry | null): student is StudentEntry => student !== null
 
@@ -87,7 +88,7 @@ export function DetailPanel({
               </div>
               <div className="detail-row">
                 <span className="detail-label">講師</span>
-                <span>{desk.teacher}</span>
+                <span>{formatDeskTeacherLabel(desk.teacher)}</span>
               </div>
               <div className="detail-row">
                 <span className="detail-label">生徒</span>

@@ -100,7 +100,10 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
   })
 
   it('サーバー: 送信時に回答待ち文書を作り(失敗しても報告は成功)、回答は開発者のみ、既読は教室メンバー', () => {
-    expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
+    expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, buildReportAnswerAiUpdate, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
+    // AI の自動回答は、回答待ちの文書を作った報告だけ同じ文書へ部分更新で写す(失敗しても報告・AI 回答は成功のまま・2026-10-22 qa-ai-1)。
+    expect(FUNCTIONS_INDEX).toContain('const aiUpdate = answerDocCreated ? buildReportAnswerAiUpdate({ answer: aiResult.answer, answeredAt }) : null')
+    expect(FUNCTIONS_INDEX).toContain('await answerDocRef.set(aiUpdate, { merge: true }).catch((writeError) => {')
     expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, isAutoErrorReport, reporterRole: member.role')
     expect(FUNCTIONS_INDEX).toContain('Failed to create pending reportAnswers doc')
     const answer = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const answerDeveloperReport'), FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'))

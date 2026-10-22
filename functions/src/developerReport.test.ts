@@ -185,43 +185,62 @@ describe('developerReport(server): メール即時通知の本文', () => {
   }
   const options = { workspaceKey: 'main', projectId: 'komahyouapp-prod', storageBucket: 'komahyouapp-prod.firebasestorage.app' }
 
-  it('件名に教室・種類・内容の先頭、本文にメタ・内容・許可ルール・操作痕跡(新しい順・上限件数)・置き場所を載せる', () => {
+  it('件名に教室・種類・内容の先頭。本文は開発者が見るべきものだけ(2026-10-22 qa-ai-3): メタ 3 行・内容・次にすること・受付番号。要望には操作痕跡を載せない', () => {
     const mail = buildDeveloperReportMail(base, options)
     expect(mail.subject).toBe('[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 追加してほしい・要望: 講師日程表にも電話番号の欄がほしい')
-    expect(mail.text).toContain('種類: 追加してほしい・要望')
-    expect(mail.text).toContain('報告元: 日程表(別タブ)')
-    expect(mail.text).toContain('2026-09-04 12:04:05 JST')
+    expect(mail.text).toContain('教室: スクールIE 緑が丘校')
+    expect(mail.text).toContain('種類: 追加してほしい・要望 / 報告元: 日程表(別タブ)')
+    expect(mail.text).toContain('時刻: 2026-09-04 12:04:05 JST / 版 1.5.494 / 報告者 manager')
     expect(mail.text).toContain('講師日程表にも電話番号の欄がほしい\n2行目')
-    expect(mail.text).toContain('勝手に修正を始めない')
+    expect(mail.text).toContain('■ 次にすること\n切り分け・整理まで。修正の着手は開発者(オーナー)が確認して許可してから(勝手に修正を始めない')
     expect(mail.text).toContain('  - personLabel: 佐藤')
     expect(mail.text).not.toContain('search:')
-    // 私的経路なので操作痕跡(生徒名+ID)を載せる。新しい方から上限件数。
-    expect(mail.text).toContain(`新しい方から ${DEVELOPER_REPORT_MAIL_TRACE_LINES} 件 / 全 ${DEVELOPER_REPORT_MAIL_TRACE_LINES + 5} 件`)
-    expect(mail.text).toContain(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4} 青木#s012`)
-    expect(mail.text).not.toContain('op-4 青木')
-    expect(mail.text.indexOf(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4}`)).toBeLessThan(mail.text.indexOf('op-5 '))
-    expect(mail.text).toContain('workspaces/main/developerReports/r1')
-    expect(mail.text).toContain('gsutil cp "gs://komahyouapp-prod.firebasestorage.app/developer-reports/main/KzFnOQoTFLsCxwUp1tvh/r1.json.gz"')
+    // 要望・質問には操作痕跡を載せない(不具合だけ)。保存状態の行も不具合だけ。
+    expect(mail.text).not.toContain('■ 直近の操作痕跡')
+    expect(mail.text).not.toContain('op-')
+    expect(mail.text).not.toContain('未保存の変更')
+    // 置き場所は受付番号と Firestore パスの 1 行。コンソール URL・gsutil コマンド・進め方の長文は出さない。
+    expect(mail.text).toContain(`受付番号: r1(全文・操作痕跡 ${DEVELOPER_REPORT_MAIL_TRACE_LINES + 5} 件・教室データは開発者画面の「開発ダッシュボード」で / Firestore workspaces/main/developerReports/r1)`)
+    expect(mail.text).not.toContain('console.firebase.google.com')
+    expect(mail.text).not.toContain('gsutil')
+    expect(mail.text).not.toContain('■ 進め方')
+    expect(mail.text).not.toContain('利用者が画面の「要望・報告」ボタンから送った内容です')
     expect(mail.text).not.toContain('【テスト】')
   })
 
-  it('質問(question・2026-09-13)は件名に【質問】が付き、本文に AI の自動回答の節と「訂正回答は開発者画面から」の進め方が載る(2026-10-16 夜)', () => {
-    // AI を呼んでいない質問(本番教室): 「なし」の節と【質問】。
+  it('不具合の報告だけ操作痕跡(新しい順・上限 20 件)と保存状態を載せる(私的経路なので生徒名を含む)', () => {
+    expect(DEVELOPER_REPORT_MAIL_TRACE_LINES).toBe(20)
+    const mail = buildDeveloperReportMail({ ...base, category: 'bug' }, options)
+    expect(mail.text).toContain('未保存の変更: あり(保存前の状態を含む) / 最終保存 2026-09-04 11:00:00 JST')
+    expect(mail.text).toContain(`■ 直近の操作痕跡(新しい方から ${DEVELOPER_REPORT_MAIL_TRACE_LINES} 件 / 全 ${DEVELOPER_REPORT_MAIL_TRACE_LINES + 5} 件は開発ダッシュボードで)`)
+    expect(mail.text).toContain(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4} 青木#s012`)
+    expect(mail.text).not.toContain('op-4 青木')
+    expect(mail.text.indexOf(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4}`)).toBeLessThan(mail.text.indexOf('op-5 '))
+    // 操作痕跡は内容・次にすることの後、受付番号の前。
+    expect(mail.text.indexOf('■ 次にすること')).toBeLessThan(mail.text.indexOf('■ 直近の操作痕跡'))
+    expect(mail.text.indexOf('■ 直近の操作痕跡')).toBeLessThan(mail.text.indexOf('受付番号: r1'))
+  })
+
+  it('質問(question・2026-09-13)は件名に【質問】が付き、本文に AI の自動回答の節と「質問への回答」の次にすることが載る(2026-10-16 夜・2026-10-22 短縮)', () => {
+    // AI を呼んでいない質問(本番教室): 「なし」の節と【質問】。次にすることは「開発者が回答する」。
     const mail = buildDeveloperReportMail({ ...base, category: 'question', note: '休みにした生徒の振替先を後から変えるには？' }, options)
     expect(mail.subject).toBe('【質問】[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 使い方の質問: 休みにした生徒の振替先を後から変えるには？')
     expect(mail.text).toContain('種類: 使い方の質問')
-    expect(mail.text).toContain('■ AI の自動回答: なし(この教室では AI を呼んでいない')
-    expect(mail.text).toContain('訂正・補足が要れば開発者画面「質問への回答」から送る')
+    expect(mail.text).toContain('■ AI の自動回答: なし(この教室では AI を呼んでいない)')
+    expect(mail.text).toContain('■ 次にすること\n開発者画面「質問への回答」から回答する')
     expect(mail.text).not.toContain('自動回答はしない')
-    // AI が回答した質問(開発用教室): 回答文がそのまま載り、件名は【質問/AI回答済】。
+    expect(mail.text).not.toContain('■ 直近の操作痕跡')
+    // AI が回答した質問(開発用教室): 回答文がそのまま載り、件名は【質問/AI回答済】。次にすることは「訂正・補足が要るときだけ」。
     const answered = buildDeveloperReportMail({ ...base, category: 'question', note: '山田太郎さんの振替は？', aiAnswer: '未消化振替の一覧から選び直せます。\n2 行目', aiAnswerModel: 'claude-haiku-5-5', aiAnswerDigestStudents: ['山田 太郎'] }, options)
     expect(answered.subject.startsWith('【質問/AI回答済】[コマ表アプリ 要望・報告]')).toBe(true)
-    expect(answered.text).toContain('■ AI の自動回答(室長の画面にすぐ表示済み・claude-haiku-5-5・数字を渡した生徒 山田 太郎)\n未消化振替の一覧から選び直せます。\n2 行目')
-    expect(answered.text.indexOf('■ AI の自動回答')).toBeLessThan(answered.text.indexOf('■ 進め方'))
+    expect(answered.text).toContain('■ AI の自動回答(室長に表示済み・claude-haiku-5-5・数字を渡した生徒 山田 太郎)\n未消化振替の一覧から選び直せます。\n2 行目')
+    expect(answered.text).toContain('■ 次にすること\n室長には AI の回答が表示済み。訂正・補足が要るときだけ、開発者画面「質問への回答」から送る')
+    expect(answered.text.indexOf('■ AI の自動回答')).toBeLessThan(answered.text.indexOf('■ 次にすること'))
     // AI が答えられなかった(止めた)質問: 理由と止めた元の文(室長には未表示)を載せ、件名は【質問】のまま(開発者が回答する)。
     const blocked = buildDeveloperReportMail({ ...base, category: 'question', aiAnswerError: '回答の決まりに反したため表示しませんでした(金額)', aiAnswerBlocked: '月額 5,000 円です。', aiAnswerModel: 'claude-haiku-5-5' }, options)
     expect(blocked.subject.startsWith('【質問】[コマ表アプリ 要望・報告]')).toBe(true)
     expect(blocked.text).toContain('■ AI の自動回答: 作れなかった(室長には「自動回答を作れませんでした。開発者より別途回答いたします」と表示済み・claude-haiku-5-5)\n理由: 回答の決まりに反したため表示しませんでした(金額)\n止めた元の文(室長には未表示):\n月額 5,000 円です。')
+    expect(blocked.text).toContain('■ 次にすること\n開発者画面「質問への回答」から回答する')
     // 不具合/要望には質問向けの節・行は出ない(件名も【質問】なし)。
     const bugMail = buildDeveloperReportMail({ ...base, category: 'bug', aiAnswer: 'x' }, options)
     expect(bugMail.subject.startsWith('[コマ表アプリ 要望・報告]')).toBe(true)
@@ -257,9 +276,10 @@ describe('developerReport(server): メール即時通知の本文', () => {
   it('#テスト の報告は件名・本文にテスト扱いを明示し、内容なし・教室データなしでも成立する', () => {
     const mail = buildDeveloperReportMail({ ...base, isTest: true, note: '', category: 'bug', snapshotStoragePath: '', recentOperations: [], recentOperationCount: 0 }, options)
     expect(mail.subject.startsWith('【テスト】[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 不具合・おかしい')).toBe(true)
-    expect(mail.text).toContain('GitHub Issue は作られません')
+    expect(mail.text).toContain('※ #テスト を含むためテスト扱い(GitHub Issue は作られません)。')
+    expect(mail.text).toContain('■ 内容\n(なし)')
     expect(mail.text).toContain('(なし)')
-    expect(mail.text).toContain('保存されていません')
+    expect(mail.text).toContain('教室データ: (保存されていません。関数ログ [DeveloperReport] を確認)')
   })
 
   it('SMTP URL と宛先が揃っていて smtp/smtps の URL のときだけ送る', () => {

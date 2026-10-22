@@ -96,19 +96,36 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第62版: 文面の言い換えの確認 c-7 を先頭に置く(版は据え置き)', () => {
-    const c7 = VERIFICATION_CHECKLIST.items[0]
-    expect(c7.id).toBe('c-7')
-    expect(c7.area).toBe('確認リスト')
-    expect(c7.check!.join(' / ')).toContain('「準備」「やること」「OKの目安」')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('c-7')
+  it('第66版(2026-10-22・v1.5.628): 第64版の結果のメモへの対応 qa-ai-5〜qa-ai-7・tb-1 を先頭に置く', () => {
+    const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
+    expect(ids.slice(0, 4)).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1'])
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    for (const id of ['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1']) {
+      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.628')
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
+    }
+    // qa-ai-1 / qa-ai-4 のメモ: 添え書きは 1 回・答えられた質問に「別途回答」と付かない(画面側の添え書きの文面も固定)。
+    expect(byId.get('qa-ai-5')!.check!.join(' / ')).toContain('最後の「（この回答は開発者にも届いています）」だけで終わる')
+    // qa-ai-1 のメモ: AI 回答を履歴に残す(#テスト では履歴に載らないので付けない旨を前提に書く)。
+    expect(byId.get('qa-ai-6')!.prep).toContain('「#テスト」を付けない')
+    expect(byId.get('qa-ai-6')!.check!.join(' / ')).toContain('「自動回答あり」')
+    expect(byId.get('qa-ai-6')!.check!.join(' / ')).toContain('「開発者からの回答（訂正・補足）」')
+    // qa-ai-3 のメモ: メールを短く(操作痕跡は不具合だけ・20 件)。
+    expect(byId.get('qa-ai-7')!.check!.join(' / ')).toContain('不具合のメールだけ「■ 直近の操作痕跡」が 20 件まで載る')
+    // その他欄: 講師欄の「講師未割当」を空白に(表示だけ・データは据え置き)。
+    expect(byId.get('tb-1')!.area).toBe('コマ表(講師欄)')
+    expect(byId.get('tb-1')!.check!.join(' / ')).toContain('「講師未割当」の文字が出ない')
   })
 
   it('第55版(v1.5.604・2026-10-15): 受付 20261015-151056959-a8890098 で OK だった c-5・tp-47・tp-53・tp-54 を外し、結果待ちの q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 を残す', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第56版(2026-10-16): 虫眼鏡の絞り込み sr-1〜sr-3 を足した(版は据え置き)。第57版(同日): AI 自動回答の Claude API 切り替え qa-ai-1 を足した(版は据え置き)。第58版(同日): AI 回答の確認用の質問 20 問 qa-q01〜qa-q20 を足した(版は据え置き)。第59版(同日夜): Sonnet・他責の言い回し禁止・説明書拡充の確認 qa-ai-2 を足した(版は据え置き)。第60版(同日夜): 妥協案 B・二重回答の確認 qa-ai-3・qa-q21〜23 を足した(版は据え置き)。第61版(同日夜): Haiku 確定・すぐ表示＋メール・訂正回答の qa-ai-3(書き換え)・qa-ai-4 を足した(版は据え置き)。第61版(同日夜): Haiku 確定・すぐ表示＋メール・訂正回答の qa-ai-3(書き換え)・qa-ai-4 を足した(版は据え置き)。
     // 第63版(2026-10-21・v1.5.622): テスト教室の結果(受付 20261020-092527755-56bbf675)で OK の tp-55 を外し、生徒ごとの理由 tp-58 を足した。
-    expect(ids).toEqual(['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-56', 'tp-57', 'tp-58', 'tp-59', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
+    // 第66版(2026-10-22・v1.5.628): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の 14 件を外し、
+    // メモへの対応の確認 qa-ai-5〜qa-ai-7・tb-1 を先頭に足した。
+    expect(ids).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-56', 'tp-57', 'tp-58', 'tp-59', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
+    // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
+    for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
     // 第54版の結果(2026-10-15・受付 20261015-151056959-a8890098)で OK → 外す。
     for (const okId of ['c-5', 'tp-47', 'tp-53', 'tp-54']) expect(ids, okId).not.toContain(okId)
@@ -136,8 +153,9 @@ describe('確認リストの項目定義', () => {
     // 第63版(2026-10-21): OK 済み tp-55 を外し tp-48/51/57 の文面を直したので次にデプロイされる版 v1.5.622 へ上げる(tp-48/tp-51 は再確認が要る)。
     // 第64版(2026-10-22): 並べ替えで生徒2→生徒1へ寄せた席が再マージで戻らない bs-1 を足し、次にデプロイされる版 v1.5.625 へ上げる。
     // 第65版(2026-10-22): 講師だけのテンプレ机の理由の文言(tp-59 の確認を書き換え)で、次にデプロイされる版 v1.5.627 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.627')
-    expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-59')?.check ?? []).some((line) => line.includes('テンプレのこの机が講師だけ'))).toBe(true)
+        expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-59')?.check ?? []).some((line) => line.includes('テンプレのこの机が講師だけ'))).toBe(true)
+    // 第66版(2026-10-22): OK 済み 14 件を外し qa-ai-5〜7・tb-1 を足したので次にデプロイされる版 v1.5.628 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.628')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
@@ -173,11 +191,6 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-48')!.check![0]).toContain('名前つき')
     expect(byId.get('tp-49')!.steps[1]).toContain('「休日設定」で元の日(丸ごと振替で移した日)を休みにしてから')
     expect(byId.get('tp-51')!.check![2]).toContain('時限を変えた後に続けて変える順でも同じ')
-    // 第64版(2026-10-22・INV-02): 並べ替えで生徒2→生徒1へ寄せた席が再マージで戻らない(bs-1)。開発用教室だけ(テスト教室には出さない)。
-    expect(byId.get('bs-1')!.introducedIn).toBe('v1.5.625')
-    expect(byId.get('bs-1')!.area).toBe('コマ表の並べ替え')
-    expect(byId.get('bs-1')!.check!.join(' / ')).toContain('リロード後も生徒1の欄のまま')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('bs-1')
     // 第63版: 確認の画面の生徒ごとの理由(tp-58)。テスト教室にも出す。
     expect(byId.get('tp-58')!.introducedIn).toBe('v1.5.622')
     expect(byId.get('tp-58')!.area).toBe('テンプレ作成')
@@ -253,8 +266,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.627')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.627')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.628')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.628')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -326,7 +339,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.627]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.628]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {

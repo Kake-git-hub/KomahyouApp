@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildPendingReportAnswerDoc,
+  buildReportAnswerAiUpdate,
   normalizeAnswerDeveloperReportRequest,
   normalizeMarkReportAnswersReadRequest,
   normalizeResolveDeveloperReportRequest,
@@ -104,6 +105,27 @@ describe('reportAnswers: 回答の書き込み計画(状態遷移は一方向・
     expect(plan.answerDoc.questionNote).toBe(report.note)
     expect(plan.answerDoc.classroomId).toBe('C1')
     expect(plan.answerDoc.source).toBe('board')
+  })
+
+  it('AI の自動回答は室長側文書へ部分更新で写し(aiAnswer / aiAnsweredAt / updatedAt だけ)、回答・既読・未読バッジには触らない(オーナー指示 2026-10-22 qa-ai-1「AI 回答を見返したい」)', () => {
+    expect(buildReportAnswerAiUpdate({ answer: ' 席をクリックして「体験授業」を選びます。 ', answeredAt: '2026-10-22T15:43:37.300Z' }))
+      .toEqual({ aiAnswer: '席をクリックして「体験授業」を選びます。', aiAnsweredAt: '2026-10-22T15:43:37.300Z', updatedAt: '2026-10-22T15:43:37.300Z' })
+    expect(buildReportAnswerAiUpdate({ answer: '   ', answeredAt: 't' })).toBeNull()
+    const update = buildReportAnswerAiUpdate({ answer: 'a', answeredAt: 't' })!
+    for (const key of ['answer', 'answeredAt', 'readAt', 'unreadAnswer', 'answerRevision']) expect(update).not.toHaveProperty(key)
+    // 回答待ちの文書には AI の項目が無い(AI を呼ばない教室の文書は従来どおり)。
+    expect(buildPendingReportAnswerDoc(report, 'x')).not.toHaveProperty('aiAnswer')
+  })
+
+  it('開発者が回答しても AI の自動回答は室長側文書に据え置く(訂正・補足として並べて読める)', () => {
+    const withAi = { ...buildPendingReportAnswerDoc(report, 'x'), aiAnswer: 'AI の回答', aiAnsweredAt: '2026-10-22T15:43:37.300Z' }
+    const plan = planReportAnswerWrite({ report, existingAnswerDoc: withAi, answer: '訂正です', answeredBy: 'dev-uid', nowIso: '2026-10-22T16:00:00.000Z' })
+    expect(plan.answerDoc.aiAnswer).toBe('AI の回答')
+    expect(plan.answerDoc.aiAnsweredAt).toBe('2026-10-22T15:43:37.300Z')
+    expect(plan.answerDoc.answer).toBe('訂正です')
+    expect(plan.answerDoc.unreadAnswer).toBe(true)
+    // AI 回答が無い文書・無い報告の計画には AI の項目を足さない。
+    expect(planReportAnswerWrite({ report, existingAnswerDoc: null, answer: '回答', answeredBy: 'dev-uid', nowIso: 't' }).answerDoc).not.toHaveProperty('aiAnswer')
   })
 
   it('室長側文書が無い(旧報告)ときは計画の中で作る', () => {

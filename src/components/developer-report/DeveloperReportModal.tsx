@@ -177,10 +177,19 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
                         <span className={`developer-report-history-status is-${status}`} data-testid="developer-report-history-status">{REPORT_ANSWER_STATUS_LABELS[status]}</span>
                       </div>
                       <p className="developer-report-history-question">{entry.questionNote}</p>
+                      {/* AI の自動回答(§G-7)は開発者の回答が来なくても残す(オーナー指示 2026-10-22 qa-ai-1)。開発者の回答はその下に訂正・補足として並ぶ。 */}
+                      {entry.aiAnswer ? (
+                        <div className="developer-report-history-answer is-ai" data-testid="developer-report-history-ai-answer">
+                          <div className="developer-report-history-answer-head">
+                            <span>{REPORT_ANSWER_UI_TEXT.aiAnswerHead} {formatReportAnswerDateLabel(entry.aiAnsweredAt)}</span>
+                          </div>
+                          <p className="developer-report-history-answer-body">{entry.aiAnswer}</p>
+                        </div>
+                      ) : null}
                       {entry.answer ? (
                         <div className="developer-report-history-answer" data-testid="developer-report-history-answer">
                           <div className="developer-report-history-answer-head">
-                            <span>開発者からの回答 {formatReportAnswerDateLabel(entry.answeredAt)}</span>
+                            <span>{entry.aiAnswer ? REPORT_ANSWER_UI_TEXT.developerAnswerAfterAiHead : REPORT_ANSWER_UI_TEXT.developerAnswerHead} {formatReportAnswerDateLabel(entry.answeredAt)}</span>
                             {entry.answerRevision > 1 ? <span className="developer-report-history-revised">{REPORT_ANSWER_UI_TEXT.revisedNote}</span> : null}
                           </div>
                           <p className="developer-report-history-answer-body">{entry.answer}</p>
@@ -190,9 +199,9 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
                             </div>
                           ) : null}
                         </div>
-                      ) : (
+                      ) : status === 'pending' ? (
                         <p className="developer-report-history-pending">{REPORT_ANSWER_UI_TEXT.pendingNote}</p>
-                      )}
+                      ) : null}
                     </li>
                   )
                 })}
