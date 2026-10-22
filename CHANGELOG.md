@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.626 (2026-10-22)
+
 - feat: **即時対応の基盤(別会社 10 教室の追加に備える・オーナー採用 2026-10-22「即時対応のための案(優先順)に従いすべて採用」)**。
   案 1 **保存ごとの教室版履歴**: `classroomSnapshots` の書き込みトリガ(`mirrorLatestClassroomRollback`)で新しい版を Storage `classroom-save-history/{ws}/{教室}/v{版数 8 桁}-{保存時刻}.json.gz` へ gzip で追記(保持 90 日・`pruneClassroomSaveHistory` が独立予算 60 秒で間引き)。直前ロールバック(1 世代上書き)は先に書き、据え置き。
   案 2 **操作痕跡の保存同梱**: 保存リクエストに前回保存以降の痕跡(新しい方から 300 件)を `operationTrace` として相乗りさせ、サーバーが `classroomSnapshots/{id}/operationTraces/{saveId}` へ残す(保持 90 日・書けなくても保存は成功)。印は保存成功時だけ進める(`collectOperationTraceSinceLastSave` / `markOperationTraceSaved`)。端末内の保持を 300 → 1000 件。
