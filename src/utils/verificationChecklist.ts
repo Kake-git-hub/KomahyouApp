@@ -81,7 +81,7 @@ export type VerificationChecklistAudience = 'development' | 'sandbox'
  * 第65版(2026-10-22・テスト教室のテスト担当の指摘): 講師だけのテンプレ机に手置き講師＋手で置いた講習がある机で、確認の画面の理由が
  *   「手で置いた生徒が居ないため」と出て講習の手置きが認識されていないように読めた(実際は Q41-12 (1) の形)。文言を直し tp-59 の確認を書き換えたので
  *   次にデプロイされる版 v1.5.627 へ上げる。
- * 第66版(2026-10-22・v1.5.628): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK だった
+ * 第66版(2026-10-22・v1.5.629): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK だった
  *   c-7・rp-1〜rp-3・sv-1(開発者側の Storage / Firestore の読み取り確認も合格)・sv-2・bs-1・sr-1〜sr-3・qa-ai-1〜qa-ai-4 を外し、
  *   メモへの対応(AI 回答の添え書きを 1 回に・答えられたら別途回答と言わない・AI 回答を履歴に残す・通知メールを短く・
  *   講師欄の「講師未割当」を空白に)の確認 qa-ai-5〜qa-ai-7・tb-1 を足した。OK 済みを外したので次にデプロイされる版へ上げる。
@@ -99,7 +99,7 @@ export function selectVerificationChecklistItems(
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.628'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.629'
 
 /**
  * 確認項目の正本(2026-09-12 初版・v1.5.504 で第2版・v1.5.506 で第3版・v1.5.508 で第4版・v1.5.509 で第5版)。
@@ -302,7 +302,7 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.628'
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
   version: VERIFICATION_CHECKLIST_VERSION,
   items: [
-    // 第66版(2026-10-22・v1.5.628): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の
+    // 第66版(2026-10-22・v1.5.629): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の
     // c-7・rp-1〜rp-3・sv-1(開発者側の読み取り確認も合格)・sv-2・bs-1・sr-1〜sr-3・qa-ai-1〜qa-ai-4 を外した。
     // その結果のメモ(qa-ai-1 / qa-ai-3 / qa-ai-4・その他欄)への対応を確認する項目 qa-ai-5〜qa-ai-7・tb-1 を足した。
     {
@@ -318,7 +318,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '2問目: 「この点は開発者より別途回答いたします。」で答え、「開発者にも届いています」は最後の 1 回だけ',
         '2 問とも、受付の文 → 「― 自動回答（試験中・誤りがあることがあります）―」→ 回答 → 「（この回答は開発者にも届いています）」の順',
       ],
-      introducedIn: 'v1.5.628',
+      introducedIn: 'v1.5.629',
     },
     {
       id: 'qa-ai-6',
@@ -334,7 +334,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '「質問・要望」ボタンに未読の数は付かない(AI の回答は未読に数えない)',
         '開発者が回答すると、黄色の枠の下に青い枠で「開発者からの回答（訂正・補足）」が並び、ボタンに未読の数が付く',
       ],
-      introducedIn: 'v1.5.628',
+      introducedIn: 'v1.5.629',
     },
     {
       id: 'qa-ai-7',
@@ -349,7 +349,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '不具合のメールだけ「■ 直近の操作痕跡」が 20 件まで載る(要望・質問には載らない)',
         '「■ 進め方」の長い段落が無く、「■ 次にすること」が 1 行で書かれている',
       ],
-      introducedIn: 'v1.5.628',
+      introducedIn: 'v1.5.629',
     },
     // その他欄(2026-10-22)「講師欄に 講師未割り当て がでているが、以前消すようにしたはず。確認して」: テンプレで講師の決まっていない行の机は
     // データ上「講師未割当」の文字を持つ(再マージの机の確保に使う)。表示だけ空白にした(deskTeacherLabel.ts・共有画面と同じ判定に一本化)。
@@ -367,7 +367,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '共有画面と、席を選ぶ一覧の講師欄も空白',
         'その机に講師を置く・外す操作は従来どおりできる(空白の机をクリックして講師を選べる)',
       ],
-      introducedIn: 'v1.5.628',
+      introducedIn: 'v1.5.629',
     },
     // 保護者QRを「休み連絡」専用へ(docs/spec-parent-portal.md §0-5・開発用教室限定)。
     // ★Cloud Functions のデプロイが緑になってから確認する(Hosting が先に出た数分間は送信が 400 になる)。
