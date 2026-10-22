@@ -3648,6 +3648,28 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
+// 盤面の生徒とテンプレ(managed)の生徒が同じ本人か(管理生徒 ID → 席 ID → 名前の順で突き合わせる)。
+function isSameManagedStudentEntry(student: StudentEntry | null | undefined, managedStudent: StudentEntry | null | undefined): boolean {
+  return Boolean(student && managedStudent && (
+    (student.managedStudentId && managedStudent.managedStudentId && student.managedStudentId === managedStudent.managedStudentId)
+    || student.id === managedStudent.id
+    || student.name === managedStudent.name
+  ))
+}
+
+// 盤面の通常生徒スロットが managedStudentId 等を欠く場合、テンプレ(managed)側の同一性を補完する。
+// これを欠くと spread で managedStudentId が undefined 上書きされ、生徒日程表で本人に紐づかず
+// 通常授業がカウントされない(同一生徒が複数の通常授業を持つと顕在化)。回帰防止: 6793374。
+function mergeManagedStudentIdentity(student: StudentEntry, managedStudent: StudentEntry): StudentEntry {
+  return {
+    ...managedStudent,
+    ...student,
+    id: student.id || managedStudent.id,
+    managedStudentId: student.managedStudentId ?? managedStudent.managedStudentId,
+    birthDate: student.birthDate ?? managedStudent.birthDate,
+  }
+}
+
 function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson, dateKey: string) {
   const nextLesson = cloneDeskLesson(managedLesson)
 
@@ -3655,23 +3677,24 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     if (!student) return
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
-    const isSameManagedStudent = managedStudent && (
-      (student.managedStudentId && managedStudent.managedStudentId && student.managedStudentId === managedStudent.managedStudentId)
-      || student.id === managedStudent.id
-      || student.name === managedStudent.name
-    )
-    if (isSameManagedStudent) {
-      // 盤面の通常生徒スロットが managedStudentId 等を欠く場合、テンプレ(managed)側の同一性を補完する。
-      // これを欠くと spread で managedStudentId が undefined 上書きされ、生徒日程表で本人に紐づかず
-      // 通常授業がカウントされない(同一生徒が複数の通常授業を持つと顕在化)。回帰防止: 6793374。
-      nextLesson.studentSlots[slotIndex] = {
-        ...managedStudent,
-        ...student,
-        id: student.id || managedStudent.id,
-        managedStudentId: student.managedStudentId ?? managedStudent.managedStudentId,
-        birthDate: student.birthDate ?? managedStudent.birthDate,
-      }
+    if (managedStudent && isSameManagedStudentEntry(student, managedStudent)) {
+      // 同一性の補完は mergeManagedStudentIdentity(回帰防止: 6793374)。
+      nextLesson.studentSlots[slotIndex] = mergeManagedStudentIdentity(student, managedStudent)
       return
+    }
+
+    // INV-02(2026-10-22・オーナー指示「上に詰めて並べ替え」で生徒2だけの机は生徒1へ寄せる): 盤面の並べ替え(pack / seat)は
+    // 机の中で生徒2→生徒1へ寄せるが、テンプレがその生徒を生徒2に持っていると、ここでテンプレの席に戻され
+    // 「寄せたのにリロードで生徒2に戻る」になっていた。テンプレの生徒1が空で、テンプレの生徒2が盤面の生徒1と同じ本人で、
+    // 盤面の生徒2にその本人が居ない(＝寄せた後)ときだけ、盤面の席(生徒1)を保つ。テンプレが生徒1に別の生徒を置いたら
+    // 従来どおりテンプレが正(下の「通常生徒はテンプレが配置を決める」へ落ちる)。逆方向(盤面が生徒2・テンプレが生徒1)は
+    // 従来どおりテンプレに追従する(テンプレ側で寄せた結果を盤面にも反映する)。
+    if (slotIndex === 0 && !managedStudent) {
+      const managedSecondStudent = managedLesson.studentSlots[1]
+      if (managedSecondStudent && isSameManagedStudentEntry(student, managedSecondStudent) && !isSameManagedStudentEntry(currentLesson.studentSlots[1], managedSecondStudent)) {
+        nextLesson.studentSlots = [mergeManagedStudentIdentity(student, managedSecondStudent), null]
+        return
+      }
     }
 
     // Regular (non-manual, non-returned) students are always handled by managed data.
