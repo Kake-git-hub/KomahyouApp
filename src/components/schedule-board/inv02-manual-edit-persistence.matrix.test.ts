@@ -2183,3 +2183,119 @@ describe('INV-02 × 並べ替え → 再マージ: 足場講師は並べ替え�
     expect(cellOf(after).desks[1].teacherAssignmentSource).toBe('deleted')
   })
 })
+
+// ============================================================================
+// INV-02 × 並べ替え → 再マージ: 机の中で生徒2から生徒1へ寄せた生徒は、再マージで生徒2へ戻らない（2026-10-22）
+//
+// 保証（INV-02）: 盤面への手動編集（並べ替え＝机の中の席の確定）は、自動処理（テンプレ再マージ／リロード）で巻き戻らない。
+// 症状: テンプレの机（生徒1=A・生徒2=B）で A を盤面で削除すると（削除記録＝抑止で A だけ消える）机は「生徒1=空・生徒2=B」になる。
+//   盤面の「上に詰めて並べ替え」「同席番で並べ替え」は机の中で B を生徒1へ寄せるが、次の再マージ（教室の開き直し・次の削除・
+//   基本データ/教室設定の変更 effect）で mergeManagedDeskLesson が「通常生徒はテンプレが配置を決める」としてテンプレ（抑止後）の
+//   席＝生徒2へ戻していた（オーナー報告 2026-10-22「生徒2のセルにしか生徒がおらず生徒1が空いているときは生徒2から生徒1へ詰めてほしい」）。
+// 修正: mergeManagedDeskLesson は、テンプレの生徒1が空・テンプレの生徒2が盤面の生徒1と同じ本人・盤面の生徒2にその本人が居ない
+//   （＝寄せた後）ときだけ盤面の席（生徒1）を保つ。テンプレが生徒1に別の生徒を置いたら従来どおりテンプレが正。
+// 行: { 上に詰めて / 同席番 } × { 再マージ 1 回・2 回（不動点＝INV-03 兄弟） }、＋ 寄せた後に生徒2へ手で置いた振替は残る、
+//     ＋ 守り（テンプレが生徒1に別の生徒を置いたらテンプレが正・並べ替えなしの盤面は従来どおり生徒2のまま・
+//     テンプレ側で生徒1へ寄せた後は盤面も追従する・削除記録は並べ替え後も効く＝A は湧かない）。
+// 修正前: 並べ替えあり 2 行と振替の行が落ちる（守りは通る）。
+// ============================================================================
+describe('INV-02 × 並べ替え → 再マージ: 生徒2から生徒1へ寄せた生徒は生徒2へ戻らない', () => {
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-11'
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const TODAY = '2026-10-05'
+  const studentRows: StudentRow[] = [['sA', '青木'], ['sB', '馬場'], ['sC', '千葉']].map(([id, name]) => ({
+    id, name, displayName: name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01',
+  }))
+  const teacherRows: TeacherRow[] = [['t1', '田中']].map(([id, name]) => ({
+    id, name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+  }))
+  const row = (student1Id: string, student2Id: string): RegularLessonRow => ({
+    id: 'r0', schoolYear: 2026, teacherId: 't1', student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id, subject2: student2Id ? '数' : '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5,
+  })
+  const settings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2 } as ClassroomSettings
+  // テンプレ(水 5限): 机0=田中(生徒1=青木・生徒2=馬場)
+  const ROWS = [row('sA', 'sB')]
+
+  const boardWeek = (rows: RegularLessonRow[]) => buildManagedScheduleCellsForRange({
+    range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+    fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END,
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: rows, boardWeeks: [],
+  })
+  const remerge = (weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[]) => remergeBoardWeeksWithManagedData(weeks, {
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: TODAY,
+  })
+  const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+  const namesOf = (cell: SlotCell) => cell.desks[0].lesson?.studentSlots.map((student) => student?.name ?? null) ?? null
+  const sortCell = (week: SlotCell[], sortDesks: (cell: SlotCell) => DeskCell[]) => week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: sortDesks(cell) }))
+  const SORTS = [
+    ['上に詰めて並べ替え（pack）', (cell: SlotCell) => packSortCellDesks(cell, { skipStatusSlotPack: true })],
+    ['同席番で並べ替え（seat）', (cell: SlotCell) => seatSortCells([cell], { skipStatusSlotPack: true })[0].desks],
+  ] as const
+  // 生徒1(青木)を盤面で削除した直後の形(handleDeleteStudent → 再マージ effect 相当): 生徒1=空・生徒2=馬場
+  const deletedFirstStudent = () => {
+    const week = boardWeek(ROWS)
+    const cell = cellOf([week])
+    const aoki = cell.desks[0].lesson!.studentSlots[0]!
+    expect(aoki.name).toBe('青木')
+    removeStudentFromDeskLesson(cell.desks[0], 0)
+    const suppressed = [buildManagedOccurrenceKey(aoki, cell.dateKey, cell.slotNumber)]
+    const afterDelete = remerge([week], ROWS, suppressed)
+    expect(namesOf(cellOf(afterDelete))).toEqual([null, '馬場'])
+    return { afterDelete, suppressed }
+  }
+
+  describe.each(SORTS)('%s', (_label, sortDesks) => {
+    it('生徒1を削除して生徒2だけになった机は生徒1へ寄り、再マージ 1 回・2 回でも生徒1のまま（管理生徒 ID・講師・削除記録も不変）', () => {
+      const { afterDelete, suppressed } = deletedFirstStudent()
+      const sorted = sortCell(afterDelete[0], sortDesks) // handleBoardSort 相当
+      expect(namesOf(cellOf([sorted]))).toEqual(['馬場', null])
+      const once = remerge([sorted], ROWS, suppressed) // 開き直し・次の削除・基本データ変更 effect
+      expect(namesOf(cellOf(once))).toEqual(['馬場', null])
+      expect(cellOf(once).desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sB')
+      expect(cellOf(once).desks[0].lesson?.studentSlots[0]?.lessonType).toBe('regular')
+      expect(cellOf(once).desks[0].teacher).toBe('田中')
+      expect(cellOf(remerge(once, ROWS, suppressed))).toEqual(cellOf(once))
+    })
+  })
+
+  it('寄せた後に生徒2へ手で置いた振替は、再マージで残り、生徒1の通常生徒と入れ替わらない', () => {
+    const { afterDelete, suppressed } = deletedFirstStudent()
+    const sorted = sortCell(afterDelete[0], SORTS[0][1])
+    const cell = cellOf([sorted])
+    cell.desks[0].lesson!.studentSlots[1] = {
+      id: 'sC_makeup', name: '千葉', managedStudentId: 'sC', grade: '中3', subject: '数', lessonType: 'makeup', teacherType: 'normal',
+      makeupSourceDate: '2026-10-01', makeupSourceLabel: '10/1(木) 5限',
+    }
+    const once = remerge([sorted], ROWS, suppressed)
+    expect(namesOf(cellOf(once))).toEqual(['馬場', '千葉'])
+    expect(cellOf(once).desks[0].lesson?.studentSlots[1]?.lessonType).toBe('makeup')
+  })
+
+  it('守り: 削除記録は並べ替えの後も効く＝寄せた机に削除した生徒1が湧かない（再マージ 2 回）', () => {
+    const { afterDelete, suppressed } = deletedFirstStudent()
+    const sorted = sortCell(afterDelete[0], SORTS[1][1])
+    const twice = remerge(remerge([sorted], ROWS, suppressed), ROWS, suppressed)
+    expect(cellOf(twice).desks.flatMap((desk) => desk.lesson?.studentSlots.map((student) => student?.name) ?? [])).not.toContain('青木')
+  })
+
+  it('守り: テンプレが生徒1に別の生徒を置いたら、テンプレが正（寄せた生徒は生徒2へ戻る）', () => {
+    const { afterDelete, suppressed } = deletedFirstStudent()
+    const sorted = sortCell(afterDelete[0], SORTS[0][1])
+    expect(namesOf(cellOf([sorted]))).toEqual(['馬場', null])
+    const after = remerge([sorted], [row('sC', 'sB')], suppressed)
+    expect(namesOf(cellOf(after))).toEqual(['千葉', '馬場'])
+  })
+
+  it('守り: 並べ替えていない盤面は従来どおりテンプレ（抑止後）の席＝生徒2のまま', () => {
+    const { afterDelete, suppressed } = deletedFirstStudent()
+    expect(namesOf(cellOf(remerge(afterDelete, ROWS, suppressed)))).toEqual([null, '馬場'])
+  })
+
+  it('守り: テンプレ側で生徒1へ寄せた（生徒1=馬場だけのテンプレ）後は、盤面が生徒2のままでもテンプレに追従して生徒1になる', () => {
+    const { afterDelete, suppressed } = deletedFirstStudent()
+    expect(namesOf(cellOf(remerge(afterDelete, [row('sB', '')], suppressed)))).toEqual(['馬場', null])
+  })
+})
