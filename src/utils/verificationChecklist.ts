@@ -92,7 +92,7 @@ export function selectVerificationChecklistItems(
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.622'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.625'
 
 /**
  * 確認項目の正本(2026-09-12 初版・v1.5.504 で第2版・v1.5.506 で第3版・v1.5.508 で第4版・v1.5.509 で第5版)。
@@ -326,7 +326,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '3 枚まで付けると「画面を撮る」「画像を選ぶ」が消え、外すと戻る',
         '送ったあとの受付文に受付番号が出る。開発者側: メールに 1 枚目が添付され、本文に「添付画像: n 枚」と Storage の置き場所が出る',
       ],
-      introducedIn: 'v1.5.625',
+      introducedIn: 'v1.5.626',
     },
     {
       id: 'rp-2',
@@ -339,7 +339,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '質問・要望の画面に「画面を撮る」は無く、「画像を選ぶ」と案内文だけがある。選んだ画像の縮小画像が出て「外す」で外せる',
         '送ったあと、同じ画面に受付文が出る。開発者側: メールに画像が添付されている',
       ],
-      introducedIn: 'v1.5.625',
+      introducedIn: 'v1.5.626',
     },
     {
       id: 'rp-3',
@@ -353,7 +353,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '画像の貼り付けは本文には入らず、画像の一覧に縮小画像として入る',
         '文字の貼り付けは本文にそのまま入る',
       ],
-      introducedIn: 'v1.5.625',
+      introducedIn: 'v1.5.626',
     },
     {
       id: 'sv-1',
@@ -366,7 +366,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '2 回とも保存は従来どおり成功する(画面の文言・所要時間に変わりがない)',
         '開発者側(Claude・読み取り専用): Storage の classroom-save-history/<会社>/<この教室>/ に保存ごとの .json.gz が 2 本増え、Firestore の operationTraces に同じ saveId の文書が 2 本あり、2 本目の entries に 1 回目の保存成功と 2 回目の操作が入っている',
       ],
-      introducedIn: 'v1.5.625',
+      introducedIn: 'v1.5.626',
     },
     {
       id: 'sv-2',
@@ -381,7 +381,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         'タブ B に「別の端末でこの教室のデータが更新されました…再読み込みしてください」が出て、クラウド保存が止まる(従来どおり)',
         '開発者のメールに 【保存失敗】[コマ表アプリ 監視] <会社> / <この教室> / 版数の衝突 が 1 通届く。2 回目の衝突ではメールは増えない(1 時間に 1 通)',
       ],
-      introducedIn: 'v1.5.625',
+      introducedIn: 'v1.5.626',
     },
     // 保護者QRを「休み連絡」専用へ(docs/spec-parent-portal.md §0-5・開発用教室限定)。
     // ★Cloud Functions のデプロイが緑になってから確認する(Hosting が先に出た数分間は送信が 400 になる)。
@@ -645,6 +645,24 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '手で置いた講師だけ(生徒を置いていない)の机は、今までどおりテンプレの講師に替わり、確認の画面に「替える机: 1机」と出る',
       ],
       introducedIn: 'v1.5.623',
+    },
+    // 並べ替えで生徒2から生徒1へ寄せた席が再マージで戻らない(オーナー指示 2026-10-22・INV-02・mergeManagedDeskLesson)。
+    {
+      id: 'bs-1',
+      area: 'コマ表の並べ替え',
+      title: '「上に詰めて並べ替え」で、生徒2にしか生徒がいない机は生徒2から生徒1へ寄り、開き直しても戻らない',
+      prep: 'テンプレ由来の通常授業で生徒1と生徒2の両方に生徒がいる机を1つ選び、その机の生徒1を右クリック→「削除」して生徒1を空にしておく(生徒2だけが残る)',
+      steps: [
+        'コマ表の右上「並べ替え」→「上に詰めて並べ替え」を押す(別の週では、同じ準備をしてから「同席番で並べ替え」を押す)',
+        '「保存」してから、ブラウザをハードリロード(Ctrl+Shift+R)して同じ週を開く',
+      ],
+      check: [
+        '並べ替え直後、その机の生徒は生徒1の欄に移り、生徒2の欄は空になる',
+        'リロード後も生徒1の欄のまま(生徒2へ戻らない)。削除した生徒1の生徒は湧かない。講師名も変わらない',
+        '並べ替えの前に生徒2の欄へ振替を手で置いた机は、並べ替えで振替が生徒1へ寄り、通常授業の生徒と入れ替わらない',
+        '「同席番で並べ替え」でも同じ(生徒1へ寄り、リロードで戻らない)',
+      ],
+      introducedIn: 'v1.5.625',
     },
     // 生徒・講師を選ぶプルダウンの虫眼鏡絞り込み(オーナー指示 2026-10-16・src/components/common/SearchableSelect.tsx)。
     {

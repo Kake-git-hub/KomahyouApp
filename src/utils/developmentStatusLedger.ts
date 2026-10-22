@@ -125,15 +125,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     references: ['docs/spec-developer-report.md §C/§D-2/§D-3', 'docs/spec-save-restore.md §8-1 #14〜#16', 'docs/runbooks/monitoring.md §3/§5〜§7', 'functions/src/saveFailureAlert.ts', 'functions/src/operationTraces.ts', 'src/utils/clientErrorCapture.ts', 'src/components/developer-report/screenCapture.ts', 'tools/snapshot-diff.mjs'],
     updatedOn: '2026-10-22',
   },
-  {
-    id: 'firestore-pitr',
-    title: 'Firestore の過去時点読み取り(PITR・7 日・1 分刻み)の有効化(案 4・オーナーの GCP 作業)',
-    stage: 'awaiting-owner',
-    summary: 'コード変更なし。保存ごとの版履歴(90 日)が積み上がるまでのつなぎと、版履歴が書けなかったときの保険。費用は PITR 分の容量に対する Firestore のストレージ課金(月 100〜300 円の見込み)。',
-    nextAction: 'オーナー: docs/runbooks/monitoring.md §7 の gcloud コマンドで有効化し、翌月の請求で実額を確認する。有効化したらこの行を消す(見合わなければ --no-enable-pitr で戻す)。',
-    references: ['docs/runbooks/monitoring.md §7', 'docs/spec-save-restore.md §8-1 #16'],
-    updatedOn: '2026-10-22',
-  },
 
   // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────
   {
