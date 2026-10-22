@@ -45,7 +45,9 @@ import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
-import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
+import { clearOperationTraceMemory, collectOperationTraceSinceLastSave, markOperationTraceSaved, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
+import { handleCapturedClientError, installClientErrorCapture, setClientErrorAutoReporter } from './utils/clientErrorCapture'
+import { captureScreenToDataUrl } from './components/developer-report/screenCapture'
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportStudentLedger, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
@@ -2420,6 +2422,8 @@ function AuthenticatedApp() {
           // 操作ログ: 前回保存以降に溜まった分をこの保存へ相乗りさせる。保存が失敗したらバッファへ戻して
           // 次回に再送する(イベント id をドキュメント id にするので、再送で重複しない)。
           const operationEvents = takeOperationEvents(targetClassroom.id)
+          // 操作痕跡(2026-10-22 案 2): 前回保存以降の分をこの保存へ相乗りさせる。印(どこまで載せたか)は保存が成功したときだけ進める。
+          const operationTrace = collectOperationTraceSinceLastSave(targetClassroom.id)
           // 生徒授業台帳: 盤面と同じ計算で生徒×科目の実績・未消化を出し、内容が変わった(または日付が変わった)
           // ときだけ相乗りさせる。計算に失敗しても保存は続ける(台帳は保存より優先度が低い)。
           let lessonLedgerToSend: ReturnType<typeof buildStudentLessonLedger> = null
@@ -2449,9 +2453,11 @@ function AuthenticatedApp() {
                 payload: targetClassroom.data,
                 ...(operationEvents.length > 0 ? { operationEvents } : {}),
                 ...(lessonLedgerToSend ? { lessonLedger: lessonLedgerToSend } : {}),
+                ...(operationTrace.length > 0 ? { operationTrace } : {}),
                 client: { appVersion: __APP_VERSION__, userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent },
               })
               if (lessonLedgerToSend) markStudentLessonLedgerSent(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)
+              markOperationTraceSaved(targetClassroom.id, operationTrace)
               recordOperationTrace('save', `保存成功 savedAt=${nextItem.snapshot.savedAt} version=${typeof result.version === 'number' ? result.version : '?'}`)
               // 保護者からの休み連絡: この保存に含まれる「保存待ち」を処理済みにする(spec-parent-portal §0-5・保存の成功点はここだけ)。
               // ★ここは全教室の保存が通る try の中。休み連絡の後処理で例外が出ても、成功した保存を「保存失敗」にしない
@@ -4184,13 +4190,37 @@ function AuthenticatedApp() {
   useLayoutEffect(() => {
     submitDeveloperReportRef.current = submitDeveloperReport
   }, [submitDeveloperReport])
+  // 画面エラーの自動捕捉(2026-10-22 案 3・spec-developer-report §D-2): window の例外と未処理の Promise 拒否を痕跡に残し、
+  // 教室を開いているときは「質問・要望」と同じ経路(種類 bug・先頭行に目印)で自動報告を送る。歯止めは clientErrorCapture 側
+  // (同じエラーは 1 回・1 タブ 3 通まで)。React の描画例外は main.tsx の AppErrorBoundary が同じ入口へ渡す。
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setClientErrorAutoReporter({
+      submit: (note) => {
+        const submit = submitDeveloperReportRef.current
+        if (!submit || !actingClassroomIdRef.current) return Promise.resolve({ ok: false as const, error: '教室を開いていないため自動報告は送りません。' })
+        return submit({ source: 'board', category: 'bug', note })
+      },
+      context: () => ({
+        appVersion: __APP_VERSION__,
+        screen: screenRef.current,
+        url: window.location.href,
+      }),
+    })
+    const uninstall = installClientErrorCapture(window, handleCapturedClientError)
+    return () => {
+      uninstall()
+      setClientErrorAutoReporter(null)
+    }
+  }, [actingClassroomIdRef, screenRef])
   const openDeveloperReportModal = useCallback(() => {
     recordOperationTrace('navigation', '質問・要望モーダルを開く(盤面)')
     setDeveloperReportModal({ sending: false, resultMessage: null })
   }, [])
-  const handleDeveloperReportSubmit = useCallback(async (note: string, category: DeveloperReportCategory) => {
+  const handleDeveloperReportSubmit = useCallback(async (note: string, category: DeveloperReportCategory, attachments: DeveloperReportAttachment[] = []) => {
     setDeveloperReportModal({ sending: true, resultMessage: null })
-    const result = await submitDeveloperReport({ source: 'board', category, note })
+    // 添付画像(2026-10-22): モーダルで撮った／選んだ画像を同じ 1 通に載せる(確認リストと同じ経路・別の送信口は作らない)。
+    const result = await submitDeveloperReport({ source: 'board', category, note, ...(attachments.length > 0 ? { attachments } : {}) })
     setDeveloperReportModal({ sending: false, resultMessage: formatDeveloperReportResultMessage(result) })
   }, [submitDeveloperReport])
 
@@ -4212,7 +4242,7 @@ function AuthenticatedApp() {
         const noteError = validateDeveloperReportNote(developerReport.note)
         const submission = noteError
           ? Promise.resolve({ ok: false as const, error: noteError })
-          : submitDeveloperReport({ source: 'schedule', category: developerReport.category, note: developerReport.note, scheduleContext: developerReport.scheduleContext })
+          : submitDeveloperReport({ source: 'schedule', category: developerReport.category, note: developerReport.note, scheduleContext: developerReport.scheduleContext, attachments: developerReport.attachments })
         void submission.then((result) => {
           try {
             replyTarget?.postMessage({ type: SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, ok: result.ok, message: formatDeveloperReportResultMessage(result) }, '*')
@@ -6223,8 +6253,9 @@ function AuthenticatedApp() {
         aiAnswerEnabled={isFeatureEnabledForClassroom('questionAiAnswer', actingClassroom)}
         sending={developerReportModal.sending}
         resultMessage={developerReportModal.resultMessage}
-        onSubmit={(note, category) => { void handleDeveloperReportSubmit(note, category) }}
+        onSubmit={(note, category, attachments) => { void handleDeveloperReportSubmit(note, category, attachments) }}
         onClose={() => setDeveloperReportModal(null)}
+        onCaptureScreen={captureScreenToDataUrl}
         answers={isRemoteBackendEnabled ? reportAnswers : undefined}
         canMarkAnswersRead={canMarkReportAnswersRead}
         onMarkAnswersRead={handleMarkReportAnswersRead}

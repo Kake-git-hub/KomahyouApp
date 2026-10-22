@@ -101,7 +101,7 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
 
   it('サーバー: 送信時に回答待ち文書を作り(失敗しても報告は成功)、回答は開発者のみ、既読は教室メンバー', () => {
     expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
-    expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role')
+    expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, isAutoErrorReport, reporterRole: member.role')
     expect(FUNCTIONS_INDEX).toContain('Failed to create pending reportAnswers doc')
     const answer = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const answerDeveloperReport'), FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'))
     expect(answer).toContain('await requireDeveloperMember(request.auth?.uid, workspaceKey)')

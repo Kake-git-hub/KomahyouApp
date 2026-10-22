@@ -21,9 +21,16 @@
 ### 2. リリース時のライブ検証（自動・既存）
 - `Deploy to Firebase Hosting` が毎デプロイ後に `tools/verify-firebase-hosting.mjs` で配信実体を検証。
 
-### 3. 保存失敗の記録（あり・要確認運用）
+### 3. 保存失敗の記録と監視メール（記録＝既存／メール＝2026-10-22 オーナー採用「即時対応のための案 6」）
 - 保存の各試行は `classroomSnapshots/{id}/saveAttempts/{saveId}` に status（started/verified/verification-failed）が残る。
 - 保存不具合の調査時はここを**読み取り**で確認する（書き込み調査は staging で）。
+- **即時メール**: Cloud Function `saveClassroomSnapshot` が次の 3 つの失敗で開発者へメールを送る（利用者報告と同じ `REPORT_MAIL_*` 設定・追加設定なし）。
+  件名 `【保存失敗】[コマ表アプリ 監視] <会社> / <教室> / <種類>`。本文に保存 ID・版数・端末情報・確かめること・置き場所（saveAttempts／operationTraces／版履歴）。
+  - `stale-version` … 楽観ロックの版数衝突（別の端末が先に保存＝多端末同時編集の疑い）
+  - `readback-failed` … 保存後の読み戻し検証に失敗
+  - `data-loss-guard` … 空の管理データでの上書きを破壊防止ガードが止めた
+- **教室ごとに 1 時間に 1 通**（`workspaces/{ws}/saveFailureAlerts/{classroomId}.lastSentAt`）。送らなかった分も `occurrenceCount`／`lastOccurredAt` に数える。
+  メールの失敗は保存の応答に影響しない（関数ログ `[SaveFailureAlert]`）。純粋ロジックは `functions/src/saveFailureAlert.ts`。
 
 ### 4. 利用者からの「要望・報告」（自動・実装済み 2026-09-04）
 
@@ -54,6 +61,36 @@ Cloud Function が SMTP で直接送る。Gmail の場合は **アプリパス�
    届かないときは Firestore の該当文書の `mailError` / `mailSkipped` と関数ログ `[DeveloperReportMail]` を見る。
 
 GitHub 側の通知設定は不要（Issue はあくまで課題管理の記録。Issue のメール通知も欲しければリポジトリを Watch する）。
+
+### 5. 画面エラーの自動報告（2026-10-22 オーナー採用「即時対応のための案 3」）
+- 室長の画面で未捕捉の例外・未処理の Promise 拒否・React の描画例外が起きると、アプリが操作痕跡（kind `error`）に残し、教室を開いていれば
+  「質問・要望」と同じ経路で **自動報告**（本文先頭 `[自動エラー報告]`・種類 bug）を送る。**メールは届く（件名【自動エラー報告】）が Issue は作らない**
+  （`notifySkipped: 'auto-error'`）。開発ダッシュボードの「通知済みだが Issue なし」で拾う。同じエラーは 1 タブ 1 回・3 通まで。
+- 描画例外のときは室長に「画面の表示で問題が起きました／再読み込み」の案内が出る（`AppErrorBoundary`）。仕様 `docs/spec-developer-report.md` §D-2。
+
+### 6. 保存ごとの版履歴・保存同梱の操作痕跡・差分ツール（2026-10-22 案 1・2・5）
+- 保存のたびに Storage `classroom-save-history/{ws}/{classroomId}/{保存時刻}-v{版数}.json.gz`（90 日）と Firestore
+  `classroomSnapshots/{id}/operationTraces/{saveId}`（前回保存以降の操作の要約・90 日）が残る。15 分バックアップでは拾えない「保存と保存の間」を辿れる。
+- 調査の手順（読み取り専用）:
+  ```bash
+  export FIRESTORE_ACCESS_TOKEN=$(node tools/prod-readonly-token.mjs)
+  gsutil ls gs://komahyouapp-prod.firebasestorage.app/classroom-save-history/<ws>/<classroomId>/      # 版の一覧(名前順=時系列)
+  gsutil cp gs://.../<前>.json.gz gs://.../<後>.json.gz <スクラッチ領域>/                                # 2 本を落とす
+  node tools/snapshot-diff.mjs <前>.json.gz <後>.json.gz                                              # 生徒・コマ(机)単位の差分
+  ```
+  `operationTraces` は Firestore REST の GET で `saveId` を指定して読む。**出力・ファイルは生徒名を含むので、スクラッチ領域に置きリポジトリ・Issue へ貼らない。**
+- 自動バックアップ関数は別会社 10 教室の追加に備えて 540 秒／2GiB へ増強済み（2026-10-22）。恒久対策（会社ごとの分割実行）は進行中テーマ台帳の `backup-per-workspace`。
+
+### 7. Firestore の過去時点読み取り（PITR）を有効にする（オーナー作業 ~5 分・2026-10-22 案 4・任意）
+- 有効にすると、Firestore の全文書を**過去 7 日・1 分刻み**の任意時点で読める（コード変更なし）。保存ごとの版履歴（§6）が 90 日ぶん積み上がるまでのつなぎ、
+  および版履歴が書けなかったときの保険。
+- 手順（オーナーの gcloud・プロジェクト `komahyouapp-prod`）:
+  ```bash
+  gcloud firestore databases update --database='(default)' --enable-pitr --project=komahyouapp-prod
+  gcloud firestore databases describe --database='(default)' --project=komahyouapp-prod   # pointInTimeRecoveryEnablement を確認
+  ```
+- 費用は PITR 分のデータ容量に対する Firestore のストレージ課金（数百 MB 〜 数 GB の見込み・月 100〜300 円程度）。翌月の請求で実額を確認し、見合わなければ `--no-enable-pitr` で戻す。
+- 読み方は Admin SDK／REST の `readTime` 指定（Claude が読み取り専用トークンで行う）。復元に使うときは従来どおり「開いている教室へ読み込み → 保存」の経路だけ（直接書かない）。
 
 ## アラートが来たら（対応フロー）
 1. 自動起票された `incident:uptime` Issue とワークフローのログ（report）を見る。

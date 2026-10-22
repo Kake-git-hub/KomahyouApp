@@ -24,6 +24,11 @@ import {
   WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS,
   WORKSPACE_BACKUP_QUIET_HOURS_END_JST,
   WORKSPACE_BACKUP_QUIET_HOURS_START_JST,
+  buildClassroomSaveHistoryStoragePath,
+  CLASSROOM_SAVE_HISTORY_PREFIX,
+  CLASSROOM_SAVE_HISTORY_RETENTION_DAYS,
+  shouldKeepClassroomSaveHistory,
+  toStorageSafeTimestampKey,
 } from './workspaceBackupSchedule'
 
 // 保持期間のスペックロック（正本: docs/spec-save-restore.md §8「データ保持期間」8-2）。
@@ -323,5 +328,39 @@ describe('shouldKeepWorkspaceIncidentBackup', () => {
 
   it('retentionDays を渡すと上書きできる', () => {
     expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: nowMs - 100 * dayMs, nowMs, retentionDays: 400 })).toBe(true)
+  })
+})
+
+describe('保存ごとの教室版履歴(2026-10-22 案 1)', () => {
+  const nowMs = new Date('2026-10-22T03:30:00.000Z').getTime()
+  const dayMs = 24 * HOUR_IN_MS
+
+  it('保持期間の仕様ロック(90 日・変えるときは docs/spec-save-restore.md §8-1 と CHANGELOG を同じコミットで)', () => {
+    expect(CLASSROOM_SAVE_HISTORY_RETENTION_DAYS).toBe(90)
+    expect(CLASSROOM_SAVE_HISTORY_PREFIX).toBe('classroom-save-history')
+  })
+
+  it('置き場所は 教室フォルダ/保存時刻-v版数.json.gz で、名前に : と . を含まない(名前順 = 時系列順)', () => {
+    const path = buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.123Z', 42)
+    expect(path).toBe('classroom-save-history/main/cls1/2026-10-22T06-32-10-123Z-v42.json.gz')
+    expect(path.split('/').pop()!.replace(/\.json\.gz$/u, '')).not.toMatch(/[:.]/u)
+    // 時系列順に並ぶ(文字列比較で前後が決まる)。
+    const earlier = buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:09.999Z', 41)
+    expect(earlier < path).toBe(true)
+  })
+
+  it('版数が読めない旧文書は v0、読めない時刻は epoch へ丸める(例外にしない)', () => {
+    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', '2026-10-22T06:32:10.000Z', undefined)).toContain('-v0.json.gz')
+    expect(buildClassroomSaveHistoryStoragePath('main', 'cls1', 'not-a-date', 3)).toBe('classroom-save-history/main/cls1/1970-01-01T00-00-00-000Z-v3.json.gz')
+    expect(toStorageSafeTimestampKey('2026-10-22T06:32:10.123Z')).toBe('2026-10-22T06-32-10-123Z')
+  })
+
+  it('保持判定: 90 日未満は残し、90 日ちょうどで削除対象。時刻不明・未来は必ず残す', () => {
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs - 89 * dayMs, nowMs })).toBe(true)
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs - 90 * dayMs, nowMs })).toBe(false)
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: 0, nowMs })).toBe(true)
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: Number.NaN, nowMs })).toBe(true)
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs + dayMs, nowMs })).toBe(true)
+    expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs - 100 * dayMs, nowMs, retentionDays: 400 })).toBe(true)
   })
 })

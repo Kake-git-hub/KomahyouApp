@@ -12,7 +12,8 @@
   バグ／仕様の誤解／勘違いを開発者側で切り分けられるようにする。
 - **受け取った後の進め方（オーナー指示 2026-09-04・厳守）**: 利用者報告 Issue を見ても**勝手に修正を始めない**。
   調査・整理までは進めてよいが、コード修正への着手はオーナーが確認して許可してから。
-- 非目的: 全操作をサーバーへ常時記録すること（コストとノイズが見合わない。オーナー判断 2026-09-04）。
+- 非目的: 全操作をサーバーへ**常時**記録すること（コストとノイズが見合わない。オーナー判断 2026-09-04）。
+  **2026-10-22 改定（オーナー採用「即時対応のための案 2」）**: 常時送信はしないまま、**保存リクエストに「前回保存以降の痕跡」を相乗りさせて**サーバーへ残す（追加リクエスト無し・§D-3）。
   本番での不変条件(INV)自己検査（オーナー判断で不要。報告が来たら開発者が検査する）。
 
 ## B. ボタンの位置と見え方（オーナー確定）
@@ -44,7 +45,7 @@
 | 直近の操作痕跡 | 端末内リングバッファの最新 300 件 | `operationTrace.ts`（§D） |
 | 報告時点の教室データ | メモリ上の教室データ（**未保存の変更込み**）を gzip して Storage へ | `buildClassroomSnapshotPayload` |
 | メタ | 教室・報告元(board/schedule)・アプリ版数・UA・URL・画面・未保存有無・最終保存時刻 | App |
-| 添付画像（2026-10-14） | 確認リスト（開発用教室）の項目ごとのスクリーンショット。画面側で長辺 1600px の JPEG に縮め data URL で送る（1 通 8 枚・1 枚 1.5MB・合計 6MB まで。サーバーも同じ上限で検証し超過分は捨てる）。一般の質問・要望モーダルには付けない | `VerificationChecklistPanel` → `attachments` |
+| 添付画像（2026-10-14・**2026-10-22 一般モーダルにも**） | 画面側で長辺 1600px の JPEG に縮め data URL で送る（1 枚 1.5MB・合計 6MB まで。サーバーも同じ上限で検証し超過分は捨てる）。**枚数は教室で分ける**: 開発用教室の確認リストは 1 通 8 枚、**一般の質問・要望モーダルは 3 枚**（オーナー決定 2026-10-22「3 枚に絞る」・`resolveDeveloperReportAttachmentLimit`）。付け方（オーナー決定 2026-10-22・案 A）: **盤面**＝「画面を撮る」（html2canvas でいま見えている範囲を撮る・モーダルと確認リストは写さない・`screenCapture.ts`）＋「画像を選ぶ」＋スクリーンショットの貼り付け（Ctrl+V）、**日程表タブ**＝「画像を選ぶ」だけ（埋め込み JS で縮小し postMessage で本体へ・本体が同じ規則で再検証）。**メールには 1 枚目だけ 1MB まで添付**し、残りは Storage の置き場所を本文に書く | `DeveloperReportModal` / `scheduleHtml.ts` → `attachments` |
 | 実行者・受領時刻 | **サーバーが付ける**（自己申告にしない） | Cloud Function |
 
 - 保存先: Firestore `workspaces/{ws}/developerReports/{reportId}`（メタ＋操作痕跡）、
@@ -60,10 +61,33 @@
 - 対象: 盤面が変わる全確定（`commitWeeks` の前後差分＝「日付 限 机番: 前 → 後」）、テンプレ反映(board-rebuild)、
   undo/redo、保存の成否、操作ログ(`operationLog.ts`)のイベントの写し、日程表など別タブからの postMessage、
   報告モーダルの開閉・送信結果。
-- 保持: 教室ごとに最新 300 件をメモリ＋`localStorage`(`operation-trace:<classroomId>`)。再読み込みを跨いで残る。
-- **報告ボタンが押されるまで端末外へ出ない。** 記録の失敗は本体の操作に影響させない（例外は握る）。
+- 保持: 教室ごとに最新 **1000 件**（2026-10-22 に 300 → 1000・案 2）をメモリ＋`localStorage`(`operation-trace:<classroomId>`)。再読み込みを跨いで残る。報告に同梱するのは新しい方から 300 件（不変）。
+- **端末外へ出るのは「報告ボタン」と「保存」の 2 経路だけ**（2026-10-22 改定・§D-3。それ以前は報告のみ）。記録の失敗は本体の操作に影響させない（例外は握る）。
 - 操作ログ（サーバー監査記録・在庫が減る/記録が消える操作だけ）とは別物。両者の種別一覧はサーバー
   `DEVELOPER_REPORT_TRACE_KINDS` と二重管理（テストで一致を固定）。
+
+### D-2. 画面エラーの自動捕捉と自動報告（2026-10-22 オーナー採用「即時対応のための案 3」）
+
+- `window` の未捕捉例外（`error`）・未処理の Promise 拒否（`unhandledrejection`）・React の描画例外（`main.tsx` の `AppErrorBoundary`）を
+  `src/utils/clientErrorCapture.ts` が捕まえ、(1) 操作痕跡に **kind `error`** で残し（両側の種別一覧に追加）、(2) 教室を開いていれば
+  **「質問・要望」と同じ経路（`submitDeveloperReport`・種類 bug）で自動報告を 1 通送る**。利用者の操作は要らない。
+- 本文の先頭行は目印 **`[自動エラー報告]`**（クライアント `CLIENT_ERROR_AUTO_REPORT_MARKER`／サーバー `DEVELOPER_REPORT_AUTO_ERROR_MARKER`・テストで一致）。
+  サーバーは `isAutoErrorReport: true` で記録し、**メールは送る（件名【自動エラー報告】）が GitHub Issue は作らない**（`notifySkipped: 'auto-error'`・
+  同じエラーが複数端末から届いて Issue が増えるのを防ぐ）。開発ダッシュボードの「通知済みだが Issue なし」に出る。室長の「これまでの質問と回答」には出さない。
+- 歯止め: 同じエラー（出どころ・名前・文の先頭・最初のフレーム）は 1 回、**1 タブ 3 通まで**。旧チャンク掴み（`recoverFromChunkLoadError` が扱う）・
+  `ResizeObserver loop`・中身の無い `Script error.` は送らない（痕跡にも残さない）。
+- 描画例外の受け皿（`AppErrorFallback`）は室長向けの案内（「内容は開発者へ自動で届いています」「再読み込み」）だけを出し、内部語を出さない。
+- 日程表タブ（独立 HTML）のエラーは対象外（別タブの `window`）。
+
+### D-3. 操作痕跡の保存同梱（2026-10-22 オーナー採用「即時対応のための案 2」）
+
+- 保存リクエスト（`saveClassroomSnapshot`）に **前回保存以降の痕跡**（新しい方から最大 300 件・`collectOperationTraceSinceLastSave`）を `operationTrace` として相乗りさせる。
+  サーバーは報告と同じ規則（`normalizeDeveloperReportTrace`）で正規化し、`classroomSnapshots/{classroomId}/operationTraces/{saveId}`
+  （`entries`・`entryCount`・`firstAt`／`lastAt`・`snapshotVersion`・`recordedAt`）へ残す。**書けなくても保存本体は成功のまま**（操作ログと同じ方針）。
+- 「どこまで載せたか」の印（最後に載せた痕跡の時刻）は**保存が成功したときだけ進め**、`localStorage`（`operation-trace-saved:<classroomId>`）にも残す。
+  失敗した保存の分は次の保存にもう一度乗る（文書 id は saveId なので重複にはならない）。
+- 保持 **90 日**（`OPERATION_TRACE_RETENTION_DAYS`・掃除は `cleanupOldSaveAttempts` の対応表）。保存ごとの教室版履歴（`docs/spec-save-restore.md` §8-1 #14）と
+  同じ saveId・版数で突き合わせ、`tools/snapshot-diff.mjs` の前後比較と並べて読む。
 
 ## E. 開発者が受け取る仕組み
 
@@ -80,6 +104,8 @@
 - **公開リポジトリのため Issue 本文に操作痕跡（生徒名）・教室データは載せない。** メタ＋一言＋置き場所
   （Firestore 文書パス／Storage パスと取得コマンド）だけ。Issue 本文にも「勝手に修正を始めない・許可後に着手」を明記。
 - LINE 通知は **不採用**（オーナー判断 2026-09-04: Messaging API の取得条件が厳しくなったため。メール直送へ置換）。
+- **添付画像はメールに 1 枚目だけ（1MB まで）添付**（オーナー決定 2026-10-22）。読めなくても本文は送る。残りの画像は本文に Storage の置き場所を書く（`buildDeveloperReportMailAttachmentLines`）。
+- **画面エラーの自動報告（§D-2）は Issue を作らない**（メールのみ・`notifySkipped: 'auto-error'`）。
 - Issue のラベルは種類で変える: bug → `type:bug`、request → `type:feature`、question → `type:question`（共通 `status:triage` / `source:user-report`）。
   Issue タイトルの種別は `[利用者報告]` / `[利用者要望]` / `[利用者質問]`。メール件名は質問のとき `【質問】` を先頭に付ける（テスト送信は `【テスト】【質問】` の順）。
 - Firestore ルール: `developerReports` は開発者のみ read、write は不可（Cloud Function は Admin SDK で書く）。

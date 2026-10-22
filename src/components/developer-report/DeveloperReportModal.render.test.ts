@@ -81,3 +81,25 @@ describe('DeveloperReportModal の描画(履歴タブ)', () => {
     expect(html).toContain('data-testid="developer-report-tab-history"')
   })
 })
+
+describe('DeveloperReportModal の描画(添付画像・2026-10-22 オーナー決定 A)', () => {
+  it('撮る関数を渡すと「画面を撮る」と「画像を選ぶ」の両方と盤面向けの案内を描く', () => {
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: async () => ({ name: 'x', dataUrl: 'data:image/jpeg;base64,AAAA' }) }))
+    expect(html).toContain('data-testid="developer-report-attachments"')
+    expect(html).toContain('data-testid="developer-report-capture"')
+    expect(html).toContain('>画面を撮る<')
+    expect(html).toContain('data-testid="developer-report-attach-input"')
+    expect(html).toContain('画像を選ぶ')
+    expect(html).toContain('画像（任意・3 枚まで）')
+    expect(html).toContain('いまのコマ表の画面がそのまま付きます')
+    // 画像が無ければ一覧の器は描かない(空の枠を出さない)。
+    expect(html).not.toContain('data-testid="developer-report-attachment"')
+  })
+
+  it('撮る関数が無ければ「画像を選ぶ」だけと、スクリーンショットを選ぶ案内', () => {
+    const html = renderToString(createElement(DeveloperReportModal, baseProps))
+    expect(html).not.toContain('data-testid="developer-report-capture"')
+    expect(html).toContain('data-testid="developer-report-attach-input"')
+    expect(html).toContain('スクリーンショットを撮って「画像を選ぶ」から付けられます')
+  })
+})

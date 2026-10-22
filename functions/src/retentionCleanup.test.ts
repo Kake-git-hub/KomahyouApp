@@ -6,6 +6,8 @@ import {
   FIRESTORE_MAX_DOCUMENT_BYTES,
   FIRESTORE_MAX_TRANSACTION_BYTES,
   INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS,
+  CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS,
+  RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS,
   resolveRetentionCutoffIso,
   RETENTION_CLEANUP_DELETE_CONCURRENCY,
   RETENTION_CLEANUP_MAX_DELETES_PER_SWEEP,
@@ -74,7 +76,21 @@ describe('Transaction too big 回帰防止', () => {
   it('Storage の間引きは Firestore 巡回と独立した時間予算を持つ', () => {
     // 予算を共有すると、Firestore 側が使い切った晩は1ページだけ見て打ち切り、翌晩も1ページ目に戻る。
     expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS).toBeGreaterThan(0)
-    expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS + RETENTION_CLEANUP_TIME_BUDGET_MS).toBeLessThan(300_000)
+    expect(CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS).toBeGreaterThan(0)
+    // 3 つの予算の合計が関数の timeoutSeconds(540・2026-10-22 に 300 から延長)に収まる。index.ts の値も同じ定数を使う。
+    expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS + CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS + RETENTION_CLEANUP_TIME_BUDGET_MS)
+      .toBeLessThan(RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS * 1000)
+    expect(RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS).toBeLessThanOrEqual(540)
+    expect(readIndexSource()).toContain('timeoutSeconds: RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS')
+  })
+
+  it('版履歴(classroom-save-history)の間引きも Firestore 巡回より先に走る', () => {
+    const source = readIndexSource()
+    const body = source.slice(source.indexOf('async function runSaveAttemptCleanup'))
+    const prunePosition = body.indexOf('await pruneClassroomSaveHistory(')
+    const firestorePosition = body.indexOf("firestore.collection('workspaces').get()")
+    expect(prunePosition).toBeGreaterThan(-1)
+    expect(prunePosition).toBeLessThan(firestorePosition)
   })
 
   it('1回のスイープで滞留分をまとめて回収できる予算になっている', () => {
@@ -96,11 +112,26 @@ describe('buildRetentionTargets', () => {
     expect(buildRetentionTargets()).toEqual([
       { key: 'saveAttempts', collectionId: 'saveAttempts', timestampField: 'createdAt' },
       { key: 'operationEvents', collectionId: 'operationEvents', timestampField: 'recordedAt' },
+      // 保存に相乗りした操作痕跡(2026-10-22 案 2・spec-save-restore §8-1 #15・保持 90 日)。
+      { key: 'operationTraces', collectionId: 'operationTraces', timestampField: 'recordedAt' },
       { key: 'lessonLedgerDays', collectionId: 'lessonLedgerDays', timestampField: 'recordedAt' },
       // 保護者向け固定QR(docs/spec-parent-portal.md §E-2): 連絡 365 日・回数制限カウンタ 7 日。
       { key: 'parentMessages', collectionId: 'parentMessages', timestampField: 'createdAt' },
       { key: 'parentPortalRateLimits', collectionId: 'parentPortalRateLimits', timestampField: 'createdAt' },
     ])
+  })
+
+  it('操作痕跡(operationTraces)の保持日数は index.ts で 90 日(下限 7)に配線され、保存の正常経路とリプレイの両方で書いている', () => {
+    const source = readIndexSource()
+    expect(source).toContain("const OPERATION_TRACE_RETENTION_DAYS = Math.max(7, Math.trunc(Number(process.env.OPERATION_TRACE_RETENTION_DAYS)) || 90)")
+    const body = source.slice(source.indexOf('async function runSaveAttemptCleanup'))
+    expect(body).toContain('operationTraces: resolveRetentionCutoffIso(startedAtMs, OPERATION_TRACE_RETENTION_DAYS)')
+    const save = source.slice(source.indexOf('async function saveClassroomSnapshotFromCallable'), source.indexOf('export const saveClassroomSnapshot = onCall('))
+    expect(save.split('await persistOperationTrace(').length - 1).toBe(2)
+    // 書けなくても保存本体は成功のまま(persistOperationTrace の中で握る)。
+    const persist = source.slice(source.indexOf('async function persistOperationTrace('), source.indexOf('async function persistLessonLedger('))
+    expect(persist).toContain('catch (error)')
+    expect(persist).not.toContain('throw')
   })
 
   it('保護者連絡の保持日数は index.ts で 365 日(下限 30)・カウンタは 7 日(下限 1)に配線されている', () => {

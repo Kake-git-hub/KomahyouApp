@@ -15,6 +15,8 @@ import {
   normalizeDeveloperReportCategory,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_KINDS,
+  DEVELOPER_REPORT_AUTO_ERROR_MARKER,
+  isAutoErrorReportNote,
   DEVELOPER_REPORT_TRACE_LIMIT,
   buildDeveloperReportAttachmentStoragePath,
   buildDeveloperReportId,
@@ -24,6 +26,11 @@ import {
   DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES,
   normalizeDeveloperReport,
   normalizeDeveloperReportAttachments,
+  DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT,
+  DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES,
+  resolveDeveloperReportAttachmentLimit,
+  selectDeveloperReportMailAttachment,
+  buildDeveloperReportMailAttachmentLines,
   parseImageDataUrl,
   normalizeDeveloperReportTrace,
   trimDeveloperReportTraceToBudget,
@@ -33,7 +40,7 @@ const FALLBACK = '2026-09-04T03:00:00.000Z'
 
 describe('developerReport(server): 操作痕跡の正規化', () => {
   it('クライアント(src/utils/operationTrace.ts)の種別一覧と一致する(片方だけ足すとサーバーが黙って捨てる)', () => {
-    expect([...DEVELOPER_REPORT_TRACE_KINDS]).toEqual(['board-commit', 'board-rebuild', 'undo', 'redo', 'save', 'operation-event', 'schedule-message', 'navigation', 'auto'])
+    expect([...DEVELOPER_REPORT_TRACE_KINDS]).toEqual(['board-commit', 'board-rebuild', 'undo', 'redo', 'save', 'operation-event', 'schedule-message', 'navigation', 'auto', 'error'])
   })
 
   it('壊れた要素だけ捨て、残りは通す。上限超過は新しい方を残す', () => {
@@ -292,8 +299,10 @@ describe('developerReport(server): 確認リストはメール・Issue の対象
     // 2026-09-16: 検証用教室の判定は (workspaceKey, classroomId) の登録台帳。教室名は渡さない。
     expect(indexTs).toContain('const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })')
     expect(indexTs).toContain('const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)')
-    expect(indexTs).toContain('notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,')
-    expect(indexTs).toMatch(/isVerificationChecklist,\s*\n\s*note: report\.note,/u)
+    // 2026-10-22 案 3 で自動エラー報告(isAutoErrorReport)も Issue 起票をしない側に加わった。
+    expect(indexTs).toContain('notifiedAt: report.isTest || isVerificationChecklist || isAutoErrorReport ? recordedAt : null,')
+    // 2026-10-22 案 3 で isAutoErrorReport が間に入った(どちらも記録して本文の前に置く)。
+    expect(indexTs).toMatch(/isVerificationChecklist,\s*\n\s*isAutoErrorReport,\s*\n\s*note: report\.note,/u)
     const trigger = indexTs.slice(indexTs.indexOf('export const notifyDeveloperReportByMail'))
     const skipIndex = trigger.indexOf('resolveDeveloperReportMailSkipReason(data)')
     expect(skipIndex).toBeGreaterThan(0)
@@ -342,13 +351,98 @@ describe('developerReport(server): 添付画像(確認リストのスクショ�
 
   it('index.ts: 添付は教室データの後に 1 枚ずつ Storage へ保存し、保存できた分だけ文書 attachments[] に残す(画像本体は文書に入れない)', () => {
     const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
-    // 受け付けるのは開発用教室(確認リストの送信元)だけ。本番教室の報告の attachments は捨てる(既存の isDevelopmentClassroom を使う)。
-    expect(indexTs).toContain('const attachments = isDevelopmentClassroom ? normalizeDeveloperReportAttachments(rawData.attachments) : []')
-    expect(indexTs.indexOf('const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })')).toBeLessThan(indexTs.indexOf('const attachments = isDevelopmentClassroom ?'))
+    // 2026-10-22 オーナー決定: 一般の質問・要望モーダルにも画像が付くので全教室から受け付け、枚数だけ教室で分ける(開発用教室 8 枚・それ以外 3 枚)。
+    expect(indexTs).toContain('const attachments = normalizeDeveloperReportAttachments(rawData.attachments, { limit: resolveDeveloperReportAttachmentLimit(isDevelopmentClassroom) })')
+    expect(indexTs.indexOf('const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })')).toBeLessThan(indexTs.indexOf('const attachments = normalizeDeveloperReportAttachments('))
     expect(indexTs).toContain("buildDeveloperReportAttachmentStoragePath(workspaceKey, classroomId, reportId, index, attachment.mimeType)")
     expect(indexTs).toContain("save(Buffer.from(attachment.base64, 'base64')")
     expect(indexTs).toContain('attachments: storedAttachments,')
     expect(indexTs).toContain('attachmentCount: attachments.length,')
     expect(indexTs).not.toMatch(/attachments:\s*attachments,/u)
+  })
+})
+
+describe('画面エラーの自動報告(2026-10-22 案 3)', () => {
+  it('目印はクライアント(src/utils/clientErrorCapture.ts)と同じ文字列で、先頭行だけを見る', () => {
+    expect(DEVELOPER_REPORT_AUTO_ERROR_MARKER).toBe('[自動エラー報告]')
+    expect(isAutoErrorReportNote('[自動エラー報告] 画面で想定外のエラーが起きました\nエラー: TypeError: x')).toBe(true)
+    expect(isAutoErrorReportNote('  [自動エラー報告] 先頭の空白は許す')).toBe(true)
+    expect(isAutoErrorReportNote('ふつうの質問\n[自動エラー報告] 2 行目では自動報告にしない')).toBe(false)
+    expect(isAutoErrorReportNote('')).toBe(false)
+  })
+
+  it('メール件名に【自動エラー報告】を付け、本文で Issue を作らない旨を知らせる', () => {
+    const mail = buildDeveloperReportMail({ reportId: 'r1', classroomId: 'c1', classroomName: '教室A', category: 'bug', source: 'board', isAutoErrorReport: true, note: '[自動エラー報告] 画面で想定外のエラー' }, { workspaceKey: 'main', projectId: 'p', storageBucket: 'b' })
+    expect(mail.subject.startsWith('【自動エラー報告】[コマ表アプリ 要望・報告] 教室A / 不具合・おかしい')).toBe(true)
+    expect(mail.text).toContain('アプリが自動で送った報告です')
+    expect(mail.text).toContain('GitHub Issue は作られません')
+    expect(mail.text).not.toContain('利用者が画面の「要望・報告」ボタンから送った内容です。')
+  })
+
+  it('index.ts: 自動報告は isAutoErrorReport を記録し、Issue 起票をしない(notifiedAt 即時・notifySkipped auto-error)。回答待ちの文書も作らない', () => {
+    const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
+    expect(indexTs).toContain('const isAutoErrorReport = isAutoErrorReportNote(report.note)')
+    expect(indexTs).toContain('isAutoErrorReport,')
+    expect(indexTs).toContain("notifiedAt: report.isTest || isVerificationChecklist || isAutoErrorReport ? recordedAt : null,")
+    expect(indexTs).toContain("notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : isAutoErrorReport ? 'auto-error' : null,")
+    expect(indexTs).toContain('shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, isAutoErrorReport, reporterRole: member.role, isDevelopmentClassroom })')
+  })
+})
+
+describe('一般モーダルの添付画像(2026-10-22 オーナー決定: 3 枚・メールに 1 枚目 1MB まで)', () => {
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 7).toString('base64')}`
+
+  it('枚数の上限はクライアントと同じ 3 枚。開発用教室(確認リスト)は 8 枚のまま', () => {
+    expect(DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT).toBe(3)
+    expect(resolveDeveloperReportAttachmentLimit(true)).toBe(DEVELOPER_REPORT_ATTACHMENT_LIMIT)
+    expect(resolveDeveloperReportAttachmentLimit(false)).toBe(3)
+    const many = Array.from({ length: 6 }, (_, index) => ({ label: `l${index}`, name: `n${index}`, dataUrl: dataUrlOfBytes(3) }))
+    expect(normalizeDeveloperReportAttachments(many, { limit: 3 })).toHaveLength(3)
+    expect(normalizeDeveloperReportAttachments(many, { limit: 3 }).map((item) => item.label)).toEqual(['l0', 'l1', 'l2'])
+    // 全体の上限(8)より大きい limit を渡しても 8 を超えない。
+    expect(normalizeDeveloperReportAttachments(Array.from({ length: 12 }, () => ({ label: 'a', name: 'a', dataUrl: dataUrlOfBytes(3) })), { limit: 20 })).toHaveLength(DEVELOPER_REPORT_ATTACHMENT_LIMIT)
+  })
+
+  it('メールに添付するのは 1 枚目だけ・1MB まで・保存先があるもの', () => {
+    expect(DEVELOPER_REPORT_MAIL_ATTACHMENT_MAX_BYTES).toBe(1_000_000)
+    const small = { name: 'a.jpg', mimeType: 'image/jpeg', byteLength: 400_000, storagePath: 'developer-reports/main/c1/r1-img1.jpg' }
+    const big = { name: 'b.jpg', mimeType: 'image/jpeg', byteLength: 1_000_001, storagePath: 'developer-reports/main/c1/r1-img1.jpg' }
+    expect(selectDeveloperReportMailAttachment([small, big])).toEqual({ name: 'a.jpg', mimeType: 'image/jpeg', storagePath: small.storagePath, byteLength: 400_000 })
+    // 1 枚目が大きければ 2 枚目には進まない(「1 枚目だけ」)。
+    expect(selectDeveloperReportMailAttachment([big, small])).toBeNull()
+    expect(selectDeveloperReportMailAttachment([{ ...small, storagePath: '' }])).toBeNull()
+    expect(selectDeveloperReportMailAttachment([{ ...small, byteLength: undefined }])).toBeNull()
+    expect(selectDeveloperReportMailAttachment(undefined)).toBeNull()
+    expect(selectDeveloperReportMailAttachment([{ ...small, name: '  ', mimeType: '' }])?.name).toBe('image')
+  })
+
+  it('本文の添付の節: 枚数・1 枚目を付けたか・各画像の置き場所。添付が無ければ節ごと無い', () => {
+    const report = { attachments: [
+      { label: '画面を撮る', name: '画面_20261022-150409.jpg', mimeType: 'image/jpeg', byteLength: 350_000, storagePath: 'developer-reports/main/c1/r1-img1.jpg' },
+      { label: '画像を選ぶ', name: 'shot.png', mimeType: 'image/jpeg', byteLength: 900_000, storagePath: 'developer-reports/main/c1/r1-img2.jpg' },
+    ] }
+    const lines = buildDeveloperReportMailAttachmentLines(report, { storageBucket: 'bucket' })
+    expect(lines[0]).toBe('■ 添付画像: 2 枚')
+    expect(lines[1]).toContain('1 枚目(画面_20261022-150409.jpg・342KB)をこのメールに添付')
+    expect(lines[2]).toBe('  1. 画面_20261022-150409.jpg [画面を撮る] gs://bucket/developer-reports/main/c1/r1-img1.jpg')
+    expect(lines[3]).toBe('  2. shot.png [画像を選ぶ] gs://bucket/developer-reports/main/c1/r1-img2.jpg')
+    expect(buildDeveloperReportMailAttachmentLines({ attachments: [] }, { storageBucket: 'b' })).toEqual([])
+    expect(buildDeveloperReportMailAttachmentLines({}, { storageBucket: 'b' })).toEqual([])
+    const tooBig = buildDeveloperReportMailAttachmentLines({ attachments: [{ name: 'x', byteLength: 2_000_000, storagePath: 'p' }] }, { storageBucket: 'b' })
+    expect(tooBig[1]).toContain('メールには付けていません')
+    // 本文全体にも節が入る。
+    const mail = buildDeveloperReportMail({ reportId: 'r1', classroomId: 'c1', category: 'bug', ...report }, { workspaceKey: 'main', projectId: 'p', storageBucket: 'bucket' })
+    expect(mail.text).toContain('■ 添付画像: 2 枚')
+  })
+
+  it('index.ts: メール送信で 1 枚目を Storage から読んで添付し、読めなくても本文は送る', () => {
+    const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
+    const notify = indexTs.slice(indexTs.indexOf('export const notifyDeveloperReportByMail = onDocumentWritten('), indexTs.indexOf('export const answerDeveloperReport = onCall('))
+    expect(notify).toContain('const mailAttachment = selectDeveloperReportMailAttachment(data.attachments)')
+    expect(notify).toContain('.file(mailAttachment.storagePath).download()')
+    expect(notify).toContain("...(mailAttachments.length > 0 ? { attachments: mailAttachments } : {}),")
+    // 読み込み失敗は warn だけ(try/catch)で、sendMail は別の try に進む。
+    expect(notify.indexOf('Failed to load attachment')).toBeGreaterThan(-1)
+    expect(notify.indexOf('Failed to load attachment')).toBeLessThan(notify.indexOf('transport.sendMail('))
   })
 })

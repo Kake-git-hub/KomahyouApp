@@ -22,6 +22,10 @@ import {
   DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES,
   DEVELOPER_REPORT_ATTACHMENT_TOTAL_MAX_BYTES,
   normalizeDeveloperReportAttachments,
+  DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT,
+  addDeveloperReportModalAttachment,
+  removeDeveloperReportModalAttachment,
+  toDeveloperReportAttachments,
   parseImageDataUrl,
   formatDeveloperReportResultMessage,
   normalizeDeveloperReportNote,
@@ -293,5 +297,73 @@ describe('developerReport: 添付画像(確認リストのスクショ・2026-10
     expect(withImages.attachments).toEqual([{ label: 'tp-38', name: 'a.png', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(6) }])
     expect('attachments' in buildDeveloperReportRequestBody(base)).toBe(false)
     expect('attachments' in buildDeveloperReportRequestBody({ ...base, attachments: ['junk'] })).toBe(false)
+  })
+})
+
+describe('developerReport: 一般モーダルの添付画像(2026-10-22 オーナー決定 A・3 枚)', () => {
+  const dataUrlOfBytes = (bytes: number, mime = 'image/jpeg') => `data:${mime};base64,${Buffer.alloc(bytes, 1).toString('base64')}`
+
+  it('枚数の上限はサーバーと同じ 3 枚(確認リストの 8 枚とは別)。normalize は limit で絞れる', () => {
+    expect(DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT).toBe(3)
+    const many = Array.from({ length: 5 }, (_, index) => ({ label: `l${index}`, name: 'n', dataUrl: dataUrlOfBytes(3) }))
+    expect(normalizeDeveloperReportAttachments(many, { limit: DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT })).toHaveLength(3)
+    expect(normalizeDeveloperReportAttachments(many)).toHaveLength(5)
+  })
+
+  it('addDeveloperReportModalAttachment: 足す・上限で断る・壊れた画像を断る・外す・送信形へ落とす', () => {
+    const first = addDeveloperReportModalAttachment([], { id: 'a1', label: ' 画面を撮る ', name: '  画面.jpg ', dataUrl: dataUrlOfBytes(30) })
+    expect(first.error).toBeNull()
+    expect(first.attachments).toEqual([{ id: 'a1', label: '画面を撮る', name: '画面.jpg', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(30), byteLength: 30 }])
+    const bad = addDeveloperReportModalAttachment(first.attachments, { id: 'a2', label: 'x', name: 'x', dataUrl: 'not-a-data-url' })
+    expect(bad.error).toBe(DEVELOPER_REPORT_UI_TEXT.attachReadError)
+    expect(bad.attachments).toHaveLength(1)
+    const tooBig = addDeveloperReportModalAttachment(first.attachments, { id: 'a3', label: 'x', name: 'x', dataUrl: dataUrlOfBytes(DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES + 3) })
+    expect(tooBig.error).toBe(DEVELOPER_REPORT_UI_TEXT.attachTooLargeError)
+    let list = first.attachments
+    for (const id of ['b', 'c']) list = addDeveloperReportModalAttachment(list, { id, label: '画像を選ぶ', name: '', dataUrl: dataUrlOfBytes(6) }).attachments
+    expect(list).toHaveLength(3)
+    expect(list[2].name).toBe('image')
+    const over = addDeveloperReportModalAttachment(list, { id: 'd', label: 'x', name: 'x', dataUrl: dataUrlOfBytes(3) })
+    expect(over.error).toBe('画像は 3 枚までです。')
+    expect(over.attachments).toHaveLength(3)
+    expect(removeDeveloperReportModalAttachment(list, 'b').map((item) => item.id)).toEqual(['a1', 'c'])
+    expect(toDeveloperReportAttachments(list)[0]).toEqual({ label: '画面を撮る', name: '画面.jpg', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(30) })
+    expect('byteLength' in toDeveloperReportAttachments(list)[0]).toBe(false)
+  })
+
+  it('合計 6MB を超える分は断る', () => {
+    // 1 枚 1.5MB 未満の画像を 4 枚(約 6.0MB)まで入れ、5 枚目で合計が 6MB を超える。枚数の上限(3)は 5 に緩めて合計の検査だけを見る。
+    const each = 1_499_000
+    let list = addDeveloperReportModalAttachment([], { id: '1', label: 'x', name: 'x', dataUrl: dataUrlOfBytes(each) }, 5).attachments
+    for (const id of ['2', '3', '4']) list = addDeveloperReportModalAttachment(list, { id, label: 'x', name: 'x', dataUrl: dataUrlOfBytes(each) }, 5).attachments
+    expect(list).toHaveLength(4)
+    const fifth = addDeveloperReportModalAttachment(list, { id: '5', label: 'x', name: 'x', dataUrl: dataUrlOfBytes(each) }, 5)
+    expect(fifth.error).toBe(DEVELOPER_REPORT_UI_TEXT.attachTotalError)
+    expect(fifth.attachments).toHaveLength(4)
+  })
+
+  it('日程表からのメッセージの attachments は 3 枚・サイズの規則で正規化し、無ければ項目ごと付けない', () => {
+    const base = { type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE, note: 'x', category: 'bug' }
+    const parsed = parseScheduleDeveloperReportMessage({ ...base, attachments: [{ label: '画像を選ぶ', name: 'a.png', dataUrl: dataUrlOfBytes(9) }, 'junk', { label: 'b', name: 'b', dataUrl: 'nope' }] })
+    expect(parsed?.attachments).toEqual([{ label: '画像を選ぶ', name: 'a.png', mimeType: 'image/jpeg', dataUrl: dataUrlOfBytes(9) }])
+    expect(parseScheduleDeveloperReportMessage({ ...base, attachments: Array.from({ length: 5 }, () => ({ label: 'l', name: 'n', dataUrl: dataUrlOfBytes(3) })) })?.attachments).toHaveLength(3)
+    expect('attachments' in (parseScheduleDeveloperReportMessage(base) ?? {})).toBe(false)
+  })
+
+  it('文言: 盤面は「画面を撮る」の案内、日程表は「画像を選ぶ」の案内。モーダルの配線(ソース走査)', () => {
+    expect(DEVELOPER_REPORT_UI_TEXT.attachLabel).toBe('画像（任意・3 枚まで）')
+    expect(DEVELOPER_REPORT_UI_TEXT.attachHintBoard).toContain('画面を撮る')
+    expect(DEVELOPER_REPORT_UI_TEXT.attachHintSchedule).toContain('画像を選ぶ')
+    expect(DEVELOPER_REPORT_UI_TEXT.attachHintSchedule).not.toContain('画面を撮る')
+    const modalSource = readFileSync(fileURLToPath(new URL('../components/developer-report/DeveloperReportModal.tsx', import.meta.url)), 'utf8')
+    expect(modalSource).toContain('onSubmit(note, category, toDeveloperReportAttachments(attachments))')
+    expect(modalSource).toContain('data-testid="developer-report-capture"')
+    expect(modalSource).toContain('data-testid="developer-report-attach-input"')
+    expect(modalSource).toContain('onPaste={(event) => {')
+    expect(modalSource).toContain('attachments.length < DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT ? (')
+    const appSource = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
+    expect(appSource).toContain('onCaptureScreen={captureScreenToDataUrl}')
+    expect(appSource).toContain("submitDeveloperReport({ source: 'board', category, note, ...(attachments.length > 0 ? { attachments } : {}) })")
+    expect(appSource).toContain('attachments: developerReport.attachments })')
   })
 })

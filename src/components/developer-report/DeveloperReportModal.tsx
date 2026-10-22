@@ -9,9 +9,23 @@
 // 既読(「確認しました」)はサーバー記録(App 側の callable)。履歴の並び・状態・件数は utils/reportAnswers.ts の純関数。
 // 日程表タブ側の埋め込みモーダルには履歴は無い(盤面の「質問・要望」から読む)。
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_UI_TEXT, resolveDeveloperReportQuestionNotice, resolveDeveloperReportSendingLabel, validateDeveloperReportNote, type DeveloperReportCategory } from '../../utils/developerReport'
+import {
+  DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY,
+  DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT,
+  DEVELOPER_REPORT_UI_TEXT,
+  addDeveloperReportModalAttachment,
+  removeDeveloperReportModalAttachment,
+  resolveDeveloperReportQuestionNotice,
+  resolveDeveloperReportSendingLabel,
+  toDeveloperReportAttachments,
+  validateDeveloperReportNote,
+  type DeveloperReportAttachment,
+  type DeveloperReportCategory,
+  type DeveloperReportModalAttachment,
+} from '../../utils/developerReport'
+import { createChecklistAttachmentId, pickChecklistImageFiles, shrinkChecklistImageToDataUrl } from './checklistImage'
 import {
   REPORT_ANSWER_CATEGORY_LABELS,
   REPORT_ANSWER_STATUS_LABELS,
@@ -33,8 +47,16 @@ export type DeveloperReportModalProps = {
   sending: boolean
   /** 送信後の結果文。null のうちは入力フォームを表示する。 */
   resultMessage: string | null
-  onSubmit: (note: string, category: DeveloperReportCategory) => void
+  /** 送信。attachments は添付画像(2026-10-22・最大 3 枚・無ければ空配列)。 */
+  onSubmit: (note: string, category: DeveloperReportCategory, attachments: DeveloperReportAttachment[]) => void
   onClose: () => void
+  /**
+   * 「画面を撮る」(2026-10-22 オーナー決定 A・盤面だけ)。いま見えている画面を JPEG の data URL にして返す。
+   * undefined なら撮るボタンを出さない(撮れない環境・日程表タブ)。失敗は例外で知らせる(「画像を選ぶ」を案内する)。
+   */
+  onCaptureScreen?: () => Promise<{ name: string; dataUrl: string }>
+  /** 選んだ／貼り付けた画像の縮小(既定: 確認リストと同じ長辺 1600px の JPEG)。テストで差し替える。 */
+  shrinkImage?: (file: File) => Promise<{ name: string; dataUrl: string }>
   /**
    * これまでの質問と回答(自教室・新しい順は内部で並べ替える)。undefined = 履歴機能なし(ローカルモード等・タブを出さない)。
    */
@@ -44,10 +66,14 @@ export type DeveloperReportModalProps = {
   onMarkAnswersRead?: (reportIds: string[]) => void
 }
 
-export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead }: DeveloperReportModalProps) {
+export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead, onCaptureScreen, shrinkImage = shrinkChecklistImageToDataUrl }: DeveloperReportModalProps) {
   const [note, setNote] = useState('')
   const [category, setCategory] = useState<DeveloperReportCategory>(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY)
   const [validationError, setValidationError] = useState<string | null>(null)
+  // 添付画像(2026-10-22 オーナー決定: 盤面＝「画面を撮る」＋「画像を選ぶ」＋貼り付け・3 枚まで)。送信時に送信形へ落として渡す。
+  const [attachments, setAttachments] = useState<DeveloperReportModalAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [capturing, setCapturing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const historyEnabled = answers !== undefined
   const sortedAnswers = historyEnabled ? sortReportAnswerEntries(answers) : []
@@ -67,8 +93,49 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
       return
     }
     setValidationError(null)
-    onSubmit(note, category)
+    onSubmit(note, category, toDeveloperReportAttachments(attachments))
   }
+
+  // 1 枚足す。上限(枚数・1 枚・合計)は純関数が見る。state の更新は関数形式で重ねる(連続貼り付けで前の分を失わない)。
+  const pushAttachment = useCallback((candidate: { label: string; name: string; dataUrl: string }) => {
+    let error: string | null = null
+    setAttachments((current) => {
+      const result = addDeveloperReportModalAttachment(current, { id: createChecklistAttachmentId(), ...candidate })
+      error = result.error
+      return result.attachments
+    })
+    // setAttachments の更新関数は同期に走る(React 18/19 とも)。ここで error を読んで理由を出す。
+    setAttachmentError(error)
+  }, [])
+
+  const addImageFiles = useCallback(async (files: ArrayLike<File> | null | undefined, label: string) => {
+    for (const file of pickChecklistImageFiles(files)) {
+      try {
+        const shrunk = await shrinkImage(file)
+        pushAttachment({ label, name: shrunk.name, dataUrl: shrunk.dataUrl })
+      } catch (error) {
+        setAttachmentError(`${DEVELOPER_REPORT_UI_TEXT.attachReadError}（${file.name || '貼り付け'}: ${error instanceof Error ? error.message : String(error)}）`)
+      }
+    }
+  }, [pushAttachment, shrinkImage])
+
+  const captureScreen = useCallback(async () => {
+    if (!onCaptureScreen) return
+    setCapturing(true)
+    try {
+      const shot = await onCaptureScreen()
+      pushAttachment({ label: DEVELOPER_REPORT_UI_TEXT.captureButton, name: shot.name, dataUrl: shot.dataUrl })
+    } catch {
+      setAttachmentError(DEVELOPER_REPORT_UI_TEXT.captureError)
+    } finally {
+      setCapturing(false)
+    }
+  }, [onCaptureScreen, pushAttachment])
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((current) => removeDeveloperReportModalAttachment(current, id))
+    setAttachmentError(null)
+  }, [])
 
   const markRead = (reportIds: string[]) => {
     if (!canMarkAnswersRead || !onMarkAnswersRead || reportIds.length === 0) return
@@ -182,9 +249,60 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
               disabled={sending}
               aria-invalid={validationError ? true : undefined}
               data-testid="developer-report-note"
+              onPaste={(event) => {
+                // スクリーンショットの貼り付け(Ctrl+V)。画像が無い貼り付けは文字として通常どおり入る。
+                const files = event.clipboardData?.files
+                if (files && files.length > 0 && pickChecklistImageFiles(files).length > 0) {
+                  event.preventDefault()
+                  void addImageFiles(files, '貼り付け')
+                }
+              }}
             />
             {validationError ? <p className="developer-report-error" role="alert" data-testid="developer-report-error">{validationError}</p> : null}
             <p className="developer-report-hint developer-report-hint-primary" data-testid="developer-report-input-hint">{DEVELOPER_REPORT_UI_TEXT.inputHint}</p>
+            {/* 添付画像(2026-10-22 オーナー決定 A): 「画面を撮る」(盤面)＋「画像を選ぶ」。貼り付け(Ctrl+V)でも付く。3 枚まで。 */}
+            <div className="developer-report-attachments-section" data-testid="developer-report-attachments">
+              <div className="developer-report-note-label">{DEVELOPER_REPORT_UI_TEXT.attachLabel}</div>
+              {attachments.length > 0 ? (
+                <div className="developer-report-attachments">
+                  {attachments.map((attachment) => (
+                    <figure key={attachment.id} className="developer-report-attachment" data-testid="developer-report-attachment">
+                      <img src={attachment.dataUrl} alt={attachment.name} />
+                      <figcaption>
+                        <span>{attachment.name}({Math.max(1, Math.round(attachment.byteLength / 1024))}KB)</span>
+                        <button type="button" className="link-button" onClick={() => removeAttachment(attachment.id)} disabled={sending} data-testid={`developer-report-attachment-remove-${attachment.id}`}>{DEVELOPER_REPORT_UI_TEXT.removeImage}</button>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : null}
+              {attachments.length < DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT ? (
+                <div className="developer-report-attach-actions">
+                  {onCaptureScreen ? (
+                    <button type="button" className="secondary-button developer-report-capture" onClick={() => { void captureScreen() }} disabled={sending || capturing} data-testid="developer-report-capture">
+                      {capturing ? DEVELOPER_REPORT_UI_TEXT.capturing : DEVELOPER_REPORT_UI_TEXT.captureButton}
+                    </button>
+                  ) : null}
+                  <label className="developer-report-attach">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={sending}
+                      onChange={(event) => {
+                        const files = event.target.files
+                        void addImageFiles(files, DEVELOPER_REPORT_UI_TEXT.chooseImage)
+                        event.target.value = ''
+                      }}
+                      data-testid="developer-report-attach-input"
+                    />
+                    {DEVELOPER_REPORT_UI_TEXT.chooseImage}
+                  </label>
+                </div>
+              ) : null}
+              <p className="developer-report-hint" data-testid="developer-report-attach-hint">{onCaptureScreen ? DEVELOPER_REPORT_UI_TEXT.attachHintBoard : DEVELOPER_REPORT_UI_TEXT.attachHintSchedule}</p>
+              {attachmentError ? <p className="developer-report-error" role="alert" data-testid="developer-report-attachment-error">{attachmentError}</p> : null}
+            </div>
             <div className="auto-assign-modal-actions developer-report-actions">
               <button type="button" className="secondary-button" onClick={onClose} disabled={sending} data-testid="developer-report-cancel">{DEVELOPER_REPORT_UI_TEXT.cancel}</button>
               <button type="button" className="primary-button" onClick={handleSubmit} disabled={sending} data-testid="developer-report-submit">

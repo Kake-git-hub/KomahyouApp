@@ -68,8 +68,10 @@ export function summarizeReportQuestion(note: string, limit: number = REPORT_QUE
  * 開発者が**本番教室を開いて**送った報告も載せない(室長の履歴に開発者の動作確認が混ざる・regression-reviewer 指摘 2026-09-28)。
  * 開発用教室では開発者が室長役なので載せる。開発者が後から回答を書けば、そのとき文書は作られる(planReportAnswerWrite)。
  */
-export function shouldCreateReportAnswerDoc(report: Pick<ReportAnswerSourceReport, 'isTest' | 'isVerificationChecklist'> & { reporterRole?: unknown; isDevelopmentClassroom?: boolean }): boolean {
+export function shouldCreateReportAnswerDoc(report: Pick<ReportAnswerSourceReport, 'isTest' | 'isVerificationChecklist'> & { reporterRole?: unknown; isDevelopmentClassroom?: boolean; isAutoErrorReport?: boolean }): boolean {
   if (report.isTest === true || report.isVerificationChecklist === true) return false
+  // 画面エラーの自動報告(2026-10-22 案 3)は室長が書いた質問ではないので「これまでの質問と回答」に出さない。
+  if (report.isAutoErrorReport === true) return false
   if (report.reporterRole === 'developer' && report.isDevelopmentClassroom === false) return false
   return true
 }

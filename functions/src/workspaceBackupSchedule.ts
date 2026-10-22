@@ -180,3 +180,40 @@ export function shouldKeepWorkspaceIncidentBackup(params: { createdAtMs: number;
   if (ageMs < 0) return true
   return ageMs < retentionDays * 24 * HOUR_IN_MS
 }
+
+// ---------------------------------------------------------------------------
+// 保存ごとの教室版履歴(2026-10-22 オーナー採用「即時対応のための案 1」)。
+//
+// 15 分毎のワークスペースバックアップは「保存と保存の間」を拾えない(盤面が変わる単位は手動保存)。
+// そこで classroomSnapshots の書き込みトリガ(index.ts mirrorLatestClassroomRollback)で、**保存された新しい版**を
+// 教室ごとに gzip で追記し、「どの保存で何が変わったか」を 90 日ぶん辿れるようにする。
+// 「直前に戻す」(workspace-latest-rollbacks/.../latest.json・1 世代上書き)は復元 UI が読むので据え置き、こちらは調査専用。
+// 読み方: tools/snapshot-diff.mjs で 2 本を比べる。費用は 15 教室・1 日 30 保存・1 本 1〜2MB(gzip)で月 200 円前後の見込み。
+// ---------------------------------------------------------------------------
+export const CLASSROOM_SAVE_HISTORY_PREFIX = 'classroom-save-history'
+export const CLASSROOM_SAVE_HISTORY_RETENTION_DAYS = 90
+
+/** ISO 時刻を GCS オブジェクト名に使える並び順保存の形へ(`:` と `.` は避ける。例 2026-10-22T06-32-10-123Z)。 */
+export function toStorageSafeTimestampKey(iso: string): string {
+  const ms = Date.parse(iso)
+  const date = Number.isFinite(ms) ? new Date(ms) : new Date(0)
+  return date.toISOString().replace(/[:.]/g, '-')
+}
+
+/**
+ * 版履歴の置き場所。教室ごとのフォルダに「保存時刻-v版数.json.gz」で置く(名前順 = 時系列順)。
+ * 版数が読めない旧文書は v0。
+ */
+export function buildClassroomSaveHistoryStoragePath(workspaceKey: string, classroomId: string, savedAtIso: string, version: number | undefined): string {
+  const safeVersion = typeof version === 'number' && Number.isFinite(version) && version >= 0 ? Math.trunc(version) : 0
+  return `${CLASSROOM_SAVE_HISTORY_PREFIX}/${workspaceKey}/${classroomId}/${toStorageSafeTimestampKey(savedAtIso)}-v${safeVersion}.json.gz`
+}
+
+/** 版履歴を残すか。incident backup と同じ規則(作成時刻が読めない・未来日時は必ず残す)で、保持だけ 90 日。 */
+export function shouldKeepClassroomSaveHistory(params: { createdAtMs: number; nowMs: number; retentionDays?: number }): boolean {
+  return shouldKeepWorkspaceIncidentBackup({
+    createdAtMs: params.createdAtMs,
+    nowMs: params.nowMs,
+    retentionDays: params.retentionDays ?? CLASSROOM_SAVE_HISTORY_RETENTION_DAYS,
+  })
+}

@@ -4665,6 +4665,18 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     for (const key of ['viewType: VIEW_TYPE', 'startDate:', 'endDate:', 'periodLabel:', 'personId:', 'personLabel:', 'search:']) {
       expect(html).toContain(key)
     }
+    // 添付画像(2026-10-22 オーナー決定): 日程表タブは「画像を選ぶ」だけ(撮るボタンは無い)・3 枚まで。縮小してから本体へ渡す。
+    expect(html).toContain('"attachLabel":"画像（任意・3 枚まで）"')
+    expect(html).toContain('"chooseImage":"画像を選ぶ"')
+    expect(html).toContain('"attachLimit":3')
+    expect(html).toContain('"attachHint":"スクリーンショットを撮って「画像を選ぶ」から付けられます。"')
+    expect(html).toContain("attachInput.id = 'schedule-developer-report-attach'")
+    expect(html).toContain("attachInput.accept = 'image/*'")
+    expect(html).toContain('function shrinkReportImage(file) {')
+    expect(html).toContain("canvas.toDataURL('image/jpeg', 0.82)")
+    expect(html).toContain('attachments: reportAttachments.map(function(attachment) { return { label: attachment.label, name: attachment.name, dataUrl: attachment.dataUrl }; }),')
+    expect(html).toContain('.developer-report-attach input[type=\'file\'] { display: none; }')
+    expect(html).not.toContain('画面を撮る')
 
     vi.unstubAllGlobals()
   })

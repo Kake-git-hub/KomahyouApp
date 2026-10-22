@@ -4,7 +4,7 @@
 // 自動修正で外すと埋め込みスクリプトが壊れて実行時に全停止する(memory: komahyou-schedulehtml-embedded-script)。
 // そのためこのルールはファイル単位で無効化する。エスケープは絶対に変更しない。
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
-import { DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
+import { DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES, DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
 import { isFeatureEnabledForClassroom } from './featureRollout'
 import { appName, resolveCompanyReportHooks, roleLabel } from '@company/profile'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
@@ -1395,6 +1395,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .developer-report-actions .developer-report-cancel { background: #eef3fb; color: #36506d; }
       .developer-report-actions button[disabled] { opacity: 0.6; cursor: default; }
       .developer-report-result { margin: 0; white-space: pre-wrap; font-size: 17px; line-height: 1.7; color: #1f3350; }
+      /* 添付画像(2026-10-22 オーナー決定: 日程表タブは「画像を選ぶ」だけ・3 枚まで)。盤面モーダル(src/App.css)と同じ見え方。 */
+      .developer-report-attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+      .developer-report-attachment { margin: 0; width: 200px; border: 1px solid #d7e2f1; border-radius: 8px; padding: 4px; background: #f8fafc; }
+      .developer-report-attachment img { display: block; width: 100%; max-height: 130px; object-fit: contain; background: #fff; }
+      .developer-report-attachment figcaption { display: flex; justify-content: space-between; gap: 6px; margin-top: 2px; font-size: 13px; color: #475569; overflow-wrap: anywhere; }
+      .developer-report-attachment figcaption button { border: none; background: none; color: #1a73e8; cursor: pointer; font-size: 13px; padding: 0; flex-shrink: 0; }
+      .developer-report-attach { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border: 1px dashed #1a73e8; border-radius: 8px; color: #1a73e8; font-size: 15px; font-weight: 700; cursor: pointer; background: #fff; }
+      .developer-report-attach:hover { background: #eef4ff; }
+      .developer-report-attach input[type='file'] { display: none; }
 
       /* 講習履歴(H-4): 「要望・報告」モーダルと同じ器を使い、中身だけ表(履歴)に差し替える。 */
       .lesson-history-overlay,
@@ -7397,6 +7406,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         sending: DEVELOPER_REPORT_UI_TEXT.sending,
         sendingAi: DEVELOPER_REPORT_UI_TEXT.sendingAi,
         close: DEVELOPER_REPORT_UI_TEXT.close,
+        // 添付画像(2026-10-22 オーナー決定: 日程表タブは「画像を選ぶ」だけ・3 枚まで)。文言と上限は盤面側の定数をそのまま埋め込む。
+        attachLabel: DEVELOPER_REPORT_UI_TEXT.attachLabel,
+        chooseImage: DEVELOPER_REPORT_UI_TEXT.chooseImage,
+        removeImage: DEVELOPER_REPORT_UI_TEXT.removeImage,
+        attachHint: DEVELOPER_REPORT_UI_TEXT.attachHintSchedule,
+        attachLimit: DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT,
+        attachLimitError: DEVELOPER_REPORT_UI_TEXT.attachLimitError(DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT),
+        attachReadError: DEVELOPER_REPORT_UI_TEXT.attachReadError,
+        attachTooLargeError: DEVELOPER_REPORT_UI_TEXT.attachTooLargeError,
+        attachMaxBytes: DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES,
       })};
       let developerReportOverlay = null;
       let developerReportResultTimer = 0;
@@ -7503,6 +7522,93 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const inputHint = document.createElement('p');
         inputHint.className = 'developer-report-hint developer-report-hint-primary';
         inputHint.textContent = DEVELOPER_REPORT_TEXT.inputHint;
+        // 添付画像(2026-10-22 オーナー決定: 日程表タブは「画像を選ぶ」だけ・3 枚まで)。縮小(長辺 1600px・JPEG)はこのタブで行い、
+        // data URL を本体へ postMessage で渡す(本体 parseScheduleDeveloperReportMessage がもう一度同じ規則で検証する)。
+        const attachLabel = document.createElement('div');
+        attachLabel.className = 'developer-report-note-label';
+        attachLabel.textContent = DEVELOPER_REPORT_TEXT.attachLabel;
+        const attachList = document.createElement('div');
+        attachList.className = 'developer-report-attachments';
+        const attachHint = document.createElement('p');
+        attachHint.className = 'developer-report-hint';
+        attachHint.textContent = DEVELOPER_REPORT_TEXT.attachHint;
+        const attachError = document.createElement('p');
+        attachError.className = 'developer-report-error';
+        attachError.setAttribute('role', 'alert');
+        attachError.hidden = true;
+        const reportAttachments = [];
+        const attachPicker = document.createElement('label');
+        attachPicker.className = 'developer-report-attach';
+        const attachInput = document.createElement('input');
+        attachInput.type = 'file';
+        attachInput.accept = 'image/*';
+        attachInput.multiple = true;
+        attachInput.id = 'schedule-developer-report-attach';
+        const attachPickerText = document.createElement('span');
+        attachPickerText.textContent = DEVELOPER_REPORT_TEXT.chooseImage;
+        attachPicker.appendChild(attachInput);
+        attachPicker.appendChild(attachPickerText);
+        function showAttachError(text) { attachError.textContent = text; attachError.hidden = false; }
+        function renderReportAttachments() {
+          attachList.innerHTML = '';
+          reportAttachments.forEach(function(attachment, index) {
+            const figure = document.createElement('figure');
+            figure.className = 'developer-report-attachment';
+            const image = document.createElement('img');
+            image.src = attachment.dataUrl;
+            image.alt = attachment.name;
+            const caption = document.createElement('figcaption');
+            const nameText = document.createElement('span');
+            nameText.textContent = attachment.name + '(' + Math.max(1, Math.round(attachment.byteLength / 1024)) + 'KB)';
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.textContent = DEVELOPER_REPORT_TEXT.removeImage;
+            removeButton.addEventListener('click', function() { reportAttachments.splice(index, 1); attachError.hidden = true; renderReportAttachments(); });
+            caption.appendChild(nameText);
+            caption.appendChild(removeButton);
+            figure.appendChild(image);
+            figure.appendChild(caption);
+            attachList.appendChild(figure);
+          });
+          attachPicker.style.display = reportAttachments.length >= DEVELOPER_REPORT_TEXT.attachLimit ? 'none' : '';
+          attachList.appendChild(attachPicker);
+        }
+        function shrinkReportImage(file) {
+          return createImageBitmap(file).then(function(bitmap) {
+            const longest = Math.max(bitmap.width, bitmap.height);
+            const ratio = longest > 1600 ? 1600 / longest : 1;
+            const width = Math.max(1, Math.round(bitmap.width * ratio));
+            const height = Math.max(1, Math.round(bitmap.height * ratio));
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('canvas');
+            context.fillStyle = '#fff';
+            context.fillRect(0, 0, width, height);
+            context.drawImage(bitmap, 0, 0, width, height);
+            if (typeof bitmap.close === 'function') bitmap.close();
+            return { name: file.name || DEVELOPER_REPORT_TEXT.chooseImage, dataUrl: canvas.toDataURL('image/jpeg', 0.82) };
+          });
+        }
+        attachInput.addEventListener('change', function() {
+          const files = Array.prototype.filter.call(attachInput.files || [], function(file) { return file.type && file.type.indexOf('image/') === 0; });
+          attachInput.value = '';
+          files.reduce(function(chain, file) {
+            return chain.then(function() {
+              return shrinkReportImage(file).then(function(result) {
+                if (reportAttachments.length >= DEVELOPER_REPORT_TEXT.attachLimit) { showAttachError(DEVELOPER_REPORT_TEXT.attachLimitError); return; }
+                const base64 = result.dataUrl.split(',')[1] || '';
+                const byteLength = Math.floor(base64.length * 3 / 4);
+                if (byteLength > DEVELOPER_REPORT_TEXT.attachMaxBytes) { showAttachError(DEVELOPER_REPORT_TEXT.attachTooLargeError); return; }
+                reportAttachments.push({ label: DEVELOPER_REPORT_TEXT.chooseImage, name: result.name, dataUrl: result.dataUrl, byteLength: byteLength });
+                attachError.hidden = true;
+                renderReportAttachments();
+              }).catch(function() { showAttachError(DEVELOPER_REPORT_TEXT.attachReadError); });
+            });
+          }, Promise.resolve());
+        });
+        renderReportAttachments();
         const actions = document.createElement('div');
         actions.className = 'developer-report-actions';
         const cancelButton = document.createElement('button');
@@ -7523,6 +7629,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         modal.appendChild(textarea);
         modal.appendChild(error);
         modal.appendChild(inputHint);
+        modal.appendChild(attachLabel);
+        modal.appendChild(attachList);
+        modal.appendChild(attachHint);
+        modal.appendChild(attachError);
         modal.appendChild(actions);
         overlay.appendChild(modal);
         overlay.addEventListener('click', function(event) {
@@ -7554,6 +7664,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             type: 'schedule-developer-report',
             note: note,
             category: selectedCategory,
+            attachments: reportAttachments.map(function(attachment) { return { label: attachment.label, name: attachment.name, dataUrl: attachment.dataUrl }; }),
             context: {
               viewType: VIEW_TYPE,
               startDate: (startInput && startInput.value) || appliedStartDate || '',
