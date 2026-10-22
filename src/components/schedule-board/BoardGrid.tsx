@@ -6,6 +6,7 @@ import { getMemoLineHeight, getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, TeacherType } from './types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent, resolveTemplatePendingBandSeat } from './templatePendingResolution'
 
@@ -825,7 +826,8 @@ function BoardGridComponent({
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
                             title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint))}
                           >
-                            {cell.isOpenDay ? desk.teacher : ''}
+                            {/* 講師未割当などの埋め草は表示だけ空白にする(deskTeacherLabel.ts・オーナー指示 2026-10-22)。データは変えない。 */}
+                            {cell.isOpenDay ? formatDeskTeacherLabel(desk.teacher) : ''}
                           </div>
                           {/* Q41（2026-10-21・オーナー決定 B）: 下段の手置き講師。生徒の下段と同じ緑・同じクラス（PDF はクローンから .sa-pending-lower を外す＝INV-13）。 */}
                           {cell.isOpenDay && pendingEntry?.lower.teacher ? (

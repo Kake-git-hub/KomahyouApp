@@ -27,6 +27,7 @@ import {
   QUESTION_AI_PRICE_REPLY,
   QUESTION_AI_TRACE_LIMIT,
   shouldAnswerQuestionWithAi,
+  stripQuestionAiRedundantNotes,
   stripQuestionAiTestMarker,
   type CreateQuestionAiMessage,
 } from './questionAiAnswer'
@@ -292,6 +293,32 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(estimateQuestionAiCostYen('claude-sonnet-5-5', 14_000, 400)).toBe(4.8)
     expect(estimateQuestionAiCostYen('claude-haiku-5-5', 14_000, 400)).toBe(0.24)
     expect(estimateQuestionAiCostYen('unknown-model', 14_000, 400)).toBe(0)
+  })
+
+  it('「開発者にも届いています」系の添え書きは AI の文から落とす(画面側が 1 回だけ添える・オーナー指示 2026-10-22 qa-ai-4「2 回繰り返されている」)', () => {
+    // 2026-10-22 の実例(受付 20261022-154331094-2cb6350b・20261022-154646483-a5fbfd9b)の形。
+    expect(stripQuestionAiRedundantNotes('1. 席をクリックします。\n2. 「体験授業」を選びます。\n\n入力する項目については、開発者より別途回答いたします。質問は開発者にも届いています。'))
+      .toBe('1. 席をクリックします。\n2. 「体験授業」を選びます。\n\n入力する項目については、開発者より別途回答いたします。')
+    expect(stripQuestionAiRedundantNotes('この点は開発者より別途回答いたします。この質問は開発者にも届いています。\n\n他にご不明な点があればお尋ねください。'))
+      .toBe('この点は開発者より別途回答いたします。\n\n他にご不明な点があればお尋ねください。')
+    // 添え書きだけの行が消えると空行が増えないように詰める。何も無ければ空(呼び出し側が「回答文が返りませんでした」にする)。
+    expect(stripQuestionAiRedundantNotes('答えです。\n\n質問は開発者にも届いています。\n\n以上です。')).toBe('答えです。\n\n以上です。')
+    expect(stripQuestionAiRedundantNotes('質問は開発者にも届いています。')).toBe('')
+    // 関係ない文はそのまま。
+    expect(stripQuestionAiRedundantNotes('日付をクリックして「休日設定」を選びます。')).toBe('日付をクリックして「休日設定」を選びます。')
+    // システム指示でも止める(決まり 12・13)。旧文「添えてかまいません」は無い。
+    const prompt = buildQuestionAiSystemPrompt('# 使い方')
+    expect(prompt).toContain('「質問は開発者にも届いています」「この内容は開発者にも届いています」のような添え書きを書かない')
+    expect(prompt).toContain('答えられたときは回答だけで完結させる')
+    expect(prompt).not.toContain('添えてかまいません')
+  })
+
+  it('generateQuestionAiAnswer は添え書きを落とした文を回答にする(配線)', async () => {
+    const result = await generateQuestionAiAnswer(
+      { note: 'q', screen: 'board', scheduleContext: {}, recentOperations: [] },
+      { apiKey: 'k', createMessage: async () => fakeMessage({ content: [{ type: 'text', text: '席をクリックします。質問は開発者にも届いています。', citations: null }] }) },
+    )
+    expect(result).toMatchObject({ ok: true, answer: '席をクリックします。' })
   })
 
   it('長すぎる回答は上限で切る', () => {

@@ -37,6 +37,13 @@ export type ReportAnswerDoc = {
   /** 未読の回答があるか(= answeredAt あり && readAt null)。将来の等値クエリ用の写しで、権威は readAt(クライアントも readAt で判定)。 */
   unreadAnswer: boolean
   updatedAt: string
+  /**
+   * AI の自動回答(質問 × 開発用教室・spec §G-7)。室長が送信直後に見た文をそのまま写し、開発者の回答が来なくても
+   * 「これまでの質問と回答」で読み返せるようにする(オーナー指示 2026-10-22・確認リスト v1.5.625 qa-ai-1)。
+   * 無い(AI を呼んでいない・作れなかった)ときは項目ごと無いか null。未読バッジには数えない(室長はすでに見ている)。
+   */
+  aiAnswer?: string | null
+  aiAnsweredAt?: string | null
 }
 
 export type ReportAnswerSourceReport = {
@@ -93,6 +100,16 @@ export function buildPendingReportAnswerDoc(report: ReportAnswerSourceReport, no
     unreadAnswer: false,
     updatedAt: nowIso,
   }
+}
+
+/**
+ * AI の自動回答を室長側文書へ写す部分更新(set merge)。送信時に作った「回答待ち」文書へ、AI の結果が出た直後に足す。
+ * 回答(answer)・既読(readAt)・未読(unreadAnswer)には触らない＝バッジは増えない。空の回答は書かない(null を返す)。
+ */
+export function buildReportAnswerAiUpdate(input: { answer: string; answeredAt: string }): { aiAnswer: string; aiAnsweredAt: string; updatedAt: string } | null {
+  const answer = input.answer.trim()
+  if (!answer) return null
+  return { aiAnswer: answer, aiAnsweredAt: input.answeredAt, updatedAt: input.answeredAt }
 }
 
 export type AnswerDeveloperReportRequest = {
@@ -163,6 +180,8 @@ export function planReportAnswerWrite(input: {
     readAt,
     unreadAnswer: readAt === null,
     updatedAt: input.nowIso,
+    // AI の自動回答は据え置く(開発者の回答と並べて読める。set(merge) でも消えないが、計画の中でも明示して落とさない)。
+    ...(typeof base.aiAnswer === 'string' && base.aiAnswer ? { aiAnswer: base.aiAnswer, aiAnsweredAt: typeof base.aiAnsweredAt === 'string' ? base.aiAnsweredAt : null } : {}),
   }
   return {
     reportUpdate: { answerFinal: input.answer, answeredAt: input.nowIso, answeredBy: input.answeredBy, answerRevision: revision },

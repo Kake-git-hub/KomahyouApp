@@ -14,6 +14,14 @@
 
 ## 未リリース
 
+## v1.5.627 (2026-10-22)
+
+- fix: **質問への AI 自動回答をシンプルに**(確認リスト v1.5.625 の結果・受付 20261022-154814822-97abc250 qa-ai-1 / qa-ai-4 メモ「回答できているときは開発者から別途回答すると答えさせないで」「『開発者にも届いています』が 2 回繰り返されている」)。画面側の添え書きを「（この回答は開発者にも届いています）」の 1 回だけにし(旧「…訂正や補足があるときは、開発者より別途回答いたします。」を外す)、AI の指示に「答えられたときは回答だけで完結させ、聞かれていない点に別途回答と書き足さない(決まり 12)」「『開発者にも届いています』の添え書きを書かない(決まり 13)」を足し、書いてしまった分は `stripQuestionAiRedundantNotes` が文単位で落とす(テスト 2 件・spec §G-7) (functions/src/questionAiAnswer.ts / src/utils/developerReport.ts)
+- feat: **AI の自動回答を「これまでの質問と回答」に残す**(同 qa-ai-1 メモ「AI 回答を開発者回答が来なくても見返したい」)。AI の結果が出た直後に室長側の `reportAnswers/{reportId}` へ `aiAnswer` / `aiAnsweredAt` を部分更新(`buildReportAnswerAiUpdate`・回答待ちの文書を作った報告だけ・回答/既読/未読バッジには触らない)。履歴は状態「自動回答あり」で黄色の枠に回答を出し、「開発者より別途回答いたします。」は出さない。開発者が回答すると下に「開発者からの回答（訂正・補足）」が並ぶ(`planReportAnswerWrite` は AI 回答を据え置く)。テスト: サーバー 2 件・クライアント 1 件(状態・読み取り・配線)・spec §G-5 (functions/src/reportAnswers.ts / functions/src/index.ts / src/utils/reportAnswers.ts / src/components/developer-report/DeveloperReportModal.tsx / src/App.css)
+- fix: **開発者への通知メールを「見るべきものだけ」に**(同 qa-ai-3 メモ「多くのことが書かれすぎていてわかりにくい」)。本文を 教室／種類・報告元／時刻・版・報告者 の 3 行 → 内容 → 添付 → (質問)AI の自動回答 → 「■ 次にすること」1 行 → 受付番号＋Firestore パス 1 行 に整理。操作痕跡は**不具合の報告だけ**(60 件 → 20 件)、Firestore コンソール URL・gsutil コマンド・「■ 進め方」の長文・保存状態の行(不具合以外)を外した。純関数 `buildDeveloperReportMailNextStepLines` を追加・メールのテストを新しい形へ書き換え・spec §E (functions/src/developerReport.ts)
+- fix: **コマ表の講師欄に「講師未割当」の文字を出さない**(同 その他欄「以前消すようにしたはず。確認して」)。テンプレで講師を決めていない行の机はデータ上「講師未割当」を持つ(再マージが机を確保するための埋め草・initial backup 以来・inv12 マトリクスの期待値)。データは変えず**表示だけ**空白に: 共有画面(BoardShareScreen)が以前から持っていた 2 語(講師未割当・講師未設定)の判定を純関数 `formatDeskTeacherLabel`(src/utils/deskTeacherLabel.ts)へ一本化し、コマ表の講師欄(BoardGrid)・右の詳細(DetailPanel)・日程表タブの机一覧(scheduleHtml)にも当てた。講師が居る机かの判定(ドラッグ可否)・机の同一性の照合は元の文字のまま。テスト 3 件(値・配線) (src/utils/deskTeacherLabel.ts / BoardGrid.tsx / DetailPanel.tsx / BoardShareScreen.tsx / scheduleHtml.ts)
+- chore: 確認リストを第65版 `v1.5.627` へ。第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の c-7・rp-1〜rp-3・sv-1(開発者側の Storage `classroom-save-history` 2 本・Firestore `operationTraces` 2 本・2 本目の entries に 1 回目の保存成功と 2 回目の操作、を読み取りで確認済み)・sv-2・bs-1・sr-1〜sr-3・qa-ai-1〜qa-ai-4 を外し、上の 4 件の確認 qa-ai-5〜qa-ai-7・tb-1 を足した (src/utils/verificationChecklist.ts)
+
 ## v1.5.626 (2026-10-22)
 
 - feat: **即時対応の基盤(別会社 10 教室の追加に備える・オーナー採用 2026-10-22「即時対応のための案(優先順)に従いすべて採用」)**。

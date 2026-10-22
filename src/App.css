@@ -6879,6 +6879,12 @@ body.verification-checklist-window {
   gap: calc(8 * var(--developer-report-unit));
 }
 
+/* AI の自動回答(試験中)は開発者の回答(青)と色を分けて並べる(2026-10-22)。 */
+.developer-report-history-answer.is-ai {
+  border-left-color: #8a6d1f;
+  background: #fbf6e8;
+}
+
 .developer-report-history-answer-head {
   display: flex;
   flex-wrap: wrap;

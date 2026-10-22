@@ -21,9 +21,16 @@ export type ReportAnswerEntry = {
   answeredAt: string | null
   answerRevision: number
   readAt: string | null
+  /** AI の自動回答(質問 × 開発用教室・§G-7)。開発者の回答が来なくても履歴で読み返せる(オーナー指示 2026-10-22)。null = 無し。 */
+  aiAnswer: string | null
+  aiAnsweredAt: string | null
 }
 
-export type ReportAnswerStatus = 'pending' | 'unread' | 'read'
+/**
+ * 状態。ai-answered = 開発者の回答はまだ無いが AI の自動回答がある(回答待ちとは言わない・未読バッジにも数えない。
+ * オーナー指示 2026-10-22「回答できているときは開発者から別途回答すると答えさせないで」「AI 回答を見返したい」)。
+ */
+export type ReportAnswerStatus = 'pending' | 'ai-answered' | 'unread' | 'read'
 
 /** 履歴に出す最大件数(購読の limit)。古いものは開発者側の記録(developerReports)に残る。 */
 export const REPORT_ANSWER_HISTORY_LIMIT = 100
@@ -36,6 +43,7 @@ export const REPORT_ANSWER_CATEGORY_LABELS: Readonly<Record<DeveloperReportCateg
 
 export const REPORT_ANSWER_STATUS_LABELS: Readonly<Record<ReportAnswerStatus, string>> = {
   pending: '回答待ち',
+  'ai-answered': '自動回答あり',
   unread: '新しい回答',
   read: '回答済み',
 }
@@ -49,6 +57,10 @@ export const REPORT_ANSWER_UI_TEXT = {
   markRead: '確認しました',
   markAllRead: 'すべて確認しました',
   pendingNote: '開発者より別途回答いたします。',
+  aiAnswerHead: '自動回答（試験中・誤りがあることがあります）',
+  developerAnswerHead: '開発者からの回答',
+  /** AI の自動回答のあとに開発者が回答したとき(訂正・補足の位置づけ・§G-7)。 */
+  developerAnswerAfterAiHead: '開発者からの回答（訂正・補足）',
   revisedNote: '(回答が更新されました)',
 } as const
 
@@ -84,6 +96,8 @@ export function parseReportAnswerEntry(id: string, data: unknown): ReportAnswerE
     answeredAt: readNullableText(record.answeredAt),
     answerRevision: revision,
     readAt: readNullableText(record.readAt),
+    aiAnswer: readNullableText(record.aiAnswer),
+    aiAnsweredAt: readNullableText(record.aiAnsweredAt),
   }
 }
 
@@ -93,9 +107,9 @@ export function selectReportAnswersForClassroom(entries: readonly ReportAnswerEn
   return entries.filter((entry) => entry.classroomId === classroomId)
 }
 
-/** 状態: 回答が無い=回答待ち／回答があり readAt 無し=未読／回答があり readAt あり=既読。 */
-export function resolveReportAnswerStatus(entry: Pick<ReportAnswerEntry, 'answer' | 'answeredAt' | 'readAt'>): ReportAnswerStatus {
-  if (!entry.answer || !entry.answeredAt) return 'pending'
+/** 状態: 開発者の回答が無い=回答待ち(AI の自動回答があれば自動回答あり)／回答があり readAt 無し=未読／回答があり readAt あり=既読。 */
+export function resolveReportAnswerStatus(entry: Pick<ReportAnswerEntry, 'answer' | 'answeredAt' | 'readAt'> & Partial<Pick<ReportAnswerEntry, 'aiAnswer'>>): ReportAnswerStatus {
+  if (!entry.answer || !entry.answeredAt) return entry.aiAnswer ? 'ai-answered' : 'pending'
   return entry.readAt ? 'read' : 'unread'
 }
 

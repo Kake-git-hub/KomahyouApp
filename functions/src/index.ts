@@ -64,7 +64,7 @@ import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
-import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
+import { buildPendingReportAnswerDoc, buildReportAnswerAiUpdate, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { buildOtherClassroomNameWords, describeQuestionAiError, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
@@ -2209,10 +2209,12 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
 
   // 室長側の「これまでの質問と回答」履歴(spec-developer-report §G-5・2026-09-28): 回答待ちの軽量文書を教室ごとのパスへ作る。
   // 教室データ・操作痕跡・送信者は載せない。失敗しても報告本体は成功のまま(履歴に出ないだけ・回答時に作り直される)。
+  const answerDocRef = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
+  let answerDocCreated = false
   if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, isAutoErrorReport, reporterRole: member.role, isDevelopmentClassroom })) {
     try {
-      await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
-        .set(buildPendingReportAnswerDoc({ reportId, classroomId, category: report.category, source: report.source, note: report.note, reportedAt: report.reportedAt, recordedAt }, recordedAt))
+      await answerDocRef.set(buildPendingReportAnswerDoc({ reportId, classroomId, category: report.category, source: report.source, note: report.note, reportedAt: report.reportedAt, recordedAt }, recordedAt))
+      answerDocCreated = true
     } catch (error) {
       logger.error(`[DeveloperReport] Failed to create pending reportAnswers doc for report=${reportId}`, error)
     }
@@ -2253,6 +2255,14 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
       if (aiResult.ok) {
         aiAnswerFields = { aiAnswer: aiResult.answer }
         await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens, aiAnswerCostYen: estimateQuestionAiCostYen(QUESTION_AI_MODEL, aiResult.inputTokens, aiResult.outputTokens), ...digestFields, aiAnswerPending: false }, { merge: true })
+        // 室長側の「これまでの質問と回答」にも AI の回答を写す(開発者の回答が来なくても読み返せる・オーナー指示 2026-10-22 qa-ai-1)。
+        // 回答待ちの文書を作った報告だけ(テスト送信・確認リストは履歴に出さない)。失敗しても報告・AI 回答は成功のまま。
+        const aiUpdate = answerDocCreated ? buildReportAnswerAiUpdate({ answer: aiResult.answer, answeredAt }) : null
+        if (aiUpdate) {
+          await answerDocRef.set(aiUpdate, { merge: true }).catch((writeError) => {
+            logger.error(`[DeveloperReport] Failed to mirror AI answer to reportAnswers doc report=${reportId}`, writeError)
+          })
+        }
       } else {
         aiAnswerFields = { aiAnswerError: aiResult.error }
         // 決まりに反して止めた回答は、室長には見せず元の文を aiAnswerBlocked に残す(開発者が見直す)。

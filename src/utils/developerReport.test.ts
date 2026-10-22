@@ -126,9 +126,13 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
 ${DEVELOPER_REPORT_AI_ANSWER_HEADING}
 基本データ画面で生徒を選びます。`)
     expect(DEVELOPER_REPORT_AI_ANSWER_HEADING).toBe('― 自動回答（試験中・誤りがあることがあります）―')
-    // 2026-10-16 夜(オーナー指示): 承認なしですぐ表示し、開発者にはメールで届く。訂正・補足は「開発者より別途回答いたします」。
+    // 2026-10-16 夜(オーナー指示): 承認なしですぐ表示し、開発者にはメールで届く。
+    // 2026-10-22(オーナー指示 qa-ai-1 / qa-ai-4「回答できているときは別途回答すると答えさせないで」「シンプルな回答にして」):
+    // 添え書きは「開発者にも届いている」ことだけを 1 回。「訂正や補足があるときは、開発者より別途回答いたします」は外した。
     expect(answered.endsWith(`\n\n${DEVELOPER_REPORT_AI_ANSWER_TRAILER}`)).toBe(true)
-    expect(DEVELOPER_REPORT_AI_ANSWER_TRAILER).toBe('この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。')
+    expect(DEVELOPER_REPORT_AI_ANSWER_TRAILER).toBe('（この回答は開発者にも届いています）')
+    expect(DEVELOPER_REPORT_AI_ANSWER_TRAILER).not.toContain('別途回答')
+    expect(answered.match(/開発者にも届いて/gu)).toHaveLength(1)
     // 2026-10-10 文言見直し(#473): 失敗理由は室長へ出さない(Vertex AI・GCP・サービスアカウント等の開発者向け文面を見せない)。
     // 理由は報告文書の aiAnswerError と関数ログに残る(functions/src/index.ts)。
     const failed = formatDeveloperReportResultMessage({ ok: true, reportId: 'r2', aiAnswerError: 'Vertex AI の権限がありません(API の有効化・実行サービスアカウントの権限を確認してください)' })

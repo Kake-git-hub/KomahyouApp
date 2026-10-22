@@ -369,8 +369,14 @@ export const DEVELOPER_REPORT_AI_ANSWER_HEADING = '― 自動回答（試験中�
  * QUESTION_AI_DEVELOPER_REPLY)・履歴の回答待ちの一文(reportAnswers.ts)と揃える。
  */
 export const DEVELOPER_REPORT_AI_ANSWER_FAILED_NOTE = '（自動回答を作れませんでした。開発者より別途回答いたします）'
-/** AI の回答の後ろに添える一文(回答は開発者にも届いていて、訂正・補足は開発者から返ることを伝える・2026-10-16 夜)。 */
-export const DEVELOPER_REPORT_AI_ANSWER_TRAILER = 'この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。'
+/**
+ * AI の回答の後ろに添える一文(回答は開発者にも届いていることだけを伝える)。
+ * 2026-10-16 夜の文「この内容は開発者にも届いています。訂正や補足があるときは、開発者より別途回答いたします。」は、
+ * AI 自身も「質問は開発者にも届いています」と書いて二重になり、答えられた質問にも「別途回答」と付いていた
+ * (確認リスト v1.5.625 qa-ai-1 / qa-ai-4・オーナー指示 2026-10-22「回答できているときは別途回答すると答えさせないで」「シンプルな回答にして」)。
+ * 添え書きは画面側のこの 1 回だけにし、AI の文からは落とす(functions/src/questionAiAnswer.ts stripQuestionAiRedundantNotes)。
+ */
+export const DEVELOPER_REPORT_AI_ANSWER_TRAILER = '（この回答は開発者にも届いています）'
 
 /** 送信結果を利用者向けの1文にする（盤面モーダル・日程表タブのモーダルで共用）。 */
 export function formatDeveloperReportResultMessage(result: DeveloperReportSubmitResult): string {
