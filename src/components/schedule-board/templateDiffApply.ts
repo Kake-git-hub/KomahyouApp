@@ -20,6 +20,7 @@ import { isCellInTemplateDiffScope, isTemplateEffectiveStartDateInPast, resolveD
 import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate } from './templateLessonAccounting'
 import type { DeskCell, DeskLesson, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
+import { isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -624,6 +625,8 @@ export function resolveTemplateDeskTeacher(
 function applyTeacherFields(desk: DeskCell, fields: TemplateDeskTeacherFields): DeskCell {
   const next: DeskCell = { ...desk, ...fields }
   if (fields.teacher !== desk.teacher) delete next.teacherUnavailableWarning
+  // Q41-13 の「ずらして置いた講師」の印は、講師が替わったら外す（置き直しの印は手順 0.5 の後処理が付け直す）。
+  if (fields.teacher !== desk.teacher) delete next.templateTeacherShift
   return next
 }
 
@@ -2085,6 +2088,22 @@ function applyTemplateDiffToCell(context: {
     // 上の kept-qr の数え方（テンプレ机に講師が居るときだけ数える）と対にする。
     if (fields.teacher) summary.qrTeacherKept -= 1
   }
+
+  // ── 5. Q41-13 の後処理（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: ずらして置いたテンプレの講師の机に印
+  //   （templateTeacherShift）を付け、この机以外の古い印（講師が替わった・手で置き直した）は外す。表示専用（isShiftedTemplateTeacherDesk）。
+  const shiftedTargets = new Map<number, ManualTeacherDeskShift>()
+  for (const shift of teacherShifts) if (shift.placement.kind === 'placed') shiftedTargets.set(shift.placement.deskIndex, shift)
+  nextDesks.forEach((desk, index) => {
+    const shift = shiftedTargets.get(index)
+    if (shift && !desk.manualTeacher && isSameTeacherByAliases(desk.teacher, shift.templateTeacher, context.teacherAliases)) {
+      nextDesks[index] = { ...desk, templateTeacherShift: { teacher: desk.teacher, fromDeskIndex: shift.fromIndex } }
+      return
+    }
+    if (desk.templateTeacherShift && !isShiftedTemplateTeacherDesk(desk)) {
+      const { templateTeacherShift: _stale, ...rest } = desk
+      nextDesks[index] = rest
+    }
+  })
 
   return {
     ...cell,

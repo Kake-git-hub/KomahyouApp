@@ -7,6 +7,7 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
+import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent, resolveTemplatePendingBandSeat } from './templatePendingResolution'
 
@@ -785,11 +786,15 @@ function BoardGridComponent({
                       const teacherUnavailableWarning = hasUnavailableTeacherWarning(desk)
                       const teacherWarning = teacherManualWarning || teacherUnavailableWarning
                       const teacherAssignmentHint = getTeacherAssignmentHint(desk)
+                      // Q41-13（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: テンプレ差分反映が同じコマの空き机へずらして置いた
+                      // 講師は講師欄を緑にする（sa-teacher-shifted）。保留（sa-pending）ではないので操作の制限は無い。PDF は stripTemplatePendingLowerForPdf が外す。
+                      const shiftedTeacher = !pendingEntry && cell.isOpenDay && isShiftedTemplateTeacherDesk(desk)
                       const teacherClassName = [
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
                         teacherWarning ? 'sa-warning' : '',
                         pendingEntry ? 'sa-pending' : '',
+                        shiftedTeacher ? 'sa-teacher-shifted' : '',
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null
                       const secondStudent = lesson?.studentSlots[1] ?? null
@@ -824,7 +829,7 @@ function BoardGridComponent({
                         >
                           <div
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
-                            title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint))}
+                            title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : (shiftedTeacher ? describeShiftedTemplateTeacher(desk) : teacherAssignmentHint)))}
                           >
                             {/* 講師未割当などの埋め草は表示だけ空白にする(deskTeacherLabel.ts・オーナー指示 2026-10-22)。データは変えない。 */}
                             {cell.isOpenDay ? formatDeskTeacherLabel(desk.teacher) : ''}
