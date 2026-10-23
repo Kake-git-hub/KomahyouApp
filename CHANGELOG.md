@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.632 (2026-10-23)
+
+- docs: v1.5.631 の push が CI の INV改定ガード（matrix テスト変更には `docs/spec-invariants.md` の同時更新が必須）で赤になったため、INV-02 に注記（表示用の印 `templateTeacherShift`・保証文の改定なし・行の追加のみ）を足した。lint / unit / build とデプロイは v1.5.631 で緑。
+
 ## v1.5.631 (2026-10-23)
 
 - feat: **ずらして置いたテンプレの講師を緑で見分ける（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）**。Q41-13 で同じコマの空き机へずらして置いた講師の机に印 `templateTeacherShift`（講師名＋元の机番号・`types.ts`）を付け、盤面の講師欄を保留と同じ緑＋左の緑線にし、ツールチップに「テンプレでは机 n の講師ですが…ずらして置きました（保留ではありません）」を出す（`BoardGrid.tsx`・`App.css`・`isShiftedTemplateTeacherDesk`＝`utils/deskTeacherLabel.ts`）。保留ではないので操作の制限は無い。印はその机の講師と一致し非 manual のときだけ有効で、講師が替わると差分反映が外す。盤面 PDF は `stripTemplatePendingLowerForPdf` が緑を外す。確認リスト第68版（tp-59・v1.5.631）。テスト: マトリクスに印の付与・再保存での消去・再マージの不動点、描画と PDF 除外の配線。
