@@ -153,9 +153,10 @@ describe('確認リストの項目定義', () => {
     // 第63版(2026-10-21): OK 済み tp-55 を外し tp-48/51/57 の文面を直したので次にデプロイされる版 v1.5.622 へ上げる(tp-48/tp-51 は再確認が要る)。
     // 第64版(2026-10-22): 並べ替えで生徒2→生徒1へ寄せた席が再マージで戻らない bs-1 を足し、次にデプロイされる版 v1.5.625 へ上げる。
     // 第65版(2026-10-22): 講師だけのテンプレ机の理由の文言(tp-59 の確認を書き換え)で、次にデプロイされる版 v1.5.627 へ上げる。
-        expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-59')?.check ?? []).some((line) => line.includes('テンプレのこの机が講師だけ'))).toBe(true)
-    // 第66版(2026-10-22): OK 済み 14 件を外し qa-ai-5〜7・tb-1 を足したので次にデプロイされる版 v1.5.629 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.629')
+        // 第66版(2026-10-22): OK 済み 14 件を外し qa-ai-5〜7・tb-1 を足したので次にデプロイされる版 v1.5.629 へ上げる。
+    // 第67版(2026-10-23): 講師だけのテンプレ机で手置き講師を残しテンプレの講師を空き机へずらす(Q41-13)で tp-59 を書き換え、v1.5.630 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.630')
+    expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-59')?.check ?? []).some((line) => line.includes('同じコマの空いている机へずらして置かれる'))).toBe(true)
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
     expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
@@ -266,8 +267,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.629')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.629')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.630')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.630')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -339,7 +340,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.629]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.630]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {

@@ -2677,7 +2677,7 @@ export function computeTemplateDiffApplyForBoard(input: {
       ...wholeDayTransferCountAdjustments.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-count-adjusted', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: null })),
       ...orphaned.removals.map((item): TemplateDiffStudentNote => ({ kind: 'orphan-removed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: `振替先 ${formatTemplateDiffMonthDay(item.targetDateKey)}` })),
       // Q41（2026-10-21）: 手置き講師の扱い（重ねて保留／テンプレの講師に替わる）。
-      ...run.diff.teacherNotes.map((item): TemplateDiffStudentNote => ({ kind: item.kind, studentName: item.teacherName, subject: '', dateKey: item.dateKey, slotNumber: item.slotNumber, detail: item.templateTeacher, ...(item.keptStudentNames && item.keptStudentNames.length > 0 ? { keptStudentNames: [...item.keptStudentNames] } : {}) })),
+      ...run.diff.teacherNotes.map((item): TemplateDiffStudentNote => ({ kind: item.kind, studentName: item.teacherName, subject: '', dateKey: item.dateKey, slotNumber: item.slotNumber, detail: item.templateTeacher, ...(item.keptStudentNames && item.keptStudentNames.length > 0 ? { keptStudentNames: [...item.keptStudentNames] } : {}), ...(item.placement ? { placement: item.placement } : {}) })),
     ]
     // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の次の反復の絞り込みは入口のまま＝反復ごとに範囲が広がらない・regression-reviewer M-1）。
     const settleSlotFilter = extendTemplateDiffSlotFilterWithCells(params.slotFilter, new Set([...removal.touchedCellIds, ...follow.touchedCellIds]))
