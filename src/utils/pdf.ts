@@ -471,6 +471,8 @@ export function stripTemplatePendingLowerForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-pending').forEach((node) => node.classList.remove('sa-pending'))
   // 席ごと表示（2026-10-02）で保留の机の席に付く上詰めの印も外す（PDF は 1 行の机と同じ高さ・配置で出す）。
   root.querySelectorAll<HTMLElement>('.sa-pending-desk').forEach((node) => node.classList.remove('sa-pending-desk'))
+  // Q41-13: ずらして置いた講師の緑（盤面画面の印）も PDF には出さない。
+  root.querySelectorAll<HTMLElement>('.sa-teacher-shifted').forEach((node) => node.classList.remove('sa-teacher-shifted'))
 }
 
 // 盤面PDFの本体。selection が null のときは従来の「表示週まるごと」出力(exportBoardPdf)と完全に同じ。

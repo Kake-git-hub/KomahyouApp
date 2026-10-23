@@ -128,6 +128,12 @@ export type DeskCell = {
    * 外す側(差分反映・再マージ)が同じ形で書く。消さない(QR 机が 1 つでも残る講師を触らないのと同じ扱い)。
    */
   scheduleRegistrationSupersededByTemplate?: { sessionId: string; teacherId: string }
+  /**
+   * テンプレ差分反映（Q41-13・オーナー指示 2026-10-22）が「テンプレの机に手置き講師が居るため、同じコマの空き机へずらして置いた講師」の印。
+   * 盤面画面で講師欄を緑にして見分けるためだけに使う（保留ではない・操作の制限なし・PDF には出さない）。
+   * teacher がこの机の講師と一致し、かつ非 manual のときだけ有効（講師が替わった／手で置き直した後の古い印は表示に使わない＝isShiftedTemplateTeacherDesk）。
+   */
+  templateTeacherShift?: { teacher: string; fromDeskIndex: number }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]

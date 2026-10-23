@@ -2797,6 +2797,13 @@ tr.sa-group-row td {
   cursor: not-allowed;
 }
 
+/* Q41-13（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: テンプレ差分反映が同じコマの空き机へずらして置いた講師。
+   保留と同じ緑で見分け、左の点線で「ずらした」ことを示す。保留ではないので操作の制限は無い。盤面 PDF は stripTemplatePendingLowerForPdf が外す。 */
+.sa-teacher.sa-teacher-shifted {
+  background: #e3f4e6;
+  box-shadow: inset 3px 0 0 #2e7d32;
+}
+
 /* 保留の机の席（下段の無い席を含む・席ごと表示 2026-10-02）: 上段を上詰めにし、1 行の席と 2 行の席で上段の高さを揃える。
    緑（sa-pending）は下段のある席だけ。盤面 PDF は stripTemplatePendingLowerForPdf が両方の印を外す。 */
 .sa-student.sa-pending-desk {

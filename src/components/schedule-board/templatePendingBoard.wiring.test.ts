@@ -257,6 +257,43 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
   })
 })
 
+describe('Q41-13 ずらして置いた講師の緑（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）', () => {
+  const shiftedCell = (): SlotCell => {
+    const cell = boardCell()
+    cell.desks = [
+      { id: `${CELL_ID}_desk_1`, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual' },
+      { id: `${CELL_ID}_desk_2`, teacher: '田村', templateTeacherShift: { teacher: '田村', fromDeskIndex: 0 } },
+      // 古い印（講師が手で置き直された）は緑にしない
+      { id: `${CELL_ID}_desk_3`, teacher: '藤井', manualTeacher: true, teacherAssignmentSource: 'manual', templateTeacherShift: { teacher: '田村', fromDeskIndex: 0 } },
+    ]
+    return cell
+  }
+  it('ずらした先の講師欄だけ sa-teacher-shifted（緑）になり、保留の緑（sa-pending）は付かず、ツールチップに元の机番号が出る', () => {
+    const html = renderGrid(undefined, { cells: [shiftedCell()] })
+    // 講師欄の <td> の開始タグ（class を含む）だけを切り出す
+    const teacherTag = (deskIndex: number) => {
+      const end = html.indexOf(`data-testid="teacher-cell-${CELL_ID}-${deskIndex}"`)
+      return html.slice(html.lastIndexOf('<td', end), end)
+    }
+    const desk1 = teacherTag(0)
+    const desk2 = teacherTag(1)
+    const desk3 = teacherTag(2)
+    expect(desk2).toContain('sa-teacher-shifted')
+    expect(desk2).not.toContain('sa-pending')
+    expect(desk3).not.toContain('sa-teacher-shifted')
+    expect(desk1).not.toContain('sa-teacher-shifted')
+    expect(html).toContain('テンプレでは机 1 の講師ですが、その机に手で置いた講師が居るため、この机へずらして置きました（保留ではありません。講師の変更・生徒の配置はできます）。')
+  })
+  it('盤面 PDF の複製からは緑（sa-teacher-shifted）を外す', () => {
+    const container = document.createElement('div')
+    container.innerHTML = renderGrid(undefined, { cells: [shiftedCell()] })
+    expect(container.querySelector('.sa-teacher-shifted')).not.toBeNull()
+    stripTemplatePendingLowerForPdf(container)
+    expect(container.querySelector('.sa-teacher-shifted')).toBeNull()
+    expect(container.textContent).toContain('田村')
+  })
+})
+
 describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分）', () => {
   it('複製から下段（.sa-pending-lower）と保留の緑を外す。上段の生徒は残る', () => {
     const container = document.createElement('div')
