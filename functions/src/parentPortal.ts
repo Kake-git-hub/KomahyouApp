@@ -144,6 +144,8 @@ export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroo
 export const PARENT_MESSAGE_ERROR_INVALID_INPUT = '送信できませんでした。ページを開き直してお試しください。'
 /** 409。対象コマが無い・過去・表示範囲外・すでに休み/出席済みなど(保護者へは理由を出し分けない)。 */
 export const PARENT_ABSENCE_ERROR_NOT_REPORTABLE = 'この授業はお休みの連絡ができません。ページを開き直してご確認ください。'
+/** 409。締切(前日の夜 0時00分 JST)を過ぎた当日・過去のコマ(2026-10-23 オーナー指示・spec §0-7)。電話に誘導する。 */
+export const PARENT_ABSENCE_ERROR_DEADLINE_PASSED = 'この授業のお休みの連絡は締め切りました（前日の夜0時00分まで）。当日の欠席連絡は教室にお電話いただきますようお願いします。'
 /** 409。同じコマの二重連絡(決定的 messageId の create が衝突したときも同じ文言)。 */
 export const PARENT_ABSENCE_ERROR_ALREADY_REPORTED = 'この授業はすでにお休みの連絡を受け付けています。'
 
@@ -773,10 +775,15 @@ export async function handleParentPortalPost(
   }
   const { dateKey, slotNumber } = input.value
 
-  // (3) 対象コマの検証。表示できない月(来月以降)・過去日は日程を計算するまでもなく弾く。
+  // (3) 対象コマの検証。締切(前日の夜 0時00分 JST)を過ぎた当日・過去の日は、日程を計算するまでもなく
+  //     電話案内つきの 409 で弾く(2026-10-23 オーナー指示・spec §0-7。共有関数 isParentLessonAbsenceReportable と同じ境界 dateKey > today)。
+  //     表示できない月(来月以降)も日程計算せず弾く。
   //     科目・種別・予定かどうかは**ここで日程計算から引いた値**を保存する(リクエストの値は使わない)。
+  if (dateKey <= today) {
+    return { status: 409, body: { error: PARENT_ABSENCE_ERROR_DEADLINE_PASSED } }
+  }
   const maxTo = deps.resolveRange({}, today).bounds.maxTo
-  const target = (dateKey >= today && dateKey <= maxTo)
+  const target = dateKey <= maxTo
     ? findParentAbsenceTargetLesson(
       deps.buildScheduleView(snapshot.payload, tokenDoc.studentId, { from: dateKey, to: dateKey })?.days,
       dateKey,

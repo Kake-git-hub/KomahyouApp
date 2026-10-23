@@ -35,6 +35,7 @@ import {
   normalizeParentAbsenceInput,
   normalizeRevokeRequest,
   PARENT_ABSENCE_ERROR_ALREADY_REPORTED,
+  PARENT_ABSENCE_ERROR_DEADLINE_PASSED,
   PARENT_ABSENCE_ERROR_NOT_REPORTABLE,
   PARENT_ABSENCE_MAX_SLOT_NUMBER,
   PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN,
@@ -278,9 +279,11 @@ describe('休み連絡できるコマの判定(共有関数 isParentLessonAbsenc
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 5, '2026-09-13')).toBeNull()
   })
 
-  it('過去の日は null・当日は可(共有関数と同じ境界)', () => {
+  // 2026-10-23 オーナー指示(spec §0-7): 休み連絡は前日の夜 0時00分まで。当日は null(共有関数と同じ境界 dateKey > today)。
+  it('過去の日・当日は null、前日までは可(共有関数と同じ境界)', () => {
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-21')).toBeNull()
-    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-20')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-20')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-19')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
   })
 
   it('壊れた days は null(型ガード)', () => {
@@ -695,16 +698,32 @@ describe('handleParentPortalPost: 休み連絡の検証順(400 → 409 → 429 �
     })
   })
 
-  it('当日のコマも受け付ける(オーナー確定 3)', async () => {
+  // ★2026-10-23 オーナー指示(spec §0-7): 休み連絡は前日の夜 0時00分(JST)まで。当日・過去は電話案内つきの 409 で、
+  //   日程計算も枠の消費もしない。前日(明日のコマ)は従来どおり 200。
+  it('当日・過去のコマは締切(前日の夜 0時00分)を過ぎているので 409 で電話を案内し、枠を消費しない', async () => {
+    for (const dateKey of ['2026-09-13', '2026-09-12']) {
+      const buildScheduleView = vi.fn(() => ({ studentName: 'n', days: [] }))
+      const deps = createDeps({ buildScheduleView })
+      const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey, slotNumber: 1 } }, deps)
+      expect(result, dateKey).toEqual({ status: 409, body: { error: PARENT_ABSENCE_ERROR_DEADLINE_PASSED } })
+      expect(buildScheduleView, dateKey).not.toHaveBeenCalled()
+      expect(deps.hasAbsenceNotice, dateKey).not.toHaveBeenCalled()
+      expect(deps.consumeMessageQuota, dateKey).not.toHaveBeenCalled()
+      expect(deps.saveMessage, dateKey).not.toHaveBeenCalled()
+    }
+    expect(PARENT_ABSENCE_ERROR_DEADLINE_PASSED).toContain('前日の夜0時00分')
+    expect(PARENT_ABSENCE_ERROR_DEADLINE_PASSED).toContain('当日の欠席連絡は教室にお電話いただきますようお願いします。')
+  })
+
+  it('前日(明日のコマ)までは受け付ける', async () => {
     const deps = createDeps()
-    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-09-13', slotNumber: 1 } }, deps)
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-09-14', slotNumber: 1 } }, deps)
     expect(result.status).toBe(200)
   })
 
   // ★(3) 対象コマの検証。理由は出し分けない(§F と同じ作法)。
-  it('過去の日・表示できない月・存在しない限・すでに結果が付いたコマは 409 で、枠を消費しない', async () => {
+  it('表示できない月・存在しない限・すでに結果が付いたコマは 409 で、枠を消費しない', async () => {
     const cases: Array<{ label: string; rawBody: { dateKey: string; slotNumber: number }; overrides?: Partial<ParentPortalDeps> }> = [
-      { label: '昨日', rawBody: { dateKey: '2026-09-12', slotNumber: 1 } },
       { label: '表示範囲(今月末)より先', rawBody: { dateKey: '2026-10-05', slotNumber: 1 } },
       { label: '存在しない限', rawBody: { dateKey: '2026-09-20', slotNumber: 4 } },
       {

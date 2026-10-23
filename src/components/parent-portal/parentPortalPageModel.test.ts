@@ -6,10 +6,11 @@ import {
   PARENT_ABSENCE_BADGE_REPORTED,
   PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE,
   PARENT_ABSENCE_CONFIRM_NOTE_CANCEL,
-  PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY,
+  PARENT_ABSENCE_DEADLINE_NOTE,
   PARENT_ABSENCE_CONFIRM_QUESTION,
   PARENT_ABSENCE_CONFLICT_MESSAGE,
   PARENT_ABSENCE_LIST_HINT,
+  PARENT_ABSENCE_SAME_DAY_PHONE_NOTE,
   PARENT_ABSENCE_SENDING_LABEL,
   PARENT_MESSAGE_RATE_LIMIT_MESSAGE,
   PARENT_PORTAL_DISABLED_MESSAGE,
@@ -399,8 +400,10 @@ describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices
     expect(rows.every((row) => row.absenceStatus === 'none')).toBe(true)
   })
 
-  it('当日のコマもタップできる・過去の日はできない(オーナー確定 3)', () => {
-    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(true)
+  // ★2026-10-23 オーナー指示(spec §0-7): 休み連絡は前日の夜 0時00分まで。当日の行はタップできない(電話案内)。
+  it('前日まではタップできる・当日と過去の日はできない', () => {
+    expect(buildParentScheduleRows(days, '2026-09-19', [])[0].canReportAbsence).toBe(true)
+    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(false)
     expect(buildParentScheduleRows(days, '2026-09-21', [])[0].canReportAbsence).toBe(false)
   })
 
@@ -444,7 +447,7 @@ describe('休み連絡の確認モーダル', () => {
   })
 
   it('確認文と注意書き(確認済み表示・取り消しは電話)を出す', () => {
-    const described = describeParentAbsenceConfirm(target, '2026-09-13')
+    const described = describeParentAbsenceConfirm(target)
     expect(described.target).toBe('9月20日(土) 3限 16:20〜 英')
     expect(described.question).toBe(PARENT_ABSENCE_CONFIRM_QUESTION)
     expect(described.notes).toEqual([PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL])
@@ -452,13 +455,11 @@ describe('休み連絡の確認モーダル', () => {
     expect(described.notes[1]).toContain('お電話')
   })
 
-  // ★当日は教室が気づくのが遅れる恐れがあるので電話併用を促す(オーナー指示 2026-09-18)。
-  it('当日のコマだけ「電話でも連絡を」の注意を足す', () => {
-    const sameDay = describeParentAbsenceConfirm(target, '2026-09-20')
-    expect(sameDay.notes).toHaveLength(3)
-    expect(sameDay.notes[2]).toBe(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)
-    expect(sameDay.notes[2]).toContain('お電話')
-    expect(describeParentAbsenceConfirm(target, '2026-09-19').notes).toHaveLength(2)
+  // ★2026-10-23 オーナー指示(spec §0-7): 当日の行は押せないので「当日のご連絡です」の注意は廃止。
+  //   当日の案内は常時表示の注記(PARENT_ABSENCE_SAME_DAY_PHONE_NOTE)で出す。
+  it('「当日のご連絡です」の注意は無い(注意は 2 行だけ・今日の日付を引数に取らない)', () => {
+    expect(describeParentAbsenceConfirm(target).notes).toHaveLength(2)
+    expect(describeParentAbsenceConfirm(target).notes.join('')).not.toContain('当日のご連絡')
   })
 })
 
@@ -486,8 +487,15 @@ describe('resolveParentScheduleMonthNotice', () => {
 describe('PARENT_PORTAL_NOTES', () => {
   // 2026-10-10 文言整理(オーナー確認済み): 3 行 → 1 行。「保存された時点」と「行をタップ」の 2 行は廃止。
   // タップの案内は連絡できる行があるときだけ一覧の上(PARENT_ABSENCE_LIST_HINT)に出る。
-  it('常時表示の注記は「予定は変更になることがあります。」の 1 行だけ', () => {
-    expect(PARENT_PORTAL_NOTES).toEqual(['予定は変更になることがあります。'])
+  // 2026-10-23 オーナー指示(spec §0-7): 休み連絡の締切(前日の夜 0時00分)と「当日は電話」の 2 行を足して 3 行。
+  it('常時表示の注記は「予定は変更に…」＋締切＋「当日は電話」の 3 行', () => {
+    expect(PARENT_PORTAL_NOTES).toEqual([
+      '予定は変更になることがあります。',
+      'お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。',
+      '当日の欠席連絡は教室にお電話いただきますようお願いします。',
+    ])
+    expect(PARENT_ABSENCE_DEADLINE_NOTE).toBe('お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。')
+    expect(PARENT_ABSENCE_SAME_DAY_PHONE_NOTE).toBe('当日の欠席連絡は教室にお電話いただきますようお願いします。')
     expect(PARENT_PORTAL_NOTES.join('')).not.toContain('保存された時点')
     expect(PARENT_PORTAL_NOTES.join('')).not.toContain('ページ下部')
   })
@@ -533,7 +541,9 @@ describe('保護者ページの文言(2026-10-10 文言整理)', () => {
     expect(PARENT_SCHEDULE_CLOSED_MESSAGE).toBe('教室お休み')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).toBe('この授業をお休みしますか？')
     expect(PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE).toBe('教室が確認すると「教室確認済」と表示されます。')
-    expect(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY).toBe('当日のご連絡です。「教室確認済」にならない場合はお電話ください。')
+    // 2026-10-23: 「当日のご連絡です。…」の注意は廃止(当日の行は押せない・spec §0-7)。復活させない。
+    expect(MODEL_TS).not.toContain('当日のご連絡です')
+    expect(PAGE_TSX).not.toContain('当日のご連絡です')
     expect(PARENT_PORTAL_LOAD_FAILED_MESSAGE).toBe('読み込めませんでした。少し待ってから開き直してください。')
     expect(PARENT_ABSENCE_CONFLICT_MESSAGE).toBe('この授業はお休みの連絡ができません。ページを開き直してご確認ください。')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).not.toContain('?')

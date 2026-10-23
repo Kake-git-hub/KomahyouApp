@@ -280,7 +280,9 @@ export function resolveParentScheduleRange(
 /**
  * その授業コマに保護者ページから「お休みの連絡」ができるか(2026-09-18 オーナー指示・休み連絡専用化)。
  * - これから受ける予定の授業(`regular` / `makeup` / `extra`)で、
- * - 日付が**今日以降**(＝当日のコマも受け付ける・オーナー確定 3)なら真。
+ * - 日付が**明日以降**(JST)なら真。★当日は不可(2026-10-23 オーナー指示: 休み連絡は前日の夜 0時00分まで。
+ *   当日の欠席連絡は教室への電話に誘導する・spec-parent-portal.md §0-7)。
+ *   旧仕様(2026-09-18 オーナー確定 3「当日のコマも受け付ける」)は廃止。`>=` に戻すと回帰。
  * すでに結果が付いたコマ(`absent` / `absent-no-makeup` / `attended`)は偽。
  * テンプレ補完(`isTentative`)でも真にする(盤面がまだ無い先の予定こそ事前連絡が要る)。
  *
@@ -291,7 +293,7 @@ export function resolveParentScheduleRange(
 export function isParentLessonAbsenceReportable(kind: ParentScheduleLessonKind, dateKey: string, todayKey: string): boolean {
   if (kind !== 'regular' && kind !== 'makeup' && kind !== 'extra') return false
   if (!isValidDateKey(dateKey) || !isValidDateKey(todayKey)) return false
-  return dateKey >= todayKey
+  return dateKey > todayKey
 }
 
 // ---------------------------------------------------------------------------

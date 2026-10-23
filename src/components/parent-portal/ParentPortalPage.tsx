@@ -207,7 +207,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const scheduleRows = buildParentScheduleRows(schedule.days, schedule.today, notices)
   const hasTentativeRow = scheduleRows.some((row) => row.isTentative)
   const hasReportableRow = scheduleRows.some((row) => row.canReportAbsence)
-  const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget, schedule.today) : null
+  const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget) : null
 
   return (
     <div className="pp-container">

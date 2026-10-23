@@ -123,7 +123,7 @@ describe('確認リストの項目定義', () => {
     // 第63版(2026-10-21・v1.5.622): テスト教室の結果(受付 20261020-092527755-56bbf675)で OK の tp-55 を外し、生徒ごとの理由 tp-58 を足した。
     // 第66版(2026-10-22・v1.5.629): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の 14 件を外し、
     // メモへの対応の確認 qa-ai-5〜qa-ai-7・tb-1 を先頭に足した。
-    expect(ids).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
+    expect(ids).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'q-7', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -158,7 +158,8 @@ describe('確認リストの項目定義', () => {
         // 第66版(2026-10-22): OK 済み 14 件を外し qa-ai-5〜7・tb-1 を足したので次にデプロイされる版 v1.5.629 へ上げる。
     // 第67版(2026-10-23): 講師だけのテンプレ机で手置き講師を残しテンプレの講師を空き机へずらす(Q41-13)で tp-59 を書き換え、v1.5.630 へ上げる。
     // 第68版(2026-10-23): ずらして置いた講師の講師欄を緑にする(保留ではない)を tp-59 に足し、v1.5.631 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.633')
+    // 第70版(2026-10-23): 休み連絡の締切(前日の夜 0時00分・spec-parent-portal.md §0-7)の確認 q-7 を足したので v1.5.634 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.634')
     // 第69版(2026-10-23): テスト教室の結果で OK の tp-50・tp-56 を外し、テスト担当の形を tp-60 に分けたので v1.5.633 へ上げる。
     expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-60')?.check ?? []).some((line) => line.includes('同じコマの空いている机に入り') && line.includes('講師欄が緑'))).toBe(true)
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
@@ -212,6 +213,12 @@ describe('確認リストの項目定義', () => {
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
     expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
+    // 第70版: 休み連絡の締切(当日は押せない・注記 2 行・spec §0-7)。q-1 の「今日以降」は「明日以降」に直してある。
+    expect(byId.get('q-7')!.introducedIn).toBe('v1.5.634')
+    expect(byId.get('q-7')!.check!.join(' / ')).toContain('前日の夜0時00分まで受け付けます')
+    expect(byId.get('q-7')!.check!.join(' / ')).toContain('当日の欠席連絡は教室にお電話いただきますようお願いします')
+    expect(byId.get('q-1')!.check!.join(' / ')).toContain('明日以降の授業の行だけ')
+    expect(byId.get('q-1')!.check!.join(' / ')).not.toContain('今日の授業なら')
     expect(byId.get('q-6')!.check!.join(' / ')).toContain('4つのボタンのどれかを押した時点で')
     expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
     expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
@@ -273,8 +280,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.633')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.633')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.634')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.634')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -346,7 +353,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.633]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.634]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
