@@ -11,6 +11,7 @@ import {
   PARENT_ABSENCE_CONFLICT_MESSAGE,
   PARENT_ABSENCE_LIST_HINT,
   PARENT_ABSENCE_SAME_DAY_PHONE_NOTE,
+  isParentLessonSameDayPhoneNotice,
   PARENT_ABSENCE_SENDING_LABEL,
   PARENT_MESSAGE_RATE_LIMIT_MESSAGE,
   PARENT_PORTAL_DISABLED_MESSAGE,
@@ -30,6 +31,7 @@ import {
   canShiftParentScheduleMonth,
   describeParentAbsenceBadge,
   describeParentAbsenceConfirm,
+  describeParentSameDayPhoneNotice,
   describeParentScheduleDayStatus,
   describeParentScheduleLesson,
   formatJstDateTimeLabel,
@@ -48,6 +50,7 @@ import {
   shiftParentScheduleMonth,
   shouldReloadParentScheduleAfterSendError,
   toParentAbsenceTarget,
+  toParentSameDayPhoneTarget,
   type ParentScheduleDay,
   type ParentScheduleLesson,
 } from './parentPortalPageModel'
@@ -400,11 +403,38 @@ describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices
     expect(rows.every((row) => row.absenceStatus === 'none')).toBe(true)
   })
 
-  // ★2026-10-23 オーナー指示(spec §0-7): 休み連絡は前日の夜 0時00分まで。当日の行はタップできない(電話案内)。
-  it('前日まではタップできる・当日と過去の日はできない', () => {
-    expect(buildParentScheduleRows(days, '2026-09-19', [])[0].canReportAbsence).toBe(true)
-    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(false)
-    expect(buildParentScheduleRows(days, '2026-09-21', [])[0].canReportAbsence).toBe(false)
+  // ★2026-10-23 オーナー指示(spec §0-7): 休み連絡は前日の夜 0時00分まで。当日の行は送信できないが、
+  //   押せるままにして「当日の欠席連絡は教室にお電話…」の案内を大きく出す(「タップできなくなるのではなく」)。
+  it('前日まではタップして連絡できる。当日は連絡できず電話案内の行になる。過去はどちらでもない', () => {
+    const before = buildParentScheduleRows(days, '2026-09-19', [])[0]
+    expect([before.canReportAbsence, before.showsSameDayPhoneNotice]).toEqual([true, false])
+    const sameDay = buildParentScheduleRows(days, '2026-09-20', [])[0]
+    expect([sameDay.canReportAbsence, sameDay.showsSameDayPhoneNotice]).toEqual([false, true])
+    const past = buildParentScheduleRows(days, '2026-09-21', [])[0]
+    expect([past.canReportAbsence, past.showsSameDayPhoneNotice]).toEqual([false, false])
+  })
+
+  it('当日でも、連絡済みの行・結果が付いた行(出席済み/お休み)は電話案内を出さない', () => {
+    const reported = buildParentScheduleRows(days, '2026-09-20', [{ dateKey: '2026-09-20', slotNumber: 1, acknowledged: false }])
+    expect([reported[0].canReportAbsence, reported[0].showsSameDayPhoneNotice, reported[0].absenceStatus]).toEqual([false, false, 'reported'])
+    const rows = buildParentScheduleRows(days, '2026-09-20', [])
+    expect(rows[2].showsSameDayPhoneNotice).toBe(false)
+    expect(rows[3].showsSameDayPhoneNotice).toBe(false)
+    expect(isParentLessonSameDayPhoneNotice('regular', '2026-09-20', '2026-09-20')).toBe(true)
+    expect(isParentLessonSameDayPhoneNotice('regular', '2026-09-21', '2026-09-20')).toBe(false)
+    expect(isParentLessonSameDayPhoneNotice('attended', '2026-09-20', '2026-09-20')).toBe(false)
+  })
+
+  it('当日の行の対象は電話案内モーダル用に作り、送信用の対象は作らない。読み上げも電話の案内にする', () => {
+    const sameDay = buildParentScheduleRows(days, '2026-09-20', [])[0]
+    expect(toParentAbsenceTarget(sameDay)).toBeNull()
+    expect(toParentSameDayPhoneTarget(sameDay)).toEqual({ dateKey: '2026-09-20', weekday: 0, slotNumber: 1, timeLabel: '13:00', subject: '英' })
+    expect(buildParentAbsenceRowAriaLabel(sameDay)).toBe('9月20日(日) 1限 13:00〜 英 は当日のため、お休みの連絡は教室へお電話ください')
+    // 前日までの行からは電話案内の対象を作らない(通常の確認モーダルへ)。
+    expect(toParentSameDayPhoneTarget(buildParentScheduleRows(days, '2026-09-19', [])[0])).toBeNull()
+    const notice = describeParentSameDayPhoneNotice(toParentSameDayPhoneTarget(sameDay)!)
+    expect(notice).toEqual({ target: '9月20日(日) 1限 13:00〜 英', message: '当日の欠席連絡は教室にお電話いただきますようお願いします。', closeLabel: '閉じる' })
+    expect(notice.message).toBe(PARENT_ABSENCE_SAME_DAY_PHONE_NOTE)
   })
 
   it('教室休み・授業の無い日の行はタップできない', () => {
@@ -541,9 +571,13 @@ describe('保護者ページの文言(2026-10-10 文言整理)', () => {
     expect(PARENT_SCHEDULE_CLOSED_MESSAGE).toBe('教室お休み')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).toBe('この授業をお休みしますか？')
     expect(PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE).toBe('教室が確認すると「教室確認済」と表示されます。')
-    // 2026-10-23: 「当日のご連絡です。…」の注意は廃止(当日の行は押せない・spec §0-7)。復活させない。
+    // 2026-10-23: 「当日のご連絡です。…」の注意は廃止(当日は電話案内モーダル・spec §0-7)。復活させない。
     expect(MODEL_TS).not.toContain('当日のご連絡です')
     expect(PAGE_TSX).not.toContain('当日のご連絡です')
+    // 当日の行は押せるまま(配線ロック): 押すと送信ではなく電話案内モーダル(大きい文字)が開く。
+    expect(PAGE_TSX).toContain('const tappable = row.canReportAbsence || row.showsSameDayPhoneNotice')
+    expect(PAGE_TSX).toContain('const sameDay = toParentSameDayPhoneTarget(row)')
+    expect(PAGE_TSX).toContain('<p className="pp-modal-big-message">{sameDayNotice.message}</p>')
     expect(PARENT_PORTAL_LOAD_FAILED_MESSAGE).toBe('読み込めませんでした。少し待ってから開き直してください。')
     expect(PARENT_ABSENCE_CONFLICT_MESSAGE).toBe('この授業はお休みの連絡ができません。ページを開き直してご確認ください。')
     expect(PARENT_ABSENCE_CONFIRM_QUESTION).not.toContain('?')

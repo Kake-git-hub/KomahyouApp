@@ -277,6 +277,11 @@ export type ParentScheduleRow = {
   subject?: string
   /** タップして休み連絡できるか(連絡可能なコマ **かつ** まだ連絡していない)。 */
   canReportAbsence: boolean
+  /**
+   * 当日の授業(締切後・2026-10-23 オーナー指示)。タップはできるが送信はせず、
+   * 「当日の欠席連絡は教室にお電話…」の案内モーダルを大きく出す(canReportAbsence とは排他)。
+   */
+  showsSameDayPhoneNotice: boolean
   /** 届いている休み連絡の状態(バッジ)。 */
   absenceStatus: ParentAbsenceStatus
 }
@@ -307,6 +312,15 @@ export function resolveParentAbsenceStatus(
   return notice.acknowledged ? 'acknowledged' : 'reported'
 }
 
+/**
+ * 当日の授業(これから受ける種別)か。締切(前日の夜 0時00分)を過ぎているので送信はできないが、
+ * 行は押せるままにして電話の案内モーダルを出す(spec §0-7)。翌日以降は isParentLessonAbsenceReportable が真になり、こちらは偽。
+ */
+export function isParentLessonSameDayPhoneNotice(kind: ParentScheduleLessonKind, dateKey: string, today: string): boolean {
+  if (kind !== 'regular' && kind !== 'makeup' && kind !== 'extra') return false
+  return dateKey === today && !isParentLessonAbsenceReportable(kind, dateKey, today)
+}
+
 export function buildParentScheduleRows(
   days: readonly ParentScheduleDay[],
   today: string,
@@ -332,6 +346,7 @@ export function buildParentScheduleRows(
           : {}),
         isTentative: false,
         canReportAbsence: false,
+        showsSameDayPhoneNotice: false,
         absenceStatus: 'none',
       })
       continue
@@ -356,6 +371,8 @@ export function buildParentScheduleRows(
         subject: String(lesson.subject ?? '').trim(),
         // 連絡済みの行はタップ不可(二重連絡の 409 を画面で見せない)。判定の権威は共有純関数。
         canReportAbsence: absenceStatus === 'none' && isParentLessonAbsenceReportable(lesson.kind, day.dateKey, today),
+        // 当日の授業は締切後(spec §0-7)。押せるままにして電話の案内を出す(2026-10-23 オーナー指示「タップできなくなるのではなく案内を大きく」)。
+        showsSameDayPhoneNotice: absenceStatus === 'none' && isToday && isParentLessonSameDayPhoneNotice(lesson.kind, day.dateKey, today),
         absenceStatus,
       })
     })
@@ -399,9 +416,8 @@ export type ParentAbsenceTarget = {
   subject: string
 }
 
-/** タップされた行 → モーダルの対象。連絡できない行は null(押せない行が押されても送らない)。 */
-export function toParentAbsenceTarget(row: ParentScheduleRow): ParentAbsenceTarget | null {
-  if (!row.canReportAbsence || typeof row.slotNumber !== 'number') return null
+function toParentRowTarget(row: ParentScheduleRow): ParentAbsenceTarget | null {
+  if (typeof row.slotNumber !== 'number') return null
   return {
     dateKey: row.dateKey,
     weekday: row.weekday,
@@ -409,6 +425,25 @@ export function toParentAbsenceTarget(row: ParentScheduleRow): ParentAbsenceTarg
     timeLabel: row.timeLabel,
     subject: row.subject ?? '',
   }
+}
+
+/** タップされた行 → モーダルの対象。連絡できない行は null(押せない行が押されても送らない)。 */
+export function toParentAbsenceTarget(row: ParentScheduleRow): ParentAbsenceTarget | null {
+  if (!row.canReportAbsence) return null
+  return toParentRowTarget(row)
+}
+
+/** タップされた当日の行 → 電話案内モーダルの対象(送信はしない)。当日でない行・連絡済みの行は null。 */
+export function toParentSameDayPhoneTarget(row: ParentScheduleRow): ParentAbsenceTarget | null {
+  if (!row.showsSameDayPhoneNotice) return null
+  return toParentRowTarget(row)
+}
+
+/** 当日の行を押したときの案内モーダル(2026-10-23 オーナー指示: シンプルに大きく出す)。 */
+export const PARENT_ABSENCE_SAME_DAY_MODAL_MESSAGE = PARENT_ABSENCE_SAME_DAY_PHONE_NOTE
+export const PARENT_ABSENCE_SAME_DAY_MODAL_CLOSE_LABEL = '閉じる'
+export function describeParentSameDayPhoneNotice(target: ParentAbsenceTarget): { target: string; message: string; closeLabel: string } {
+  return { target: formatParentAbsenceTargetLabel(target), message: PARENT_ABSENCE_SAME_DAY_MODAL_MESSAGE, closeLabel: PARENT_ABSENCE_SAME_DAY_MODAL_CLOSE_LABEL }
 }
 
 /** 対象コマの 1 行表記('9月20日(土) 3限 16:20〜 英')。科目が空でも見出しが崩れないようにする。 */
@@ -425,11 +460,13 @@ export function formatParentAbsenceTargetLabel(target: ParentAbsenceTarget): str
 /** 行の読み上げ用ラベル(内部 ID は出さない)。 */
 export function buildParentAbsenceRowAriaLabel(row: ParentScheduleRow): string | null {
   const target = toParentAbsenceTarget(row)
-  if (!target) return null
-  return `${formatParentAbsenceTargetLabel(target)} のお休みを連絡する`
+  if (target) return `${formatParentAbsenceTargetLabel(target)} のお休みを連絡する`
+  const sameDay = toParentSameDayPhoneTarget(row)
+  if (sameDay) return `${formatParentAbsenceTargetLabel(sameDay)} は当日のため、お休みの連絡は教室へお電話ください`
+  return null
 }
 
-/** 確認モーダルの文言(2026-10-23: 当日の行は押せなくなったので旧「当日のご連絡…」の注意は足さない)。 */
+/** 確認モーダルの文言(2026-10-23: 当日の行は送信できず別の案内モーダルになるので旧「当日のご連絡…」の注意は足さない)。 */
 export function describeParentAbsenceConfirm(target: ParentAbsenceTarget): { target: string; question: string; notes: string[] } {
   const notes = [PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL]
   return { target: formatParentAbsenceTargetLabel(target), question: PARENT_ABSENCE_CONFIRM_QUESTION, notes }

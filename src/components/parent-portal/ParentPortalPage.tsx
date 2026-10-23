@@ -18,6 +18,7 @@ import {
   canShiftParentScheduleMonth,
   describeParentAbsenceBadge,
   describeParentAbsenceConfirm,
+  describeParentSameDayPhoneNotice,
   formatParentScheduleMonthLabel,
   formatParentPortalTitle,
   formatParentScheduleRowDateLabel,
@@ -30,6 +31,7 @@ import {
   shiftParentScheduleMonth,
   shouldReloadParentScheduleAfterSendError,
   toParentAbsenceTarget,
+  toParentSameDayPhoneTarget,
   type ParentAbsenceNotice,
   type ParentAbsenceTarget,
   type ParentPortalScheduleResponse,
@@ -76,6 +78,8 @@ export default function ParentPortalPage({ token }: { token: string }) {
   // 送信直後に「休み連絡済」を出すための楽観的な上乗せ(次の GET で正式な値に置き換わる)。
   const [optimisticNotices, setOptimisticNotices] = useState<ParentAbsenceNotice[]>([])
   const [absenceTarget, setAbsenceTarget] = useState<ParentAbsenceTarget | null>(null)
+  // 当日の行(締切後)を押したときの電話案内モーダル(送信はしない・spec §0-7)。
+  const [sameDayTarget, setSameDayTarget] = useState<ParentAbsenceTarget | null>(null)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [sentMessage, setSentMessage] = useState('')
@@ -141,6 +145,11 @@ export default function ParentPortalPage({ token }: { token: string }) {
   }, [])
 
   const openAbsenceModal = useCallback((row: ParentScheduleRow) => {
+    const sameDay = toParentSameDayPhoneTarget(row)
+    if (sameDay) {
+      setSameDayTarget(sameDay)
+      return
+    }
     const target = toParentAbsenceTarget(row)
     if (!target) return
     setSendError('')
@@ -208,6 +217,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const hasTentativeRow = scheduleRows.some((row) => row.isTentative)
   const hasReportableRow = scheduleRows.some((row) => row.canReportAbsence)
   const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget) : null
+  const sameDayNotice = sameDayTarget ? describeParentSameDayPhoneNotice(sameDayTarget) : null
 
   return (
     <div className="pp-container">
@@ -284,6 +294,20 @@ export default function ParentPortalPage({ token }: { token: string }) {
           </div>
         </div>
       ) : null}
+
+      {sameDayNotice ? (
+        <div className="pp-modal-backdrop" role="dialog" aria-modal="true" aria-label="当日のお休みの連絡">
+          <div className="pp-modal">
+            <div className="pp-modal-target">{sameDayNotice.target}</div>
+            <p className="pp-modal-big-message">{sameDayNotice.message}</p>
+            <div className="pp-modal-actions">
+              <button type="button" className="pp-modal-cancel" onClick={() => setSameDayTarget(null)}>
+                {sameDayNotice.closeLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <style>{baseStyles}</style>
     </div>
   )
@@ -297,7 +321,8 @@ function ParentScheduleRowItem({ row, onReportAbsence }: { row: ParentScheduleRo
   const kindClass = row.rowKind === 'lesson' ? ` pp-lesson-${row.lessonKind}` : ` pp-row-${row.rowKind}`
   const badge = describeParentAbsenceBadge(row.absenceStatus)
   const ariaLabel = buildParentAbsenceRowAriaLabel(row)
-  const tappable = row.canReportAbsence
+  // 当日の行(締切後)も押せる。押すと送信ではなく電話の案内モーダルが出る(spec §0-7)。
+  const tappable = row.canReportAbsence || row.showsSameDayPhoneNotice
   return (
     <li
       className={`pp-row${weekdayClass}${kindClass}${row.isFirstOfDay ? ' pp-row-first' : ''}${row.isToday ? ' pp-row-today' : ''}${tappable ? ' pp-row-tappable' : ''}`}
@@ -416,6 +441,7 @@ const baseStyles = `
   .pp-modal { width: 100%; max-width: 420px; background: #fff; border-radius: 12px; padding: 18px 16px; display: grid; gap: 10px; max-height: 90dvh; overflow-y: auto; }
   .pp-modal-target { font-size: 19px; font-weight: 700; line-height: 1.4; }
   .pp-modal-question { font-size: 16px; line-height: 1.5; }
+  .pp-modal-big-message { font-size: 22px; font-weight: 700; line-height: 1.6; color: #b00020; text-align: center; padding: 8px 0; }
   .pp-modal-notes { list-style: none; display: grid; gap: 4px; font-size: 13px; color: #555; line-height: 1.5; }
   .pp-modal-notes li::before { content: '・'; }
   .pp-modal-actions { display: grid; gap: 8px; margin-top: 4px; }
