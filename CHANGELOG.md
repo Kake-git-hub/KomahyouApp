@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.635 (2026-10-23)
+
+- feat: 保護者用QRの当日の行は押せるままにし、押すと「当日の欠席連絡は教室にお電話いただきますようお願いします。」だけを大きな文字で出す案内モーダルに変更（オーナー指示 2026-10-23「タップできなくなるのではなくて、モーダルで案内をシンプルに大きく出す」）。送信用の確認モーダルは開かず、サーバー判定(当日 409)は据え置き。仕様 §0-7 更新・確認リスト第71版 q-7 書き換え（`parentPortalPageModel.ts`・`ParentPortalPage.tsx`）
+
 ## v1.5.634 (2026-10-23)
 
 - feat: 保護者用QRの休み連絡に締切を導入（オーナー指示 2026-10-23「前日の夜0時00分までしかできないようにして」）。共有判定 `isParentLessonAbsenceReportable` を `dateKey > today`（JST・明日以降だけ）に改定し、当日の行は押せない。ページ上部の注記に「お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。」「当日の欠席連絡は教室にお電話いただきますようお願いします。」を追加。サーバーは `dateKey ≤ today` の POST を日程計算せず 409（締切超過＋電話案内の文言 `PARENT_ABSENCE_ERROR_DEADLINE_PASSED`）。旧「当日のご連絡です…」のモーダル注意は廃止。仕様 `docs/spec-parent-portal.md` §0-7、確認リスト第70版 q-7（`parentSchedule.ts`・`functions/src/parentPortal.ts`・`parentPortalPageModel.ts`・各テスト）

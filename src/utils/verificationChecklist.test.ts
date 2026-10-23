@@ -159,7 +159,8 @@ describe('確認リストの項目定義', () => {
     // 第67版(2026-10-23): 講師だけのテンプレ机で手置き講師を残しテンプレの講師を空き机へずらす(Q41-13)で tp-59 を書き換え、v1.5.630 へ上げる。
     // 第68版(2026-10-23): ずらして置いた講師の講師欄を緑にする(保留ではない)を tp-59 に足し、v1.5.631 へ上げる。
     // 第70版(2026-10-23): 休み連絡の締切(前日の夜 0時00分・spec-parent-portal.md §0-7)の確認 q-7 を足したので v1.5.634 へ上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.634')
+    // 第71版(2026-10-23): 当日の行は押せるまま電話案内を大きく出す形に q-7 を書き換えたので v1.5.635 へ上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.635')
     // 第69版(2026-10-23): テスト教室の結果で OK の tp-50・tp-56 を外し、テスト担当の形を tp-60 に分けたので v1.5.633 へ上げる。
     expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-60')?.check ?? []).some((line) => line.includes('同じコマの空いている机に入り') && line.includes('講師欄が緑'))).toBe(true)
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
@@ -214,7 +215,8 @@ describe('確認リストの項目定義', () => {
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
     expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
     // 第70版: 休み連絡の締切(当日は押せない・注記 2 行・spec §0-7)。q-1 の「今日以降」は「明日以降」に直してある。
-    expect(byId.get('q-7')!.introducedIn).toBe('v1.5.634')
+    expect(byId.get('q-7')!.introducedIn).toBe('v1.5.635')
+    expect(byId.get('q-7')!.check!.join(' / ')).toContain('大きな赤い文字')
     expect(byId.get('q-7')!.check!.join(' / ')).toContain('前日の夜0時00分まで受け付けます')
     expect(byId.get('q-7')!.check!.join(' / ')).toContain('当日の欠席連絡は教室にお電話いただきますようお願いします')
     expect(byId.get('q-1')!.check!.join(' / ')).toContain('明日以降の授業の行だけ')
@@ -280,8 +282,8 @@ describe('生徒名の差し込み(resolveVerificationChecklistText・2026-10-10
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.634')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.634')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.635')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.635')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -353,7 +355,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.634]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.635]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
