@@ -61,8 +61,13 @@ export type ParentScheduleBounds = { minFrom: string; maxTo: string }
 // 常時表示する注記(spec §C / §0-6)。2026-10-10 の文言整理(オーナー確認済み)で 3 行 → 1 行にまとめた。
 // 「教室で保存された時点の予定です」と「授業の行をタップ…」は廃止(タップの案内は連絡できる行があるときだけ
 // 一覧の上に PARENT_ABSENCE_LIST_HINT で出る)。
+// 2026-10-23 オーナー指示(spec §0-7): 休み連絡の締切(前日の夜 0時00分)と「当日は電話」の案内を 2 行足した。
+export const PARENT_ABSENCE_DEADLINE_NOTE = 'お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。'
+export const PARENT_ABSENCE_SAME_DAY_PHONE_NOTE = '当日の欠席連絡は教室にお電話いただきますようお願いします。'
 export const PARENT_PORTAL_NOTES: readonly string[] = [
   '予定は変更になることがあります。',
+  PARENT_ABSENCE_DEADLINE_NOTE,
+  PARENT_ABSENCE_SAME_DAY_PHONE_NOTE,
 ]
 
 // 見出し(「◯◯ さん 授業予定」・2026-10-10 文言整理)。
@@ -372,8 +377,8 @@ export const PARENT_ABSENCE_SENDING_LABEL = '送信中…'
 export const PARENT_ABSENCE_CONFIRM_CANCEL_LABEL = 'やめる'
 export const PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE = `教室が確認すると「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」と表示されます。`
 export const PARENT_ABSENCE_CONFIRM_NOTE_CANCEL = '取り消し・変更はお電話でご連絡ください。'
-/** 当日のコマだけ足す注意(授業までに確認が間に合わない可能性がある)。 */
-export const PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY = `当日のご連絡です。「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」にならない場合はお電話ください。`
+// 旧「当日のご連絡…」の注意(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)は 2026-10-23 の締切導入で廃止
+// (当日の行は押せない。当日は PARENT_ABSENCE_SAME_DAY_PHONE_NOTE で電話に誘導する・spec §0-7)。
 export const PARENT_ABSENCE_SENT_MESSAGE = 'お休みの連絡を送りました。'
 // サーバー PARENT_ABSENCE_ERROR_NOT_REPORTABLE と同文(サーバーの { error } が無いときのフォールバック)。
 export const PARENT_ABSENCE_CONFLICT_MESSAGE = 'この授業はお休みの連絡ができません。ページを開き直してご確認ください。'
@@ -424,10 +429,9 @@ export function buildParentAbsenceRowAriaLabel(row: ParentScheduleRow): string |
   return `${formatParentAbsenceTargetLabel(target)} のお休みを連絡する`
 }
 
-/** 確認モーダルの文言。当日のコマだけ注意を 1 つ足す。 */
-export function describeParentAbsenceConfirm(target: ParentAbsenceTarget, today: string): { target: string; question: string; notes: string[] } {
+/** 確認モーダルの文言(2026-10-23: 当日の行は押せなくなったので旧「当日のご連絡…」の注意は足さない)。 */
+export function describeParentAbsenceConfirm(target: ParentAbsenceTarget): { target: string; question: string; notes: string[] } {
   const notes = [PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL]
-  if (target.dateKey === today) notes.push(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)
   return { target: formatParentAbsenceTargetLabel(target), question: PARENT_ABSENCE_CONFIRM_QUESTION, notes }
 }
 

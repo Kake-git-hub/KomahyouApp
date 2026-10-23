@@ -165,9 +165,11 @@ describe('resolveParentScheduleRange', () => {
 describe('isParentLessonAbsenceReportable', () => {
   const TODAY = '2026-09-14'
 
-  it('これから受ける授業(通常・振替・増コマ)は当日を含めて連絡できる(オーナー確定 3)', () => {
+  // ★2026-10-23 オーナー指示: 休み連絡は前日の夜 0時00分まで(当日は教室へ電話)。当日を true に戻すと回帰(spec §0-7)。
+  it('これから受ける授業(通常・振替・増コマ)は明日以降だけ連絡できる。当日・過去は不可', () => {
     for (const kind of ['regular', 'makeup', 'extra'] as const) {
-      expect(isParentLessonAbsenceReportable(kind, TODAY, TODAY), `${kind} 当日`).toBe(true)
+      expect(isParentLessonAbsenceReportable(kind, TODAY, TODAY), `${kind} 当日`).toBe(false)
+      expect(isParentLessonAbsenceReportable(kind, '2026-09-15', TODAY), `${kind} 翌日`).toBe(true)
       expect(isParentLessonAbsenceReportable(kind, '2026-09-30', TODAY), `${kind} 先`).toBe(true)
       expect(isParentLessonAbsenceReportable(kind, '2026-09-13', TODAY), `${kind} 過去`).toBe(false)
     }

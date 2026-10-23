@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.634 (2026-10-23)
+
+- feat: 保護者用QRの休み連絡に締切を導入（オーナー指示 2026-10-23「前日の夜0時00分までしかできないようにして」）。共有判定 `isParentLessonAbsenceReportable` を `dateKey > today`（JST・明日以降だけ）に改定し、当日の行は押せない。ページ上部の注記に「お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。」「当日の欠席連絡は教室にお電話いただきますようお願いします。」を追加。サーバーは `dateKey ≤ today` の POST を日程計算せず 409（締切超過＋電話案内の文言 `PARENT_ABSENCE_ERROR_DEADLINE_PASSED`）。旧「当日のご連絡です…」のモーダル注意は廃止。仕様 `docs/spec-parent-portal.md` §0-7、確認リスト第70版 q-7（`parentSchedule.ts`・`functions/src/parentPortal.ts`・`parentPortalPageModel.ts`・各テスト）
+
 ## v1.5.633 (2026-10-23)
 
 - docs: 確認リスト第69版（オーナー指示「マージしてテスト教室の確認リストを最新にして」）。テスト教室の結果（受付 20261022-094354322-14472254）で OK の tp-50・tp-56 を外し、テスト担当の形（手置き講師＋未消化講習の机にテンプレが講師だけを置く → 手置き講師が残り、テンプレの講師は空き机へずらして緑・保留ではない・空き机が無いとき）を tp-60 として足した。tp-57(3)・tp-59(4) の文を Q41-13 に合わせた。要改善の tp-48・tp-49・tp-51 は調査待ちで残し、進行中テーマ台帳に記載（`verificationChecklist.ts`・`developmentStatusLedger.ts`）。
