@@ -251,7 +251,13 @@ export default function ParentPortalPage({ token }: { token: string }) {
           {formatParentScheduleMonthLabel(schedule.range.from)}
           {refreshing ? <span className="pp-range-refreshing">更新中…</span> : null}
         </div>
-        <button type="button" className="pp-range-button" onClick={() => shiftMonth(1)} disabled={!canGoNext || refreshing}>次の月</button>
+        {/* 来月は出さない(§0-5)ので、今月を見ているときの「次の月」は灰色で残さず消す(確認リスト q-1 のメモ 2026-10-24)。
+            見出しを中央に保つため、同じ幅の見えない枠だけ置く。先月を見ているときは今月へ戻るために出す。 */}
+        {canGoNext ? (
+          <button type="button" className="pp-range-button" onClick={() => shiftMonth(1)} disabled={refreshing}>次の月</button>
+        ) : (
+          <span className="pp-range-button pp-range-button-placeholder" aria-hidden="true">次の月</span>
+        )}
       </nav>
 
       <section className="pp-days" aria-label="授業予定">
@@ -393,6 +399,7 @@ const baseStyles = `
   .pp-range-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 12px 0; }
   .pp-range-button { flex: none; padding: 10px 12px; border: 1px solid #bbb; border-radius: 8px; background: #fff; font-size: 14px; font-weight: 700; color: #222; cursor: pointer; touch-action: manipulation; }
   .pp-range-button:disabled { opacity: .4; cursor: default; }
+  .pp-range-button-placeholder { visibility: hidden; }
   .pp-range-label { flex: 1; min-width: 0; text-align: center; font-size: 13px; color: #444; line-height: 1.3; }
   .pp-range-refreshing { display: block; font-size: 12px; color: #888; }
 

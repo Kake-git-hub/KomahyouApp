@@ -20,17 +20,18 @@ function textMessage(text: string): Anthropic.Message {
 }
 
 describe('質問 AI 回答の評価(2026-10-16 オーナー指示「テスト質問と回答はあなたの方で」)', () => {
-  it('評価の 23 問は確認リスト qa-q01〜q23 と同じ質問文・見るところ(片方だけ直して食い違わない)', () => {
+  it('評価の 23 問は qa-q01〜q23 の連番で、質問文と見るところを持つ(確認リストには載せない・2026-10-24 オーナー指示)', () => {
     expect(QUESTION_AI_EVAL_CASES).toHaveLength(23)
-    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     QUESTION_AI_EVAL_CASES.forEach((evalCase, index) => {
       expect(evalCase.id).toBe(`qa-q${String(index + 1).padStart(2, '0')}`)
-      const item = byId.get(evalCase.id)!
-      expect(item, evalCase.id).toBeDefined()
-      expect(item.title).toBe(`Q${index + 1} ${evalCase.title}`)
-      expect(item.steps[0]).toContain(`「${evalCase.question} #テスト」`)
-      for (const expectation of evalCase.expectations) expect(item.check, evalCase.id).toContain(expectation)
+      expect(evalCase.title.trim(), evalCase.id).not.toBe('')
+      expect(evalCase.question.trim(), evalCase.id).not.toBe('')
+      expect(evalCase.question, evalCase.id).not.toContain('#テスト')
+      expect(evalCase.expectations.length, evalCase.id).toBeGreaterThan(0)
     })
+    // 確認リストの「質問への AI 自動回答(20 問)」は不要(受付 20261024-062027562-37618588 のその他欄)。正本はこの評価だけ。
+    const checklistIds = new Set(VERIFICATION_CHECKLIST.items.map((item) => item.id))
+    for (const evalCase of QUESTION_AI_EVAL_CASES) expect(checklistIds, evalCase.id).not.toContain(evalCase.id)
   })
 
   it('本番と同じ generateQuestionAiAnswer へ 1 問ずつ流し、他教室名の検査も効かせる', async () => {

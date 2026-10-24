@@ -1,5 +1,6 @@
 // 質問への AI 即時回答の確認用の質問 20 問(2026-10-16 オーナー指示「新規ユーザー向けの質問 20 件をなるべく方向性の違う内容で」)。
-// 正本はここ。確認リスト(src/utils/verificationChecklist.ts qa-q01〜q20)の文面と一致することを questionAiEval.test.ts が固定する。
+// 正本はここだけ。2026-10-24 オーナー指示「確認リストからの確認は不要」で確認リスト(src/utils/verificationChecklist.ts)の qa-q01〜q23 は外した
+// (それまでは文面の一致を questionAiEval.test.ts が固定していた)。
 // 評価は Actions「Question AI eval」(.github/workflows/question-ai-eval.yml)が functions/tools/question-ai-eval.mjs で流す。
 
 import type { NormalizedDeveloperReportStudentLedger } from './developerReport'
