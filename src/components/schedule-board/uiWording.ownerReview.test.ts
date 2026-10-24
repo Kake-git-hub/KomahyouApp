@@ -97,3 +97,19 @@ describe('DetailPanel / IssuesPanel / GroupAttendanceModal の文言', () => {
     expect(group).toContain('はじめは全員出席です。欠席者だけクリックしてください。')
   })
 })
+
+describe('テンプレの流れは 1 行（オーナー指示 2026-10-24「モーダルやナビバーの文章が長すぎる。1 行くらいに大事なことだけ」）', () => {
+  it('編集開始・保留の席の案内・採用の確認・旧方式の上書き確認は 1 行の文言', () => {
+    expect(BOARD).toContain("'テンプレ編集中（前回のテンプレを読み込みました）。'")
+    expect(BOARD).toContain("setStatusMessage('保留の席です。残す方を選んでください。')")
+    expect(BOARD).toContain('return `テンプレ授業を採用します。${dropped ? `下段の ${dropped} は外します。` : \'\'}よろしいですか？`')
+    expect(BOARD).toContain('return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : \'\'}よろしいですか？`')
+    expect(BOARD).toContain('以降をテンプレだけで作り直します。手入力・メモ・振替・講習は消えます。')
+  })
+  it('旧来の長い文が戻っていない', () => {
+    expect(BOARD).not.toContain('通常授業テンプレート編集モードです。')
+    expect(BOARD).not.toContain('の席のメニューを開きました。')
+    expect(BOARD).not.toContain('手入力・メモ・振替・講習を含むすべてのデータが消去され')
+    expect(BOARD).not.toContain('通常授業テンプレートを上書き保存しました。')
+  })
+})

@@ -37,7 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmMessage, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -7435,7 +7435,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setTemplateAddDraft(null)
     setTemplateUndoStack([])
     setTemplateRedoStack([])
-    setStatusMessage(savedTemplate ? '通常授業テンプレート編集モードです。前回のテンプレートを読み込みました。' : '通常授業テンプレート編集モードです。コマ表から通常授業のみコピーしました。')
+    setStatusMessage(savedTemplate ? 'テンプレ編集中（前回のテンプレを読み込みました）。' : 'テンプレ編集中（コマ表の通常授業をコピーしました）。')
   }, [templateDiffApplyEnabled, cells, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, students, teachers])
 
   const handleExitTemplateMode = useCallback(() => {
@@ -7609,7 +7609,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentScheduleRange,
       teacherScheduleRange,
     }, { userInitiated: true })
-    setStatusMessage(buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary, plan.scopeNote))
+    // ナビバーは 1 行だけ（オーナー指示 2026-10-24）。内訳の文は操作の記録に残す（報告・開発ダッシュボードで読める）。
+    recordOperationTrace('board-rebuild', buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary, plan.scopeNote))
+    setStatusMessage(buildTemplateDiffSavedHeadline(template.effectiveStartDate, plan.diff.summary))
 
     setIsTemplateMode(false)
     setTemplateCells([])
@@ -7855,12 +7857,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         teacherScheduleRange,
       }, { userInitiated: true })
       if (restoredCount > 0) {
-        setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。${restoredCount}件の振替・講習を未消化ストックへ戻しました。`)
+        setStatusMessage(`テンプレを保存しました（${template.effectiveStartDate} 以降を作り直し・振替/講習 ${restoredCount}件は未消化へ）。`)
       } else {
-        setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
+        setStatusMessage(`テンプレを保存しました（${template.effectiveStartDate} 以降を作り直し）。`)
       }
     } else {
-      setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
+      setStatusMessage(`テンプレを保存しました（${template.effectiveStartDate} 以降を作り直し）。`)
     }
 
     setIsTemplateMode(false)
@@ -12454,7 +12456,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y })
-    setStatusMessage('保留（2 行・緑）の席のメニューを開きました。「テンプレ授業を採用」「手入力データを採用」か、手入力データの削除・移動で片づけてください。')
+    setStatusMessage('保留の席です。残す方を選んでください。')
     return true
   }
 
@@ -12492,12 +12494,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (mode === 'adopt-template') {
       const lowerNames = names(seatLower.lesson?.studentSlots)
       const hasMemo = (seatLower.memoSlots ?? []).some((memo) => typeof memo === 'string' && memo.trim() !== '')
-      return `テンプレ授業を採用します。\n${lowerNames ? `手入力データ（下段）の ${lowerNames} を削除します（振替・講習は未消化ストックへ戻し、手動追加は戻しません。通常授業の希望回数は変わりません）。\n` : ''}${hasMemo ? '下段のメモも削除します。\n' : ''}よろしいですか。`
+      // 1 行（オーナー指示 2026-10-24）。ストックへの戻し方の内訳は結果のメッセージで出る。
+      const dropped = [lowerNames, hasMemo ? 'メモ' : ''].filter(Boolean).join('・')
+      return `テンプレ授業を採用します。${dropped ? `下段の ${dropped} は外します。` : ''}よろしいですか？`
     }
     if (mode === 'adopt-existing') {
       // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
       const upperNames = names(planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex }).withdrawnStudents)
-      return `手入力データを採用します。\n${upperNames ? `テンプレ授業の ${upperNames} を取り下げ、手入力データ（下段）を机へ戻します（同じ日に同じ科目の授業が残らない生徒は希望回数を1減らします）。\n` : '下段を机へ戻します。\n'}よろしいですか。`
+      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : ''}よろしいですか？`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
@@ -15543,23 +15547,33 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 <div className="auto-assign-modal-title">
                   {templateSaveConfirm.diffSummary ? 'テンプレート保存' : 'テンプレート上書き保存'}
                 </div>
+                {/* 本文は 1 行だけ（オーナー指示 2026-10-24「文章が長すぎる。ユーザーはほとんど見ない。1 行くらいに大事なことだけ」）。
+                    範囲・内訳・生徒ごとの理由・テンプレの変更点は「詳細」に畳む（中身は従来の確認文と同じ）。 */}
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }} data-testid="template-save-confirm-message">
                   {templateSaveConfirm.diffSummary
-                    ? buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })
-                    : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
+                    ? buildTemplateDiffConfirmHeadline(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { todayKey: templateSaveConfirm.todayKey })
+                    : `${templateSaveConfirm.template.effectiveStartDate} 以降をテンプレだけで作り直します。手入力・メモ・振替・講習は消えます。`}
                 </div>
-                {templateSaveConfirm.definitionDiff && !templateSaveConfirm.definitionDiff.allSlots && templateSaveConfirm.definitionDiff.changedSlotKeys.length > 0 ? (
-                  // Q39: テンプレの変更点一覧。範囲は選ばせない（オーナー指示 2026-10-15・確認リスト v1.5.596 tp-44/tp-46 メモ「選択肢は不要で、
-                  // 自動的に変更のあったコマだけ反映して。何も変更なかったときだけ自動で全コマ突き合わせにして」）: 変えたコマがあれば「変えたコマだけ」、
-                  // 0 なら全コマ（resolveDefaultTemplateDiffApplyScope）。旧「すべてのコマを突き合わせる」のラジオは v1.5.598〜601 だけ存在した。
-                  <div className="student-menu-section" data-testid="template-save-scope">
-                    <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }} data-testid="template-save-changed-desks">
-                      {['テンプレの変更点:', ...buildTemplateDefinitionDiffLines(templateSaveConfirm.definitionDiff, {
-                        studentName: (studentId) => { const row = students.find((student) => student.id === studentId); return row ? getStudentDisplayName(row) : '' },
-                        teacherName: (teacherId) => { const row = teachers.find((teacher) => teacher.id === teacherId); return row ? getTeacherDisplayName(row) : '' },
-                      })].join('\n')}
+                {templateSaveConfirm.diffSummary ? (
+                  <details className="student-menu-section template-save-confirm-detail" data-testid="template-save-confirm-detail">
+                    <summary className="student-menu-help-text" style={{ cursor: 'pointer' }}>詳細</summary>
+                    <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto' }} data-testid="template-save-confirm-detail-text">
+                      {buildTemplateDiffConfirmDetail(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })}
                     </div>
-                  </div>
+                    {templateSaveConfirm.definitionDiff && !templateSaveConfirm.definitionDiff.allSlots && templateSaveConfirm.definitionDiff.changedSlotKeys.length > 0 ? (
+                      // Q39: テンプレの変更点一覧。範囲は選ばせない（オーナー指示 2026-10-15・確認リスト v1.5.596 tp-44/tp-46 メモ「選択肢は不要で、
+                      // 自動的に変更のあったコマだけ反映して。何も変更なかったときだけ自動で全コマ突き合わせにして」）: 変えたコマがあれば「変えたコマだけ」、
+                      // 0 なら全コマ（resolveDefaultTemplateDiffApplyScope）。旧「すべてのコマを突き合わせる」のラジオは v1.5.598〜601 だけ存在した。
+                      <div className="student-menu-section" data-testid="template-save-scope">
+                        <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }} data-testid="template-save-changed-desks">
+                          {['テンプレの変更点:', ...buildTemplateDefinitionDiffLines(templateSaveConfirm.definitionDiff, {
+                            studentName: (studentId) => { const row = students.find((student) => student.id === studentId); return row ? getStudentDisplayName(row) : '' },
+                            teacherName: (teacherId) => { const row = teachers.find((teacher) => teacher.id === teacherId); return row ? getTeacherDisplayName(row) : '' },
+                          })].join('\n')}
+                        </div>
+                      </div>
+                    ) : null}
+                  </details>
                 ) : null}
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} disabled={busyOverlayMessage !== null} data-testid="template-save-confirm-execute-button">

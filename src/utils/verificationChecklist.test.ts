@@ -96,6 +96,19 @@ describe('確認リストの項目定義', () => {
     }
   })
 
+  it('第73版(2026-10-24・v1.5.635 据え置き): テンプレの文章を 1 行にした確認 tp-61 を足し、結果待ちの項目は理由を「詳細」で読む書き方へ', () => {
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    const item = byId.get('tp-61')!
+    expect(item.introducedIn).toBe('v1.5.637')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-61')
+    expect(item.check?.join('\n')).toContain('「詳細」を開くと')
+    // 確認の画面の本文は 1 行になったので、結果待ちの項目が「確認の画面に「…」が出る」と案内していない(理由は「詳細」の中)。
+    for (const entry of VERIFICATION_CHECKLIST.items) {
+      for (const line of [...entry.steps, ...(entry.check ?? [])]) expect(line, entry.id).not.toContain('確認の画面に「')
+    }
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.635')
+  })
+
   it('第72版(2026-10-24・v1.5.635 据え置き): 受付 20261024-062027562-37618588 で OK の 12 件と、確認不要とされた AI 回答の 23 問 qa-q01〜qa-q23 を外す', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     for (const okId of ['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'q-7']) expect(ids, okId).not.toContain(okId)
@@ -115,7 +128,8 @@ describe('確認リストの項目定義', () => {
     // 第66版(2026-10-22・v1.5.629): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の 14 件を外し、
     // メモへの対応の確認 qa-ai-5〜qa-ai-7・tb-1 を先頭に足した。
     // 第72版(2026-10-24): OK の 12 件と AI 回答の 23 問を外し、テスト教室の結果待ちの 7 件だけが残る。
-    expect(ids).toEqual(['tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第73版(2026-10-24): テンプレの文章を 1 行にした確認 tp-61 を先頭に足した(版は据え置き)。
+    expect(ids).toEqual(['tp-61', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -533,7 +547,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-61', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
