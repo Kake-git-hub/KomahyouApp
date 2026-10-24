@@ -96,25 +96,16 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第66版(2026-10-22・v1.5.629): 第64版の結果のメモへの対応 qa-ai-5〜qa-ai-7・tb-1 を先頭に置く', () => {
+  it('第72版(2026-10-24・v1.5.635 据え置き): 受付 20261024-062027562-37618588 で OK の 12 件と、確認不要とされた AI 回答の 23 問 qa-q01〜qa-q23 を外す', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids.slice(0, 4)).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1'])
-    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
-    for (const id of ['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1']) {
-      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.629')
-      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
-    }
-    // qa-ai-1 / qa-ai-4 のメモ: 添え書きは 1 回・答えられた質問に「別途回答」と付かない(画面側の添え書きの文面も固定)。
-    expect(byId.get('qa-ai-5')!.check!.join(' / ')).toContain('最後の「（この回答は開発者にも届いています）」だけで終わる')
-    // qa-ai-1 のメモ: AI 回答を履歴に残す(#テスト では履歴に載らないので付けない旨を前提に書く)。
-    expect(byId.get('qa-ai-6')!.prep).toContain('「#テスト」を付けない')
-    expect(byId.get('qa-ai-6')!.check!.join(' / ')).toContain('「自動回答あり」')
-    expect(byId.get('qa-ai-6')!.check!.join(' / ')).toContain('「開発者からの回答（訂正・補足）」')
-    // qa-ai-3 のメモ: メールを短く(操作痕跡は不具合だけ・20 件)。
-    expect(byId.get('qa-ai-7')!.check!.join(' / ')).toContain('不具合のメールだけ「■ 直近の操作痕跡」が 20 件まで載る')
-    // その他欄: 講師欄の「講師未割当」を空白に(表示だけ・データは据え置き)。
-    expect(byId.get('tb-1')!.area).toBe('コマ表(講師欄)')
-    expect(byId.get('tb-1')!.check!.join(' / ')).toContain('「講師未割当」の文字が出ない')
+    for (const okId of ['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'q-7']) expect(ids, okId).not.toContain(okId)
+    // その他欄「質問への AI 自動回答(20 問)は確認リストからの確認は不要」: 23 問は評価ワークフロー(functions/src/questionAiEvalCases.ts)だけが持つ。
+    expect(ids.filter((id) => id.startsWith('qa-'))).toEqual([])
+    expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
+    // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
+    for (const id of ids) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.635')
   })
 
   it('第55版(v1.5.604・2026-10-15): 受付 20261015-151056959-a8890098 で OK だった c-5・tp-47・tp-53・tp-54 を外し、結果待ちの q-1〜q-6・tp-15・tp-48〜51・tp-55〜57 を残す', () => {
@@ -123,7 +114,8 @@ describe('確認リストの項目定義', () => {
     // 第63版(2026-10-21・v1.5.622): テスト教室の結果(受付 20261020-092527755-56bbf675)で OK の tp-55 を外し、生徒ごとの理由 tp-58 を足した。
     // 第66版(2026-10-22・v1.5.629): 第64版の結果(受付 20261022-125601189-6663f16f / 20261022-154814822-97abc250)で OK の 14 件を外し、
     // メモへの対応の確認 qa-ai-5〜qa-ai-7・tb-1 を先頭に足した。
-    expect(ids).toEqual(['qa-ai-5', 'qa-ai-6', 'qa-ai-7', 'tb-1', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'q-7', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60', ...Array.from({ length: 23 }, (_, index) => `qa-q${String(index + 1).padStart(2, '0')}`)])
+    // 第72版(2026-10-24): OK の 12 件と AI 回答の 23 問を外し、テスト教室の結果待ちの 7 件だけが残る。
+    expect(ids).toEqual(['tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -164,15 +156,6 @@ describe('確認リストの項目定義', () => {
     // 第69版(2026-10-23): テスト教室の結果で OK の tp-50・tp-56 を外し、テスト担当の形を tp-60 に分けたので v1.5.633 へ上げる。
     expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-60')?.check ?? []).some((line) => line.includes('同じコマの空いている机に入り') && line.includes('講師欄が緑'))).toBe(true)
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
-    // tp-15 は要改善「確認リストの保護者連絡の欄に入れて」→ 保護者QR(休み連絡)の欄へ移し、q-6 の直後に置く(中身は据え置き)。
-    expect(byId.get('tp-15')!.area).toBe('保護者QR(休み連絡)')
-    expect(byId.get('tp-15')!.area).toBe(byId.get('q-6')!.area)
-    expect(ids.indexOf('tp-15')).toBe(ids.indexOf('q-6') + 1)
-    expect(byId.get('tp-15')!.introducedIn).toBe('v1.5.572')
-    expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
-    // 第47版: 今の緑の机(10/16(金) 5限の机 2)を名指し。上段を先に休みにすると机が 1 行に戻って下段でなくなるので、下段→上段の順。
-    expect(byId.get('tp-15')!.prep).toContain('10/16(金) 5限の机 2')
-    expect(byId.get('tp-15')!.steps[0]).toMatch(/先に下の行の\{\{student:s079\}\}.*次に上の行の\{\{student:s085\}\}/u)
     // 第54版(2026-10-15): 基本仕様の確認 tp-55〜57 は v1.5.602 で追加。
     for (const id of ['tp-57']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.602')
     // オーナー指示「未消化数が変化しないこと・日程表とコマ表に差異がないこと・コマ表から意図してない変更が発生してないこと(基本仕様のデバッグ)」: テスト教室にも出す。
@@ -210,22 +193,6 @@ describe('確認リストの項目定義', () => {
     for (const item of VERIFICATION_CHECKLIST.items) {
       for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) expect(line, item.id).not.toMatch(/[一-龠ぁ-んァ-ヶ]+\u3000[一-龠ぁ-んァ-ヶ]+/u)
     }
-    // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
-    for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
-    // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
-    expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
-    // 第70版: 休み連絡の締切(当日は押せない・注記 2 行・spec §0-7)。q-1 の「今日以降」は「明日以降」に直してある。
-    expect(byId.get('q-7')!.introducedIn).toBe('v1.5.635')
-    expect(byId.get('q-7')!.check!.join(' / ')).toContain('大きな赤い文字')
-    expect(byId.get('q-7')!.check!.join(' / ')).toContain('前日の夜0時00分まで受け付けます')
-    expect(byId.get('q-7')!.check!.join(' / ')).toContain('当日の欠席連絡は教室にお電話いただきますようお願いします')
-    expect(byId.get('q-1')!.check!.join(' / ')).toContain('明日以降の授業の行だけ')
-    expect(byId.get('q-1')!.check!.join(' / ')).not.toContain('今日の授業なら')
-    expect(byId.get('q-6')!.check!.join(' / ')).toContain('4つのボタンのどれかを押した時点で')
-    expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
-    expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
-    // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
-    expect(byId.get('q-5')!.steps.join(' / ')).toContain('保存せずにPCをリロード')
     // 第22版の結果(2026-09-22・受付 e541141c)で OK だった項目は載せない。
     for (const okId of ['r-2', 'r-5', 'v-1', 'r-8', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3']) expect(ids, okId).not.toContain(okId)
     // 予行 y-1〜y-4 はオーナー判断で中止(2026-09-22「本番教室では以降の丸ごと振替だけ今の仕様なら問題ないので、この予行は不要」)。

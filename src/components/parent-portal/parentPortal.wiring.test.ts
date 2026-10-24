@@ -269,3 +269,23 @@ describe('保護者向け固定QRの配線(main.tsx)', () => {
     expect(parentBranchBody).not.toContain('読み込み中...')
   })
 })
+
+const PARENT_PORTAL_PAGE_TSX = readFileSync(fileURLToPath(new URL('./ParentPortalPage.tsx', import.meta.url)), 'utf8')
+
+describe('保護者ページの月の移動(ParentPortalPage.tsx)', () => {
+  it('今月を見ているとき(来月へ進めない)は「次の月」を灰色で残さず出さない(確認リスト q-1 のメモ 2026-10-24・spec §0-5)', () => {
+    // 押せるときだけボタンを描く。旧版は disabled={!canGoNext || refreshing} で灰色のまま残っていた。
+    expect(PARENT_PORTAL_PAGE_TSX).not.toContain('disabled={!canGoNext')
+    const nextButton = PARENT_PORTAL_PAGE_TSX.indexOf('onClick={() => shiftMonth(1)}')
+    expect(nextButton).toBeGreaterThan(0)
+    const branch = PARENT_PORTAL_PAGE_TSX.lastIndexOf('{canGoNext ? (', nextButton)
+    expect(branch).toBeGreaterThan(0)
+    expect(nextButton - branch).toBeLessThan(200)
+    // 見出しを中央に保つ見えない枠は、押せない・読み上げない。
+    expect(PARENT_PORTAL_PAGE_TSX).toContain('<span className="pp-range-button pp-range-button-placeholder" aria-hidden="true">次の月</span>')
+    expect(PARENT_PORTAL_PAGE_TSX).toContain('.pp-range-button-placeholder { visibility: hidden; }')
+    // 先月を見ているときに今月へ戻る経路(「次の月」)は残す。「前の月」は従来どおり。
+    expect(PARENT_PORTAL_PAGE_TSX).toContain('onClick={() => shiftMonth(1)} disabled={refreshing}>次の月</button>')
+    expect(PARENT_PORTAL_PAGE_TSX).toContain('onClick={() => shiftMonth(-1)} disabled={!canGoPrev || refreshing}>前の月</button>')
+  })
+})
