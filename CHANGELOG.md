@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.637 (2026-10-24)
+
+- style: テンプレの流れの文章を 1 行に(オーナー指示「モーダルやナビバーの文章が長すぎる。ユーザーはほとんど見ない。1 行くらいに大事なことだけ」)。保存の確認の画面は「M/D 以降に反映します(置き換え n机・保留 n机)。」＋過去の週の警告だけにし、範囲・内訳・生徒ごとの理由・テンプレの変更点は畳んだ「詳細」へ(中身は従来と同じ)。保存後の上の帯も 1 行(内訳の文は操作の記録へ)、編集開始・保留の席の案内・採用の確認・旧方式の上書き確認も 1 行に。計算・保存の挙動は変えない(文言のみ)。確認リスト第73版 tp-61 を足し、結果待ち tp-48〜tp-60 の「確認の画面に…」を「詳細に…」へ言い換え(版 v1.5.635 据え置き)。(templateDiffApply.ts の buildTemplateDiffConfirmHeadline / buildTemplateDiffConfirmDetail / buildTemplateDiffSavedHeadline・ScheduleBoardScreen.tsx・verificationChecklist.ts)
+
 ## v1.5.636 (2026-10-24)
 
 - style: 保護者ページ(/p/)で今月を見ているとき、押せない「次の月」ボタンを灰色で残さず出さないように(見出しの位置は見えない枠で保つ・先月を見ているときは今月へ戻るために出す)。確認リスト v1.5.635 の q-1 のメモ(受付 20261024-062027562-37618588)。確認リストには載せない(オーナー指示)。(ParentPortalPage.tsx・parentPortal.wiring.test.ts・spec-parent-portal.md §0-5)

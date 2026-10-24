@@ -2288,7 +2288,25 @@ export function describeTemplateDiffScopeNote(note: TemplateDiffScopeNote | unde
   }
 }
 
+/**
+ * 確認の画面の 1 行（オーナー指示 2026-10-24「テンプレの流れでモーダルやナビバーの文章が長すぎる。ユーザーはほとんど見ない。1 行くらいに大事なことだけ」）。
+ * 反映開始日・置き換え・保留（あとで片づける机）と、過去の週を含む警告だけ。範囲・内訳・生徒ごとの理由は「詳細」に畳む（buildTemplateDiffConfirmDetail）。
+ */
+export function buildTemplateDiffConfirmHeadline(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: Pick<TemplateDiffConfirmContext, 'todayKey'>) {
+  const past = context?.todayKey && isTemplateEffectiveStartDateInPast(effectiveStartDate, context.todayKey) ? ' ⚠ 今日より前の週も含みます。' : ''
+  return `${formatMonthDay(effectiveStartDate)} 以降に反映します（置き換え ${summary.replaced}机・保留 ${summary.pending}机）。${past}`
+}
+
+/** 確認の画面の「詳細」（畳んだ中身）。従来の確認文から最後の「実行しますか？」を除いたもの。 */
+export function buildTemplateDiffConfirmDetail(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: TemplateDiffConfirmContext) {
+  return buildTemplateDiffConfirmLines(effectiveStartDate, summary, context).join('\n')
+}
+
 export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: TemplateDiffConfirmContext) {
+  return [...buildTemplateDiffConfirmLines(effectiveStartDate, summary, context), '', '実行しますか？'].join('\n')
+}
+
+function buildTemplateDiffConfirmLines(effectiveStartDate: string, summary: TemplateDiffApplySummary, context?: TemplateDiffConfirmContext): string[] {
   const scopeLine = describeTemplateDiffScopeNote(context?.scopeNote)
   const pastWarning = context?.todayKey && isTemplateEffectiveStartDateInPast(effectiveStartDate, context.todayKey)
     ? `⚠ 反映開始日（${effectiveStartDate}）が今日より前です。過去の週も突き合わせます（出欠のある机は残ります）。`
@@ -2312,9 +2330,12 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     ...(context?.studentNotes && context.studentNotes.length > 0 ? ['', ...buildTemplateDiffStudentNoteLines(context.studentNotes)] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
-    '',
-    '実行しますか？',
-  ].join('\n')
+  ]
+}
+
+/** 保存後のナビバー 1 行（オーナー指示 2026-10-24・確認の画面の 1 行と同じ件数だけ）。内訳は buildTemplateDiffSavedMessage（操作の記録に残す）。 */
+export function buildTemplateDiffSavedHeadline(effectiveStartDate: string, summary: TemplateDiffApplySummary) {
+  return `テンプレを保存しました（${formatMonthDay(effectiveStartDate)} 以降・置き換え ${summary.replaced}机・保留 ${summary.pending}机）。`
 }
 
 /** 保存後のメッセージ（Q32-1）。確認文の 4 件数に、即時合流・QR 講師・講師を削除した机・上段に置かなかった生徒を足す。 */

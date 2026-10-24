@@ -319,7 +319,16 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain("const plan = buildTemplateDiffSavePlan(template, '')")
     expect(BOARD_TSX).toContain("setTemplateSaveConfirm({ mode: 'overwrite', template, diffSummary: plan.diff.summary, studentNotes: plan.diff.studentNotes, definitionDiff: plan.definitionDiff, applyScope: plan.applyScope, scopeNote: plan.scopeNote, scopedSlotCount: plan.scopedSlotCount, todayKey: toDateKey(new Date()) })")
     // 2026-10-21: 確認の画面には件数に加えて生徒ごとの理由（名前つき）を出す（試し実行の結果をそのまま渡す＝保存本体と同じ入力）。
-    expect(BOARD_TSX).toContain("buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })")
+    // 2026-10-24（オーナー指示「文章が長すぎる。1 行くらいに大事なことだけ」）: 本文は 1 行、従来の確認文（理由つき）は「詳細」に畳む。
+    expect(BOARD_TSX).toContain("buildTemplateDiffConfirmHeadline(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { todayKey: templateSaveConfirm.todayKey })")
+    expect(BOARD_TSX).toContain("buildTemplateDiffConfirmDetail(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary, { scopeNote: templateSaveConfirm.scopeNote, todayKey: templateSaveConfirm.todayKey, studentNotes: templateSaveConfirm.studentNotes })")
+    expect(BOARD_TSX).toContain('data-testid="template-save-confirm-detail"')
+    expect(BOARD_TSX.indexOf('data-testid="template-save-confirm-detail"')).toBeLessThan(BOARD_TSX.indexOf('data-testid="template-save-changed-desks"'))
+    expect(BOARD_TSX).not.toContain('buildTemplateDiffConfirmMessage(templateSaveConfirm')
+    // 保存後のナビバーは 1 行、内訳は操作の記録へ。
+    expect(BOARD_TSX).toContain('setStatusMessage(buildTemplateDiffSavedHeadline(template.effectiveStartDate, plan.diff.summary))')
+    expect(BOARD_TSX).toContain("recordOperationTrace('board-rebuild', buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary, plan.scopeNote))")
+    expect(BOARD_TSX).not.toContain('setStatusMessage(buildTemplateDiffSavedMessage(')
     // Q40-3（2026-10-21 H-A）: 精算済みの集合は本体（resolveWholeDayTransferSettlement）が決め、配置計画は同じ集合を参照で受ける。材料の在庫の正本は保存前の盤面・台帳で引き、希望回数の補正は読むだけ。
     expect(BOARD_TSX).toContain("settled: new Set(run.diff.wholeDayTransferSettled)")
     expect(BOARD_TSX).toContain("wholeDayTransferSettlement: params.wholeDayTransferSettlement,")

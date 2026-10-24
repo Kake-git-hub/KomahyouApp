@@ -27,6 +27,9 @@ import {
 import {
   buildFullySuppressedManagedDesk,
   buildTemplateDiffConfirmMessage,
+  buildTemplateDiffConfirmDetail,
+  buildTemplateDiffConfirmHeadline,
+  buildTemplateDiffSavedHeadline,
   buildTemplateDiffStudentNoteLines,
   describeWholeDayTransferStockReason,
   type TemplateDiffStudentNote,
@@ -1030,6 +1033,30 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
+  })
+
+  it('2026-10-24 オーナー指示「1 行くらいに大事なことだけ」: 確認・保存後は 1 行（反映開始日・置き換え・保留）、内訳は詳細へ', () => {
+    const summary = { ...createEmptyTemplateDiffApplySummary(), replaced: 3, kept: 2, adopted: 1, pending: 4, seatMerged: 1 }
+    const notes: TemplateDiffStudentNote[] = [{ kind: 'duplicate-skipped', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 5 }]
+    const context = { scopeNote: { scope: 'changed-slots' as const, slotLabels: ['月 5限'], extraSlotLabels: [] }, todayKey: '2026-10-01', studentNotes: notes }
+    const [, month, day] = EFFECTIVE.split('-').map(Number)
+    const headline = buildTemplateDiffConfirmHeadline(EFFECTIVE, summary, context)
+    expect(headline).toBe(`${month}/${day} 以降に反映します（置き換え 3机・保留 4机）。`)
+    expect(headline).not.toContain('\n')
+    // 反映開始日が今日より前なら警告だけ足す（1 行のまま）
+    const past = buildTemplateDiffConfirmHeadline(EFFECTIVE, summary, { todayKey: '2099-01-01' })
+    expect(past).toContain('⚠ 今日より前の週も含みます。')
+    expect(past).not.toContain('\n')
+    // 詳細＝従来の確認文から「実行しますか？」を除いたもの（範囲・内訳・理由は残る）
+    const detail = buildTemplateDiffConfirmDetail(EFFECTIVE, summary, context)
+    expect(`${detail}\n\n実行しますか？`).toBe(buildTemplateDiffConfirmMessage(EFFECTIVE, summary, context))
+    expect(detail).toContain('テンプレで変えたコマ（月 5限）だけを突き合わせます。')
+    expect(detail).toContain('テンプレの空いた席に既存の生徒を残して 1 行にする1机。')
+    expect(detail).toContain('・10/7 5限 青木（数）:')
+    expect(detail).not.toContain('実行しますか？')
+    // 保存後のナビバーも 1 行
+    const saved = buildTemplateDiffSavedHeadline(EFFECTIVE, summary)
+    expect(saved).toBe(`テンプレを保存しました（${month}/${day} 以降・置き換え 3机・保留 4机）。`)
   })
 
   it('2026-10-21: 確認文に「生徒ごとの理由」を名前つきで出す（件数の行はそのまま・12 行を超えると「ほか n 件」・無ければ見出しも出ない）', () => {
