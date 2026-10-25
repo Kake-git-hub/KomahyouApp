@@ -39,7 +39,7 @@ import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_N
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
 import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
-import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, placeIntoPendingLower, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
+import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
@@ -60,7 +60,7 @@ import {
   splitTemplatePendingLowerSeat,
   TEMPLATE_PENDING_MESSAGES,
 } from './templatePendingResolution'
-import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
 import { extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -2088,9 +2088,13 @@ export function computeHolidayReleaseRestoration(params: {
     const seatTaken = Boolean(desk.lesson?.studentSlots[studentIndex])
     const restoredStudent = buildStudentEntryFromStatus(record)
     const location = cellByDesk.get(desk)
+    // ★下段へ戻す授業には手入力の印（manualAdded）を付ける（regression-reviewer H-1・2026-10-25）: 下段の通常授業は印が無いと保留中の再保存（Q29）の
+    //   候補から外れ、1 行に戻った後も Q21-8 の「印を持たない通常生徒を外す」で落ちる＝黙って消える。抑止キーを残したまま手で足し直した通常授業と同じ形
+    //   （2026-10-07 の「手動追加の通常授業はテンプレの出現ではない」）にそろえる。会計: 削除時の −1 は手動追加と同じく積まない（INV-05・オーナー確認事項・Q42-3）。
+    const lowerStudent: StudentEntry = { ...restoredStudent, manualAdded: true }
     const lowerPlacement = seatTaken && nextTemplatePendingDesks && location
       ? placeIntoPendingLower({
-        cell: location.cell, pendingDesks: nextTemplatePendingDesks, preferredDeskIndex: location.deskIndex, preferredSeat: studentIndex, student: restoredStudent,
+        cell: location.cell, pendingDesks: nextTemplatePendingDesks, preferredDeskIndex: location.deskIndex, preferredSeat: studentIndex, student: lowerStudent,
         effectiveStartDate: dateKey, createdAt: params.createdAt ?? new Date().toISOString(), kind: 'holiday-release-seat-taken',
         note: `休日設定の解除（${dateKey}）で戻す席に別の生徒が居たため、保留（下段）に戻しました。室長が動かすか採用で片づけてください。`,
       })
@@ -2720,10 +2724,12 @@ export function computeTemplateDiffApplyForBoard(input: {
         today: resolveTemplateDiffToday(params.createdAt), includeAbsentMakeupOrigins: true, templatePendingDesks: run.diff.nextPendingDesks,
       }),
       effectiveStartDate: params.effectiveStartDate, slotFilter: params.slotFilter,
+      // 決定記録 48（regression-reviewer M-2）: 下段の振替（Q40-2 の満席で置いたもの）も根拠を失えば外す。
+      pendingDesks: run.diff.nextPendingDesks,
     })
-    const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals)
+    const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals, run.diff.nextPendingDesks)
     // 決定記録 48（2026-10-25・(b)-1）: 満席の生徒は未消化へ逃がさず、同じ机番号の机の下段（保留・緑）へ振替として置く（follow.nextPendingDesks を保存の保留マップにする）。
-    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry, createdAt: params.createdAt })
+    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: removal.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry, createdAt: params.createdAt })
     // 2026-10-25（Q40-2 休日設定した振替元）: 休日の日の「置かなかった生徒」は Q35-8 の −1 を積まない（従来どおり休日の自動発生〔テンプレ行×休日〕に任せる。
     // 置けたときは置いた振替がその自動発生を消化する＝在庫中立）。置いた／未消化にした生徒は従来どおり −1 から外す。
     const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)) && !isClosedDate(target.dateKey, params.classroomSettings))
@@ -2763,8 +2769,8 @@ export function computeTemplateDiffApplyForBoard(input: {
           wholeDayTransferPlacedStudents: follow.placed.length,
           wholeDayTransferStockedStudents: follow.stocked.length,
           wholeDayTransferPendingStudents: follow.pendingPlaced.length,
-          // 下段へ置いた分は保留の机の数にも足す（確認の画面・保存後の 1 行の「保留 n机」に含める・決定記録 48 §3）。
-          pending: run.diff.summary.pending + Object.keys(follow.nextPendingDesks).filter((key) => !(key in run.diff.nextPendingDesks)).length,
+          // 下段へ置いた分は保留の机の数にも足し、下段の振替を外して空になった保留は引く（確認の画面・保存後の 1 行の「保留 n机」に含める・決定記録 48 §3）。
+          pending: run.diff.summary.pending + Object.keys(follow.nextPendingDesks).filter((key) => !(key in run.diff.nextPendingDesks)).length - Object.keys(run.diff.nextPendingDesks).filter((key) => !(key in follow.nextPendingDesks)).length,
         },
         nextWeeks,
         /** 決定記録 48: Q40-2 の満席で下段へ置いた分を合流させた保留マップ（保存がこれを state にする）。 */

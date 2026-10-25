@@ -14,7 +14,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry } from './types'
-import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, placeIntoPendingLower, templatePendingStudentIdentity, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 /** 振替先から押し出される授業（移送前のコマ・机・席）。 */
 export type WholeDayTransferDisplacedStudent = {
@@ -70,13 +70,6 @@ function pickFreeSeat(desk: DeskCell, preferredSeat: number): number {
   return isSeatFree(desk, other) ? other : -1
 }
 
-function pickFreeLowerSeat(lower: TemplatePendingDesk['lower'] | undefined, preferredSeat: number): number {
-  const slots = lower?.lesson?.studentSlots ?? [null, null]
-  const taken = (index: number) => Boolean(slots[index]) || Boolean(lower?.statusSlots?.[index]) || Boolean(lower?.memoSlots?.[index])
-  if (!taken(preferredSeat)) return preferredSeat
-  const other = preferredSeat === 0 ? 1 : 0
-  return taken(other) ? -1 : other
-}
 
 /** 下段の理由文（ツールチップ・確認の画面）。 */
 export function buildWholeDayTransferDisplacedNote(sourceDateKey: string, targetDateKey: string) {
@@ -114,8 +107,12 @@ export function placeWholeDayTransferDisplacedStudents(params: {
 
   for (const item of params.displaced) {
     const ownDesk = cell.desks[item.deskIndex]
+    // INV-12（regression-reviewer H-2・2026-10-25）: 移送で同じ生徒が上段に居る（振替元の授業が移ってきた）なら、上段に残さず・ずらさず下段へ回す
+    // （Q40-2 の 'duplicate' の兄弟。下段は配置でないので同じ生徒が上下に並ぶのは INV-12 違反ではなく、Q28 の合流も重複を止める）。
+    const identity = templatePendingStudentIdentity(item.student)
+    const liveElsewhere = cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student && templatePendingStudentIdentity(student) === identity))
     // 1. 元の机に残す。
-    if (ownDesk && !isPendingDesk(ownDesk)) {
+    if (!liveElsewhere && ownDesk && !isPendingDesk(ownDesk)) {
       const seat = pickFreeSeat(ownDesk, item.seatIndex)
       if (seat >= 0) {
         placeIntoDesk(ownDesk, seat, item.student, item.deskIndex)
@@ -130,6 +127,7 @@ export function placeWholeDayTransferDisplacedStudents(params: {
     ]
     let shifted = false
     for (const { desk, index } of candidates) {
+      if (liveElsewhere) break
       if (isPendingDesk(desk)) continue
       const seat = pickFreeSeat(desk, item.seatIndex)
       if (seat < 0) continue
@@ -139,48 +137,33 @@ export function placeWholeDayTransferDisplacedStudents(params: {
       break
     }
     if (shifted) continue
-    // 3. 同じ机番号の机の下段へ（埋まっていれば次の机の下段）。
-    let placedPending = false
-    for (let offset = 0; offset < cell.desks.length; offset += 1) {
-      const deskIndex = (item.deskIndex + offset) % cell.desks.length
-      const desk = cell.desks[deskIndex]
-      if (!desk) continue
-      const key = buildTemplatePendingDeskKey(cell.id, desk.id)
-      const existing = nextPendingDesks[key]
-      const seat = pickFreeLowerSeat(existing?.lower, item.seatIndex)
-      if (seat < 0) continue
-      const slots: [StudentEntry | null, StudentEntry | null] = [
-        existing?.lower.lesson?.studentSlots[0] ?? null,
-        existing?.lower.lesson?.studentSlots[1] ?? null,
-      ]
-      slots[seat] = item.student
-      const entry: TemplatePendingDesk = existing
-        ? { ...existing, lower: { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: `pending_displaced_${cell.dateKey}_${cell.slotNumber}_${deskIndex}` }), studentSlots: slots } } }
-        : {
-          lower: { lesson: { id: `pending_displaced_${cell.dateKey}_${cell.slotNumber}_${deskIndex}`, studentSlots: slots } },
-          effectiveStartDate: params.targetDateKey,
-          createdAt: params.createdAt,
-          origin: { kind: 'whole-day-transfer-displaced', note: buildWholeDayTransferDisplacedNote(params.sourceDateKey, params.targetDateKey) },
-        }
-      nextPendingDesks = { ...nextPendingDesks, [key]: entry }
-      outcomes.push({ student: item.student, deskIndex: item.deskIndex, placedDeskIndex: deskIndex, placement: 'pending', teacherless: !desk.teacher.trim() })
-      placedPending = true
-      break
+    // 3. 同じ机番号の机の下段へ（埋まっていれば次の机の下段）＝Q42 の共通手順 placeIntoPendingLower。
+    const placed = placeIntoPendingLower({
+      cell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: item.student,
+      effectiveStartDate: params.targetDateKey, createdAt: params.createdAt, kind: 'whole-day-transfer-displaced', note: buildWholeDayTransferDisplacedNote(params.sourceDateKey, params.targetDateKey),
+    })
+    if (placed) {
+      nextPendingDesks = placed.nextPendingDesks
+      const desk = cell.desks[placed.deskIndex]
+      outcomes.push({ student: item.student, deskIndex: item.deskIndex, placedDeskIndex: placed.deskIndex, placement: 'pending', teacherless: !desk?.teacher.trim() })
+      continue
     }
     // 全机の下段まで埋まる形は、事前ブロック（振替先に保留なし）のもとでは 1 机 2 席×机数を超える押し出しが要るので起きない。
     // それでも黙って消さず、呼び出し側へ返して従来どおり処分（確認ダイアログに件数が出る）する。
-    if (!placedPending) overflow.push(item)
+    overflow.push(item)
   }
   return { outcomes, nextPendingDesks, overflow }
 }
 
 /** 確認ダイアログ・結果メッセージの件数と名前。 */
 export function summarizeWholeDayTransferDisplaced(outcomes: readonly WholeDayTransferDisplacedOutcome[]) {
-  const label = (student: StudentEntry) => `${student.lessonType === 'trial' ? '体験' : student.lessonType === 'extra' ? '増コマ' : '手動追加'}:${student.name}`
+  // 講師の開示（regression-reviewer M-1・2026-10-25）: 振替先の講師は従来どおり移送で上書き／削除記録になるので、残した授業の講師は移ってきた講師に替わる。
+  // 講師の居ない机に残す（残る）ときは「(講師なし)」を添える（Q40-2 の「講師のいない机なので講師を付けてください」と同じ扱い。下段は講師を持たないので付けない）。
+  const label = (o: WholeDayTransferDisplacedOutcome) => `${o.student.lessonType === 'trial' ? '体験' : o.student.lessonType === 'extra' ? '増コマ' : '手動追加'}:${o.student.name}${o.placement !== 'pending' && o.teacherless ? '(講師なし)' : ''}`
   return {
     keptCount: outcomes.filter((o) => o.placement === 'kept').length,
     shiftedCount: outcomes.filter((o) => o.placement === 'shifted').length,
     pendingCount: outcomes.filter((o) => o.placement === 'pending').length,
-    names: outcomes.map((o) => label(o.student)),
+    names: outcomes.map(label),
   }
 }

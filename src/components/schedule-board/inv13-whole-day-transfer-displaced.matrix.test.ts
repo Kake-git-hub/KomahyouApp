@@ -120,11 +120,12 @@ describe('INV-02 マトリクス: 丸ごと振替で振替先の室長の手置�
     // 振替先の講師は移送で上書きされる（従来どおり）ので、移送後に講師が居るのは振替元 s2 の佐藤講師が移る t2。
     const { result, target, pending } = run(
       [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })]), desk('s1', '', null), desk('s2', '佐藤講師', null)],
-      [desk('t0', '', [extra(), null]), desk('t1', '', null), desk('t2', '', null)],
+      // 増コマは移送で来る生徒と別の生徒（同じ生徒なら INV-12 で下段へ回る＝別の行で固定）。
+      [desk('t0', '', [entry({ id: 'extra-3', name: '別の子', managedStudentId: 'student-3', subject: '英', lessonType: 'extra', manualAdded: true }), null]), desk('t1', '', null), desk('t2', '', null)],
     )
     expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎', 'makeup:鈴木 花子'])
     expect(liveNames(target.desks[1])).toEqual([])
-    expect(liveNames(target.desks[2])).toEqual(['extra:鈴木 花子'])
+    expect(liveNames(target.desks[2])).toEqual(['extra:別の子'])
     expect(result.summary.displaced).toMatchObject({ keptCount: 0, shiftedCount: 1, pendingCount: 0 })
     expect(result.summary.clearedExtraCount).toBe(0)
     expect(pending).toEqual({})
@@ -149,6 +150,43 @@ describe('INV-02 マトリクス: 丸ごと振替で振替先の室長の手置�
     expect(result.summary.clearedRegularCount).toBe(0)
     // 入力の保留マップは変えない（新しい参照）。
     expect(result.nextTemplatePendingDesks).not.toBe(undefined)
+    expect(Object.keys(pending)).toHaveLength(1)
+  })
+
+  it('INV-12（regression-reviewer H-2）: 移送で同じ生徒が上段に来るなら、残す授業は上段に残さず・ずらさず下段へ回す（同じコマに同じ生徒を 2 件にしない）', () => {
+    const { result, target, pending } = run(
+      [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })]), desk('s1', '', null)],
+      [desk('t0', '', null), desk('t1', '佐藤講師', [extra(), null])],
+    )
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎', 'makeup:鈴木 花子'])
+    expect(liveNames(target.desks[1])).toEqual([])
+    const upperIds = target.desks.flatMap((d) => (d.lesson?.studentSlots ?? []).flatMap((s) => (s?.managedStudentId ? [s.managedStudentId] : [])))
+    expect(upperIds.filter((id) => id === 'student-2')).toHaveLength(1)
+    const key = buildTemplatePendingDeskKey(target.id, 't1')
+    expect(pending[key].lower.lesson?.studentSlots[0]).toMatchObject({ id: 'extra-1', lessonType: 'extra' })
+    expect(result.summary.displaced).toMatchObject({ keptCount: 0, shiftedCount: 0, pendingCount: 1 })
+  })
+
+  it('入力の保留マップは変えない（新しい参照を返す）。講師の居ない机に残す授業は確認文に「(講師なし)」と出る', () => {
+    const inputPending: TemplatePendingDeskMap = {}
+    const weeks = [[cell(SOURCE_DATE, [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })])]), cell(TARGET_DATE, [desk('t0', '佐藤講師', [manualRegular(), null])])]]
+    const ledgerOriginDatesByKey = collectMakeupOriginDatesByKey({ students, regularLessons: [regularLesson], classroomSettings: settings, weeks, manualAdjustments: {}, resolveStudentKey, today: TODAY, includeAbsentMakeupOrigins: false })
+    const result = computeWholeDayTransfer({
+      weeks, sourceDateKey: SOURCE_DATE, targetDateKey: TARGET_DATE, manualMakeupAdjustments: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackMakeupStudents: {}, fallbackLectureStockStudents: {},
+      suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, scheduleCountAdjustments: [], students, teachers, regularLessons: [regularLesson], managedStudentByAnyName: new Map(students.map((s) => [s.name, s])),
+      resolveDisplayName: (name) => name, resolveStockId: resolveStudentKey, ledgerOriginDatesByKey, templatePendingDesks: inputPending, createdAt: CREATED_AT,
+    })
+    if (result.status !== 'transferred') throw new Error('expected transferred')
+    expect(inputPending).toEqual({})
+    expect(result.nextTemplatePendingDesks).not.toBe(inputPending)
+    expect(Object.keys(result.nextTemplatePendingDesks ?? {})).toHaveLength(1)
+    // 講師なしの開示（M-1）: 振替元に講師が居ない机へ移った体験は「(講師なし)」。
+    const teacherless = run(
+      [desk('s0', '', [entry(), null])],
+      [desk('t0', '佐藤講師', [null, trial('a')])],
+    )
+    expect(teacherless.result.summary.displaced?.names).toEqual(['体験:体験生(講師なし)'])
+    expect(teacherless.target.desks[0].teacher).toBe('')
   })
 
   it('下段の 2 席が埋まれば次の机の下段へ（同じ机に体験 2 人＋別の机から押し出し）', () => {

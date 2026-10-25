@@ -837,9 +837,10 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [makeupOnAltDate(), null] }
     findDesk(set.weeks, RELEASE_DATE).lesson = { id: 'other-lesson', studentSlots: [student({ id: 'other', name: '別の子', managedStudentId: 'student-2' }), null] }
 
+    const inputPending = {}
     const released = computeHolidayReleaseRestoration({
       weeks: set.weeks, dateKey: RELEASE_DATE, ledgers: set.ledgers, managedStudentByAnyName: roster, resolveDisplayName, resolveStockId,
-      templatePendingDesks: {}, createdAt: '2026-10-25T09:00:00.000Z',
+      templatePendingDesks: inputPending, createdAt: '2026-10-25T09:00:00.000Z',
     })
     expect(released.skipped).toEqual([])
     expect(released.restoredStudentNames).toEqual([])
@@ -855,7 +856,8 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     const key = buildTemplatePendingDeskKey(`${RELEASE_DATE}_1`, 'desk-1')
     expect(Object.keys(released.nextTemplatePendingDesks ?? {})).toEqual([key])
     const lower = released.nextTemplatePendingDesks![key]
-    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', subject: '数', lessonType: 'regular' })
+    // 下段の授業は手入力の印（manualAdded）つき＝保留中の再保存（Q29）や 1 行に戻った後の Q21-8 で落ちない（regression-reviewer H-1）。
+    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', subject: '数', lessonType: 'regular', manualAdded: true })
     expect(lower.lower.lesson?.studentSlots[1]).toBeNull()
     expect(lower.origin).toMatchObject({ kind: 'holiday-release-seat-taken' })
     expect(lower.origin?.note).toContain('休日設定の解除')
@@ -863,8 +865,9 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(lower.createdAt).toBe('2026-10-25T09:00:00.000Z')
     // 抑止キーは外さない（外すと再マージがテンプレの授業を別の机へ置き、下段と 2 か所になる＝INV-12）
     expect(released.restoredOccurrenceKeys).toEqual([])
-    // 入力の保留マップは変えない
-    expect(set.weeks).toEqual(set.weeks)
+    // 入力の保留マップは変えない（新しい参照を返す）
+    expect(inputPending).toEqual({})
+    expect(released.nextTemplatePendingDesks).not.toBe(inputPending)
   })
 
   it('★(f-3) 保留マップを渡しても、同じ机の下段が 2 席とも埋まっていれば従来どおり戻さない（別の机の下段へ勝手に逃がさない・台帳も記録も不変）', () => {

@@ -16,7 +16,7 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import { studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
-import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingOriginKind } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, isTemplatePendingLowerEmpty, placeIntoPendingLower, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 type StudentPair = [StudentEntry | null, StudentEntry | null]
 type StatusPair = [StudentStatusEntry | null, StudentStatusEntry | null]
@@ -49,6 +49,8 @@ export type OrphanedMakeupRemoval = {
   sourceDateKey: string
   /** 振替元の時限（ラベルから取れないときは null）。範囲の判定にだけ使う（根拠は日単位で見る・Q40-1）。 */
   sourceSlotNumber: number | null
+  /** 決定記録 48（2026-10-25）: 保留の下段に居る振替（Q40-2 の満席で下段へ置いたもの）。下段から外す。 */
+  inLower?: boolean
 }
 
 export type MakeupOriginLedger = Record<string, ManualMakeupOrigin[]>
@@ -127,6 +129,8 @@ export function collectOrphanedMakeups(params: {
   resolveLedgerOriginDates: (ledgerAfterRemovals: MakeupOriginLedger) => Record<string, string[]>
   effectiveStartDate: string
   slotFilter?: TemplateDiffSlotFilter | null
+  /** 決定記録 48（2026-10-25）: 保留の下段の振替も走査する（Q40-2 の満席で下段へ置いた振替が足す→外すで孤児として残らないように・regression-reviewer M-2）。 */
+  pendingDesks?: TemplatePendingDeskMap | null
 }): OrphanedMakeupCollection {
   const rowKeysByDay = new Map<number, Set<string>>()
   for (const row of params.regularLessons) {
@@ -170,32 +174,54 @@ export function collectOrphanedMakeups(params: {
   const hasBasis = (student: StudentEntry, dateKey: string) => templateHas(student, dateKey) || ledgerHas(student, dateKey)
 
   const removals: OrphanedMakeupRemoval[] = []
+  const scan = (cell: SlotCell, deskId: string, slots: readonly (StudentEntry | null)[] | undefined, inLower: boolean) => {
+    slots?.forEach((student, seatIndex) => {
+      if (!student || student.lessonType !== 'makeup' || student.manualAdded || !student.makeupSourceDate) return
+      // 管理生徒 ID の無い振替（名前だけ・旧データ）はテンプレの生徒と突き合わせられないので触らない（消さない側に倒す・監査 M-B）。
+      if (!student.managedStudentId) return
+      const sourceDateKey = student.makeupSourceDate
+      if (sourceDateKey < params.effectiveStartDate) return
+      const sourceSlotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? null
+      if (!isSourceInScope(sourceDateKey, sourceSlotNumber, params.slotFilter)) return
+      if (hasBasis(student, sourceDateKey)) return
+      removals.push({ cellId: cell.id, targetDateKey: cell.dateKey, deskId, seatIndex, student, sourceDateKey, sourceSlotNumber, ...(inLower ? { inLower: true } : {}) })
+    })
+  }
   for (const week of params.weeks) for (const cell of week) {
     if (cell.dateKey < params.effectiveStartDate) continue
     for (const desk of cell.desks) {
-      desk.lesson?.studentSlots.forEach((student, seatIndex) => {
-        if (!student || student.lessonType !== 'makeup' || student.manualAdded || !student.makeupSourceDate) return
-        // 管理生徒 ID の無い振替（名前だけ・旧データ）はテンプレの生徒と突き合わせられないので触らない（消さない側に倒す・監査 M-B）。
-        if (!student.managedStudentId) return
-        const sourceDateKey = student.makeupSourceDate
-        if (sourceDateKey < params.effectiveStartDate) return
-        const sourceSlotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? null
-        if (!isSourceInScope(sourceDateKey, sourceSlotNumber, params.slotFilter)) return
-        if (hasBasis(student, sourceDateKey)) return
-        removals.push({ cellId: cell.id, targetDateKey: cell.dateKey, deskId: desk.id, seatIndex, student, sourceDateKey, sourceSlotNumber })
-      })
+      scan(cell, desk.id, desk.lesson?.studentSlots, false)
+      // 決定記録 48: 下段の振替（Q40-2 の満席で置いたもの・テンプレ保存の保留の下段の振替）も同じ根拠で見る。
+      const lower = params.pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower
+      if (lower?.lesson) scan(cell, desk.id, lower.lesson.studentSlots, true)
     }
   }
   return { removals, ledgerRemovals }
 }
 
 /** 根拠を失った振替を机から外し、振替元の移動元記録（moved・その日のその生徒×科目）も消す。触ったセルの ID を返す（保存直後の再マージの重ね合わせに渡す）。 */
-export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly OrphanedMakeupRemoval[]): { weeks: SlotCell[][]; removedMovedRecords: number; touchedCellIds: Set<string> } {
-  if (removals.length === 0) return { weeks, removedMovedRecords: 0, touchedCellIds: new Set() }
+export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly OrphanedMakeupRemoval[], pendingDesks: TemplatePendingDeskMap = {}): { weeks: SlotCell[][]; removedMovedRecords: number; touchedCellIds: Set<string>; nextPendingDesks: TemplatePendingDeskMap } {
+  if (removals.length === 0) return { weeks, removedMovedRecords: 0, touchedCellIds: new Set(), nextPendingDesks: pendingDesks }
   const byDesk = new Map<string, OrphanedMakeupRemoval[]>()
   for (const removal of removals) {
+    if (removal.inLower) continue
     const key = `${removal.cellId}__${removal.deskId}`
     byDesk.set(key, [...(byDesk.get(key) ?? []), removal])
+  }
+  // 決定記録 48: 下段の振替は保留マップから外す。下段が空になれば保留のキーごと消す（上段はそのまま＝合流の計算は要らない）。
+  let nextPendingDesks = pendingDesks
+  for (const removal of removals) {
+    if (!removal.inLower) continue
+    const key = buildTemplatePendingDeskKey(removal.cellId, removal.deskId)
+    const entry = nextPendingDesks[key]
+    if (!entry?.lower.lesson) continue
+    const slots = [...entry.lower.lesson.studentSlots] as StudentPair
+    slots[removal.seatIndex] = null
+    const lower = { ...entry.lower, lesson: { ...entry.lower.lesson, studentSlots: slots } }
+    if (!slots.some(Boolean)) delete (lower as { lesson?: unknown }).lesson
+    nextPendingDesks = { ...nextPendingDesks }
+    if (isTemplatePendingLowerEmpty(lower)) delete nextPendingDesks[key]
+    else nextPendingDesks[key] = { ...entry, lower }
   }
   // 振替元の移動元記録: 日 × 生徒×科目（根拠と同じく日単位。時限だけ変えた写しを残さない）
   const movedTargets = new Map<string, Set<string>>()
@@ -235,7 +261,7 @@ export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly Or
     })
     return nextWeek.some((cell, index) => cell !== week[index]) ? nextWeek : week
   })
-  return { weeks: nextWeeks, removedMovedRecords, touchedCellIds }
+  return { weeks: nextWeeks, removedMovedRecords, touchedCellIds, nextPendingDesks }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,7 +457,7 @@ export function planWholeDayTransferPlacements(params: {
     if (!targetDesk || seatIndex < 0) {
       // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机の**下段（保留・緑）**へ振替として置く（埋まっていれば次の机の下段）。
       // 下段の振替は在庫の消化に数える（INV-06 の 3 本目の走査）ので台帳には積まない＝在庫中立。L-5（台帳に積んでも残数が増えない消失）はこれで閉じる。
-      const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved, effectiveStartDate: destination.dateKey, createdAt: params.createdAt ?? new Date().toISOString(), note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
+      const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved, effectiveStartDate: destination.dateKey, createdAt: params.createdAt ?? new Date().toISOString(), kind: 'transfer-follow-full', note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
       if (!lowerPlacement) { stock(item, 'no-seat'); continue }
       nextPendingDesks = lowerPlacement.nextPendingDesks
       pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: lowerPlacement.deskId, deskIndex: lowerPlacement.deskIndex, seatIndex: lowerPlacement.seatIndex, fallbackDesk: lowerPlacement.deskIndex !== item.deskIndex })
@@ -476,42 +502,6 @@ export function buildTransferFollowPendingNote(sourceDateKey: string, targetDate
   return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました。室長が動かすか採用で片づけてください。`
 }
 
-/**
- * 保留（下段）へ 1 人置く（決定記録 48 の共通手順）: 望みの机番号の下段の空いた席（望みの席 → もう一方）。埋まっていれば次の机の下段（末尾まで行けば先頭へ）。
- * 全机の下段が埋まっていれば null（呼び出し側が従来の扱いへ）。入力の保留マップは変えない。
- */
-export function placeIntoPendingLower(params: {
-  cell: SlotCell
-  pendingDesks: TemplatePendingDeskMap
-  preferredDeskIndex: number
-  preferredSeat: number
-  student: StudentEntry
-  effectiveStartDate: string
-  createdAt: string
-  note: string
-  kind?: TemplatePendingOriginKind
-}): { nextPendingDesks: TemplatePendingDeskMap; deskId: string; deskIndex: number; seatIndex: number } | null {
-  const { cell } = params
-  const lowerSeatTaken = (entry: TemplatePendingDesk | undefined, index: number) => Boolean(entry?.lower.lesson?.studentSlots[index]) || Boolean(entry?.lower.statusSlots?.[index]) || Boolean(entry?.lower.memoSlots?.[index])
-  for (let offset = 0; offset < cell.desks.length; offset += 1) {
-    const deskIndex = (params.preferredDeskIndex + offset) % cell.desks.length
-    const desk = cell.desks[deskIndex]
-    if (!desk) continue
-    const key = buildTemplatePendingDeskKey(cell.id, desk.id)
-    const existing = params.pendingDesks[key]
-    const other = params.preferredSeat === 0 ? 1 : 0
-    const seatIndex = !lowerSeatTaken(existing, params.preferredSeat) ? params.preferredSeat : (!lowerSeatTaken(existing, other) ? other : -1)
-    if (seatIndex < 0) continue
-    const slots: StudentPair = [existing?.lower.lesson?.studentSlots[0] ?? null, existing?.lower.lesson?.studentSlots[1] ?? null]
-    slots[seatIndex] = params.student
-    const lessonId = existing?.lower.lesson?.id ?? `pending_follow_${cell.dateKey}_${cell.slotNumber}_${deskIndex}`
-    const entry: TemplatePendingDesk = existing
-      ? { ...existing, lower: { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: lessonId }), studentSlots: slots } } }
-      : { lower: { lesson: { id: lessonId, studentSlots: slots } }, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt, origin: { kind: params.kind ?? 'transfer-follow-full', note: params.note } }
-    return { nextPendingDesks: { ...params.pendingDesks, [key]: entry }, deskId: desk.id, deskIndex, seatIndex }
-  }
-  return null
-}
 
 /** 保存直後の再マージの重ね合わせを、追従で触ったセルにも当てるための絞り込み。絞り込みが無い（全コマ）ならそのまま。 */
 export function extendTemplateDiffSlotFilterWithCells(filter: TemplateDiffSlotFilter | null | undefined, cellIds: ReadonlySet<string>): TemplateDiffSlotFilter | null | undefined {

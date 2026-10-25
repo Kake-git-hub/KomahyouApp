@@ -19,6 +19,8 @@
 
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
+type StudentPair = [StudentEntry | null, StudentEntry | null]
+
 /** 下段が持つ手置き講師（Q41・2026-10-21・オーナー決定 B）。保存前の机の講師フィールドの写し。表示と「既存を採用」の復元にだけ使う（INV-13）。 */
 export type TemplatePendingLowerTeacher = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>
 
@@ -302,4 +304,53 @@ export function collectTemplatePendingDeskIdsInCell(map: TemplatePendingDeskMap 
     ids.add(parsed.deskId)
   }
   return ids
+}
+
+/** 生徒の同一性（INV-12 の「同じ生徒」）: 管理生徒 ID があればそれ、無ければ名前（templateTransferFollow の studentIdentity と同じ規則）。 */
+export function templatePendingStudentIdentity(student: Pick<StudentEntry, 'managedStudentId' | 'name'>) {
+  return student.managedStudentId ?? student.name
+}
+
+/** 下段に生きている生徒・記録・メモ・講師が 1 つも無い（キーを消してよい）。 */
+export function isTemplatePendingLowerEmpty(lower: TemplatePendingLower) {
+  return !lower.lesson?.studentSlots.some(Boolean) && !lower.statusSlots?.some(Boolean) && !lower.memoSlots?.some((memo) => memo != null && memo !== '') && !lower.teacher
+}
+
+/**
+ * 保留（下段）へ 1 人置く（決定記録 48・2026-10-25・spec-template-behavior §H Q42 の**唯一の共通手順**。丸ごと振替の押し出し・Q40-2 の満席・休日解除の
+ * 席ふさがりがいずれもこれを使う＝置き方を 3 か所に書かない）: 望みの机番号の下段の空いた席（望みの席 → もう一方）。埋まっていれば次の机の下段
+ * （末尾まで行けば先頭へ）。全机の下段が埋まっていれば null（呼び出し側が従来の扱いへ）。入力の保留マップは変えない（純関数）。
+ * 既にある保留（テンプレ保存の下段など）に相乗りするときは、その保留の由来（origin）・反映日・作成日時は上書きしない。
+ */
+export function placeIntoPendingLower(params: {
+  cell: SlotCell
+  pendingDesks: TemplatePendingDeskMap
+  preferredDeskIndex: number
+  preferredSeat: number
+  student: StudentEntry
+  effectiveStartDate: string
+  createdAt: string
+  kind: TemplatePendingOriginKind
+  note: string
+}): { nextPendingDesks: TemplatePendingDeskMap; deskId: string; deskIndex: number; seatIndex: number } | null {
+  const { cell } = params
+  const lowerSeatTaken = (entry: TemplatePendingDesk | undefined, index: number) => Boolean(entry?.lower.lesson?.studentSlots[index]) || Boolean(entry?.lower.statusSlots?.[index]) || Boolean(entry?.lower.memoSlots?.[index])
+  for (let offset = 0; offset < cell.desks.length; offset += 1) {
+    const deskIndex = (params.preferredDeskIndex + offset) % cell.desks.length
+    const desk = cell.desks[deskIndex]
+    if (!desk) continue
+    const key = buildTemplatePendingDeskKey(cell.id, desk.id)
+    const existing = params.pendingDesks[key]
+    const other = params.preferredSeat === 0 ? 1 : 0
+    const seatIndex = !lowerSeatTaken(existing, params.preferredSeat) ? params.preferredSeat : (!lowerSeatTaken(existing, other) ? other : -1)
+    if (seatIndex < 0) continue
+    const slots: StudentPair = [existing?.lower.lesson?.studentSlots[0] ?? null, existing?.lower.lesson?.studentSlots[1] ?? null]
+    slots[seatIndex] = params.student
+    const lessonId = existing?.lower.lesson?.id ?? `pending_lower_${cell.dateKey}_${cell.slotNumber}_${deskIndex}`
+    const entry: TemplatePendingDesk = existing
+      ? { ...existing, lower: { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: lessonId }), studentSlots: slots } } }
+      : { lower: { lesson: { id: lessonId, studentSlots: slots } }, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt, origin: { kind: params.kind, note: params.note } }
+    return { nextPendingDesks: { ...params.pendingDesks, [key]: entry }, deskId: desk.id, deskIndex, seatIndex }
+  }
+  return null
 }

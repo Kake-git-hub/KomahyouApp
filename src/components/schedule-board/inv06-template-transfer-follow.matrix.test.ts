@@ -12,7 +12,9 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeHolidayReleaseRestoration, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
+import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -587,5 +589,85 @@ describe('INV-06 × Q40 regression-reviewer 最終確認（2026-10-15・M-C/L-3�
     expect(balances(saved.nextWeeks, newRows, ledger, settings(), suppressed)['sA__数'] ?? 0).toBe(before['sA__数'] ?? 0)
     // 抑止を渡さなければ根拠あり（H-2 の形）
     expect(save(normalized, newRows, [keyA], { manualMakeupAdjustments: ledger }).summary.orphanedMakeupsRemoved).toBe(0)
+  })
+})
+
+// ============================================================================
+// 決定記録 48（2026-10-25）Q42 の兄弟（regression-reviewer H-1 / M-2・同日）
+// ============================================================================
+describe('Q42 × テンプレ再保存（regression-reviewer 2026-10-25 H-1 / M-2）', () => {
+  const emptyLedgers = { manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} }
+  const roster = new Map(students.map((student) => [student.name, student]))
+  function audit(weeks: SlotCell[][], rows: RegularLessonRow[], pendingDesks: TemplatePendingDeskMap, suppressed: string[]) {
+    void suppressed
+    return auditTemplateLessonAccounting({ weeks, regularLessons: rows, students, classroomSettings: settings(), scheduleCountAdjustments: [], manualMakeupAdjustments: {}, templatePendingDesks: pendingDesks, fromDate: WED, toDate: WEEK_END })
+  }
+  /** 休日設定の後に、水 5限 机 0 の A の席へ別の生徒 D を手で置いた形（A は holiday 記録）。 */
+  function holidayWithSeatTaken() {
+    const base = remerge([buildWeek(OLD_ROWS)], OLD_ROWS, [])
+    const desk0 = cellOf(base, WED_CELL).desks[0]
+    const a = desk0.lesson!.studentSlots[0]!
+    const record: StudentStatusEntry = {
+      id: 'sA_holiday', studentId: 'sA', sourceManagedLesson: true, name: a.name, managedStudentId: 'sA', grade: a.grade, subject: a.subject, lessonType: 'regular', teacherType: a.teacherType,
+      teacherName: desk0.teacher, dateKey: WED, slotNumber: SLOT, recordedAt: '2026-10-01T00:00:00.000Z', status: 'holiday', holidayStockReturn: { kind: 'none' }, sourceLessonId: desk0.lesson!.id,
+    }
+    const weeks = withDesk(base, WED_CELL, 0, (desk) => ({ ...desk, lesson: { id: 'other-lesson', studentSlots: [MANUAL_D, null] }, statusSlots: [record, null] }))
+    const released = computeHolidayReleaseRestoration({ weeks, dateKey: WED, ledgers: emptyLedgers, managedStudentByAnyName: roster, resolveDisplayName: (name) => name, resolveStockId: resolveStudentKey, templatePendingDesks: {}, createdAt: '2026-10-25T09:00:00.000Z' })
+    // 休日解除ハンドラと同じく、その日のテンプレの出現は抑止したまま（下段へ戻した分は外さない）。
+    const suppressed = [`sA__数__${WED}__${SLOT}`]
+    return { released, suppressed }
+  }
+
+  it('H-1: 休日解除で下段へ戻した通常授業（印つき）は、同じテンプレの再保存で消えず下段に残る（保存則の違反なし・不動点）', () => {
+    const { released, suppressed } = holidayWithSeatTaken()
+    expect(released.pendingRestoredStudentNames).toEqual(['青木'])
+    const pending = released.nextTemplatePendingDesks!
+    const key = buildTemplatePendingDeskKey(WED_CELL, cellOf(released.nextWeeks, WED_CELL).desks[0].id)
+    expect(pending[key].lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'regular', manualAdded: true })
+    expect(audit(released.nextWeeks, OLD_ROWS, pending, suppressed), describeLessonAccountingViolations(audit(released.nextWeeks, OLD_ROWS, pending, suppressed))).toEqual([])
+    const saved = save(released.nextWeeks, OLD_ROWS, suppressed, { templatePendingDesks: pending })
+    expect(saved.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', manualAdded: true })
+    expect(saved.nextPendingDesks[key]?.origin?.kind).toBe('holiday-release-seat-taken')
+    expect(liveIds(saved.nextWeeks, WED_CELL)).toEqual(['sD', 'sB'])
+    expect(audit(saved.nextWeeks, OLD_ROWS, saved.nextPendingDesks, suppressed)).toEqual([])
+    expectFixpoint(saved, OLD_ROWS, suppressed)
+  })
+
+  it('H-1 続き: 上段の席が空いて Q28 で 1 行に戻った後の再保存でも消えない（手で足し直した通常授業と同じ形）', () => {
+    const { released, suppressed } = holidayWithSeatTaken()
+    const pending = released.nextTemplatePendingDesks!
+    const emptied = released.nextWeeks.map((week) => week.map((cell) => (cell.id !== WED_CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) })))
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: emptied, templatePendingDesks: pending })
+    expect(settled.nextTemplatePendingDesks).toEqual({})
+    expect(cellOf(settled.nextWeeks, WED_CELL).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', manualAdded: true })
+    const saved = save(settled.nextWeeks, OLD_ROWS, suppressed, { templatePendingDesks: {} })
+    expect(liveIds(saved.nextWeeks, WED_CELL).sort()).toEqual(['sA', 'sB'])
+    expect(liveIds(saved.nextWeeks, WED_CELL).filter((id) => id === 'sA')).toHaveLength(1)
+    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed)).toEqual([])
+    expectFixpoint(saved, OLD_ROWS, suppressed)
+  })
+
+  it("M-2' 満席で下段へ置いた振替は、足す→外すで下段から外れ、振替元の移動元記録も消え、保留は空になって消える（台帳・残数は足す前と同じ）", () => {
+    const board = transferredBoard()
+    const weeks = fillSeat2WithManual(board.weeks)
+    const rowsWithC = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const before = balances(weeks, OLD_ROWS, board.ledgers)
+    const first = save(weeks, rowsWithC, board.suppressed, { manualMakeupAdjustments: board.ledgers })
+    expect(first.summary.wholeDayTransferPendingStudents).toBe(1)
+    expect(Object.keys(first.nextPendingDesks)).toHaveLength(1)
+    const suppressed1 = suppressedAfter(board.suppressed, first)
+    const second = save(first.nextWeeks, OLD_ROWS, suppressed1, { manualMakeupAdjustments: board.ledgers, templatePendingDesks: first.nextPendingDesks })
+    expect(second.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(second.orphanedMakeups[0]).toMatchObject({ inLower: true, sourceDateKey: WED })
+    expect(second.orphanedMakeups[0].student.managedStudentId).toBe('sC')
+    expect(second.nextPendingDesks).toEqual({})
+    expect(second.summary.pending).toBe(0)
+    expect(cellOf(second.nextWeeks, WED_CELL).desks[0].statusSlots?.some((entry) => entry?.managedStudentId === 'sC') ?? false).toBe(false)
+    expect(second.manualMakeupOriginAdditions).toEqual([])
+    expect(second.manualMakeupOriginRemovals).toEqual([])
+    const after = balances(second.nextWeeks, OLD_ROWS, board.ledgers, settings(), {}, second.nextPendingDesks)
+    expect(after['sC__数'] ?? 0).toBe(before['sC__数'] ?? 0)
+    expect(after['sA__数'] ?? 0).toBe(before['sA__数'] ?? 0)
+    expectFixpoint(second, OLD_ROWS, suppressed1)
   })
 })
