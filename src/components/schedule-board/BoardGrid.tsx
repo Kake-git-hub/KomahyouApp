@@ -558,7 +558,8 @@ function BoardGridComponent({
     return (
       <div
         className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}`}
-        title="保留中の下段（既存）。押すと保留の机のメニューを開きます。"
+        // 決定記録 48（2026-10-25）: テンプレ保存以外（丸ごと振替の押し出しなど）が作った保留は理由文を添える。色は同じ緑（種別の区別は文だけ）。
+        title={pending.origin?.note ? `保留中の下段（${pending.origin.note}）。押すと保留の机のメニューを開きます。` : '保留中の下段（既存）。押すと保留の机のメニューを開きます。'}
         data-testid={`pending-lower-${cell.id}-${deskIndex}-${studentIndex}`}
         onClick={(event) => {
           event.stopPropagation()

@@ -14,6 +14,9 @@
 
 ## 未リリース
 
+- feat(INV-02/INV-06/INV-13): **押し出された授業を保留(下段・緑)で残す (a)**(決定記録 48・引き継ぎ正本 docs/plan-2026-10-25-conflict-placement.md・templateDiffApply の教室だけ)。丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加の通常は消さず、元の机の空き席に残す → 同じコマの別の机の空き席へずらす(講師あり→なし・机番号順) → 無ければ同じ机番号の机の下段へ(2 席埋まれば次の机)。テンプレ由来の通常は従来どおり消して −1、振替・講習は従来どおり未消化へ。保留に `origin`(種別＋理由文)を足し、ツールチップ・確認ダイアログ(「残す: n件(名前・別の机へ・保留に)」)・結果の帯に出す(色は既存の保留と同じ緑)。上段の席が空けば Q28 で自動で 1 行に戻る(決定 A)。フラグ OFF(本番 3 教室)は従来どおり。新規 `wholeDayTransferDisplaced.ts`・マトリクス `inv13-whole-day-transfer-displaced.matrix.test.ts`(種別・置き先 3 通り・在庫中立・再マージの不動点・Q28・PDF 除外・文言)。(ScheduleBoardScreen.tsx computeWholeDayTransfer・templatePendingDesks.ts・BoardGrid.tsx・boardResultMessages.ts)
+- feat(INV-06): **(b)-1 Q40-2 の満席は未消化へ逃がさず、振替先の同じ机番号の机の下段(保留)へ振替として置く**(決定記録 48)。旧「満席なら台帳に origin 1 件＝INV-06 の唯一の例外」は 'duplicate' / 'no-target-cell' だけに縮み、既知の限界 L-5(台帳に積んでも残数が増えない消失)は閉じた。下段の振替は在庫の消化に数えるので在庫中立。確認の画面に「満席の n 名は同じ机の保留〔下段〕へ」と名前つきの理由 'transfer-pending'、保留 n机にも数える。再保存で保留の `origin` を落とさない修正。`templateTransferFollow.ts` に共通手順 `placeIntoPendingLower`。マトリクス `inv06-template-transfer-follow`(満席 2 行を下段の期待に改定・M-2/M-A は duplicate の形で台帳を作る)・`inv06-template-save-sequences`(L-5 の許容を違反 0 に戻す)・`templateTransferFollow.test.ts`。(templateDiffApply.ts・ScheduleBoardScreen.tsx computeTemplateDiffApplyForBoard)
+
 ## v1.5.640 (2026-10-25)
 
 - docs: **押し出された授業を保留(下段・緑)で残す**方針の引き継ぎ文書 `docs/plan-2026-10-25-conflict-placement.md`(オーナー決定 2026-10-25・実装は次セッション)。当初の「矛盾配置＝机を増やして黄色」は「優先順位は 2 行表示 > 矛盾配置」の指摘で取り下げ、既存の保留に相乗りする形で確定(決定記録 46 改定・47 注記・48 追加)。対象は (a) 丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加 → (b) Q40-2 の満席・休日解除の席ふさがり・時限変更の追従の満席。上段が空いたら Q28 で自動で 1 行に戻す。進行中テーマ台帳を更新。(docs/spec-template-behavior.md・developmentStatusLedger.ts)

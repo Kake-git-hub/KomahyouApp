@@ -41,12 +41,47 @@ export type TemplatePendingLower = {
   teacher?: TemplatePendingLowerTeacher
 }
 
+/**
+ * 保留を作った自動処理の種別（決定記録 48・2026-10-25・docs/plan-2026-10-25-conflict-placement.md §3）。
+ * 自動処理が授業を本来の机に置けないとき、消さず・隠さず・別の場所へ逃がさず、その机の下段（保留・緑）に残す。
+ * 色は既存の保留と同じ緑。種別の区別は理由文（ツールチップ・確認の画面）だけ。未設定＝従来どおりテンプレ保存の保留。
+ *  - whole-day-transfer-displaced … 丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加で、移送後のコマに空き席が無かったもの（(a)）。
+ *  - transfer-follow-full        … Q40-2 で丸ごと振替した日に足した生徒の振替先のコマが満席だったもの（(b)-1）。
+ *  - holiday-release-seat-taken  … 休日解除で戻す席に別の生徒が居たもの（(b)-2）。
+ *  - slot-follow-full            … 時限変更の追従（決定記録 46）で新しい時限が満席だったもの（(b)-3・未実装）。
+ */
+export type TemplatePendingOriginKind = 'whole-day-transfer-displaced' | 'transfer-follow-full' | 'holiday-release-seat-taken' | 'slot-follow-full'
+
+export type TemplatePendingOrigin = {
+  kind: TemplatePendingOriginKind
+  /** 室長向けの理由文（ツールチップ・確認の画面・保留の帯に出す）。 */
+  note: string
+}
+
 export type TemplatePendingDesk = {
   lower: TemplatePendingLower
-  /** 保留を作ったテンプレ保存の反映日。 */
+  /** 保留を作ったテンプレ保存の反映日（テンプレ保存以外が作った保留はその操作の対象日）。 */
   effectiveStartDate: string
   /** 保留を作った日時（ISO）。 */
   createdAt: string
+  /** 保留を作った自動処理（任意・2026-10-25）。無ければテンプレ保存の保留。 */
+  origin?: TemplatePendingOrigin
+}
+
+const PENDING_ORIGIN_KINDS = new Set<TemplatePendingOriginKind>(['whole-day-transfer-displaced', 'transfer-follow-full', 'holiday-release-seat-taken', 'slot-follow-full'])
+
+/** 読込時の正規化: 種別が既知で理由文が文字列のときだけ受け付ける（形が壊れた値は捨てる＝従来のテンプレ保存の保留として扱う）。 */
+export function normalizeTemplatePendingOrigin(value: unknown): TemplatePendingOrigin | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.kind !== 'string' || !PENDING_ORIGIN_KINDS.has(record.kind as TemplatePendingOriginKind)) return undefined
+  return { kind: record.kind as TemplatePendingOriginKind, note: typeof record.note === 'string' ? record.note : '' }
+}
+
+/** 保留の由来の短い見出し（ツールチップ・帯）。テンプレ保存の保留は従来の文のまま。 */
+export function describeTemplatePendingOrigin(origin: TemplatePendingOrigin | undefined): string {
+  if (!origin) return ''
+  return origin.note
 }
 
 /** キー＝`"<cellId>::<deskId>"`（Q24-1・オーナー確定）。 */
@@ -126,6 +161,7 @@ export function cloneTemplatePendingDeskMap(map: TemplatePendingDeskMap | null |
       lower: cloneTemplatePendingLower(entry.lower),
       effectiveStartDate: entry.effectiveStartDate,
       createdAt: entry.createdAt,
+      ...(entry.origin ? { origin: { ...entry.origin } } : {}),
     }
   }
   return result
@@ -161,10 +197,12 @@ export function normalizeTemplatePendingDeskMap(value: unknown): TemplatePending
     }
     const teacher = normalizeTemplatePendingLowerTeacher(lowerRecord.teacher)
     if (teacher) lower.teacher = teacher
+    const origin = normalizeTemplatePendingOrigin(entry.origin)
     result[key] = {
       lower,
       effectiveStartDate: typeof entry.effectiveStartDate === 'string' ? entry.effectiveStartDate : '',
       createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : '',
+      ...(origin ? { origin } : {}),
     }
   }
   return result

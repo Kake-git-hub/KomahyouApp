@@ -45,10 +45,13 @@ export function buildWholeDayTransferResultMessage(params: {
   movedStudentCount: number
   movedTeacherCount: number
   returnedCount: number
+  /** 決定記録 48（2026-10-25）: 振替先に置いていた体験・増コマ・手動追加のうち、同じ机番号の下段（保留・緑）に残した件数。0 なら出さない。 */
+  pendingCount?: number
 }): string {
-  const { sourceDateKey, targetDateKey, movedStudentCount, movedTeacherCount, returnedCount } = params
+  const { sourceDateKey, targetDateKey, movedStudentCount, movedTeacherCount, returnedCount, pendingCount = 0 } = params
   return `${sourceDateKey} → ${targetDateKey} へ丸ごと振替しました${joinResultNotes([
     `生徒${movedStudentCount}・講師${movedTeacherCount}`,
     returnedCount > 0 ? `未消化へ ${returnedCount}件` : '',
+    pendingCount > 0 ? `保留(下段)に ${pendingCount}件` : '',
   ])}。`
 }
