@@ -48,8 +48,9 @@ function projectDesks(weeks: SlotCell[][]) {
 /** 同じテンプレをもう一度保存（変えたコマ 0＝全コマ）しても、置く・未消化・消す・−1 が出ず盤面も変わらない（冪等）。 */
 function expectIdempotentResave(state: SavedState, rows: RegularLessonRow[], label: string) {
   const again = save(state.weeks, rows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments })
-  expect({ placed: again.summary.wholeDayTransferPlacedStudents, stocked: again.summary.wholeDayTransferStockedStudents, orphans: again.summary.orphanedMakeupsRemoved, minus: again.wholeDayTransferCountAdjustments.length, ledgerAdd: again.manualMakeupOriginAdditions.length, ledgerRemove: again.manualMakeupOriginRemovals.length }, label)
-    .toEqual({ placed: 0, stocked: 0, orphans: 0, minus: 0, ledgerAdd: 0, ledgerRemove: 0 })
+  expect({ placed: again.summary.wholeDayTransferPlacedStudents, stocked: again.summary.wholeDayTransferStockedStudents, pending: again.summary.wholeDayTransferPendingStudents, orphans: again.summary.orphanedMakeupsRemoved, minus: again.wholeDayTransferCountAdjustments.length, ledgerAdd: again.manualMakeupOriginAdditions.length, ledgerRemove: again.manualMakeupOriginRemovals.length }, label)
+    .toEqual({ placed: 0, stocked: 0, pending: 0, orphans: 0, minus: 0, ledgerAdd: 0, ledgerRemove: 0 })
+  expect(again.nextPendingDesks, label).toEqual(state.pendingDesks)
   expect(projectDesks(again.nextWeeks), label).toEqual(projectDesks(state.weeks))
 }
 function initialState(rows: RegularLessonRow[]): SavedState {
@@ -142,14 +143,11 @@ describe('tp-51（2026-10-17 テスト教室）: 時限を変える → 科目�
   })
 })
 
-describe('既知の限界 L-5（2026-10-21）: 振替元の日に既に振替（移送済み）がある生徒を、同じコマのどの机にも置けない形で足すと、未消化の origin が同じ日付へのフォールバック消化で食われる', () => {
-  // オーナー確定 (a)（2026-10-21）で「同じ机が使えなければ同じコマの別の机へ置く」ので、置ける机が 1 つでもあればこの形にならない。残るのは「そのコマに講師の居る机が 1 つも無い」形だけ。
-  // A は水 5限 を木 5限 へ移送済み。水 4限（木 4限 にはどの机にも講師が居ない）にも A の数を足すと、置けないので台帳に origin（水 4限）を積むが、
-  // 在庫の消化（consumeMatchingOriginTokens）は時限が合わなくても同じ日付の origin へフォールバックするため、移送済みの振替（振替元 水 5限）がこの origin を食う。
-  // 結果: 台帳には積まれるが残数は増えず、4限の分の授業は盤面にも在庫にも無い。確認の画面には「未消化振替にします（同じ机に講師がいない）」が出る。
-  // 監査はこれを「無言の消失」として検出する（期待 2・説明 1）。残る形の直し方はオーナー判断（進行中テーマ台帳 template-diff-apply の (c)）: 置けないときは Q35-8 と同じ −1 にする／
-  // 在庫の消化を時限つきの origin には日付フォールバックさせない。決まるまで**この形だけ**を許容し、ほかの違反は許さない。
-  it('監査が「無言の消失」1 件（A×数×水）だけを返し、台帳には origin が 1 件積まれている（決まったら expectNoViolation に戻す）', () => {
+describe('旧・既知の限界 L-5（2026-10-21）→ 決定記録 48（2026-10-25）で閉じた: 振替先のコマが満席なら同じ机番号の下段（保留）へ振替として置く', () => {
+  // 旧挙動: 置けないと台帳に origin（水 4限）を積むが、在庫の消化（consumeMatchingOriginTokens）の同じ日付へのフォールバックで移送済みの振替に食われ、
+  // 台帳には積まれるが残数は増えず、4限の分の授業は盤面にも在庫にも無い（監査が「無言の消失」として検出していた形）。
+  // 新挙動: 下段に振替として置く。下段の振替は監査の説明（collectLessonExplanationFacts）にも在庫の消化にも数えるので、違反 0・台帳 0・残数 0。
+  it('監査に違反が無く、台帳には積まれず、下段に A の振替（振替元 水 4限）が居る。再保存は冪等', () => {
     const BASE = [...OLD_ROWS.slice(0, 2), row('r2', 't3', '', '', 4)]
     const NEXT = [...BASE, row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })]
     // 木 4限 を満席にする（オーナー指示 2026-10-21: 講師が居なくても空席なら置くので、残る形は満席だけ）
@@ -157,13 +155,18 @@ describe('既知の限界 L-5（2026-10-21）: 振替元の日に既に振替（
     const state0 = initialState(BASE)
     state0.weeks = state0.weeks.map((week) => week.map((cell) => (cell.id !== `${THU}_4` ? cell : { ...cell, desks: cell.desks.map((desk, index) => ({ ...desk, lesson: { id: `full_${index}`, studentSlots: [fill('X', index * 2), fill('Y', index * 2 + 1)] } })) })))
     const { saved, state } = step(state0, BASE, NEXT)
-    expect(saved.summary.wholeDayTransferStockedStudents).toBe(1)
-    expect(saved.studentNotes.map((note) => note.kind)).toEqual(['transfer-stocked'])
-    expect(state.ledgers['sA__数']).toHaveLength(1)
-    const violations = audit(state, NEXT)
-    expect(violations.map((item) => ({ kind: item.kind, studentId: item.studentId, subject: item.subject, dateKey: item.dateKey, expected: item.expected, explained: item.explained })))
-      .toEqual([{ kind: 'missing', studentId: 'sA', subject: '数', dateKey: WED, expected: 2, explained: 1 }])
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferPendingStudents).toBe(1)
+    expect(saved.studentNotes.map((note) => note.kind)).toEqual(['transfer-pending'])
+    expect(state.ledgers['sA__数'] ?? []).toHaveLength(0)
+    const pendingEntries = Object.values(state.pendingDesks)
+    expect(pendingEntries).toHaveLength(1)
+    expect(pendingEntries[0].lower.lesson?.studentSlots.some((student) => student?.managedStudentId === 'sA' && student.lessonType === 'makeup' && student.makeupSourceDate === WED)).toBe(true)
+    expect(pendingEntries[0].origin?.kind).toBe('transfer-follow-full')
+    expectNoViolation(state, NEXT, 'L-5 の形（満席 → 下段）')
     expect(balances(state.weeks, NEXT, state.ledgers)['sA__数'] ?? 0).toBe(0)
+    expectFixpoint(state, NEXT)
+    expectIdempotentResave(state, NEXT, 'L-5 の形の再保存')
   })
 })
 

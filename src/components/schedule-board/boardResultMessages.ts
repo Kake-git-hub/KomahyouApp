@@ -27,13 +27,16 @@ export function buildHolidayReleaseResultMessage(params: {
   dateKey: string
   isClosedWeekday: boolean
   restoredCount: number
+  /** 決定記録 48（2026-10-25）: 席に別の生徒が居るため、その机の下段（保留・緑）へ戻した件数。0 なら出さない。 */
+  pendingRestoredCount?: number
   removedMakeupCount: number
   skippedCount: number
   skippedSummary: string
 }): string {
-  const { dateKey, isClosedWeekday, restoredCount, removedMakeupCount, skippedCount, skippedSummary } = params
+  const { dateKey, isClosedWeekday, restoredCount, pendingRestoredCount = 0, removedMakeupCount, skippedCount, skippedSummary } = params
   return `${dateKey} の${isClosedWeekday ? '休校' : '休日'}を解除しました${joinResultNotes([
     restoredCount > 0 ? `元の席へ ${restoredCount}件` : '',
+    pendingRestoredCount > 0 ? `保留(下段)に ${pendingRestoredCount}件` : '',
     removedMakeupCount > 0 ? `別日のコマ ${removedMakeupCount}件を削除` : '',
     skippedCount > 0 ? `戻せない ${skippedCount}件${skippedSummary ? `: ${skippedSummary}` : ''}` : '',
   ])}。`
@@ -45,10 +48,13 @@ export function buildWholeDayTransferResultMessage(params: {
   movedStudentCount: number
   movedTeacherCount: number
   returnedCount: number
+  /** 決定記録 48（2026-10-25）: 振替先に置いていた体験・増コマ・手動追加のうち、同じ机番号の下段（保留・緑）に残した件数。0 なら出さない。 */
+  pendingCount?: number
 }): string {
-  const { sourceDateKey, targetDateKey, movedStudentCount, movedTeacherCount, returnedCount } = params
+  const { sourceDateKey, targetDateKey, movedStudentCount, movedTeacherCount, returnedCount, pendingCount = 0 } = params
   return `${sourceDateKey} → ${targetDateKey} へ丸ごと振替しました${joinResultNotes([
     `生徒${movedStudentCount}・講師${movedTeacherCount}`,
     returnedCount > 0 ? `未消化へ ${returnedCount}件` : '',
+    pendingCount > 0 ? `保留(下段)に ${pendingCount}件` : '',
   ])}。`
 }

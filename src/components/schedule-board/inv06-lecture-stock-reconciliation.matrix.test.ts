@@ -262,11 +262,11 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
     // Q36（2026-10-03）の removedSuppressedRegularLessonOccurrences（写しの抑止キーを外す）と sameDayMoveCopyReverts（検出結果）も台帳の書き換えではない。
     // Q39-9（2026-10-14）の scopedFullDates は確認文用（入口がその日を全コマにした日）で、台帳の書き換えではない。
-    // Q40（同日・段 2）の orphanedMakeups / wholeDayTransferPlaced / wholeDayTransferStocked / wholeDayTransferSkipped は追従の結果（盤面側）。
+    // Q40（同日・段 2）の orphanedMakeups / wholeDayTransferPlaced / wholeDayTransferPending（2026-10-25・決定記録 48） / wholeDayTransferStocked / wholeDayTransferSkipped は追従の結果（盤面側）。
     // manualMakeupOriginAdditions だけは保存が台帳へ積む依頼（INV-06 の唯一の例外・丸ごと振替した日に足した生徒で振替先に空きが無く休日でない分）で、
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
@@ -307,11 +307,11 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
     // Q36（2026-10-03）の removedSuppressedRegularLessonOccurrences（写しの抑止キーを外す）と sameDayMoveCopyReverts（検出結果）も台帳の書き換えではない。
     // Q39-9（2026-10-14）の scopedFullDates は確認文用（入口がその日を全コマにした日）で、台帳の書き換えではない。
-    // Q40（同日・段 2）の orphanedMakeups / wholeDayTransferPlaced / wholeDayTransferStocked / wholeDayTransferSkipped は追従の結果（盤面側）。
+    // Q40（同日・段 2）の orphanedMakeups / wholeDayTransferPlaced / wholeDayTransferPending（2026-10-25・決定記録 48） / wholeDayTransferStocked / wholeDayTransferSkipped は追従の結果（盤面側）。
     // manualMakeupOriginAdditions だけは保存が台帳へ積む依頼（INV-06 の唯一の例外・丸ごと振替した日に足した生徒で振替先に空きが無く休日でない分）で、
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })
