@@ -19,6 +19,8 @@ import {
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
 import { buildMakeupStockKey, collectMakeupOriginDatesByKey } from './makeupStock'
+import { buildTemplatePendingDeskKey } from './templatePendingDesks'
+import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 
 // ============================================================================
 // INV-06 操作マトリクス（休日設定の「記録保持」・D5 オーナー確定 2026-09-16）
@@ -824,6 +826,79 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]?.managedStudentId).toBe('student-2')
     expect(findDesk(released.nextWeeks, RELEASE_DATE).statusSlots?.[0]?.status).toBe('holiday')
     expect(released.ledgers).toEqual(set.ledgers)
+  })
+
+  // 決定記録 48（2026-10-25・(b)-2・spec-template-behavior §H Q42・templateDiffApply の教室だけ）: 席に別の生徒が居るときは、戻さずに記録を隠すのではなく
+  // その机の下段（保留・緑）へ戻す。在庫の巻き戻し・別日のコマの削除は席へ戻したときと同じ（下段の授業も在庫・回数に数える＝INV-06）。
+  it('★(f-2) 保留マップを渡す（フラグ ON）: 席が別の生徒で埋まっていたら、その机の下段（保留）へ戻す。記録は消え、台帳は休日設定前と完全一致。抑止キーは外さない', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [makeupOnAltDate(), null] }
+    findDesk(set.weeks, RELEASE_DATE).lesson = { id: 'other-lesson', studentSlots: [student({ id: 'other', name: '別の子', managedStudentId: 'student-2' }), null] }
+
+    const released = computeHolidayReleaseRestoration({
+      weeks: set.weeks, dateKey: RELEASE_DATE, ledgers: set.ledgers, managedStudentByAnyName: roster, resolveDisplayName, resolveStockId,
+      templatePendingDesks: {}, createdAt: '2026-10-25T09:00:00.000Z',
+    })
+    expect(released.skipped).toEqual([])
+    expect(released.restoredStudentNames).toEqual([])
+    expect(released.pendingRestoredStudentNames).toEqual(['大槻 太郎'])
+    // 上段は席に居る生徒のまま・記録は消える・別日のコマは消える・台帳は往復で完全一致
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    expect(desk.lesson?.studentSlots[0]?.managedStudentId).toBe('student-2')
+    expect(desk.statusSlots).toBeUndefined()
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined()
+    expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'makeup' }])
+    expect(released.ledgers).toEqual(before)
+    // 下段: 同じ机・同じ席に通常授業として戻る。理由は休日解除。
+    const key = buildTemplatePendingDeskKey(`${RELEASE_DATE}_1`, 'desk-1')
+    expect(Object.keys(released.nextTemplatePendingDesks ?? {})).toEqual([key])
+    const lower = released.nextTemplatePendingDesks![key]
+    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', subject: '数', lessonType: 'regular' })
+    expect(lower.lower.lesson?.studentSlots[1]).toBeNull()
+    expect(lower.origin).toMatchObject({ kind: 'holiday-release-seat-taken' })
+    expect(lower.origin?.note).toContain('休日設定の解除')
+    expect(lower.effectiveStartDate).toBe(RELEASE_DATE)
+    expect(lower.createdAt).toBe('2026-10-25T09:00:00.000Z')
+    // 抑止キーは外さない（外すと再マージがテンプレの授業を別の机へ置き、下段と 2 か所になる＝INV-12）
+    expect(released.restoredOccurrenceKeys).toEqual([])
+    // 入力の保留マップは変えない
+    expect(set.weeks).toEqual(set.weeks)
+  })
+
+  it('★(f-3) 保留マップを渡しても、同じ机の下段が 2 席とも埋まっていれば従来どおり戻さない（別の机の下段へ勝手に逃がさない・台帳も記録も不変）', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null]), { id: 'desk-2', teacher: '' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    findDesk(set.weeks, RELEASE_DATE).lesson = { id: 'other-lesson', studentSlots: [student({ id: 'other', name: '別の子', managedStudentId: 'student-2' }), null] }
+    const key = buildTemplatePendingDeskKey(`${RELEASE_DATE}_1`, 'desk-1')
+    const fullLower = { [key]: { lower: { lesson: { id: 'lower-full', studentSlots: [student({ id: 'l1', name: '下段1', managedStudentId: 'student-3' }), student({ id: 'l2', name: '下段2', managedStudentId: 'student-4' })] as [StudentEntry, StudentEntry] } }, effectiveStartDate: RELEASE_DATE, createdAt: 'x' } }
+    const released = computeHolidayReleaseRestoration({
+      weeks: set.weeks, dateKey: RELEASE_DATE, ledgers: set.ledgers, managedStudentByAnyName: roster, resolveDisplayName, resolveStockId, templatePendingDesks: fullLower,
+    })
+    expect(released.skipped).toEqual([{ studentName: '大槻 太郎', reason: 'seat-taken' }])
+    expect(released.pendingRestoredStudentNames).toEqual([])
+    expect(released.nextTemplatePendingDesks).toBe(fullLower)
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).statusSlots?.[0]?.status).toBe('holiday')
+    expect(released.ledgers).toEqual(set.ledgers)
+  })
+
+  it('★(f-4) 下段へ戻した通常授業は、上段の席が空くと Q28 で 1 行に戻る（決定 A）', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    findDesk(set.weeks, RELEASE_DATE).lesson = { id: 'other-lesson', studentSlots: [student({ id: 'other', name: '別の子', managedStudentId: 'student-2' }), null] }
+    const released = computeHolidayReleaseRestoration({
+      weeks: set.weeks, dateKey: RELEASE_DATE, ledgers: set.ledgers, managedStudentByAnyName: roster, resolveDisplayName, resolveStockId, templatePendingDesks: {},
+    })
+    const pending = released.nextTemplatePendingDesks!
+    // 室長が上段の別の子を（記録を残さず）外した
+    const emptied = released.nextWeeks.map((week) => week.map((cell) => (cell.dateKey !== RELEASE_DATE ? cell : { ...cell, desks: cell.desks.map((desk) => ({ ...desk, lesson: undefined })) })))
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: emptied, templatePendingDesks: pending })
+    expect(settled.collapsedKeys).toHaveLength(1)
+    expect(settled.nextTemplatePendingDesks).toEqual({})
+    expect(findDesk(settled.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
   })
 
   it('★(g) 解除 → 再マージ 2 回でも席は 1 つだけ・台帳も不変(INV-03 / INV-12)', () => {
