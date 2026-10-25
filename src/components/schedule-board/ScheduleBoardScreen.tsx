@@ -2090,7 +2090,7 @@ export function computeHolidayReleaseRestoration(params: {
     const location = cellByDesk.get(desk)
     // ★下段へ戻す授業には手入力の印（manualAdded）を付ける（regression-reviewer H-1・2026-10-25）: 下段の通常授業は印が無いと保留中の再保存（Q29）の
     //   候補から外れ、1 行に戻った後も Q21-8 の「印を持たない通常生徒を外す」で落ちる＝黙って消える。抑止キーを残したまま手で足し直した通常授業と同じ形
-    //   （2026-10-07 の「手動追加の通常授業はテンプレの出現ではない」）にそろえる。会計: 削除時の −1 は手動追加と同じく積まない（INV-05・オーナー確認事項・Q42-3）。
+    //   （2026-10-07 の「手動追加の通常授業はテンプレの出現ではない」）にそろえる。会計: 削除時の −1 は手動追加と同じく積まない（INV-05・Q42-3・オーナー了承 2026-10-25＝決定記録 49。専用の印に分ける案は不採用）。
     const lowerStudent: StudentEntry = { ...restoredStudent, manualAdded: true }
     const lowerPlacement = seatTaken && nextTemplatePendingDesks && location
       ? placeIntoPendingLower({
