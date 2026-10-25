@@ -118,6 +118,8 @@ export type ManagerSelfRestoreConfirmation = {
   notRestoredItems: readonly string[]
   notRestoredNote: string
   notes: string[]
+  /** 畳まずに出す 1 行(オーナー指示 2026-10-25)。戻らないもの・注意は「詳細」に畳む。 */
+  keyWarning: string
   confirmLabel: string
   cancelLabel: string
 }
@@ -144,6 +146,7 @@ export function buildManagerSelfRestoreConfirmation(input: ManagerSelfRestoreCon
       '読み込むと盤面に切り替わります。内容を確認して「保存」を押すと確定します(押すまでサーバーのデータは変わりません)。',
       '保存すると元に戻せません。保存前なら「直前の状態に戻す」で取り消せます。',
     ],
+    keyWarning: '「保存」すると元に戻せません（保存までは取り消せます）。',
     confirmLabel: 'この時点を読み込む',
     cancelLabel: 'やめる',
   }

@@ -132,5 +132,5 @@ export function buildStudentWithdrawSweepMessage(
     .filter((entry) => entry.removedSeatCount + entry.removedStatusCount > 0)
     .map((entry) => entry.displayName.trim() || '退塾した生徒')
   const subject = names.length === 1 ? names[0] : `退塾した生徒 ${names.length} 名(${names.join('・')})`
-  return `${subject} の今日以降のコマ ${removedSeatCount} 件・記録 ${removedStatusCount} 件を盤面から消しました(未消化へは戻していません)。保存してください。`
+  return `${subject} の今日以降のコマ ${removedSeatCount}件・記録 ${removedStatusCount}件を消しました(未消化へは戻していません)。保存してください。`
 }

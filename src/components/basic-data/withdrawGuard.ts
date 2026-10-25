@@ -93,6 +93,9 @@ export function preserveWithdrawnStudentRowsOnImport<T extends WithdrawTarget & 
 
 export type StudentWithdrawConfirmation = {
   title: string
+  /** 画面に出す 1 行(オーナー指示 2026-10-25「三行以上の長文を 1 行くらいに」)。「元に戻せません」は必ず含める。 */
+  summary: string
+  /** 詳細(畳んだ中身)。従来の案内文そのまま。 */
   message: string
   // 既に将来の退塾日が入っているときだけ非 null。
   overwriteNote: string | null
@@ -138,6 +141,7 @@ export function buildStudentWithdrawConfirmation(params: {
     : '（手で置いた講習・振替のコマは残ります）。'
   return {
     title: `${safeName} を退塾にします`,
+    summary: `本日（${today}）で退塾にします。★元に戻せません（データは「退塾生徒」に残ります）。`,
     message: `${base}${sweepNote}${irreversibleNote}`,
     overwriteNote,
     stockWarning,

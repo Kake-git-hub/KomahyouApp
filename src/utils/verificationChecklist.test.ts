@@ -96,6 +96,14 @@ describe('確認リストの項目定義', () => {
     }
   })
 
+  it('第74版(2026-10-25・v1.5.635 据え置き): 長文を 1〜2 行にした確認 tx-1 は開発用教室だけ(テスト教室はテンプレ関係だけ)', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tx-1')!
+    expect(item.introducedIn).toBe('v1.5.638')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('tx-1')
+    expect(item.check?.join('\n')).toContain('元に戻せません')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.635')
+  })
+
   it('第73版(2026-10-24・v1.5.635 据え置き): テンプレの文章を 1 行にした確認 tp-61 を足し、結果待ちの項目は理由を「詳細」で読む書き方へ', () => {
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     const item = byId.get('tp-61')!
@@ -116,7 +124,7 @@ describe('確認リストの項目定義', () => {
     expect(ids.filter((id) => id.startsWith('qa-'))).toEqual([])
     expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
-    for (const id of ids) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    for (const id of ids.filter((id) => id !== 'tx-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.635')
   })
@@ -129,7 +137,8 @@ describe('確認リストの項目定義', () => {
     // メモへの対応の確認 qa-ai-5〜qa-ai-7・tb-1 を先頭に足した。
     // 第72版(2026-10-24): OK の 12 件と AI 回答の 23 問を外し、テスト教室の結果待ちの 7 件だけが残る。
     // 第73版(2026-10-24): テンプレの文章を 1 行にした確認 tp-61 を先頭に足した(版は据え置き)。
-    expect(ids).toEqual(['tp-61', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第74版(2026-10-25): 長文を 1〜2 行にした確認 tx-1 を先頭に足した(開発用教室だけ・版は据え置き)。
+    expect(ids).toEqual(['tx-1', 'tp-61', 'tp-48', 'tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)

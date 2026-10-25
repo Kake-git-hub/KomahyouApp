@@ -62,7 +62,7 @@ export function buildTemplateDuplicateStudentsMessage(
 ): string {
   const parts = duplicates.map((entry) => `${resolveCellLabel(entry.cell)}: ${resolveDisplayName(entry.students[0].name)}(${entry.deskNumbers.map((number) => `机 ${number}`).join('・')})`)
   if (action === 'import') {
-    return `Excel を取り込めません。同じコマに同じ生徒が 2 か所に入っています(${parts.join(' / ')})。Excel で片方の席から外してから取り込み直してください。`
+    return `Excel を取り込めません。同じ生徒が 2 か所にいます(${parts.join(' / ')})。Excel を直してください。`
   }
-  return `同じコマに同じ生徒が 2 か所に入っているため保存できません(${parts.join(' / ')})。どちらかの席から外してください。`
+  return `保存できません。同じ生徒が 2 か所にいます(${parts.join(' / ')})。`
 }

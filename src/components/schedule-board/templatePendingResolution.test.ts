@@ -240,7 +240,7 @@ describe('バッジ件数（条件 27）と保留のある日の停止（条件 
 
   it('保留がある日は休日設定・全コマ削除・丸ごと振替の前に止める理由が出る。保留の無い日・保留が無い教室は null', () => {
     const { diff } = pendingWithMakeupLower()
-    expect(resolveTemplatePendingDateBlockReason(diff.nextPendingDesks, diff.nextWeeks, DATE, '休日設定')).toContain('先に保留を片づけてください')
+    expect(resolveTemplatePendingDateBlockReason(diff.nextPendingDesks, diff.nextWeeks, DATE, '休日設定')).toBe(`${DATE} に保留の机が 1 机あるため、休日設定は中止しました。`)
     expect(resolveTemplatePendingDateBlockReason(diff.nextPendingDesks, diff.nextWeeks, DATE, '休日設定')).toContain('1 机')
     expect(resolveTemplatePendingDateBlockReason(diff.nextPendingDesks, diff.nextWeeks, '2026-10-08', '休日設定')).toBeNull()
     expect(resolveTemplatePendingDateBlockReason({}, diff.nextWeeks, DATE, '休日設定')).toBeNull()
@@ -406,7 +406,7 @@ describe('下段の同日移動の通常授業を捨てたときの希望回数�
     if (result.status !== 'applied') throw new Error(result.message)
     expect(result.countAdjustedCount).toBe(1)
     expect(result.ledgers.scheduleCountAdjustments).toEqual(minusD)
-    expect(result.message).toContain('1件の希望回数を1減らしました')
+    expect(result.message).toContain('希望回数 −1')
   })
 
   it.each(['adopt-template', 'delete-lower-student'] as const)('%s: 同じ日の別の時限に D が生きていれば補正しない', (mode) => {
@@ -488,7 +488,7 @@ describe('既存を採用（条件 13・14・19）', () => {
     expect(result.ledgers.scheduleCountAdjustments).toEqual([])
   })
 
-  it('INV-12: 下段の生徒が同じコマの別の 1 行の机に生きていれば実行せず「先に上段側を片づけてください」（盤面・保留・台帳は不変）', () => {
+  it('INV-12: 下段の生徒が同じコマの別の 1 行の机に生きていれば実行せず「同じ生徒が 2 か所になります。先に上段を片づけてください」（盤面・保留・台帳は不変）', () => {
     const setup = pendingWithMakeupLower()
     const weeks = [mutateDesk(setup.diff.nextWeeks[0], 2, (desk) => ({ ...desk, lesson: { id: 'm_elsewhere', studentSlots: [entry('sM', { id: 'm-elsewhere', manualAdded: true }), null] } }))]
     const ledgers = emptyLedgers()
@@ -496,7 +496,7 @@ describe('既存を採用（条件 13・14・19）', () => {
     expect(result.status).toBe('blocked')
     if (result.status !== 'blocked') return
     expect(result.message).toContain('2 か所')
-    expect(result.message).toContain('先に上段側を片づけてください')
+    expect(result.message).toContain('同じ生徒が 2 か所になります。先に上段を片づけてください')
   })
 })
 
@@ -699,7 +699,7 @@ describe('席ごと: 生徒 2 の席だけ保留の机（上段 [A, C]・下段 
     expect(result.nextTemplatePendingDesks).toEqual({})
     expect(result.ledgers.suppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sC'), DATE, SLOT)])
     expect(result.ledgers.scheduleCountAdjustments).toEqual([{ studentKey: 'sC', subject: '数', countKind: 'regular', dateKey: DATE, delta: -1 }])
-    expect(result.message).toContain('テンプレ授業の 千葉 を取り下げました')
+    expect(result.message).toContain('千葉 を取り下げ')
     const after = balances(result.nextWeeks, setup.newRows, result.nextTemplatePendingDesks, result.ledgers)
     expect(after['sM__数'] ?? 0).toBe(before['sM__数'] ?? 0)
     const once = remergeWith(result.nextWeeks, setup.newRows, result.ledgers.suppressedRegularLessonOccurrences)
@@ -964,9 +964,9 @@ describe('席ごとの採用（Q26-10・2026-10-03）: 押した席の下段だ�
     expect(result.nextTemplatePendingDesks[setup.key]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sD'])
     expect(result.collapsed).toBe(false)
     expect(result.ledgers.suppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)])
-    expect(result.message).toContain('テンプレ授業の 青木 を取り下げました')
+    expect(result.message).toContain('青木 を取り下げ')
     expect(result.message).not.toContain('千葉')
-    expect(result.message).toContain('もう一方の席の手入力データは保留のままです')
+    expect(result.message).toContain('もう一方の席は保留のまま')
     // 在庫: M は机へ戻って消化のまま、D は下段のまま消化のまま（どちらも残数は変わらない）
     expect(balances(result.nextWeeks, setup.newRows, result.nextTemplatePendingDesks, result.ledgers)).toEqual(before)
     // 続けて生徒 2 も手入力データを採用 → C を取り下げて D を戻し、保留が消える [M, D]
@@ -986,7 +986,7 @@ describe('席ごとの採用（Q26-10・2026-10-03）: 押した席の下段だ�
     expect(result.nextTemplatePendingDesks[setup.key]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sD'])
     expect(result.collapsed).toBe(false)
     expect(result.returnedCount).toBe(1)
-    expect(result.message).toContain('手入力データ（下段）の 三浦 を外しました')
+    expect(result.message).toContain('三浦 を外す')
     expect(result.message).not.toContain('土屋')
     const after = balances(result.nextWeeks, setup.newRows, result.nextTemplatePendingDesks, result.ledgers)
     expect(after['sM__数']).toBe((before['sM__数'] ?? 0) + 1)

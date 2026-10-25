@@ -105,7 +105,7 @@ export function countTemplatePendingDesksOnDate(map: TemplatePendingDeskMap | nu
 export function resolveTemplatePendingDateBlockReason(map: TemplatePendingDeskMap | null | undefined, weeks: readonly SlotCell[][], dateKey: string, actionLabel: string) {
   const count = countTemplatePendingDesksOnDate(map, weeks, dateKey)
   if (count === 0) return null
-  return `${dateKey} には保留（2 行・緑）の机が ${count} 机あります。先に保留を片づけてください（${actionLabel}は実行しませんでした）。`
+  return `${dateKey} に保留の机が ${count} 机あるため、${actionLabel}は中止しました。`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,10 +128,10 @@ export function resolveTemplatePendingStudentMenuActions(row: 'upper' | 'lower',
 }
 
 export const TEMPLATE_PENDING_MESSAGES = {
-  teacherLocked: '保留（2 行・緑）の机では講師を変更できません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
-  landingBlocked: '保留（2 行・緑）の席へは生徒を移動・配置できません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
-  attendBlocked: '保留（2 行・緑）の席では出席を付けられません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
-  lowerMoveNeedsEmptySeat: '保留の下段の生徒は、空いている席へだけ移動できます（入れ替えはできません）。',
+  teacherLocked: '保留の机は講師を変えられません。先に保留を片づけてください。',
+  landingBlocked: '保留の席へは移動・配置できません。先に保留を片づけてください。',
+  attendBlocked: '保留の席は出席を付けられません。先に保留を片づけてください。',
+  lowerMoveNeedsEmptySeat: '下段の生徒は空いている席へだけ移動できます。',
   closedCell: '休校のコマへは移動できません。',
 } as const
 
@@ -301,13 +301,13 @@ export function describeTemplatePendingCollapseFailure(reason: Extract<TemplateP
   switch (reason) {
     case 'status-overflow':
     case 'memo-overflow':
-      return '出欠記録・メモの席（2 つ）が足りないため 1 行に戻せません。先に下段を片づけてください。'
+      return '出欠・メモの席が足りません。先に下段を片づけてください。'
     case 'duplicate-student':
-      return '同じコマに同じ生徒が 2 か所で生きることになるため 1 行に戻せません。先に上段側を片づけてください。'
+      return '同じ生徒が 2 か所になります。先に上段を片づけてください。'
     case 'both-rows-live':
-      return '下段の生徒を戻す席（元の席）が空いていないため 1 行に戻せません。上段の生徒を削除・移動するか、「テンプレを採用」で片づけてください。'
+      return '元の席が空いていません。上段の生徒を動かすか「テンプレを採用」を選んでください。'
     case 'teacher-duplicate':
-      return '下段の手で置いた講師が同じコマの別の机に居るため 1 行に戻せません。先にそちらの机を片づけるか、「テンプレを採用」で片づけてください。'
+      return '手で置いた講師が同じコマの別の机に居ます。先にそちらを片づけてください。'
   }
 }
 

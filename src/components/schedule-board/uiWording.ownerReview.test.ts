@@ -40,9 +40,9 @@ describe('盤面: 案内文・確認ダイアログの言い回し', () => {
   })
   it('休日設定・丸ごと振替・授業削除・未消化削除の確認は全角「？」', () => {
     expect(BOARD).toContain('よろしいですか？`)')
-    expect(BOARD).toContain("lines.push('よろしいですか？')")
-    expect(BOARD).toContain('を休日に設定します。\\nこの日に入っている授業はすべてストックへ移行します。\\nよろしいですか？')
-    expect(BOARD).toContain('のこの授業を削除します。\\n${confirmBody}\\nよろしいですか？')
+    expect(BOARD).toContain('${existing}よろしいですか？`')
+    expect(BOARD).toContain('を休日にします（授業はすべてストックへ）。よろしいですか？')
+    expect(BOARD).toContain('のこの授業を削除します（${confirmBody}）。よろしいですか？')
     expect(BOARD).toContain('を削除します。よろしいですか？`)')
     expect(BOARD).not.toContain('の未消化講習 ${item.subject}${sessionLabel} を削除します。よろしいですか。')
     expect(BOARD).not.toContain('の未消化振替 ${item.subject} (${item.label}) を削除します。よろしいですか。')
@@ -111,5 +111,40 @@ describe('テンプレの流れは 1 行（オーナー指示 2026-10-24「モ�
     expect(BOARD).not.toContain('の席のメニューを開きました。')
     expect(BOARD).not.toContain('手入力・メモ・振替・講習を含むすべてのデータが消去され')
     expect(BOARD).not.toContain('通常授業テンプレートを上書き保存しました。')
+  })
+})
+
+describe('三行以上の長文を 1〜2 行に（オーナー指示 2026-10-25）', () => {
+  const read2 = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+  const APP = read2('../../App.tsx')
+  const BASIC = read2('../basic-data/BasicDataScreen.tsx')
+  const RESTORE = read2('../backup-restore/BackupRestoreScreen.tsx')
+  it('盤面の結果は 1 行の組み立て関数へ（旧来の長文が戻っていない）', () => {
+    expect(BOARD).toContain('setStatusMessage(buildAutoAssignResultMessage({')
+    expect(BOARD).toContain('setStatusMessage(buildHolidayReleaseResultMessage({')
+    expect(BOARD).toContain('setStatusMessage(buildWholeDayTransferResultMessage({')
+    expect(BOARD).not.toContain('候補不足でストックに残しています')
+    expect(BOARD).not.toContain('の休日設定を解除しました。通常営業に戻しました。')
+    expect(BOARD).not.toContain('移動先の空いている席を左クリックしてください（入れ替え・2 行の机への移動はできません）')
+    expect(BOARD).not.toContain('・生徒ごと席を入れ替える（講師と生徒のペアはそのまま、席番号を交換）')
+  })
+  it('確認ダイアログは 1〜2 行（全コマ削除・休日の解除・出席不可）', () => {
+    expect(BOARD).toContain('の全コマの生徒を削除します（講師は残す・振替/講習は未消化へ・通常/体験/増コマは回数 −1）。\\nよろしいですか？')
+    expect(BOARD).not.toContain('\\n講師はそのまま残ります。\\n振替・講習は未消化ストックへ戻します。')
+    expect(BOARD).toContain('if (!window.confirm(confirmText))')
+    expect(BOARD).toContain('（不可には戻せません）')
+  })
+  it('保存失敗・別の端末で更新は 2 行（手順の箇条書きは無い）', () => {
+    expect(APP).not.toContain('お手数ですが、次の手順でご対応ください。')
+    expect(APP).not.toContain('  1. インターネット接続を確認する')
+    expect(APP).toContain('保存に失敗しました。接続を確認して、もう一度「保存」してください。')
+  })
+  it('退塾・自教室復元のモーダルは 1 行＋「詳細」。「元に戻せません」は畳まない', () => {
+    expect(BASIC).toContain('{confirmation.summary}</p>')
+    expect(BASIC).toContain('data-testid="basic-data-withdraw-detail"')
+    expect(RESTORE).toContain('{managerSelfRestoreConfirmation.keyWarning}</p>')
+    expect(RESTORE.indexOf('managerSelfRestoreConfirmation.keyWarning')).toBeLessThan(RESTORE.indexOf('data-testid="backup-restore-self-restore-detail"'))
+    // 取り違え防止の規模の行は畳まない（2026-06-06 上書き事故の再発防止）
+    expect(RESTORE.indexOf('managerSelfRestoreConfirmation.scaleLine')).toBeLessThan(RESTORE.indexOf('data-testid="backup-restore-self-restore-detail"'))
   })
 })

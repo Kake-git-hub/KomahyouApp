@@ -209,21 +209,26 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <div className="auto-assign-modal self-restore-confirm-modal" role="alertdialog" aria-modal="true" aria-label={managerSelfRestoreConfirmation.title} data-testid="backup-restore-self-restore-modal">
             <div className="self-restore-confirm-title">{managerSelfRestoreConfirmation.title}</div>
             <p className="self-restore-confirm-headline">⚠️ {managerSelfRestoreConfirmation.headline}</p>
+            {/* 規模の行（取り違え防止）と「元に戻せません」だけ畳まずに出す。戻らないもの・注意は「詳細」へ（オーナー指示 2026-10-25）。 */}
             <div className="self-restore-confirm-scale">
-              {managerSelfRestoreConfirmation.sourceSavedAtLine ? <p>{managerSelfRestoreConfirmation.sourceSavedAtLine}</p> : null}
               <p>{managerSelfRestoreConfirmation.scaleLine}</p>
               <p className="self-restore-confirm-scale-hint">{managerSelfRestoreConfirmation.scaleHint}</p>
             </div>
-            <div className="self-restore-confirm-not-restored" data-testid="backup-restore-self-restore-not-restored">
-              <strong>{managerSelfRestoreConfirmation.notRestoredTitle}</strong>
-              <ul>
-                {managerSelfRestoreConfirmation.notRestoredItems.map((item) => <li key={item}>{item}</li>)}
+            <p className="self-restore-confirm-headline" data-testid="backup-restore-self-restore-key-warning">{managerSelfRestoreConfirmation.keyWarning}</p>
+            <details data-testid="backup-restore-self-restore-detail">
+              <summary style={{ cursor: 'pointer' }}>詳細</summary>
+              {managerSelfRestoreConfirmation.sourceSavedAtLine ? <p>{managerSelfRestoreConfirmation.sourceSavedAtLine}</p> : null}
+              <div className="self-restore-confirm-not-restored" data-testid="backup-restore-self-restore-not-restored">
+                <strong>{managerSelfRestoreConfirmation.notRestoredTitle}</strong>
+                <ul>
+                  {managerSelfRestoreConfirmation.notRestoredItems.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+                <p>{managerSelfRestoreConfirmation.notRestoredNote}</p>
+              </div>
+              <ul className="self-restore-confirm-notes">
+                {managerSelfRestoreConfirmation.notes.map((note) => <li key={note}>{note}</li>)}
               </ul>
-              <p>{managerSelfRestoreConfirmation.notRestoredNote}</p>
-            </div>
-            <ul className="self-restore-confirm-notes">
-              {managerSelfRestoreConfirmation.notes.map((note) => <li key={note}>{note}</li>)}
-            </ul>
+            </details>
             <div className="auto-assign-modal-actions self-restore-confirm-actions">
               <button className="secondary-button" type="button" onClick={() => onCancelOwnClassroomRestore?.()} data-testid="backup-restore-self-restore-cancel-button">{managerSelfRestoreConfirmation.cancelLabel}</button>
               <button className="primary-button self-restore-confirm-button" type="button" onClick={() => onConfirmOwnClassroomRestore?.()} data-testid="backup-restore-self-restore-confirm-button">{managerSelfRestoreConfirmation.confirmLabel}</button>
@@ -336,7 +341,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               <section className="basic-data-section-card" data-testid="backup-restore-development-load-panel">
                 <div className="basic-data-card-head">
                   <h3>他教室のバックアップをこの教室に読み込む</h3>
-                  <p>選んだ教室の「選んだバックアップ時点」のデータを、いま開いているこの検証用教室(開発用教室・テスト教室)へ読み込みます。読み込みはこの教室だけに書き込まれ、読み込み元の教室には一切影響しません(データ混入防止)。共有用トークンは自動で外します(コピー元のQRで本番へ誤送信しないため)。読み込み後は「保存」してください。</p>
+                  <p>選んだ時点のデータをこの検証用教室だけに読み込みます（読み込み元は変わりません）。読み込み後は「保存」してください。</p>
                 </div>
                 <div className="basic-data-form-grid">
                   <button
