@@ -50,7 +50,7 @@ export function ParentContactHistoryModal({ rows, onOpenUnconfirmed, onClose }: 
       >
         <div className="submission-acknowledgement-kicker">保護者連絡(QRからの休み連絡の履歴)</div>
         <p className="parent-message-lead">
-          新しい連絡が上です。確認済は直近{PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT}件まで表示します。未確認の行を押すと、休み連絡の処理を選べます。
+          新しい順（確認済は直近{PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT}件）。未確認の行を押すと処理を選べます。
         </p>
         {rows.length === 0 ? (
           <p className="parent-contact-history-empty" data-testid="parent-contact-history-empty">休み連絡はまだありません。</p>

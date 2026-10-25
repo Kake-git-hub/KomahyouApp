@@ -105,6 +105,8 @@ describe('buildStudentWithdrawConfirmation', () => {
   it('今日の日付と「データは削除されず残る」ことを伝える(掃除フラグ ON の教室)', () => {
     const confirmation = buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: true })
     expect(confirmation.title).toBe('生徒A を退塾にします')
+    // 2026-10-25 1 行化（オーナー指示）: 畳まずに出す 1 行に日付と「元に戻せません」を必ず含める。案内の全文は message（「詳細」）に残る。
+    expect(confirmation.summary).toBe(`本日（${TODAY}）で退塾にします。★元に戻せません（データは「退塾生徒」に残ります）。`)
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
     // 2026-09-20 夜 改定: 一覧の呼び名は「退塾生徒」(旧「非在籍生徒表示」へ戻さない)。

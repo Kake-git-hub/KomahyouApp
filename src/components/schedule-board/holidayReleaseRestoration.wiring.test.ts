@@ -53,9 +53,10 @@ describe('休日解除の配線(席の復元・在庫巻き戻し)', () => {
 
   it('実行前に件数を確認し、キャンセルなら何も変えない', () => {
     const branch = holidayReleaseBranch()
-    expect(branch).toContain('人を元の席へ戻します。')
-    expect(branch).toContain('別日に組んだコマ')
-    const confirmIndex = branch.indexOf('if (!window.confirm(confirmLines.join')
+    // 2026-10-25 2 行化（オーナー指示）: 件数（元の席へ n人・別日のコマ・戻せない人数）は確認に残す。
+    expect(branch).toContain('`元の席へ ${restoration.restoredStudentNames.length}人`')
+    expect(branch).toContain('`別日のコマ ${removedLabel} を削除`')
+    const confirmIndex = branch.indexOf('if (!window.confirm(confirmText))')
     expect(confirmIndex).toBeGreaterThan(0)
     expect(branch.slice(confirmIndex, confirmIndex + 200)).toContain("setStatusMessage('休日設定の解除をキャンセルしました。')")
     // キャンセルは commitWeeks より前に return する。

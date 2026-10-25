@@ -75,17 +75,10 @@ const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
 
 // 保存失敗時の作業指示(spec-save-restore.md §2)。自動リトライに頼らず、
 // 自動ダウンロードしたバックアップを使って再ログイン後に復元する手順を明示する。
+// 2 行（オーナー指示 2026-10-25「三行以上の長文を 1 行くらいに」）。何が起きたか＋すること、と復旧の道筋だけ。
 const SAVE_FAILURE_GUIDANCE_MESSAGE = [
-  '保存に失敗しました。',
-  '',
-  'まず、インターネットに接続されているかご確認ください。',
-  '通信が不安定な場合は、接続が回復してからもう一度「保存」をお試しください。',
-  '',
-  '念のためバックアップを自動でダウンロードしました。',
-  '接続が回復しても保存できない場合は、次の手順で復元してください。',
-  '  1. インターネット接続を確認する',
-  '  2. 一度ログアウトし、再ログインする',
-  '  3. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
+  '保存に失敗しました。接続を確認して、もう一度「保存」してください。',
+  'バックアップをダウンロード済みです（直らないときは再ログイン →「バックアップを読み込む」）。',
 ].join('\n')
 
 // C1: 遅延読み込み画面のロード中に出す軽量フォールバック。
@@ -109,16 +102,10 @@ function isStaleSnapshotConflictError(error: unknown) {
   return message.includes(STALE_SNAPSHOT_ERROR_MARKER)
 }
 
+// 2 行（オーナー指示 2026-10-25）。保存を止めたこと・書き出し済み・再読み込み、と同時に開かない注意だけ。
 const STALE_SNAPSHOT_GUIDANCE_MESSAGE = [
-  '別の端末でこの教室のデータが更新されました。',
-  '',
-  'このタブの変更は、最新データを上書きしないようクラウド保存を止めています。',
-  'お手数ですが、次の手順でご対応ください。',
-  '  1. このタブの内容をバックアップに書き出しました（ダウンロードフォルダ）',
-  '  2. 画面を再読み込みして、最新のデータを取得してください',
-  '  3. 必要な変更が最新データに無ければ、再度入力して保存してください',
-  '',
-  '※ コマ表は「1教室=1端末」での編集を前提にしています。複数の端末・タブで同時に開かないでください。',
+  '別の端末・タブでこの教室が更新されたため、保存を止めました（このタブの内容はダウンロード済み）。',
+  '画面を再読み込みしてください。同じ教室を 2 か所で開かないでください。',
 ].join('\n')
 
 function createRemoteSaveId(savedAt: string, classroomId: string) {
@@ -1932,8 +1919,7 @@ function AuthenticatedApp() {
     const staleConflictBanner = hasRemoteStaleConflict ? (
       <div className="remote-stale-conflict-banner" role="alert" data-testid="remote-stale-conflict-banner">
         <span className="remote-stale-conflict-banner-text">
-          別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しています。
-          このタブの内容はバックアップに書き出し済みです。最新データを取得するため、画面を再読み込みしてください。
+          別の端末で更新されたため保存を止めました（内容はダウンロード済み）。再読み込みしてください。
         </span>
         <button
           type="button"
@@ -2522,8 +2508,8 @@ function AuthenticatedApp() {
           remoteStaleConflictRef.current = true
           setHasRemoteStaleConflict(true)
           setPersistenceMessage(downloadedStaleBackup
-            ? '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。このタブの内容をバックアップに書き出したので、画面を再読み込みしてください。'
-            : '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。画面を再読み込みしてください。')
+            ? '別の端末で更新されたため保存を止めました（内容はダウンロード済み）。再読み込みしてください。'
+            : '別の端末で更新されたため保存を止めました。再読み込みしてください。')
           // 初回だけダイアログで手順を明示する(連続編集での多重ダイアログを防ぐ)。
           if (!alreadyFlagged) {
             window.alert(STALE_SNAPSHOT_GUIDANCE_MESSAGE)
@@ -5314,9 +5300,7 @@ function AuthenticatedApp() {
         }
       }
       const confirmed = window.confirm([
-        'バックアップを復元します。',
-        `保存日時: ${new Date(snapshot.savedAt).toLocaleString('ja-JP')}`,
-        '現在のデータはこの内容で上書きされます。',
+        `${new Date(snapshot.savedAt).toLocaleString('ja-JP')} のバックアップで、今のデータを上書きします。`,
         '復元してよろしいですか？',
       ].join('\n'))
       if (!confirmed) {
@@ -5479,19 +5463,18 @@ function AuthenticatedApp() {
       // 自教室復元(prepareOwnClassroomRestore)と同じ守り: 応答が要求した教室のものでない／取得中に
       // 開いている教室が変わった → 読み込まない(同じ callable の 2 経路で守りを非対称にしない)。
       if (!isRestoreSourceForClassroom(source.classroomId, sourceClassroomId) || actingClassroomIdRef.current !== loadTargetClassroomId) {
-        setPersistenceMessage('取得したバックアップが選んだ教室のものではない、または取得中に教室が切り替わったため、読み込みを中止しました。')
+        setPersistenceMessage('教室が一致しないため、読み込みを中止しました。')
         return
       }
       const sourceStudentCount = source.data?.students?.length ?? 0
       const sourceTeacherCount = source.data?.teachers?.length ?? 0
       const sourceTemplateCells = source.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0
       const backupLabel = developmentBackupSources.backups.find((backup) => backup.backupDateKey === backupDateKey)?.displayLabel ?? backupDateKey
+      // 取り違え防止の規模の行は残す（2026-06-06 の上書き事故の再発防止）。それ以外は 1 行に（オーナー指示 2026-10-25）。
       const confirmed = window.confirm([
-        `「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータをこの教室へ読み込みます。`,
-        `読み込み元の規模: 生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ`,
-        'この人数・コマ数が想定と違う場合は、教室や時点の取り違えの可能性があるので中止してください。',
-        '共有用トークン類は自動で外します(コピー元のQRで他教室へ誤送信しないため)。',
-        '現在のこの教室のデータは上書きされます。続行しますか?',
+        `「${source.classroomName || sourceClassroomId}」(${backupLabel})で、この教室のデータを上書きします。`,
+        `生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ — 想定と違えば中止してください。`,
+        '続行しますか？',
       ].join('\n'))
       if (!confirmed) {
         setPersistenceMessage('バックアップの読み込みをキャンセルしました。')
@@ -5663,7 +5646,7 @@ function AuthenticatedApp() {
       setBoardMountKey,
     })
     loadedEditingClassroomIdRef.current = restoreClassroomId
-    setPersistenceMessage(`${pending.backupLabel} の状態を読み込みました。内容を確認して「保存」で確定してください(保存前なら「直前の状態に戻す」で取り消せます)。`)
+    setPersistenceMessage(`${pending.backupLabel} の状態を読み込みました。確認して「保存」で確定してください。`)
   }, [actingClassroomIdRef, currentUser, isRemoteBackendEnabled, managerSelfRestoreEnabled, managerSelfRestorePending, saveUndoSnapshot, screenRef, setWorkspaceClassrooms])
 
   const exportBasicDataTemplate = useCallback(async () => {
@@ -5681,8 +5664,7 @@ function AuthenticatedApp() {
   const importInitialBasicDataWorkbook = useCallback(async (file: File) => {
     try {
       if (hasAnyExistingSetupData() && !window.confirm([
-        '基本データを初期取り込みします。',
-        '現在の基本データ、自動割振ルール、盤面、開始時点ストックは初期化されます。',
+        '基本データを初期取り込みします（今の基本データ・ルール・盤面・開始時点ストックは初期化）。',
         '続行しますか？',
       ].join('\n'))) {
         setPersistenceMessage('基本データの初期取り込みをキャンセルしました。')
@@ -5709,9 +5691,7 @@ function AuthenticatedApp() {
       const validationErrors = validateImportedBasicDataBundle(initialImportedBundle)
       if (validationErrors.length > 0) {
         window.alert([
-          '基本データの取り込みを中断しました。',
-          '以下の矛盾をすべて修正してから再取り込みしてください。',
-          '',
+          '取り込みを中断しました。次の矛盾を直してから取り込み直してください。',
           ...validationErrors.map((message, index) => `${index + 1}. ${message}`),
         ].join('\n'))
         setPersistenceMessage('基本データに矛盾が見つかったため、取り込みを中断しました。')
@@ -5758,9 +5738,7 @@ function AuthenticatedApp() {
       const validationErrors = validateImportedBasicDataBundle(merged)
       if (validationErrors.length > 0) {
         window.alert([
-          '基本データの取り込みを中断しました。',
-          '以下の矛盾をすべて修正してから再取り込みしてください。',
-          '',
+          '取り込みを中断しました。次の矛盾を直してから取り込み直してください。',
           ...validationErrors.map((message, index) => `${index + 1}. ${message}`),
         ].join('\n'))
         setPersistenceMessage('基本データに矛盾が見つかったため、取り込みを中断しました。')

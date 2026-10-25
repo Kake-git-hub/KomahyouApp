@@ -67,9 +67,7 @@ export function BoardPrintSelectionModal({ grid, weekLabel, isPrinting, storageK
         <div className="auto-assign-modal-title">PDF出力するコマを選ぶ</div>
         {weekLabel ? <div className="student-menu-meta">{weekLabel}</div> : null}
         <div className="student-menu-help-text">
-          全選択なら、これまでどおり 1 週間まるごと出力します。チェックを外したコマは空白になり、
-          曜日・時限をまるごと外すとその列・行ごと詰めて A3 縦いっぱいに拡大されます。
-          出力した選択は、この教室の次回のデフォルトとして端末に記憶されます。
+          外したコマは空白、曜日・時限ごと外すと詰めて拡大します（選択は次回も使います）。
         </div>
 
         <div className="board-print-selection-actions">

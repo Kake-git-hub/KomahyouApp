@@ -1704,11 +1704,15 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
           <div className="auto-assign-modal-overlay" role="presentation">
             <div className="auto-assign-modal basic-data-delete-modal" role="dialog" aria-modal="true" aria-label={confirmation.title}>
               <div className="auto-assign-modal-title">{confirmation.title}</div>
-              <p className="basic-data-delete-hint">{confirmation.message}</p>
+              <p className="basic-data-delete-warning" data-testid="basic-data-withdraw-summary">{confirmation.summary}</p>
               {confirmation.overwriteNote ? <p className="basic-data-delete-warning">{confirmation.overwriteNote}</p> : null}
               {confirmation.stockWarning ? (
                 <p className="basic-data-delete-stock-warning" data-testid="basic-data-withdraw-stock-warning">{confirmation.stockWarning}</p>
               ) : null}
+              <details className="basic-data-delete-hint" data-testid="basic-data-withdraw-detail">
+                <summary style={{ cursor: 'pointer' }}>詳細</summary>
+                {confirmation.message}
+              </details>
               <div className="auto-assign-modal-actions">
                 <button className="secondary-button" type="button" onClick={cancelStudentWithdraw}>キャンセル</button>
                 <button className="primary-button" type="button" onClick={confirmStudentWithdraw} data-testid="basic-data-withdraw-confirm-button">退塾にする</button>

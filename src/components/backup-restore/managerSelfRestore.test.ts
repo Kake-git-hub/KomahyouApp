@@ -149,6 +149,8 @@ describe('室長の自教室復元: 確認モーダルの中身(spec-save-restor
     expect(notes).toContain('保存していない編集は失われます')
     expect(notes).toContain('「保存」を押すと確定')
     expect(notes).toContain('元に戻せません')
+    // 2026-10-25（オーナー指示）: 戻らないもの・注意は「詳細」に畳み、「元に戻せません」は畳まずに出す。
+    expect(confirmation.keyWarning).toContain('元に戻せません')
   })
 
   it('パスワードを求める文言が無い(確認モーダル方式へ変更)', () => {

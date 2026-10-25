@@ -237,14 +237,14 @@ describe('退塾スイープの開始日と検出(collectStudentWithdrawSweepTar
   it('結果メッセージは合計件数と名前を出す(1 人・複数人)。0 件なら空文字(=何も知らせない)', () => {
     expect(buildStudentWithdrawSweepMessage([{ displayName: '退塾', removedSeatCount: 0, removedStatusCount: 0 }])).toBe('')
     const single = buildStudentWithdrawSweepMessage([{ displayName: '退塾', removedSeatCount: 2, removedStatusCount: 1 }])
-    expect(single).toContain('退塾 の今日以降のコマ 2 件・記録 1 件')
+    expect(single).toContain('退塾 の今日以降のコマ 2件・記録 1件')
     expect(single).toContain('未消化へは戻していません')
     const many = buildStudentWithdrawSweepMessage([
       { displayName: '退塾', removedSeatCount: 1, removedStatusCount: 0 },
       { displayName: '在籍', removedSeatCount: 2, removedStatusCount: 3 },
     ])
     expect(many).toContain('退塾した生徒 2 名(退塾・在籍)')
-    expect(many).toContain('コマ 3 件・記録 3 件')
+    expect(many).toContain('コマ 3件・記録 3件')
   })
 })
 

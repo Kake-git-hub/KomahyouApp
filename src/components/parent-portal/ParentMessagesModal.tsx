@@ -41,7 +41,7 @@ export function ParentMessagesModal({ notifications, collapsed, busyId, errors, 
         <div className="submission-acknowledgement-kicker">
           保護者からの休み連絡{notifications.length > 1 ? `（${notifications.length}件）` : ''}
         </div>
-        <p className="parent-message-lead">コマごとに処理を選んでください。選ぶと保護者のページに「教室確認済」と表示されます。</p>
+        <p className="parent-message-lead">コマごとに処理を選んでください（保護者のページに「教室確認済」と出ます）。</p>
         <ul className="submission-acknowledgement-list">
           {notifications.map((entry) => {
             const isBusy = busyId === entry.id
@@ -82,7 +82,7 @@ export function ParentMessagesModal({ notifications, collapsed, busyId, errors, 
           })}
         </ul>
         <div className="submission-acknowledgement-actions parent-message-actions">
-          <span className="parent-message-actions-hint">休み・振無休・振替先は盤面を保存した時点で処理済みになります(保存前に閉じると次回もう一度表示されます)。</span>
+          <span className="parent-message-actions-hint">盤面を保存すると処理済みになります。</span>
           <button type="button" className="secondary-button" onClick={onCollapse} disabled={busyId !== null} data-testid="parent-messages-collapse">
             あとで(盤面を見る)
           </button>

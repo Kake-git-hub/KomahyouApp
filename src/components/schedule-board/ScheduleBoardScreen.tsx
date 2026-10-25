@@ -37,6 +37,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
+import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
 import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
@@ -485,8 +486,9 @@ export function buildReopenConfirmMessage(targets: Array<Pick<ReopenTargetWithLa
     const [, month, day] = dateKey.split('-')
     return `${Number(month)}/${Number(day)} ${slotNumber}限`
   }
-  const lines = targets.map((target) => `・${target.displayName}: ${formatSlotLabel(target.dateKey, target.slotNumber)}`)
-  return `出席不可と提出されたコマへの配置です。\n${lines.join('\n')}\nこのコマを「出席可能(黄色)」に変更して配置しますか？\n※変更すると日程表・QR画面で黄色表示になり、自動割振の対象にもなります。元(不可)へ戻すことはできません。`
+  const labels = targets.map((target) => `${target.displayName}: ${formatSlotLabel(target.dateKey, target.slotNumber)}`)
+  // 2 行（オーナー指示 2026-10-25）。戻せない注意だけは残す。
+  return `出席不可で提出されたコマへの配置です（${labels.join('、')}）。\nこのコマを「出席可能(黄色)」に変えて配置しますか？（不可には戻せません）`
 }
 
 // 移動/入れ替えの着地コマを列挙する(移動生徒→移動先、入れ替え相手→移動元)。
@@ -6517,7 +6519,8 @@ export function computePendingDeskResolution(params: {
     const { nextEntry, removed } = cleared
     const disposal = disposeTemplatePendingLowerStudents({ ...params, students: removed, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber })
     const names = templatePendingStudentNames(removed, params.resolveDisplayName)
-    const describe = (collapsedLabel: string, countAdjustment: { count: number }) => `テンプレ授業を採用しました。${names ? `手入力データ（下段）の ${names} を外しました。` : ''}${disposal.returnedCount > 0 ? `うち${disposal.returnedCount}件を未消化ストックへ戻しました。` : ''}${countAdjustment.count > 0 ? `${countAdjustment.count}件の希望回数を1減らしました。` : ''}${collapsedLabel}`
+    // 上の帯は 1 行（オーナー指示 2026-10-25）: 外した生徒と件数だけを括弧にまとめる。
+    const describe = (collapsedLabel: string, countAdjustment: { count: number }) => `テンプレ授業を採用しました${joinResultNotes([names ? `${names} を外す` : '', disposal.returnedCount > 0 ? `未消化へ ${disposal.returnedCount}件` : '', countAdjustment.count > 0 ? `希望回数 −${countAdjustment.count}` : ''])}。${collapsedLabel}`
     if (liveTemplatePendingStudents(nextEntry.lower.lesson).length > 0) {
       // もう一方の席の下段に生きている生徒が残る → 2 行のまま（押した席だけ片づいた）。残りの席は Q28 で戻れるなら戻す。
       const updatedMap = { ...params.templatePendingDesks, [key]: nextEntry }
@@ -6532,7 +6535,7 @@ export function computePendingDeskResolution(params: {
         collapsed: settled.status === 'collapsed',
         returnedCount: disposal.returnedCount,
         countAdjustedCount: countAdjustment.count,
-        message: describe(settled.status === 'collapsed' ? '1 行に戻しました。' : 'もう一方の席の手入力データは保留のままです。', countAdjustment),
+        message: describe(settled.status === 'collapsed' ? '' : 'もう一方の席は保留のまま。', countAdjustment),
       }
     }
     const collapse = computePendingDeskCollapse(desk, nextEntry, { liveStudentsElsewhere })
@@ -6566,7 +6569,7 @@ export function computePendingDeskResolution(params: {
     // 講師の一意性（INV-01 の兄弟）: 戻す手置き講師が同じコマの別の机に居るなら止める（同じ講師 2 机を作らない）。判定は 1 行に戻る経路と同じ isTeacherElsewhereInCell。
     const restoringTeacher = entry.lower.teacher && collapse.nextDesk.teacher.trim() === entry.lower.teacher.teacher.trim() && collapse.nextDesk.teacher.trim() !== desk.teacher.trim() ? entry.lower.teacher.teacher.trim() : ''
     if (restoringTeacher && entry.lower.teacher && isTeacherElsewhereInCell(cell, desk.id, entry.lower.teacher)) {
-      return { status: 'blocked', message: `既存を採用できません。手で置いた講師 ${restoringTeacher} が同じコマの別の机に居ます。先にそちらを片づけてください。` }
+      return { status: 'blocked', message: `既存を採用できません。講師 ${restoringTeacher} が同じコマの別の机に居ます。` }
     }
     // Q26-4・INV-12: 下段を机へ戻した結果、同じコマに同じ生徒が 2 か所で生きるなら止める（既存の findDuplicateStudentInCellByKey と同じ検査）。
     const surfacedCell: SlotCell = { ...cell, desks: cell.desks.map((current) => (current.id === desk.id ? collapse.nextDesk : current)) }
@@ -6621,7 +6624,7 @@ export function computePendingDeskResolution(params: {
       collapsed: !stillPending,
       returnedCount: 0,
       countAdjustedCount: countTargets.length,
-      message: `手入力データを採用しました。${restoringTeacher ? `机の講師を ${restoringTeacher} に戻しました。` : ''}${withdrawnNames ? `テンプレ授業の ${withdrawnNames} を取り下げました。` : ''}${countTargets.length > 0 ? `${countTargets.length}件の希望回数を1減らしました。` : ''}${stillPending ? 'もう一方の席の手入力データは保留のままです。' : ''}`,
+      message: `手入力データを採用しました${joinResultNotes([restoringTeacher ? `講師を ${restoringTeacher} に戻す` : '', withdrawnNames ? `${withdrawnNames} を取り下げ` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${stillPending ? 'もう一方の席は保留のまま。' : ''}`,
     }
   }
 
@@ -6646,9 +6649,8 @@ export function computePendingDeskResolution(params: {
   // 同日移動の通常授業を下段から削除したときだけ Q26-1 と同じ判定で希望回数 −1（N-2）。
   const countAdjustment = applyDiscardedLowerSameDayMoveCountAdjustments(disposal.ledgers.scheduleCountAdjustments, removedStudents, cell.dateKey, nextWeeks)
   const ledgers = { ...disposal.ledgers, scheduleCountAdjustments: countAdjustment.scheduleCountAdjustments }
-  const countLabel = countAdjustment.count > 0 ? `${countAdjustment.count}件の希望回数を1減らしました。` : ''
   const removedLabel = params.mode === 'delete-lower-student'
-    ? `下段の ${templatePendingStudentNames(removedStudents, params.resolveDisplayName)} を削除しました。${disposal.returnedCount > 0 ? '未消化ストックへ戻しました。' : ''}${countLabel}`
+    ? `下段の ${templatePendingStudentNames(removedStudents, params.resolveDisplayName)} を削除しました${joinResultNotes([disposal.returnedCount > 0 ? '未消化へ戻す' : '', countAdjustment.count > 0 ? `希望回数 −${countAdjustment.count}` : ''])}。`
     : '下段のメモを削除しました。'
   if (settled.status === 'collapsed') {
     return {
@@ -6745,7 +6747,7 @@ export function computePendingLowerStudentMove(params: {
     if (upperDesk.lesson?.studentSlots[params.studentIndex]) return { status: 'blocked', message: TEMPLATE_PENDING_MESSAGES.lowerMoveNeedsEmptySeat }
     // テンプレの管理授業に同居させると再マージで落ちる生徒（別日移動の通常授業）は置かない（Q34-3 と同じ条件）。
     if (upperDesk.lesson && isTemplateManagedLesson(upperDesk.lesson) && !shouldSeatSurviveRemerge(lowerStudent, sourceLocation.cell.dateKey)) {
-      return { status: 'blocked', message: 'この手入力データ（別日から移した通常授業）はテンプレ授業の机には同居できません。「手入力データを採用」で片づけてください。' }
+      return { status: 'blocked', message: '別日から移した通常授業はテンプレの机に置けません。「手入力データを採用」を選んでください。' }
     }
     const slots = [...(upperDesk.lesson?.studentSlots ?? [null, null])] as [StudentEntry | null, StudentEntry | null]
     slots[params.studentIndex] = { ...lowerStudent }
@@ -7127,17 +7129,12 @@ export function buildWholeDayTransferConfirmMessage(sourceDateKey: string, targe
     { label: '振替', count: summary.returnedMakeupCount },
   ])
 
-  const lines = [`${formatDay(sourceDateKey)} の全コマを ${formatDay(targetDateKey)} へ丸ごと振替します。`]
-  if (moved) lines.push(`移動: ${moved}`)
-  if (cleared || returned) {
-    lines.push('振替先の既存コマ:')
-    if (cleared) lines.push(`・消去（未消化へ入れません）: ${cleared}`)
-    if (returned) lines.push(`・未消化へ返却: ${returned}`)
-  } else {
-    lines.push('振替先に既存のコマはありません。')
-  }
-  lines.push('よろしいですか？')
-  return lines.join('\n')
+  // 2 行（オーナー指示 2026-10-25「三行以上の長文を 1 行くらいに」）。消える件数（講師の人数も）の開示は残す（INV-06）。
+  const head = `${formatDay(sourceDateKey)} の全コマを ${formatDay(targetDateKey)} へ丸ごと振替します${moved ? `（${moved}）` : ''}。`
+  const existing = cleared || returned
+    ? `振替先は${[cleared ? `消去（未消化へ入れません）: ${cleared}` : '', returned ? `未消化へ返却: ${returned}` : ''].filter(Boolean).join('／')}。`
+    : '振替先に既存のコマはありません。'
+  return `${head}\n${existing}よろしいですか？`
 }
 
 // 講習自動割振の完了後にどのストック一覧モーダルを開くかを決める。
@@ -11205,17 +11202,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         })
         : null
       if (restoration && (restoration.restoredStudentNames.length > 0 || restoration.skipped.length > 0)) {
-        const confirmLines = [`${dateKey} の休日設定を解除します。`]
-        confirmLines.push(`${restoration.restoredStudentNames.length}人を元の席へ戻します。`)
-        if (restoration.removedMakeups.length > 0) {
-          const removedLabel = Array.from(new Set(restoration.removedMakeups.map((removed) => `${removed.dateKey} ${removed.slotNumber}限`))).join('、')
-          confirmLines.push(`うち${restoration.removedMakeups.length}人は別日に組んだコマ(${removedLabel})を消します。`)
-        }
-        if (restoration.skipped.length > 0) {
-          confirmLines.push(`${restoration.skipped.length}人は戻せません(${summarizeHolidayReleaseSkips(restoration.skipped)})。記録はそのまま残します。`)
-        }
-        confirmLines.push('よろしいですか。')
-        if (!window.confirm(confirmLines.join('\n'))) {
+        // 2 行（オーナー指示 2026-10-25）。
+        const removedLabel = Array.from(new Set(restoration.removedMakeups.map((removed) => `${removed.dateKey} ${removed.slotNumber}限`))).join('、')
+        const confirmText = `${dateKey} の休日設定を解除します${joinResultNotes([
+          `元の席へ ${restoration.restoredStudentNames.length}人`,
+          restoration.removedMakeups.length > 0 ? `別日のコマ ${removedLabel} を削除` : '',
+          restoration.skipped.length > 0 ? `戻せない ${restoration.skipped.length}人: ${summarizeHolidayReleaseSkips(restoration.skipped)}` : '',
+        ])}。\nよろしいですか？`
+        if (!window.confirm(confirmText)) {
           setStatusMessage('休日設定の解除をキャンセルしました。')
           return
         }
@@ -11283,12 +11277,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         removedMakeupCount: restoration?.removedMakeups.length ?? 0,
         skippedCount: restoration?.skipped.length ?? 0,
       })
-      setStatusMessage([
-        isClosedWeekday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`,
-        ...(restoration && restoration.restoredStudentNames.length > 0 ? [`${restoration.restoredStudentNames.length}件の授業を元の席へ戻しました。`] : []),
-        ...(restoration && restoration.removedMakeups.length > 0 ? [`別日に組んでいた${restoration.removedMakeups.length}件のコマを消しました。`] : []),
-        ...(restoration && restoration.skipped.length > 0 ? [`${restoration.skipped.length}件は戻せませんでした(${summarizeHolidayReleaseSkips(restoration.skipped)})。`] : []),
-      ].join(''))
+      setStatusMessage(buildHolidayReleaseResultMessage({
+        dateKey,
+        isClosedWeekday,
+        restoredCount: restoration?.restoredStudentNames.length ?? 0,
+        removedMakeupCount: restoration?.removedMakeups.length ?? 0,
+        skippedCount: restoration?.skipped.length ?? 0,
+        skippedSummary: restoration && restoration.skipped.length > 0 ? summarizeHolidayReleaseSkips(restoration.skipped) : '',
+      }))
       return
     }
 
@@ -11309,7 +11305,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const confirmed = window.confirm(`${dateKey} を休日に設定します。\nこの日に入っている授業はすべてストックへ移行します。\nよろしいですか？`)
+    const confirmed = window.confirm(`${dateKey} を休日にします（授業はすべてストックへ）。よろしいですか？`)
     if (!confirmed) {
       setStatusMessage('休日設定をキャンセルしました。')
       return
@@ -11493,11 +11489,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       movedTeacherCount: result.summary.movedTeacherCount,
       returnedCount,
     })
-    setStatusMessage(
-      `${sourceDateKey} の全コマを ${targetDateKey} へ丸ごと振替しました。`
-      + `生徒${result.summary.movedStudentCount}件・講師${result.summary.movedTeacherCount}名を移動しました。`
-      + (returnedCount > 0 ? `振替先の既存コマ${returnedCount}件を未消化ストックへ戻しました。` : ''),
-    )
+    setStatusMessage(buildWholeDayTransferResultMessage({
+      sourceDateKey,
+      targetDateKey,
+      movedStudentCount: result.summary.movedStudentCount,
+      movedTeacherCount: result.summary.movedTeacherCount,
+      returnedCount,
+    }))
   }
 
   const handleClearStudentsOnDate = (dateKey: string) => {
@@ -11513,7 +11511,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // INV-06（2026-08-02 オーナー確定）: 在庫から出したコマ（振替・ストック由来の講習）は**未消化へ返す**。
     // 通常授業・体験・増コマ・手動追加コマは従来どおり返さず、日程表の希望回数を1減らす。
     // 「返す＝別日にやる（回数はそのまま）／返さない＝もうやらない（回数−1）」の組み合わせを崩さないこと。
-    const confirmed = window.confirm(`${dateKey} の全コマの生徒を削除します。\n講師はそのまま残ります。\n振替・講習は未消化ストックへ戻します。\n通常授業・体験・増コマは戻さず、日程表の回数を1減らします。\nよろしいですか。`)
+    const confirmed = window.confirm(`${dateKey} の全コマの生徒を削除します（講師は残す・振替/講習は未消化へ・通常/体験/増コマは回数 −1）。\nよろしいですか？`)
     if (!confirmed) {
       setDayHeaderMenu(null)
       setStatusMessage('生徒削除をキャンセルしました。')
@@ -12042,19 +12040,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedLectureStockItemKey(null)
     setIsLectureStockOpen(postView.openLectureStock)
     setIsMakeupStockOpen(postView.openMakeupStock)
-    // 振替を含めない従来経路はメッセージ文言を完全に踏襲する(回帰防止: e2e が文言を検証)。
-    setStatusMessage(
-      options.includeMakeup
-        ? (
-          `${entry.displayName} を自動割振しました。講習${placedItems.length}コマ・振替${makeupPlacedItems.length}コマ配置しました。`
-          + (remainingItems.length > 0 ? ` 講習${remainingItems.length}コマは候補不足でストックに残しています。` : '')
-          + (remainingMakeupCount > 0 ? ` 振替${remainingMakeupCount}コマは候補不足でストックに残しています。` : '')
-        )
-        : (
-          `${entry.displayName} を自動割振しました。${placedItems.length}コマ配置しました。`
-          + (remainingItems.length > 0 ? ` ${remainingItems.length}コマは候補不足でストックに残しています。` : '')
-        ),
-    )
+    // 上の帯は 1 行（オーナー指示 2026-10-25「三行以上の長文を 1 行に」）。件数だけ・残りは「候補なしで残り n」。
+    setStatusMessage(buildAutoAssignResultMessage({
+      displayName: entry.displayName,
+      includeMakeup: Boolean(options.includeMakeup),
+      placedLecture: placedItems.length,
+      placedMakeup: makeupPlacedItems.length,
+      remainingLecture: remainingItems.length,
+      remainingMakeup: remainingMakeupCount,
+    }))
   }
 
   const handleDeleteLecturePendingItem = (entry: GroupedLectureStockEntry, item: LectureStockPendingItem) => {
@@ -12507,11 +12501,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
     if (!student) return ''
     const stockNote = student.lessonType === 'special'
-      ? (student.specialStockSource === 'session' ? '講習は未消化講習へ戻します。' : '手動追加の講習は未消化へ戻しません。')
+      ? (student.specialStockSource === 'session' ? '未消化講習へ戻す' : '手動追加なので未消化へ戻さない')
       : student.lessonType === 'makeup'
-        ? (student.manualAdded ? '手動追加の振替は未消化へ戻しません。' : '振替は未消化振替へ戻します。')
-        : '希望回数は変わりません。'
-    return `下段（既存）の ${resolveBoardStudentDisplayName(student.name)} を削除します。\n${stockNote}\nよろしいですか。`
+        ? (student.manualAdded ? '手動追加なので未消化へ戻さない' : '未消化振替へ戻す')
+        : '希望回数は変わらない'
+    return `下段の ${resolveBoardStudentDisplayName(student.name)} を削除します（${stockNote}）。よろしいですか？`
   }
 
   const handleResolveTemplatePendingDesk = (mode: TemplatePendingResolutionMode, lowerIndex?: number) => {
@@ -12572,7 +12566,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedLectureStockKey(null)
     setTemplatePendingDeskMenu(null)
     setTemplatePendingLowerMove({ cellId: context.cell.id, deskId: context.desk.id, lowerIndex, label })
-    setStatusMessage(`下段の ${label} を選択しました。移動先の空いている席を左クリックしてください（入れ替え・2 行の机への移動はできません）。`)
+    setStatusMessage(`${label} の移動先の空いている席を押してください。`)
   }
 
   // sourceOverride: 長押し D&D のドロップ確定で「掴んでいる下段」を明示で渡す（state の templatePendingLowerMove は更新が非同期で、
@@ -14376,9 +14370,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const studentDisplayName = resolveBoardStudentDisplayName(menuStudent.student.name)
     const isSessionLecture = isSessionLectureDeletion(menuStudent.student)
     const confirmBody = isSessionLecture
-      ? '削除すると講習の希望数が1減ります（未消化ストックには戻りません）。'
-      : '削除した授業は振替の対象になりません。'
-    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n${confirmBody}\nよろしいですか？`)
+      ? '講習の希望数 −1・未消化へは戻りません'
+      : '振替の対象になりません'
+    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します（${confirmBody}）。よろしいですか？`)
     if (!confirmed) {
       setStatusMessage('授業の削除をキャンセルしました。')
       return
@@ -15491,23 +15485,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="board-sort-menu-modal" style={{ minWidth: 300 }}>
                 <div className="auto-assign-modal-title">並べ替えの種類を選択</div>
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
-                  {isTemplateMode
-                    ? '通常授業テンプレート全体に適用します。'
-                    : '表示中の週だけに適用します（他の週は変わりません）。'}
+                  {isTemplateMode ? 'テンプレ全体に適用します。' : '表示中の週だけに適用します。'}
                 </div>
                 <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <button type="button" className="primary-button" onClick={() => handleApplySortMode('pack')} data-testid="board-sort-pack-button">
                     上に詰めて並べ替え
                   </button>
-                  <div className="student-menu-help-text">埋まっている机を上へ詰めて、空いた机を下にまとめます。</div>
+                  <div className="student-menu-help-text">空いた机を下にまとめます。</div>
                   <button type="button" className="primary-button" onClick={() => handleApplySortMode('seat')} data-testid="board-sort-seat-button">
                     同席番で並べ替え
                   </button>
-                  <div className="student-menu-help-text">
-                    {isTemplateMode
-                      ? '曜日ごとに、コマ数の多い講師から順にできるだけ同じ席番へ揃えます（席が空いたままになることがあります）。'
-                      : '1日ごとに、コマ数の多い講師から順にできるだけ同じ席番へ揃えます（席が空いたままになることがあります）。'}
-                  </div>
+                  <div className="student-menu-help-text">{isTemplateMode ? '曜日ごとに' : '1日ごとに'}、講師をできるだけ同じ席番へ揃えます。</div>
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="secondary-button" onClick={() => setSortMenuOpen(false)} data-testid="board-sort-cancel-button">キャンセル</button>
@@ -15589,11 +15577,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="teacher-seat-move-modal" style={{ minWidth: 280 }}>
                 <div className="auto-assign-modal-title">講師の入れ替え方法を選択</div>
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
-                  {'この机には生徒がいます。\n・生徒ごと席を入れ替える（講師と生徒のペアはそのまま、席番号を交換）\n・講師だけを入れ替える（生徒は各机に残す）\nのどちらにしますか？'}
+                  {'この机には生徒がいます。どちらで入れ替えますか？'}
                 </div>
                 <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
-                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-teacher-button" onClick={() => executePendingTeacherMove('teacher')}>講師だけ入れ替え</button>
-                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-seat-button" onClick={() => executePendingTeacherMove('seat')}>席を入れ替え</button>
+                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-teacher-button" onClick={() => executePendingTeacherMove('teacher')}>講師だけ入れ替え（生徒は残す）</button>
+                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-seat-button" onClick={() => executePendingTeacherMove('seat')}>生徒ごと席を入れ替え</button>
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="secondary-button" data-testid="teacher-seat-move-cancel-button" onClick={cancelPendingTeacherMove}>キャンセル</button>

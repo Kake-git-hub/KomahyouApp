@@ -47,8 +47,9 @@ describe('App.tsx 起動・ログイン(#92〜#105 / #139〜#142)', () => {
 
 describe('App.tsx 保存失敗・競合の案内(#122 / #130 / #136)', () => {
   it('「バックアップJSON」を出さない', () => {
-    expect(app).toContain("'念のためバックアップを自動でダウンロードしました。'")
-    expect(app).toContain("'  1. このタブの内容をバックアップに書き出しました（ダウンロードフォルダ）'")
+    // 2026-10-25 2 行化（オーナー指示「三行以上の長文を 1 行くらいに」）: 「バックアップ」の言い方のまま短くした。
+    expect(app).toContain("'バックアップをダウンロード済みです（直らないときは再ログイン →「バックアップを読み込む」）。'")
+    expect(app).toContain("'別の端末・タブでこの教室が更新されたため、保存を止めました（このタブの内容はダウンロード済み）。'")
     expect(app).toContain("'保存できなかったため、バックアップを自動ダウンロードしました。'")
     // 文字列リテラル内に残っていないこと(コメント中の説明は対象外)。
     expect(app).not.toMatch(/['`][^'`\n]*バックアップJSON/)
@@ -65,7 +66,7 @@ describe('App.tsx 確認ダイアログ・登録解除(#146 / #151 / #158)', () 
   it('#151 / #158 確認ダイアログの「？」は全角', () => {
     expect(app).toContain("'復元してよろしいですか？',")
     expect(app).not.toContain("'復元してよろしいですか?',")
-    const initialImport = app.slice(app.indexOf("'基本データを初期取り込みします。'"), app.indexOf("'基本データの初期取り込みをキャンセルしました。'"))
+    const initialImport = app.slice(app.indexOf("'基本データを初期取り込みします（"), app.indexOf("'基本データの初期取り込みをキャンセルしました。'"))
     expect(initialImport).toContain("'続行しますか？',")
     expect(initialImport).not.toContain("'続行しますか?',")
   })

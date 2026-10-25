@@ -176,7 +176,7 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
       const importMessage = buildTemplateDuplicateStudentsMessage(duplicates, (name) => `${name}さん`, (cell) => `金曜 ${cell.slotLabel}`, 'import')
       expect(importMessage).toMatch(/^Excel を取り込めません。/u)
       expect(importMessage).toContain('金曜 3限: Aさん(机 1・机 2)')
-      expect(importMessage).toContain('Excel で片方の席から外してから取り込み直してください')
+      expect(importMessage).toContain('Excel を直してください')
       expect(importMessage).not.toContain('保存できません')
     })
 
@@ -248,7 +248,7 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     expect(r.status).toBe('blocked')
     if (r.status !== 'blocked') return
     expect(r.message).toContain('2 か所')
-    expect(r.message).toContain('先に上段側を片づけてください')
+    expect(r.message).toContain('同じ生徒が 2 か所になります。先に上段を片づけてください')
     expect(JSON.stringify({ weeks, pending, ledgers })).toBe(snapshot)
   })
 

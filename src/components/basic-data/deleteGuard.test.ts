@@ -39,7 +39,8 @@ describe('buildDeleteConfirmation', () => {
     expect(confirmation.irreversibleWarning).toBe(STUDENT_DELETE_APP_ONLY_WARNING)
     // 2026-09-20 夜(オーナー確定): 退塾後は編集できず残る操作は削除だけ。先頭で不可逆をはっきり伝える。
     expect(confirmation.irreversibleWarning).toContain('この生徒をデータ上から削除します。元に戻せません')
-    expect(confirmation.irreversibleWarning).toContain('過去の記録と削除日時だけがデータに残ります')
+    // 2026-10-25 1 行化（オーナー指示）: 消える場所だけ添える。
+    expect(confirmation.irreversibleWarning).toContain('名簿・「退塾生徒」一覧から消えます')
     expect(confirmation.hideHint).toBe('')
     expect(confirmation.title).toContain('富樫應佑')
   })

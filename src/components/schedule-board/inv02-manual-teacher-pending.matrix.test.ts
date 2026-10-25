@@ -162,7 +162,7 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
     expect(desk.teacherAssignmentTeacherId).toBe('tB')
     expect(ids(desk)).toEqual(['sA', null])
     expect(result.nextTemplatePendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
-    expect(result.message).toContain('机の講師を 倉島 に戻しました')
+    expect(result.message).toContain('講師を 倉島 に戻す')
     expect(teacherSheetPeople(result.nextWeeks, 'tB')).toEqual(['青木'])
     expect(teacherSheetPeople(result.nextWeeks, 'tD')).toEqual([])
     expect(JSON.stringify({ weeks: saved.nextWeeks, pending: saved.nextPendingDesks })).toBe(before)
