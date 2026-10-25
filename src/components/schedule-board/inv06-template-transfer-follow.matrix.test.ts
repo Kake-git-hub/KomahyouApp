@@ -167,14 +167,16 @@ describe('INV-06 × Q40-2: 丸ごと振替した日（振替元）に足した�
     expectFixpoint(saved, newRows, board.suppressed)
   })
 
-  it('振替元が休日設定の日: 休日のコマはテンプレの机が空（Q21-6）なので置く対象にならず、未消化は自動の不足 origin に任せて台帳へは積まない。既に移送済みの A・B の振替と移動元記録は根拠（テンプレ行）があるので消えない', () => {
+  it('振替元が休日設定の日で振替先が満席: 休日でも足した生徒は拾われ、未消化へ（台帳には積まず自動の不足 origin に任せる＝残数 1）。−1 なし。既に移送済みの A・B の振替と移動元記録は根拠（テンプレ行）があるので消えない', () => {
     const holidaySettings = settings({ holidayDates: [WED] })
     const board = transferredBoard()
     const weeks = fillSeat2WithManual(board.weeks)
     const newRows = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
     const saved = save(weeks, newRows, board.suppressed, { classroomSettings: holidaySettings })
-    expect(saved.summary.wholeDayTransferStockedStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(1)
+    expect(saved.wholeDayTransferStocked[0]).toMatchObject({ reason: 'no-seat', ledger: false, sourceDateKey: WED, sourceSlotNumber: SLOT })
     expect(saved.summary.wholeDayTransferPlacedStudents).toBe(0)
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
     expect(saved.manualMakeupOriginAdditions).toEqual([])
     expect(saved.summary.orphanedMakeupsRemoved).toBe(0)
     expect(liveIds(saved.nextWeeks, THU_CELL).sort()).toEqual(['sA', 'sB', 'sD', 'sE'])
@@ -184,6 +186,75 @@ describe('INV-06 × Q40-2: 丸ごと振替した日（振替元）に足した�
     expect(after['sC__数']).toBe(1)
     expect(after['sA__数'] ?? 0).toBe(0)
     expect(after['sB__数'] ?? 0).toBe(0)
+    expectFixpoint(saved, newRows, board.suppressed, holidaySettings)
+  })
+
+  // 2026-10-25（オーナー承認・テスト教室 tp-48/tp-49・受付 20261023-142500887-cb435534）: 丸ごと振替した元の日を後から「休日設定」すると、
+  // 休日のコマはテンプレ机が空（Q21-6）なので足した生徒が拾われず、Q40-2 が起動せずに未消化へ逃げていた。休日でも拾って振替先へ置く。
+  it('振替元が休日設定の日で振替先に空席: 休日でも足した生徒は振替先の同じ机へ振替として置く（在庫中立・移動元記録・−1 なし・再保存で二重にならない・再マージの不動点）', () => {
+    const holidaySettings = settings({ holidayDates: [WED] })
+    const board = transferredBoard()
+    const newRows = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const before = balances(board.weeks, OLD_ROWS, board.ledgers, holidaySettings)
+    const saved = save(board.weeks, newRows, board.suppressed, { classroomSettings: holidaySettings })
+    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(1)
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(0)
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    expect(saved.studentNotes.filter((note) => note.kind === 'transfer-placed').map((note) => note.studentName)).toEqual(['千葉'])
+    const thu = cellOf(saved.nextWeeks, THU_CELL)
+    expect(thu.desks[0].lesson?.studentSlots.map((student) => student?.managedStudentId)).toEqual(['sA', 'sC'])
+    expect(thu.desks[0].lesson?.studentSlots[1]).toMatchObject({ lessonType: 'makeup', makeupSourceDate: WED })
+    expect(liveIds(saved.nextWeeks, WED_CELL)).toEqual([])
+    expect(cellOf(saved.nextWeeks, WED_CELL).desks[0].statusSlots?.[1]).toMatchObject({ status: 'moved', managedStudentId: 'sC', moveDestinationDateKey: THU, moveDestinationSlotNumber: SLOT })
+    // 在庫: 置いた振替が休日の自動発生（テンプレ行×休日）を消化するので C は 0。A・B は保存前と同じ
+    const after = balances(saved.nextWeeks, newRows, board.ledgers, holidaySettings)
+    expect(after['sC__数'] ?? 0).toBe(0)
+    expect(after['sA__数'] ?? 0).toBe(before['sA__数'] ?? 0)
+    expect(after['sB__数'] ?? 0).toBe(before['sB__数'] ?? 0)
+    expectFixpoint(saved, newRows, board.suppressed, holidaySettings)
+    const again = save(saved.nextWeeks, newRows, suppressedAfter(board.suppressed, saved), { classroomSettings: holidaySettings })
+    expect(again.summary.wholeDayTransferPlacedStudents).toBe(0)
+    expect(again.wholeDayTransferCountAdjustments).toEqual([])
+    expect(liveIds(again.nextWeeks, THU_CELL).filter((id) => id === 'sC')).toHaveLength(1)
+  })
+
+  // テスト教室 tp-51（受付 20261022-094354322-14472254・v1.5.624）: 11/22→11/29 に丸ごと振替し 11/22 を休日設定した後、月 4限 の科目を英→社に変えると、
+  // 旧科目の振替は根拠を失って消え、新科目は休日の元の日で拾われず（振替先の日では消される旧科目の振替を理由に精算済み）、生徒が 11/29 から消えていた。
+  it('振替元が休日設定の日で科目を変える（tp-51）: 旧科目の振替を外し、新科目を振替先の同じ机へ置く＝生徒が振替先から消えない（INV-12・在庫中立）', () => {
+    const holidaySettings = settings({ holidayDates: [WED] })
+    const board = transferredBoard()
+    const newRows = [row('r0', 't1', 'sA', '', 3, { subject1: '英' }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const saved = save(board.weeks, newRows, board.suppressed, { classroomSettings: holidaySettings })
+    expect(saved.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(saved.orphanedMakeups[0].student).toMatchObject({ managedStudentId: 'sA', subject: '数' })
+    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(1)
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    const thu = cellOf(saved.nextWeeks, THU_CELL)
+    expect(thu.desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', subject: '英', lessonType: 'makeup', makeupSourceDate: WED })
+    expect(liveIds(saved.nextWeeks, THU_CELL).filter((id) => id === 'sA')).toHaveLength(1)
+    expect(cellOf(saved.nextWeeks, WED_CELL).desks[0].statusSlots?.some((entry) => entry?.managedStudentId === 'sA' && entry.subject === '英')).toBe(true)
+    expect(cellOf(saved.nextWeeks, WED_CELL).desks[0].statusSlots?.some((entry) => entry?.managedStudentId === 'sA' && entry.subject === '数')).toBe(false)
+    const after = balances(saved.nextWeeks, newRows, board.ledgers, holidaySettings)
+    expect(after['sA__英'] ?? 0).toBe(0)
+    expect(after['sA__数'] ?? 0).toBe(0)
+    expectFixpoint(saved, newRows, board.suppressed, holidaySettings)
+  })
+
+  it('回帰防止: 丸ごと振替していない普通の休日にテンプレで生徒を足しても、拾わない・置かない・−1 しない（従来どおり休日の自動発生だけ）', () => {
+    const holidaySettings = settings({ holidayDates: [WED] })
+    const base = remerge([buildWeek(OLD_ROWS, holidaySettings)], OLD_ROWS, [], holidaySettings)
+    const newRows = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const saved = save(base, newRows, [], { classroomSettings: holidaySettings })
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(0)
+    expect(saved.summary.wholeDayTransferStockedStudents).toBe(0)
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(liveIds(saved.nextWeeks, WED_CELL)).toEqual([])
+    expect(balances(saved.nextWeeks, newRows, {}, holidaySettings)['sC__数']).toBe(1)
   })
 })
 

@@ -28,7 +28,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
@@ -2569,8 +2569,20 @@ export function buildTemplateDiffTemplateCells(params: {
     if (lastDateKey < params.effectiveStartDate) continue
     // 管理セルの準備は再マージと同じ関数（buildAppliedManagedPostFreezeCells）を通す（R-5。手で写さない）。
     const { managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
+    // Q40-2 休日設定した振替元（オーナー承認 2026-10-25・テスト教室 tp-48/tp-49/tp-51）: 丸ごと振替した日（日単位抑止あり）が休日設定だと、
+    // 休日の管理セルにはテンプレの授業が生成されず（Q21-6）、足した生徒が振替先へ置く対象に拾われなかった。その日だけを forceOpenDates で開けた
+    // 形の管理セルを同じ準備関数で作り（抑止・strip も同じ）、拾うためだけのテンプレ机 closedTransferSourceDesks として添える。
+    // 普通の休日（日単位抑止なし）は作らない＝従来どおり何もしない。
+    const closedTransferDates = managedCells.filter((entry) => entry.scaffoldTeachersStripped && !entry.applied.isOpenDay).map((entry) => entry.raw.dateKey)
+    const openedById = new Map<string, SlotCell>()
+    if (closedTransferDates.length > 0) {
+      const openedSettings: ClassroomSettings = { ...params.classroomSettings, forceOpenDates: [...new Set([...params.classroomSettings.forceOpenDates, ...closedTransferDates])] }
+      const opened = buildAppliedManagedPostFreezeCells(week, { ...params, classroomSettings: openedSettings, freezeDate: params.effectiveStartDate })
+      for (const entry of opened.managedCells) if (closedTransferDates.includes(entry.raw.dateKey)) openedById.set(entry.raw.id, entry.applied)
+    }
     for (const { raw, applied, scaffoldTeachersStripped } of managedCells) {
-      result.push({ raw: cloneSlotCell(raw), applied, scaffoldTeachersStripped })
+      const openedCell = openedById.get(raw.id)
+      result.push({ raw: cloneSlotCell(raw), applied, scaffoldTeachersStripped, ...(openedCell ? { closedTransferSourceDesks: openedCell.desks } : {}) })
     }
   }
   return result
@@ -2668,7 +2680,9 @@ export function computeTemplateDiffApplyForBoard(input: {
     })
     const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals)
     const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: run.diff.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry })
-    const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)))
+    // 2026-10-25（Q40-2 休日設定した振替元）: 休日の日の「置かなかった生徒」は Q35-8 の −1 を積まない（従来どおり休日の自動発生〔テンプレ行×休日〕に任せる。
+    // 置けたときは置いた振替がその自動発生を消化する＝在庫中立）。置いた／未消化にした生徒は従来どおり −1 から外す。
+    const wholeDayTransferCountAdjustments = run.diff.wholeDayTransferCountAdjustments.filter((target) => !follow.handledKeys.has(buildWholeDayTransferHandledKey(target.student, target.dateKey)) && !isClosedDate(target.dateKey, params.classroomSettings))
     // 2026-10-21: 確認の画面に出す「生徒ごとの理由」（名前つき）。件数だけでは「誰がなぜ置かれないか」が追えない（テスト教室 tp-48/tp-56）。
     const noteName = (student: StudentEntry) => student.name
     const studentNotes: TemplateDiffStudentNote[] = [

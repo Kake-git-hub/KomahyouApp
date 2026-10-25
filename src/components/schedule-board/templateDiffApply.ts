@@ -80,10 +80,19 @@ export function resolveWholeDayTransferSettlement<T extends { student: StudentEn
   const facts = collectLessonExplanationFacts({ weeks: input.weeks, pendingDesks: input.pendingDesks })
   const adjustments = collectCountAdjustmentsByKey(input.scheduleCountAdjustments)
   const templateCount = new Map<string, number>()
+  // Q40-2 休日設定した振替元（2026-10-25）: 休日の raw にはテンプレの授業が無いので、開けた形のテンプレ机（closedTransferSourceDesks）で数える。
+  // その日の「テンプレ行×休日」の自動発生 origin は、これから振替先へ置いて埋める不足そのもので説明ではない（数えると新しく足した生徒が
+  // 置かれずに精算済み扱いで消える）ので、テンプレの授業数ぶんだけ origin から引く（移送済みの生徒は置いた振替が消化するので結果は同じ）。
+  const closedTemplateCount = new Map<string, number>()
   for (const entry of input.templateCells) {
     for (const desk of entry.raw.desks) for (const student of liveStudents(desk.lesson)) {
       const key = buildLessonFactKey(student.managedStudentId ?? student.name, student.subject, entry.raw.dateKey)
       templateCount.set(key, (templateCount.get(key) ?? 0) + 1)
+    }
+    if (entry.applied.isOpenDay || !entry.closedTransferSourceDesks) continue
+    for (const desk of entry.closedTransferSourceDesks) for (const student of liveStudents(desk.lesson)) {
+      const key = buildLessonFactKey(student.managedStudentId ?? student.name, student.subject, entry.raw.dateKey)
+      closedTemplateCount.set(key, (closedTemplateCount.get(key) ?? 0) + 1)
     }
   }
   const preSaveKeys = new Set(input.suppressedRegularLessonOccurrences)
@@ -105,8 +114,10 @@ export function resolveWholeDayTransferSettlement<T extends { student: StudentEn
     }
     if (rest.length === 0) continue
     // (2) 件数の余り
-    const total = Math.max(templateCount.get(key) ?? 0, group.length)
-    const { explained } = countLessonExplanations(facts, { studentId, subject, dateKey, origins: countOriginsOnDate(input.originDatesByKey, studentId, subject, dateKey), countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: [] })
+    const closedCount = closedTemplateCount.get(key) ?? 0
+    const total = Math.max((templateCount.get(key) ?? 0) + closedCount, group.length)
+    const origins = Math.max(0, countOriginsOnDate(input.originDatesByKey, studentId, subject, dateKey) - closedCount)
+    const { explained } = countLessonExplanations(facts, { studentId, subject, dateKey, origins, countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: [] })
     let spare = explained - (total - group.length) - sameSlotSettled
     for (const item of rest) {
       if ((facts.otherLessonBySlot.get(`${studentId}__${dateKey}__${item.slotNumber}`) ?? 0) > 0) { settled.add(item); continue }
@@ -1163,6 +1174,12 @@ export type TemplateDiffTemplateCell = {
   applied: SlotCell
   /** applied に丸ごと振替の日の足場講師 strip を当てた日か（Q21-11 で後から空けた机にも同じ strip を当てる・L-7 兄弟 1）。 */
   scaffoldTeachersStripped?: boolean
+  /**
+   * Q40-2 休日設定した振替元（2026-10-25）: 休日の管理セルにはテンプレの授業が生成されない（Q21-6 で机は空扱い）ため、丸ごと振替した日
+   * （日単位抑止あり）が休日設定のとき、その日を**開けた形**で作り同じ抑止を当てたテンプレ机。振替先へ置く生徒を拾うためだけに使い、
+   * 休日のコマ自体には置かない。普通の休日（日単位抑止なし）では作らない。
+   */
+  closedTransferSourceDesks?: readonly DeskCell[]
 }
 
 export type TemplateDiffApplySummary = {
@@ -1586,6 +1603,26 @@ function applyTemplateDiffToCell(context: {
   const isClosed = !templateCell.applied.isOpenDay
   let rawTemplateDesks = cell.desks.map((_, index) => (isClosed ? EMPTY_TEMPLATE_DESK : (templateCell.raw.desks[index] ?? EMPTY_TEMPLATE_DESK)))
   const appliedTemplateDesks = cell.desks.map((_, index) => (isClosed ? EMPTY_TEMPLATE_DESK : (templateCell.applied.desks[index] ?? EMPTY_TEMPLATE_DESK)))
+
+  // ── 0'. Q40-2 休日設定した振替元（オーナー承認 2026-10-25・テスト教室 tp-48/tp-49/tp-51 の真因）: 丸ごと振替した日（日単位抑止あり）を
+  //   後から「休日設定」しても、テンプレで足した生徒は振替先へ置く対象（wholeDayTransferSkipped）に拾う。休日のコマはテンプレ机を空とみなす
+  //   （Q21-6）ので、拾わないと手順 0 が走らず Q40-2 が起動せず、未消化（テンプレ行×休日の自動発生）へ逃げていた（休校日だから丸ごと振替する
+  //   →元の日を休日設定、の順は実運用で普通）。置くのは振替先（入口 computeTemplateDiffApplyForBoard の planWholeDayTransferPlacements）で、
+  //   この休日のコマ自体には置かない。移動元記録が無い（振替先の日そのもの等）なら置かれず、休日なので −1 も積まない（入口が休日の −1 を外す）。
+  //   抑止キーは手順 0 と同じく積む（再保存で二重に拾わない＝不動点）。日単位抑止の無い普通の休日は従来どおり何もしない（回帰防止テストあり）。
+  if (isClosed && templateCell.scaffoldTeachersStripped && templateCell.closedTransferSourceDesks) {
+    templateCell.closedTransferSourceDesks.forEach((templateDesk, deskIndex) => {
+      if (deskIndex >= cell.desks.length) return
+      for (const student of liveStudents(templateDesk.lesson)) {
+        const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
+        if (context.existingSuppressed.has(key)) continue
+        summary.wholeDayTransferSkippedStudents += 1
+        const seatIndex = Math.max(0, (templateDesk.lesson?.studentSlots ?? []).findIndex((seat) => seat === student))
+        context.wholeDayTransferSkipped.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex, seatIndex })
+        context.addedSuppressed.add(key)
+      }
+    })
+  }
 
   // ── Q36（オーナー指示 2026-10-03）: 同じ日の中で手で動かした通常授業の写しは、テンプレに合わせる（検出だけ。外すのは呼び出し側）。
   //   superseded＝新テンプレが同じ日の**別のコマ**に同じ生徒×科目を置く（移動元・移動先の両方に出る二重配置の原因）
