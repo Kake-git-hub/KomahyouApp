@@ -98,9 +98,24 @@ Claudeの自動チェックセッションが `actingClassroomId` を適切に�
 
 ---
 
+## Claude のメモリ（`.claude/memory/`・2026-10-26 にリポジトリへ移設）
+
+Claude の記憶（過去の事故・設計判断・オーナー指示の記録）の**正本はリポジトリの `.claude/memory/`**。
+ユーザーフォルダ側（`~/.claude/projects/.../memory/`）には案内の `MEMORY.md` だけを残してある。
+索引は下で読み込む。本文で「memory `<名前>`」と書いてあるものは `.claude/memory/<名前>.md` を指す。
+
+- **新しく覚える・直すときはここへ書く**（1 記憶 1 ファイル＋frontmatter、`MEMORY.md` に 1 行の索引）。ユーザーフォルダ側には書かない。
+- **⚠️ このリポジトリは公開(PUBLIC)。** 生徒・講師・保護者・室長の実名、メールアドレス、UID、電話番号は書かない。
+  生徒は生徒ID（`s091` など）か「生徒A」、講師は講師ID（`t025` など）か「講師A」、オーナーは「オーナー」と書く
+  （移設時に既存の記憶も同じ規則で伏せ字にした）。
+
+@.claude/memory/MEMORY.md
+
+---
+
 ## 保守運営の体制（エージェントとスキル）
 
-複数ユーザー導入に向けた保守運営の役割分担。詳細は memory `komahyou-staging-and-ops` 参照。
+複数ユーザー導入に向けた保守運営の役割分担。詳細は memory `komahyou-staging-and-ops`（`.claude/memory/`）参照。
 
 ### 役割エージェント（`.claude/agents/`）
 - **triage**（Sonnet）… 曖昧な報告（口頭/LINE/スクショ）を再現手順・影響範囲・優先度に整理し GitHub Issue 化（読み取り＋起票）。
@@ -249,4 +264,4 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
   と `komahyouapp-prod.web.app/version.json` の版が揃っている状態を作ってから作業する。古い staging のまま検証して
   「本番と挙動が違う」と誤判定しない。常時 CI 自動追従はしない（新機能で staging を使うタイミングで都度反映する）。詳細は
   `staging-environment` スキル。
-- 詳細: `memory/komahyou-save-architecture.md` および `memory/komahyou-classroom-restore-cross-contamination.md` 参照
+- 詳細: `.claude/memory/komahyou-save-architecture.md` および `.claude/memory/komahyou-classroom-restore-cross-contamination.md` 参照
