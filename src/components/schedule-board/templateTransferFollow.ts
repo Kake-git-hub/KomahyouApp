@@ -508,3 +508,233 @@ export function extendTemplateDiffSlotFilterWithCells(filter: TemplateDiffSlotFi
   if (!filter || cellIds.size === 0) return filter
   return { ...filter, cellIds: new Set([...(filter.cellIds ?? []), ...cellIds]) }
 }
+
+// ============================================================================
+// 決定記録 46（オーナー決定 2026-10-25・spec-template-behavior §H Q40-9）: テンプレで時限を変えたら、丸ごと振替で移送済みの振替も新しい時限へ動かす。
+//
+// ★対象は「同じ授業」とみなせるものだけ＝丸ごと振替の 1 対 1 の写像が残っている組（振替元 D の旧時限に移動元記録〔moved・振替先 T・旧時限〕があり、
+//   振替先 T の旧時限の上段にその生徒×科目の振替〔もと＝D の旧時限〕が生きている）。生徒×科目×振替元の日付×時限が一致するもの。
+// ★きっかけは Q40-3 の「精算済み」（新しい時限の分は移送済みの振替が説明している＝置かない）。精算済みの生徒について、旧テンプレ→新テンプレで
+//   その曜日の時限が 1 つだけ入れ替わった（旧時限が 1 つ消え、新しい時限が 1 つ増えた）ときだけ動かす。曖昧な形（2 つ以上の増減）は動かさない＝今までどおり。
+// ★動かさない（決定 46 の例外）: 振替先が反映日より前／振替に出欠記録あり（上段に生きていない）／室長が手で動かした後（T の旧時限に居ない）／
+//   保留の机の上段・下段／新しい時限に同じ生徒が既に居る（INV-12）／振替先のコマが無い。
+// ★置き方: 新しい時限のテンプレの机番号（Q35 が置かなかった生徒の机・席）→ 同じコマの別の机（講師あり → なし・机番号順）→ 満席なら同じ机番号の
+//   下段（保留・緑・決定記録 48・placeIntoPendingLower）。振替の「もと」ラベルの時限を新しい時限に、移動元記録を D の新しい時限の机へ移す。
+// ★会計: 在庫中立（振替を別のコマへ移すだけ・移動元記録は会計を持たない）。台帳・抑止キー・希望回数は触らない（新しい時限の抑止キーは Q35 が既に積む。
+//   旧時限の抑止キーはテンプレがその時限に生徒を持たなくなるので効かない）。
+// ============================================================================
+
+export type SlotChangeFollowMove = {
+  student: StudentEntry
+  sourceDateKey: string
+  oldSlotNumber: number
+  newSlotNumber: number
+  targetDateKey: string
+  targetCellId: string
+  deskId: string
+  deskIndex: number
+  seatIndex: number
+  placement: 'upper' | 'pending'
+  /** テンプレの机番号が使えず別の机へ置いた／下段が次の机。 */
+  fallbackDesk: boolean
+  /** 上段に置いた机に講師が居ない。 */
+  teacherless: boolean
+}
+
+export type SlotChangeFollowPlan = {
+  weeks: SlotCell[][]
+  nextPendingDesks: TemplatePendingDeskMap
+  moves: SlotChangeFollowMove[]
+  touchedCellIds: Set<string>
+}
+
+/** 旧テンプレ→新テンプレで、曜日 dow の生徒×科目の時限が 1 つだけ入れ替わったなら旧時限を返す（newSlot が増えた側でなければ null）。 */
+export function resolveTemplateSlotChange(previousRows: readonly RegularLessonRow[], nextRows: readonly RegularLessonRow[], dow: number, studentId: string, subject: string, newSlot: number): number | null {
+  const slotsOf = (rows: readonly RegularLessonRow[]) => {
+    const slots = new Set<number>()
+    for (const row of rows) {
+      if (row.dayOfWeek !== dow) continue
+      if ((row.student1Id === studentId && row.subject1 === subject) || (row.student2Id === studentId && row.subject2 === subject)) slots.add(row.slotNumber)
+    }
+    return slots
+  }
+  const before = slotsOf(previousRows)
+  const after = slotsOf(nextRows)
+  const removed = [...before].filter((slot) => !after.has(slot))
+  const added = [...after].filter((slot) => !before.has(slot))
+  if (removed.length !== 1 || added.length !== 1 || added[0] !== newSlot) return null
+  return removed[0]
+}
+
+export function planSlotChangeTransferFollow(params: {
+  weeks: SlotCell[][]
+  pendingDesks: TemplatePendingDeskMap
+  /** 保存前のテンプレの行。無ければ何もしない（呼び出し側は必ず渡す＝配線テストで固定）。 */
+  previousRegularLessons: readonly RegularLessonRow[] | null | undefined
+  regularLessons: readonly RegularLessonRow[]
+  /** Q40-3 で精算済みにした生徒（Q35 が置かなかった新しい時限の机・席つき）。 */
+  settled: readonly WholeDayTransferSkippedStudent[]
+  effectiveStartDate: string
+  createdAt: string
+  formatOriginLabel: (dateKey: string, slotNumber: number) => string
+  buildMovedSourceStatusEntry: (params: { student: StudentEntry; sourceCell: SlotCell; sourceDesk: DeskCell; destinationDateKey: string; destinationSlotNumber: number }) => StudentStatusEntry
+}): SlotChangeFollowPlan {
+  const moves: SlotChangeFollowMove[] = []
+  const touchedCellIds = new Set<string>()
+  let nextPendingDesks = params.pendingDesks
+  if (!params.previousRegularLessons || params.settled.length === 0) return { weeks: params.weeks, nextPendingDesks, moves, touchedCellIds }
+
+  const cellById = new Map<string, SlotCell>()
+  for (const week of params.weeks) for (const cell of week) cellById.set(cell.id, cell)
+  const cellByDateSlot = new Map<string, string>()
+  for (const cell of cellById.values()) cellByDateSlot.set(dateSlotKey(cell.dateKey, cell.slotNumber), cell.id)
+  const cellAt = (dateKey: string, slotNumber: number) => {
+    const id = cellByDateSlot.get(dateSlotKey(dateKey, slotNumber))
+    return id ? cellById.get(id) : undefined
+  }
+  const replaceDesk = (cell: SlotCell, deskIndex: number, desk: DeskCell) => {
+    const next = { ...cell, desks: cell.desks.map((entry, index) => (index === deskIndex ? desk : entry)) }
+    cellById.set(cell.id, next)
+    touchedCellIds.add(cell.id)
+    return next
+  }
+  const isPendingDesk = (cell: SlotCell, desk: DeskCell) => Boolean(nextPendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)])
+  const freeSeatOf = (desk: DeskCell, preferred: number) => (isSeatFree(desk, preferred) ? preferred : (isSeatFree(desk, preferred === 0 ? 1 : 0) ? (preferred === 0 ? 1 : 0) : -1))
+
+  for (const item of params.settled) {
+    const studentId = item.student.managedStudentId
+    if (!studentId) continue
+    const sourceDateKey = item.dateKey
+    const newSlot = item.slotNumber
+    const oldSlot = resolveTemplateSlotChange(params.previousRegularLessons, params.regularLessons, resolveDayOfWeekFromDateKey(sourceDateKey), studentId, item.student.subject, newSlot)
+    if (oldSlot == null) continue
+    const subjectKey = studentSubjectKey(item.student)
+
+    // 1. 振替元 D の旧時限の移動元記録（丸ごと振替の 1 対 1＝振替先の時限も旧時限）。
+    const oldSourceCell = cellAt(sourceDateKey, oldSlot)
+    if (!oldSourceCell) continue
+    let recordDeskIndex = -1
+    let recordSeat = -1
+    oldSourceCell.desks.forEach((desk, deskIndex) => desk.statusSlots?.forEach((entry, seat) => {
+      if (recordDeskIndex >= 0 || !entry || entry.status !== 'moved' || !entry.moveDestinationDateKey) return
+      if (studentSubjectKey(entry) !== subjectKey) return
+      if ((entry.moveDestinationSlotNumber ?? oldSlot) !== oldSlot) return
+      recordDeskIndex = deskIndex
+      recordSeat = seat
+    }))
+    if (recordDeskIndex < 0) continue
+    const targetDateKey = oldSourceCell.desks[recordDeskIndex].statusSlots![recordSeat]!.moveDestinationDateKey!
+    if (targetDateKey < params.effectiveStartDate) continue
+
+    // 2. 振替先 T の旧時限の上段に生きている振替（もと＝D の旧時限）。保留の机は動かさない。
+    const oldTargetCell = cellAt(targetDateKey, oldSlot)
+    const newTargetCell = cellAt(targetDateKey, newSlot)
+    if (!oldTargetCell || !newTargetCell) continue
+    let makeupDeskIndex = -1
+    let makeupSeat = -1
+    oldTargetCell.desks.forEach((desk, deskIndex) => desk.lesson?.studentSlots.forEach((student, seat) => {
+      if (makeupDeskIndex >= 0 || !student || student.lessonType !== 'makeup' || student.manualAdded) return
+      if (studentSubjectKey(student) !== subjectKey || student.makeupSourceDate !== sourceDateKey) return
+      if (parseOriginSlotNumberFromLabel(student.makeupSourceLabel) !== oldSlot) return
+      makeupDeskIndex = deskIndex
+      makeupSeat = seat
+    }))
+    if (makeupDeskIndex < 0) continue
+    if (isPendingDesk(oldTargetCell, oldTargetCell.desks[makeupDeskIndex])) continue
+    // INV-12: 新しい時限に同じ生徒が既に居る（上段）なら動かさない。
+    const identity = studentIdentity(item.student)
+    if (newTargetCell.desks.some((desk) => liveStudentsOf(desk).some((student) => studentIdentity(student) === identity))) continue
+
+    const makeup = oldTargetCell.desks[makeupDeskIndex].lesson!.studentSlots[makeupSeat]!
+    const moved: StudentEntry = { ...makeup, makeupSourceLabel: params.formatOriginLabel(sourceDateKey, newSlot) }
+
+    // 3. 置き先（新しい時限のテンプレの机 → 別の机〔講師あり → なし〕 → 下段）。置き先が決まってから旧時限から外す（置けないのに外さない）。
+    let placedDeskIndex = -1
+    let placedSeat = -1
+    const preferredDesk = newTargetCell.desks[item.deskIndex]
+    if (preferredDesk && !isPendingDesk(newTargetCell, preferredDesk)) {
+      const seat = freeSeatOf(preferredDesk, item.seatIndex)
+      if (seat >= 0) { placedDeskIndex = item.deskIndex; placedSeat = seat }
+    }
+    if (placedDeskIndex < 0) {
+      const indexed = newTargetCell.desks.map((desk, index) => ({ desk, index })).filter(({ index }) => index !== item.deskIndex)
+      for (const { desk, index } of [...indexed.filter(({ desk }) => desk.teacher.trim()), ...indexed.filter(({ desk }) => !desk.teacher.trim())]) {
+        if (isPendingDesk(newTargetCell, desk)) continue
+        const seat = freeSeatOf(desk, item.seatIndex)
+        if (seat < 0) continue
+        placedDeskIndex = index
+        placedSeat = seat
+        break
+      }
+    }
+    let lowerPlacement: ReturnType<typeof placeIntoPendingLower> = null
+    if (placedDeskIndex < 0) {
+      lowerPlacement = placeIntoPendingLower({
+        cell: newTargetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved,
+        effectiveStartDate: targetDateKey, createdAt: params.createdAt, kind: 'slot-follow-full',
+        note: `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため保留（下段）に置きました。室長が動かすか採用で片づけてください。`,
+      })
+      if (!lowerPlacement) continue
+    }
+
+    // 4. 旧時限から外す。
+    const oldDesk = oldTargetCell.desks[makeupDeskIndex]
+    const oldSlots = [...oldDesk.lesson!.studentSlots] as StudentPair
+    oldSlots[makeupSeat] = null
+    const nextOldDesk: DeskCell = { ...oldDesk }
+    if (oldSlots.some(Boolean)) nextOldDesk.lesson = { ...oldDesk.lesson!, studentSlots: oldSlots }
+    else delete nextOldDesk.lesson
+    replaceDesk(oldTargetCell, makeupDeskIndex, nextOldDesk)
+
+    // 5. 新しい時限へ置く。
+    const freshNewTargetCell = cellById.get(newTargetCell.id)!
+    let teacherless = false
+    if (lowerPlacement) {
+      nextPendingDesks = lowerPlacement.nextPendingDesks
+    } else {
+      const desk = freshNewTargetCell.desks[placedDeskIndex]
+      const slots = [...(desk.lesson?.studentSlots ?? [null, null])] as StudentPair
+      slots[placedSeat] = moved
+      teacherless = !desk.teacher.trim()
+      replaceDesk(freshNewTargetCell, placedDeskIndex, { ...desk, lesson: desk.lesson ? { ...desk.lesson, studentSlots: slots } : { id: `daymove_${sourceDateKey}_${newSlot}_${placedDeskIndex}`, studentSlots: slots } })
+    }
+
+    // 6. 移動元記録を D の旧時限から外し、D の新しい時限のテンプレの机（空いた席）へ置く（席が無ければ記録は残さない＝Q40-2 と同じ）。
+    const sourceOld = cellById.get(oldSourceCell.id)!
+    const recordDesk = sourceOld.desks[recordDeskIndex]
+    const recordSlots = [...recordDesk.statusSlots!] as StatusPair
+    recordSlots[recordSeat] = null
+    const nextRecordDesk: DeskCell = { ...recordDesk }
+    if (recordSlots.some(Boolean)) nextRecordDesk.statusSlots = recordSlots
+    else delete nextRecordDesk.statusSlots
+    replaceDesk(sourceOld, recordDeskIndex, nextRecordDesk)
+    const sourceNew = cellAt(sourceDateKey, newSlot)
+    const sourceNewDesk = sourceNew?.desks[item.deskIndex]
+    if (sourceNew && sourceNewDesk) {
+      const seat = freeSeatOf(sourceNewDesk, item.seatIndex)
+      if (seat >= 0) {
+        const entry = params.buildMovedSourceStatusEntry({ student: item.student, sourceCell: sourceNew, sourceDesk: sourceNewDesk, destinationDateKey: targetDateKey, destinationSlotNumber: newSlot })
+        const statusSlots = [...(sourceNewDesk.statusSlots ?? [null, null])] as StatusPair
+        statusSlots[seat] = entry
+        replaceDesk(sourceNew, item.deskIndex, { ...sourceNewDesk, statusSlots })
+      }
+    }
+
+    moves.push({
+      student: item.student, sourceDateKey, oldSlotNumber: oldSlot, newSlotNumber: newSlot, targetDateKey, targetCellId: newTargetCell.id,
+      deskId: lowerPlacement ? lowerPlacement.deskId : freshNewTargetCell.desks[placedDeskIndex].id,
+      deskIndex: lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex,
+      seatIndex: lowerPlacement ? lowerPlacement.seatIndex : placedSeat,
+      placement: lowerPlacement ? 'pending' : 'upper',
+      fallbackDesk: (lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex) !== item.deskIndex,
+      teacherless,
+    })
+  }
+
+  if (touchedCellIds.size === 0) return { weeks: params.weeks, nextPendingDesks, moves, touchedCellIds }
+  const weeks = params.weeks.map((week) => {
+    const next = week.map((cell) => cellById.get(cell.id) ?? cell)
+    return next.some((cell, index) => cell !== week[index]) ? next : week
+  })
+  return { weeks, nextPendingDesks, moves, touchedCellIds }
+}

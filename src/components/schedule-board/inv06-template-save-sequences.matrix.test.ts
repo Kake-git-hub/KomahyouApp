@@ -58,7 +58,7 @@ function initialState(rows: RegularLessonRow[]): SavedState {
   return { weeks: board.weeks, suppressed: board.suppressed, ledgers: board.ledgers, scheduleCountAdjustments: board.scheduleCountAdjustments, pendingDesks: {} }
 }
 function step(state: SavedState, previousRows: RegularLessonRow[], nextRows: RegularLessonRow[]) {
-  const saved = save(state.weeks, nextRows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments, slotFilter: slotFilterBetween(previousRows, nextRows) })
+  const saved = save(state.weeks, nextRows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments, slotFilter: slotFilterBetween(previousRows, nextRows), previousRegularLessons: previousRows })
   return { saved, state: applySaveToState(state, saved) }
 }
 
@@ -107,13 +107,18 @@ describe('tp-51（2026-10-17 テスト教室）: 時限を変える → 科目�
   const MOVED = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3 }), row('r4', 't4', '', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
   const RESUBJECT = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3, subject1: '英' }), row('r4', 't4', '', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
 
-  it('2 回目（変えたコマ＝水 3限だけ）でも、水 5限を振替元に持つ旧科目の振替は根拠を失って消え、新科目は振替先へ置かれる。確認文の両方の行が出る', () => {
+  it('2 回目（変えたコマ＝水 3限だけ）でも、旧科目の振替は根拠を失って消え、新科目は振替先へ置かれる。確認文の両方の行が出る', () => {
     const state0 = initialState(BASE)
     const first = step(state0, BASE, MOVED)
     expect(first.saved.summary.orphanedMakeupsRemoved).toBe(0)
     expect(first.saved.summary.wholeDayTransferPlacedStudents).toBe(0)
-    expect(first.saved.studentNotes.map((note) => note.kind)).toEqual(['transfer-settled'])
-    expect(liveIds(first.state.weeks, THU_CELL).sort()).toEqual(['sA', 'sB'])
+    // 決定記録 46（2026-10-26・Q40-9）: 時限を変えたら、丸ごと振替で移送済みの振替も新しい時限（木 3限 机 0）へ動く。移動元記録も 水 5限 → 水 3限。
+    expect(first.saved.studentNotes.map((note) => note.kind)).toEqual(['slot-followed'])
+    expect(first.saved.summary.slotFollowMovedMakeups).toBe(1)
+    expect(liveIds(first.state.weeks, THU_CELL)).toEqual(['sB'])
+    expect(cellOf(first.state.weeks, `${THU}_3`).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', subject: '数', lessonType: 'makeup', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 3限' })
+    expect(cellOf(first.state.weeks, WED_CELL).desks[0].statusSlots?.some((entry) => entry?.managedStudentId === 'sA') ?? false).toBe(false)
+    expect(cellOf(first.state.weeks, `${WED}_3`).desks[0].statusSlots?.some((entry) => entry?.managedStudentId === 'sA' && entry.status === 'moved' && entry.moveDestinationDateKey === THU && entry.moveDestinationSlotNumber === 3)).toBe(true)
     expectNoViolation(first.state, MOVED, '時限変更の後')
     expectIdempotentResave(first.state, MOVED, '時限変更の再保存')
 
@@ -136,7 +141,7 @@ describe('tp-51（2026-10-17 テスト教室）: 時限を変える → 科目�
     expectIdempotentResave(second.state, RESUBJECT, '科目変更の再保存')
 
     // 改定前の結果（旧科目の振替が木 5限に残ったまま）は「根拠の無い振替」として監査が検出する。
-    const staleMakeup = cellOf(first.state.weeks, THU_CELL).desks[0].lesson!.studentSlots[0]!
+    const staleMakeup = cellOf(first.state.weeks, `${THU}_3`).desks[0].lesson!.studentSlots[0]!
     const ghost: SavedState = { ...second.state, weeks: second.state.weeks.map((week) => week.map((cell) => (cell.id !== THU_CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index !== 0 ? desk : { ...desk, lesson: { id: 'ghost', studentSlots: [staleMakeup, null] } })) }))) }
     const violations = audit(ghost, RESUBJECT)
     expect(violations.map((item) => ({ kind: item.kind, studentId: item.studentId, subject: item.subject }))).toEqual([{ kind: 'surplus-makeup', studentId: 'sA', subject: '数' }])
