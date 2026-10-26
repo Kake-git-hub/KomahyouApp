@@ -2896,6 +2896,74 @@ tr.sa-group-row td {
   white-space: nowrap;
 }
 
+/* 押せる「保留 n」バッジ（週をまたいだ一覧を開く・決定記録 48 §3・§H Q42-6）。 */
+.toolbar-template-pending-badge.is-button {
+  cursor: pointer;
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.toolbar-template-pending-badge.is-button:hover {
+  background: #c8e6c9;
+}
+
+/* 保留の机の一覧（週をまたぐ）。色は保留と同じ緑。 */
+.template-pending-list-modal {
+  max-width: 640px;
+}
+
+.template-pending-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-pending-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid #a5d6a7;
+  border-left: 4px solid #2e7d32;
+  border-radius: 10px;
+  background: #f1f8f2;
+}
+
+.template-pending-list-head {
+  font-weight: 700;
+  color: #1b5e20;
+}
+
+.template-pending-list-kind {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid #2e7d32;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.template-pending-list-detail,
+.template-pending-list-reason {
+  grid-column: 1 / 2;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.template-pending-list-reason {
+  color: #455a64;
+}
+
+.template-pending-list-row > .secondary-button {
+  grid-column: 2 / 3;
+  grid-row: 1 / span 3;
+  white-space: nowrap;
+}
+
 /* 保留（2 行）の席のメニュー＝4 択だけ（テンプレ授業を採用／手入力データを採用／削除／移動・確認リスト v1.5.576 その他欄・2026-10-02）。 */
 .template-pending-desk-menu-actions {
   display: flex;

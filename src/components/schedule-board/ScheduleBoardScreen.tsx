@@ -61,6 +61,7 @@ import {
   TEMPLATE_PENDING_MESSAGES,
 } from './templatePendingResolution'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
+import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -7491,6 +7492,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 保留の机のメニュー（下段の中身・採用ボタン）。deskId で持つ（机の並べ替えで index がずれても同じ机を指す）。
   const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number } | null>(null)
   const templatePendingDeskMenuRef = useRef<HTMLDivElement | null>(null)
+  // 保留の机の週をまたいだ一覧（決定記録 48 §3・spec-template-behavior §H Q42-6）。「保留 n」バッジで開く。読むだけ（解決は保留の机メニュー）。
+  const [isTemplatePendingListOpen, setTemplatePendingListOpen] = useState(false)
+  // 一覧の「このコマへ」で移った先の机（週の切替を描画し終えてから画面内へスクロールする）。
+  const [templatePendingListScrollTarget, setTemplatePendingListScrollTarget] = useState<{ cellId: string; deskIndex: number } | null>(null)
   const templatePendingDeskMenuSize = usePopoverMeasuredSize(templatePendingDeskMenuRef, templatePendingDeskMenu)
   // 下段の生徒の「移動」で移動先を待っている状態（次の生徒セルのクリックが移動先）。
   const [templatePendingLowerMove, setTemplatePendingLowerMove] = useState<{ cellId: string; deskId: string; lowerIndex: number; label: string } | null>(null)
@@ -12612,6 +12617,38 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [templatePendingSettleNotice])
 
   const templatePendingDeskCount = useMemo(() => countTemplatePendingDesksOnBoard(activeTemplatePendingDesks, weeks), [activeTemplatePendingDesks, weeks])
+  // 一覧の行は開いている間だけ作る（件数と同じ除外規則・buildTemplatePendingList）。
+  const templatePendingListRows = useMemo(
+    () => (isTemplatePendingListOpen ? buildTemplatePendingList(activeTemplatePendingDesks, weeks) : []),
+    [activeTemplatePendingDesks, isTemplatePendingListOpen, weeks],
+  )
+
+  const handleJumpToTemplatePendingDesk = (row: TemplatePendingListRow) => {
+    if (!jumpToWeekByDate(row.dateKey)) {
+      setStatusMessage('保留の机のコマが見つかりませんでした。表示を更新してから操作してください。')
+      return
+    }
+    // jumpToWeekByDate は週の先頭のコマを選ぶので、その後で保留の机を選び直す（同じイベント内の更新はまとめて描画される）。
+    setSelectedCellId(row.cellId)
+    setSelectedDeskIndex(row.deskIndex)
+    setTemplatePendingListOpen(false)
+    setTemplatePendingListScrollTarget({ cellId: row.cellId, deskIndex: row.deskIndex })
+    setStatusMessage(`保留 ${row.dateLabel} ${row.slotLabel} / ${row.deskIndex + 1}机目へ移動しました。緑の机の下の行を押して片づけます。`)
+  }
+
+  useEffect(() => {
+    if (!templatePendingListScrollTarget) return
+    const { cellId, deskIndex } = templatePendingListScrollTarget
+    setTemplatePendingListScrollTarget(null)
+    const escapedCellId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(cellId) : cellId.replace(/"/g, '\\"')
+    const target = document.querySelector(`[data-cell-id="${escapedCellId}"][data-desk-index="${deskIndex}"]`)
+    if (target && typeof (target as HTMLElement).scrollIntoView === 'function') (target as HTMLElement).scrollIntoView({ block: 'center', inline: 'center' })
+  }, [templatePendingListScrollTarget])
+
+  // フラグ OFF の教室・保留が無くなったときは一覧を閉じる（空の一覧を開いたままにしない）。
+  useEffect(() => {
+    if (isTemplatePendingListOpen && (isTemplateMode || templatePendingDeskCount === 0)) setTemplatePendingListOpen(false)
+  }, [isTemplateMode, isTemplatePendingListOpen, templatePendingDeskCount])
 
   const resolveTemplatePendingDeskAt = (cellId: string, deskIndex: number) => {
     if (!activeTemplatePendingDesks) return null
@@ -15006,6 +15043,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const tbOnGoPrevWeek = useStableCallback(() => switchWeek(weekIndex - 1))
   const tbOnGoNextWeek = useStableCallback(() => switchWeek(weekIndex + 1))
   const tbOnJumpToDate = useStableCallback(jumpToWeekByDate)
+  const tbOnOpenTemplatePendingList = useStableCallback(() => setTemplatePendingListOpen(true))
   const tbOnToggleLectureStock = useStableCallback(handleToggleLectureStock)
   const tbOnToggleMakeupStock = useStableCallback(handleToggleMakeupStock)
   const tbOnOpenStudentSchedule = useStableCallback(handleOpenStudentSchedule)
@@ -15105,6 +15143,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onOpenParentContactHistory={onOpenParentContactHistory}
             parentContactUnconfirmedCount={parentContactUnconfirmedCount}
             templatePendingDeskCount={templatePendingDeskCount}
+            onOpenTemplatePendingList={activeTemplatePendingDesks ? tbOnOpenTemplatePendingList : undefined}
             onGoPrevWeek={tbOnGoPrevWeek}
             onGoNextWeek={tbOnGoNextWeek}
             onJumpToDate={tbOnJumpToDate}
@@ -15712,6 +15751,34 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="secondary-button" onClick={() => setTemplateImportDateOptions(null)}>キャンセル</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {!isTemplateMode && isTemplatePendingListOpen ? (
+            // 決定記録 48 §3（spec-template-behavior §H Q42-6）: 保留（2 行・緑）の机の週をまたいだ一覧。読むだけ。
+            // 片づけは「このコマへ」で移った先の緑の机の下段（保留の机メニュー）で行う。
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplatePendingListOpen(false) }}>
+              <div className="auto-assign-modal template-pending-list-modal" role="dialog" aria-modal="true" aria-label="保留の机の一覧" data-testid="template-pending-list-modal">
+                <div className="auto-assign-modal-title">{`保留の机の一覧（${templatePendingListRows.length}机）`}</div>
+                <div className="student-menu-help-text">日付の早い順。「このコマへ」でその週へ移り、緑の机の下の行を押して片づけます（下の行はコマ表の PDF・共有画面には出ません）。</div>
+                <ul className="template-pending-list" data-testid="template-pending-list">
+                  {templatePendingListRows.map((row) => (
+                    <li key={row.key} className="template-pending-list-row" data-testid="template-pending-list-row">
+                      <div className="template-pending-list-head">
+                        {`${row.dateLabel}(${row.dayLabel}) ${row.slotLabel} / ${row.deskIndex + 1}机目`}
+                        <span className="template-pending-list-kind">{row.kindLabel}</span>
+                      </div>
+                      <div className="template-pending-list-detail">
+                        {`下の行(保留): ${row.lowerLabels.length > 0 ? row.lowerLabels.join('・') : '(なし)'} / 上の行: ${row.upperLabels.length > 0 ? row.upperLabels.join('・') : '(空き)'}`}
+                      </div>
+                      <div className="template-pending-list-reason">{row.reason}</div>
+                      <button type="button" className="secondary-button slim" onClick={() => handleJumpToTemplatePendingDesk(row)} data-testid="template-pending-list-jump-button">このコマへ</button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="primary-button" onClick={() => setTemplatePendingListOpen(false)} data-testid="template-pending-list-close-button">閉じる</button>
                 </div>
               </div>
             </div>

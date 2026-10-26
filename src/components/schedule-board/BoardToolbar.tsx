@@ -53,6 +53,11 @@ type BoardToolbarProps = {
    * 0・未指定（機能フラグ OFF の教室）ならバッジを出さない。
    */
   templatePendingDeskCount?: number
+  /**
+   * 「保留 n」バッジを押したとき（保留の机の週をまたいだ一覧を開く・決定記録 48 §3・spec-template-behavior §H Q42-6）。
+   * 未指定ならバッジは押せない表示のまま（従来どおり）。
+   */
+  onOpenTemplatePendingList?: () => void
   /** 会社レイヤの追加ボタン/メニュー項目へ渡す文脈(Phase 1 T1-5)。いま開いている教室名。 */
   classroomName?: string
   onGoPrevWeek: () => void
@@ -124,6 +129,7 @@ function BoardToolbarComponent({
   onOpenParentContactHistory,
   parentContactUnconfirmedCount,
   templatePendingDeskCount,
+  onOpenTemplatePendingList,
   classroomName,
   onGoPrevWeek,
   onGoNextWeek,
@@ -324,9 +330,16 @@ function BoardToolbarComponent({
                 通常授業テンプレ作成
               </button>
               {templatePendingDeskCount && templatePendingDeskCount > 0 ? (
-                <span className="toolbar-template-pending-badge" data-testid="board-template-pending-badge" title="テンプレ保存で保留（2 行・緑）になった机の数。緑の机の下段を押して片づけます。">
-                  保留 {templatePendingDeskCount}
-                </span>
+                onOpenTemplatePendingList ? (
+                  // 決定記録 48 §3（spec-template-behavior §H Q42-6）: 押すと保留の机の週をまたいだ一覧（日付・時限・生徒・理由・このコマへ）を開く。
+                  <button className="toolbar-template-pending-badge is-button" type="button" onClick={onOpenTemplatePendingList} data-testid="board-template-pending-badge" title="保留（2 行・緑）の机の数。押すと週をまたいだ一覧を開きます。緑の机の下段を押して片づけます。">
+                    保留 {templatePendingDeskCount}
+                  </button>
+                ) : (
+                  <span className="toolbar-template-pending-badge" data-testid="board-template-pending-badge" title="テンプレ保存で保留（2 行・緑）になった机の数。緑の机の下段を押して片づけます。">
+                    保留 {templatePendingDeskCount}
+                  </span>
+                )
               ) : null}
               {onOpenParentContactHistory ? (
                 <button className="secondary-button slim" type="button" onClick={onOpenParentContactHistory} data-testid="board-parent-contact-button" title="保護者QRからの休み連絡の履歴">
