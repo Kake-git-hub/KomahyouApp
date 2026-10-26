@@ -479,6 +479,74 @@ describe('ツールバーのバッジ（条件 27）', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 保留の机の週をまたいだ一覧（決定記録 48 §3・spec-template-behavior §H Q42-6・2026-10-26）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('保留の机の週をまたいだ一覧（決定記録 48 §3・Q42-6）', () => {
+  const noop = () => {}
+  function toolbarProps() {
+    return {
+      weekLabel: '2026/10/05〜10/11', weekStartDate: '2026-10-05', statusMessage: '',
+      lectureStockTotalCount: 0, isLectureStockOpen: false, makeupStockTotalCount: 0, isMakeupStockOpen: false, isMakeupMoveActive: false,
+      isPrintingPdf: false, isStudentScheduleOpen: false, isTeacherScheduleOpen: false, hasSelectedStudent: false,
+      canUndo: false, canRedo: false, canGoPrevWeek: true, canGoNextWeek: true, isTemplateMode: false,
+      onUndo: noop, onRedo: noop, onOpenSortMenu: noop, onReportToDeveloper: noop, onGoPrevWeek: noop, onGoNextWeek: noop, onJumpToDate: noop,
+      onToggleLectureStock: noop, onToggleMakeupStock: noop, onOpenStudentSchedule: noop, onOpenTeacherSchedule: noop, onOpenRegularTemplate: noop,
+      onPrintPdf: noop, onCancelSelection: noop, onOpenBasicData: noop, onOpenSpecialData: noop, onOpenAutoAssignRules: noop, onOpenBackupRestore: noop,
+      onLogout: noop, undoSnapshotLabel: null,
+    }
+  }
+
+  async function renderToolbar(extra: Record<string, unknown>) {
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const { BoardToolbar } = await import('./BoardToolbar')
+    ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => { root.render(createElement(BoardToolbar, { ...toolbarProps(), ...extra })) })
+    return { container, act, cleanup: () => { act(() => root.unmount()); container.remove() } }
+  }
+
+  it('「保留 n」バッジは onOpenTemplatePendingList を渡すとボタンになり、押すと一覧を開く', async () => {
+    const onOpenTemplatePendingList = vi.fn()
+    const { container, act, cleanup } = await renderToolbar({ templatePendingDeskCount: 3, onOpenTemplatePendingList })
+    const badge = container.querySelector('[data-testid="board-template-pending-badge"]')
+    expect(badge?.tagName).toBe('BUTTON')
+    expect(badge?.textContent).toContain('保留 3')
+    act(() => { badge!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(onOpenTemplatePendingList).toHaveBeenCalledTimes(1)
+    cleanup()
+  })
+
+  it('onOpenTemplatePendingList を渡さない（フラグ OFF）なら従来どおり押せない表示・0 件なら出さない', async () => {
+    const withoutHandler = await renderToolbar({ templatePendingDeskCount: 2 })
+    expect(withoutHandler.container.querySelector('[data-testid="board-template-pending-badge"]')?.tagName).toBe('SPAN')
+    withoutHandler.cleanup()
+    const zero = await renderToolbar({ templatePendingDeskCount: 0, onOpenTemplatePendingList: vi.fn() })
+    expect(zero.container.querySelector('[data-testid="board-template-pending-badge"]')).toBeNull()
+    zero.cleanup()
+  })
+
+  it('盤面: 開く口はフラグ ON の保留マップがあるときだけ・行は件数と同じ規則（buildTemplatePendingList）・テンプレ編集中は出さない', () => {
+    expect(BOARD_TSX).toContain('onOpenTemplatePendingList={activeTemplatePendingDesks ? tbOnOpenTemplatePendingList : undefined}')
+    expect(BOARD_TSX).toContain('(isTemplatePendingListOpen ? buildTemplatePendingList(activeTemplatePendingDesks, weeks) : [])')
+    expect(BOARD_TSX).toContain('{!isTemplateMode && isTemplatePendingListOpen ? (')
+  })
+
+  it('盤面: 「このコマへ」はその週へ移ってから保留の机を選び直し、一覧を閉じる（読むだけ＝週データ・保留マップを書かない）', () => {
+    const jump = sliceBody(BOARD_TSX, 'const handleJumpToTemplatePendingDesk = (', '\n  }\n')
+    expect(jump.indexOf('jumpToWeekByDate(row.dateKey)')).toBeGreaterThanOrEqual(0)
+    expect(jump.indexOf('setSelectedCellId(row.cellId)')).toBeGreaterThan(jump.indexOf('jumpToWeekByDate(row.dateKey)'))
+    expect(jump).toContain('setSelectedDeskIndex(row.deskIndex)')
+    expect(jump).toContain('setTemplatePendingListOpen(false)')
+    expect(jump).not.toContain('commitWeeks')
+    expect(jump).not.toContain('setTemplatePendingDesks')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 保留の下段の生徒の長押し D&D（オーナー指示 2026-10-13「保留の生徒〔テンプレも既存もどちらも〕の移動を D&D でできるようにして」・Q26-8 追記）
 // ─────────────────────────────────────────────────────────────────────────────
 

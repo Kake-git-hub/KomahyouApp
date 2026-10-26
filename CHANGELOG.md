@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.644 (2026-10-26)
+
+- feat(INV-13): **保留(2 行・緑)の机の週をまたいだ一覧(決定記録 48 §3・§H Q42-6・templateDiffApply の教室だけ)**。盤面上部の「保留 n」バッジを押せるボタンにし、押すと保留の机の一覧(日付(曜)・時限・n机目・由来〔テンプレ保存／丸ごと振替／振替先が満席／休日解除／時限変更の追従〕・下の行と上の行の生徒・理由文・「このコマへ」)を開く。保存後に誰がどこの保留に残ったかを週を送らずに追えるように(棚卸しの共通の弱点への手当て)。行はバッジの件数と同じ規則(孤児キー・机の無いキー・反映日より前は出さない)で日付 → 時限 → 机の順。「このコマへ」はその週へ移って机を選びスクロールするだけで、週データ・保留マップは書かない(読むだけ・片づけは既存の保留の机メニュー)。フラグ OFF の教室は従来どおり押せない表示。新規 `templatePendingList.ts`(権威関数 buildTemplatePendingList)＋`templatePendingList.test.ts`・`templatePendingBoard.wiring.test.ts` に describe「保留の机の週をまたいだ一覧」4 行。確認リスト第78版 v1.5.644(tp-64・テスト教室にも出す)。計画 docs/plan-2026-10-25-conflict-placement.md は完了。(BoardToolbar.tsx・ScheduleBoardScreen.tsx・App.css)
+
 ## v1.5.643 (2026-10-26)
 
 - feat(INV-02/INV-06/INV-12): **時限変更の追従(決定記録 46・§H Q40-9・templateDiffApply の教室だけ)**。テンプレで時限を変えたら、丸ごと振替で移送済みの振替(振替先)と元の日の「休)」(移動元記録)も新しい時限へ動かす。対象は同じ授業(生徒×科目×振替元の日付×時限が一致・丸ごと振替の 1 対 1 が残っている)だけで、時限の増減が 1 対 1 のとき。置き先は新しい時限のテンプレの机 → 別の机(講師あり→なし) → 満席なら同じ机番号の下段(保留・緑・決定記録 48)。もとの表示の時限も新しい時限に。振替先が反映日より前・出欠記録あり・室長が手で動かした後・保留の机・新しい時限に同じ生徒・時限の増減が曖昧、は動かさない。在庫中立(台帳・希望回数・抑止キーは触らない)。確認の画面に件数と名前つきの理由。入口に保存前のテンプレの行(`previousRegularLessons`)を渡し、盤面の保存が必ず渡すことを配線テストで固定。マトリクス `inv06-template-transfer-follow` describe「Q40-9」4 行・`inv06-template-save-sequences` の tp-51 の 1 手目を改定(全順序ペアに保存前のテンプレを渡す)・新規 `templateSlotChangeFollow.wiring.test.ts`。確認リスト第77版 v1.5.643(tp-51 書き換え)。進行中テーマ台帳: 残りは保留の帯の週をまたいだ一覧だけ。(templateTransferFollow.ts planSlotChangeTransferFollow・ScheduleBoardScreen.tsx・templateDiffApply.ts)
