@@ -2622,14 +2622,20 @@ export function buildTemplateDiffTemplateCells(params: {
     // 普通の休日（日単位抑止なし）は作らない＝従来どおり何もしない。
     const closedTransferDates = managedCells.filter((entry) => entry.scaffoldTeachersStripped && !entry.applied.isOpenDay).map((entry) => entry.raw.dateKey)
     const openedById = new Map<string, SlotCell>()
+    const openedRawById = new Map<string, SlotCell>()
     if (closedTransferDates.length > 0) {
       const openedSettings: ClassroomSettings = { ...params.classroomSettings, forceOpenDates: [...new Set([...params.classroomSettings.forceOpenDates, ...closedTransferDates])] }
       const opened = buildAppliedManagedPostFreezeCells(week, { ...params, classroomSettings: openedSettings, freezeDate: params.effectiveStartDate })
-      for (const entry of opened.managedCells) if (closedTransferDates.includes(entry.raw.dateKey)) openedById.set(entry.raw.id, entry.applied)
+      for (const entry of opened.managedCells) {
+        if (!closedTransferDates.includes(entry.raw.dateKey)) continue
+        openedById.set(entry.raw.id, entry.applied)
+        openedRawById.set(entry.raw.id, entry.raw)
+      }
     }
     for (const { raw, applied, scaffoldTeachersStripped } of managedCells) {
       const openedCell = openedById.get(raw.id)
-      result.push({ raw: cloneSlotCell(raw), applied, scaffoldTeachersStripped, ...(openedCell ? { closedTransferSourceDesks: openedCell.desks } : {}) })
+      const openedRaw = openedRawById.get(raw.id)
+      result.push({ raw: cloneSlotCell(raw), applied, scaffoldTeachersStripped, ...(openedCell ? { closedTransferSourceDesks: openedCell.desks } : {}), ...(openedRaw ? { closedTransferSourceRawDesks: cloneSlotCell(openedRaw).desks } : {}) })
     }
   }
   return result
@@ -2740,7 +2746,7 @@ export function computeTemplateDiffApplyForBoard(input: {
     const slotFollow = planSlotChangeTransferFollow({
       weeks: follow.weeks, pendingDesks: follow.nextPendingDesks, previousRegularLessons: params.previousRegularLessons, regularLessons: params.regularLessons,
       settled: run.diff.wholeDayTransferSettled, templateCells: run.templateCells, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt,
-      formatOriginLabel: formatStockOriginLabel, buildMovedSourceStatusEntry,
+      formatOriginLabel: formatStockOriginLabel, buildMovedSourceStatusEntry, studentFromStatus: buildStudentEntryFromStatus,
       // M-1（regression-reviewer 2026-10-26）: 丸ごと振替の両日（日単位の足場講師の抑止）だけを 1 対 1 の写像として扱う（1 コマの別日 D&D を動かさない＝INV-02）。
       wholeDayTransferDates: collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences),
       resolveSchoolYear: resolveTemplateSchoolYear,
@@ -2782,7 +2788,8 @@ export function computeTemplateDiffApplyForBoard(input: {
           sameDayMoveCopiesReverted: run.stripped.length,
           // Q40-2 で振替先へ置いた／未消化にした生徒は「置かず振替を優先」の数と −1 から外す。
           // 時限の追従で動かした生徒も「置かず振替を優先」から外す（同じ生徒を 2 行で出さない・regression-reviewer 2026-10-26 L-2）。
-          wholeDayTransferSkippedStudents: run.diff.summary.wholeDayTransferSkippedStudents - follow.handledCount - slotFollow.moves.length,
+          // 引くのは Q35 の「置かなかった生徒」に入っていた分（精算済み）だけ（往復の 2 回目は入っていないので引くと負になる・再監査 L-A）。
+          wholeDayTransferSkippedStudents: run.diff.summary.wholeDayTransferSkippedStudents - follow.handledCount - follow.settled.filter((item) => slotFollowedKeys.has(`${studentSubjectKey(item.student)}__${item.sourceDateKey}__${item.sourceSlotNumber}`)).length,
           wholeDayTransferCountAdjusted: wholeDayTransferCountAdjustments.length,
           orphanedMakeupsRemoved: orphaned.removals.length,
           wholeDayTransferPlacedStudents: follow.placed.length,
@@ -7172,13 +7179,17 @@ export function computeWholeDayTransfer(params: {
           if (leaveSourceRestMarkers && student.lessonType === 'regular') {
             sourceRestMarkers.push({
               studentIndex,
-              entry: buildMovedSourceStatusEntry({
-                student,
-                sourceCell,
-                sourceDesk: srcDesk,
-                destinationDateKey: targetCell.dateKey,
-                destinationSlotNumber: targetCell.slotNumber,
-              }),
+              // 丸ごと振替が作った記録の印（決定記録 46・Q40-9 が 1 対 1 の組と見なす根拠。1 コマ D&D の記録には付けない）。
+              entry: {
+                ...buildMovedSourceStatusEntry({
+                  student,
+                  sourceCell,
+                  sourceDesk: srcDesk,
+                  destinationDateKey: targetCell.dateKey,
+                  destinationSlotNumber: targetCell.slotNumber,
+                }),
+                wholeDayTransfer: true,
+              },
             })
           }
           // 通常→振替変換（元日+時限を焼く）。元の通常授業日へ戻る振替は通常へ復帰。他種別は素通し。

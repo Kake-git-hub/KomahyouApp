@@ -1180,6 +1180,11 @@ export type TemplateDiffTemplateCell = {
    * 休日のコマ自体には置かない。普通の休日（日単位抑止なし）では作らない。
    */
   closedTransferSourceDesks?: readonly DeskCell[]
+  /**
+   * 同じ開けた形の、抑止を当てる**前**のテンプレ机（2026-10-26・Q40-9 の再監査 L-C）。時限変更の追従が新しい時限のテンプレの机番号を引く手がかり
+   * （抑止後の closedTransferSourceDesks には、往復の 2 回目で旧時限の抑止キーが効いて生徒が居ない）。表示・配置には使わない。
+   */
+  closedTransferSourceRawDesks?: readonly DeskCell[]
 }
 
 export type TemplateDiffApplySummary = {

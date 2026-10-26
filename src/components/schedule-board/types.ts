@@ -101,6 +101,12 @@ export type StudentStatusEntry = {
    * 休日解除の巻き戻しが設定時と厳密に対称になるようにするための唯一の根拠。
    */
   holidayStockReturn?: HolidayStockReturnStamp
+  /**
+   * `status==='moved'` のうち、**丸ごと振替（とテンプレ保存の追従 Q40-2 / Q40-9）が作った**移動元記録の印（2026-10-26・決定記録 46・regression-reviewer M-A）。
+   * 時限変更の追従（Q40-9）が「丸ごと振替の 1 対 1 の組」とみなす根拠。1 コマの別日 D&D（computeStudentMove）の記録には付けない＝室長が置き先を選んだ授業を動かさない（INV-02）。
+   * 印の無い旧データは、振替の授業の ID（丸ごと振替が付ける `daymove_<振替元の日>_…`）で組を確かめる。
+   */
+  wholeDayTransfer?: boolean
   sourceLessonId: string
   sourceLessonNote?: string
   sourceLessonWarning?: string

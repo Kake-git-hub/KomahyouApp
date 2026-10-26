@@ -27,6 +27,21 @@ describe('時限の追従の配線（決定記録 46）', () => {
     expect(body).toContain('const nextWeeks = slotFollow.weeks.map(')
     expect(body).toContain('nextPendingDesks: slotFollow.nextPendingDesks,')
     expect(body).toContain('...slotFollow.touchedCellIds')
+    // 省略できる手がかり・条件の渡し忘れは黙って効かなくなるので字面で固定（再監査 2026-10-26）。
+    expect(body).toContain('templateCells: run.templateCells')
+    expect(body).toContain('wholeDayTransferDates: collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences)')
+    expect(body).toContain('resolveSchoolYear: resolveTemplateSchoolYear')
+    expect(body).toContain('studentFromStatus: buildStudentEntryFromStatus')
+  })
+
+  it('丸ごと振替が作る移動元記録に印（wholeDayTransfer: true）を付ける（1 コマ D&D の computeStudentMove には付けない）', () => {
+    const start = BOARD_TSX.indexOf('export function computeWholeDayTransfer(')
+    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('export function buildWholeDayTransferConfirmMessage', start))
+    expect(body).toContain('wholeDayTransfer: true,')
+    const moveStart = BOARD_TSX.indexOf('export function computeStudentMove(')
+    expect(moveStart).toBeGreaterThan(0)
+    const moveBody = BOARD_TSX.slice(moveStart, BOARD_TSX.indexOf('\nexport function ', moveStart + 10))
+    expect(moveBody).not.toContain('wholeDayTransfer: true')
   })
 })
 
