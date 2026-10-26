@@ -50,7 +50,7 @@ export type TemplatePendingLower = {
  *  - whole-day-transfer-displaced … 丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加で、移送後のコマに空き席が無かったもの（(a)）。
  *  - transfer-follow-full        … Q40-2 で丸ごと振替した日に足した生徒の振替先のコマが満席だったもの（(b)-1）。
  *  - holiday-release-seat-taken  … 休日解除で戻す席に別の生徒が居たもの（(b)-2）。
- *  - slot-follow-full            … 時限変更の追従（決定記録 46）で新しい時限が満席だったもの（(b)-3・未実装）。
+ *  - slot-follow-full            … 時限変更の追従（決定記録 46・§H Q40-9）で新しい時限が満席だったもの（(b)-3・v1.5.643）。
  */
 export type TemplatePendingOriginKind = 'whole-day-transfer-displaced' | 'transfer-follow-full' | 'holiday-release-seat-taken' | 'slot-follow-full'
 

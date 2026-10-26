@@ -2741,6 +2741,9 @@ export function computeTemplateDiffApplyForBoard(input: {
       weeks: follow.weeks, pendingDesks: follow.nextPendingDesks, previousRegularLessons: params.previousRegularLessons, regularLessons: params.regularLessons,
       settled: run.diff.wholeDayTransferSettled, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt,
       formatOriginLabel: formatStockOriginLabel, buildMovedSourceStatusEntry,
+      // M-1（regression-reviewer 2026-10-26）: 丸ごと振替の両日（日単位の足場講師の抑止）だけを 1 対 1 の写像として扱う（1 コマの別日 D&D を動かさない＝INV-02）。
+      wholeDayTransferDates: collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences),
+      resolveSchoolYear: resolveTemplateSchoolYear,
     })
     const slotFollowedKeys = new Set(slotFollow.moves.map((move) => `${studentSubjectKey(move.student)}__${move.sourceDateKey}__${move.newSlotNumber}`))
     // 2026-10-25（Q40-2 休日設定した振替元）: 休日の日の「置かなかった生徒」は Q35-8 の −1 を積まない（従来どおり休日の自動発生〔テンプレ行×休日〕に任せる。
@@ -2778,7 +2781,8 @@ export function computeTemplateDiffApplyForBoard(input: {
           ...run.diff.summary,
           sameDayMoveCopiesReverted: run.stripped.length,
           // Q40-2 で振替先へ置いた／未消化にした生徒は「置かず振替を優先」の数と −1 から外す。
-          wholeDayTransferSkippedStudents: run.diff.summary.wholeDayTransferSkippedStudents - follow.handledCount,
+          // 時限の追従で動かした生徒も「置かず振替を優先」から外す（同じ生徒を 2 行で出さない・regression-reviewer 2026-10-26 L-2）。
+          wholeDayTransferSkippedStudents: run.diff.summary.wholeDayTransferSkippedStudents - follow.handledCount - slotFollow.moves.length,
           wholeDayTransferCountAdjusted: wholeDayTransferCountAdjustments.length,
           orphanedMakeupsRemoved: orphaned.removals.length,
           wholeDayTransferPlacedStudents: follow.placed.length,

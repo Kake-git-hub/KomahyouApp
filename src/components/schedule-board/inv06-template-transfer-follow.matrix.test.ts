@@ -12,7 +12,7 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeHolidayReleaseRestoration, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeHolidayReleaseRestoration, computeStudentMove, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
@@ -765,6 +765,13 @@ describe('Q40-9 時限変更の追従（決定記録 46）', () => {
     const r4 = saveMoved(dup, board.suppressed)
     expect(r4.summary.slotFollowMovedMakeups + r4.summary.slotFollowPendingMakeups, 'r4').toBe(0)
     expect(liveIds(r4.nextWeeks, THU_CELL)).toContain('sA')
+    // 追従しなかった形でも −1・台帳は動かない（H-1 が本番の経路を見なくなった分の補完・regression-reviewer 2026-10-26）
+    for (const [label, result] of [['r1', r1], ['r2', r2], ['r3', r3], ['r4', r4]] as const) {
+      expect(result.wholeDayTransferCountAdjustments, label).toEqual([])
+      expect(result.manualMakeupOriginAdditions, label).toEqual([])
+    }
+    expectFixpoint(r3, MOVED_ROWS, board.suppressed)
+    expectFixpoint(r4, MOVED_ROWS, board.suppressed)
   })
 
   it('例外: 振替先が反映日より前（後ろ向きの丸ごと振替）・時限の増減が 1 対 1 でない（5限 → 3限＋4限）は動かさない', () => {
@@ -780,5 +787,132 @@ describe('Q40-9 時限変更の追従（決定記録 46）', () => {
     const r2 = save(board.weeks, twoRows, board.suppressed, { previousRegularLessons: OLD_ROWS })
     expect(r2.summary.slotFollowMovedMakeups + r2.summary.slotFollowPendingMakeups).toBe(0)
     expect(liveIds(r2.nextWeeks, THU_CELL)).toContain('sA')
+  })
+})
+
+// regression-reviewer（2026-10-26）の監査で足した行: M-1（1 コマ D&D を動かさない）・L-1（下段の同じ生徒）・兄弟（休日の振替元・別の週・同じ曜日・生徒 2 の席・時限＋科目・2 科目の入れ替え・セルが無い）。
+describe('Q40-9 時限変更の追従 × 監査の兄弟（regression-reviewer 2026-10-26）', () => {
+  const MOVED_ROWS = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+  const THU3 = `${THU}_3`
+  const roster = new Map(students.map((student) => [student.name, student]))
+  const where = (weeks: SlotCell[][], id: string) => weeks.flat().flatMap((cell) => cell.desks.flatMap((desk, deskIndex) => (desk.lesson?.studentSlots ?? []).flatMap((student) => (student?.managedStudentId === id ? [`${cell.id}#${deskIndex}:${student.lessonType}:${student.subject}`] : []))))
+  /** 追従しなかった・したに関わらず: −1 なし・台帳不変・残数不変・再マージの不動点。 */
+  function expectNeutral(saved: ReturnType<typeof save>, weeksBefore: SlotCell[][], rowsBefore: RegularLessonRow[], rowsAfter: RegularLessonRow[], suppressed: string[], ledgers: Record<string, ManualMakeupOrigin[]> = {}, classroomSettings = settings()) {
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    const before = balances(weeksBefore, rowsBefore, ledgers, classroomSettings)
+    const after = balances(saved.nextWeeks, rowsAfter, ledgers, classroomSettings, {}, saved.nextPendingDesks)
+    for (const key of ['sA__数', 'sB__数']) expect(after[key] ?? 0, key).toBe(before[key] ?? 0)
+    expectFixpoint(saved, rowsAfter, suppressed, classroomSettings)
+  }
+
+  it('M-1（INV-02）: 振替を元の日へ戻してから別の日（丸ごと振替の日でない金）の同じ時限へ 1 コマ D&D した振替は、時限を変えても動かさない', () => {
+    const board = transferredBoard()
+    const move = (weeks: SlotCell[][], suppressed: string[], studentId: string, cellId: string) => {
+      const result = computeStudentMove({ weeks, weekIndex: 0, cells: weeks[0], movingStudentId: studentId, cellId, deskIndex: 0, studentIndex: 0, suppressedRegularLessonOccurrences: suppressed, managedStudentByAnyName: roster, resolveBoardStudentDisplayName: (name) => name })
+      if (result.status !== 'moved') throw new Error(result.message)
+      return { weeks: remerge(result.nextWeeks, OLD_ROWS, result.nextSuppressedRegularLessonOccurrences), suppressed: result.nextSuppressedRegularLessonOccurrences }
+    }
+    const makeupA = cellOf(board.weeks, THU_CELL).desks[0].lesson!.studentSlots[0]!
+    let state = move(board.weeks, board.suppressed, makeupA.id, WED_CELL)
+    const back = cellOf(state.weeks, WED_CELL).desks[0].lesson!.studentSlots[0]!
+    state = move(state.weeks, state.suppressed, back.id, FRI_CELL)
+    // 前提: 金 5限に振替（もと 水 5限）、水 5限に移動元記録（行き先 金・5限）＝時限だけでは丸ごと振替と区別できない形
+    expect(cellOf(state.weeks, FRI_CELL).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: WED })
+    expect(cellOf(state.weeks, WED_CELL).desks.some((desk) => desk.statusSlots?.some((entry) => entry?.status === 'moved' && entry.managedStudentId === 'sA' && entry.moveDestinationDateKey === FRI))).toBe(true)
+    const saved = save(state.weeks, MOVED_ROWS, state.suppressed, { previousRegularLessons: OLD_ROWS })
+    expect(saved.summary.slotFollowMovedMakeups + saved.summary.slotFollowPendingMakeups).toBe(0)
+    expect(liveIds(saved.nextWeeks, FRI_CELL)).toContain('sA')
+    expect(liveIds(saved.nextWeeks, `${FRI}_3`)).not.toContain('sA')
+    expectNeutral(saved, state.weeks, OLD_ROWS, MOVED_ROWS, state.suppressed)
+  })
+
+  it('L-1（INV-12）: 新しい時限の保留の下段に同じ生徒（別の科目）が居れば動かさない', () => {
+    const board = transferredBoard()
+    const thu3 = cellOf(board.weeks, THU3)
+    const mk = (id: string, studentId: string, subject: StudentEntry['subject'] = '数'): StudentEntry => ({ id, name: studentId, managedStudentId: studentId, grade: '中2', subject, lessonType: 'regular', teacherType: 'normal', manualAdded: true })
+    const weeks = withDesk(board.weeks, THU3, 1, (desk) => ({ ...desk, teacher: '鈴木', manualTeacher: true, lesson: { id: 'u1', studentSlots: [mk('c1', 'sC'), mk('d1', 'sD')] as [StudentEntry | null, StudentEntry | null] } }))
+    const key = buildTemplatePendingDeskKey(thu3.id, thu3.desks[1].id)
+    const pending = { [key]: { lower: { lesson: { id: 'lw', studentSlots: [mk('a1', 'sA', '英'), null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: WED, createdAt: 'x' } }
+    const saved = saveMovedWithPending(weeks, board.suppressed, pending)
+    expect(saved.summary.slotFollowMovedMakeups + saved.summary.slotFollowPendingMakeups).toBe(0)
+    expect(liveIds(saved.nextWeeks, THU3)).not.toContain('sA')
+    expect(liveIds(saved.nextWeeks, THU_CELL)).toContain('sA')
+  })
+  function saveMovedWithPending(weeks: SlotCell[][], suppressed: string[], templatePendingDesks: TemplatePendingDeskMap) {
+    return save(weeks, MOVED_ROWS, suppressed, { previousRegularLessons: OLD_ROWS, templatePendingDesks })
+  }
+
+  it('振替元が休日設定の日（決定記録 45）でも動く・在庫中立・不動点・再保存で何も起きない', () => {
+    const hs = settings({ holidayDates: [WED] })
+    const board = transferredBoard()
+    const saved = save(board.weeks, MOVED_ROWS, board.suppressed, { previousRegularLessons: OLD_ROWS, classroomSettings: hs })
+    expect(saved.summary.slotFollowMovedMakeups).toBe(1)
+    expect(where(saved.nextWeeks, 'sA')).toEqual([`${THU3}#0:makeup:数`])
+    expectNeutral(saved, board.weeks, OLD_ROWS, MOVED_ROWS, board.suppressed, {}, hs)
+    const again = save(saved.nextWeeks, MOVED_ROWS, suppressedAfter(board.suppressed, saved), { previousRegularLessons: MOVED_ROWS, classroomSettings: hs, templatePendingDesks: saved.nextPendingDesks })
+    expect(again.summary.slotFollowMovedMakeups + again.summary.wholeDayTransferPlacedStudents + again.summary.wholeDayTransferPendingStudents).toBe(0)
+  })
+
+  for (const [label, targetDateKey] of [['別の週（翌週の木）', '2026-10-15'], ['同じ曜日（翌週の水）', '2026-10-14']] as const) {
+    it(`振替先が${label}でも動く・二重なし・在庫中立・不動点`, () => {
+      const w1 = buildWeek(OLD_ROWS)
+      const w2 = buildWeek(OLD_ROWS, settings(), { startDate: '2026-10-12', endDate: '2026-10-18' })
+      const weeks0 = [w1, w2]
+      const ledgerOriginDatesByKey = collectMakeupOriginDatesByKey({ students, regularLessons: OLD_ROWS, classroomSettings: settings(), weeks: weeks0, manualAdjustments: {}, resolveStudentKey, today: TODAY, includeAbsentMakeupOrigins: false })
+      const result = computeWholeDayTransfer({ weeks: weeks0, sourceDateKey: WED, targetDateKey, manualMakeupAdjustments: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackMakeupStudents: {}, fallbackLectureStockStudents: {}, suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, scheduleCountAdjustments: [], students, teachers, regularLessons: OLD_ROWS, managedStudentByAnyName: roster, resolveDisplayName: (name: string) => name, resolveStockId: resolveStudentKey, ledgerOriginDatesByKey, leaveSourceRestMarkers: true })
+      if (result.status !== 'transferred') throw new Error(result.message)
+      const weeks = remerge(result.nextWeeks, OLD_ROWS, result.nextSuppressedRegularLessonOccurrences)
+      const saved = save(weeks, MOVED_ROWS, result.nextSuppressedRegularLessonOccurrences, { previousRegularLessons: OLD_ROWS })
+      expect(saved.summary.slotFollowMovedMakeups).toBe(1)
+      expect(where(saved.nextWeeks, 'sA').filter((entry) => entry.includes(':makeup:'))).toEqual([`${targetDateKey}_3#0:makeup:数`])
+      expectNeutral(saved, weeks, OLD_ROWS, MOVED_ROWS, result.nextSuppressedRegularLessonOccurrences)
+    })
+  }
+
+  it('生徒 2 の席でも動く（置く席は Q35 が報告するテンプレの机・席＝生徒 1 が空なら盤面の席 1。Q40-2 と同じ）', () => {
+    const rows0 = [row('r0', 't1', 'sD', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const rows1 = [row('r0', 't1', 'sD'), row('r5', 't1', '', 'sA', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const board = transferredBoard(rows0)
+    const saved = save(board.weeks, rows1, board.suppressed, { previousRegularLessons: rows0 })
+    expect(saved.summary.slotFollowMovedMakeups).toBe(1)
+    expect(where(saved.nextWeeks, 'sA')).toEqual([`${THU3}#0:makeup:数`])
+    expect(liveIds(saved.nextWeeks, THU_CELL)).not.toContain('sA')
+    expectNeutral(saved, board.weeks, rows0, rows1, board.suppressed)
+  })
+
+  it('時限＋科目を 1 回で変えると追従ではなく「外す＋足す」（Q40-1 が旧科目を外し Q40-2 が新科目を置く）。二重なし', () => {
+    const rows1 = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3, subject1: '英' }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const board = transferredBoard()
+    const saved = save(board.weeks, rows1, board.suppressed, { previousRegularLessons: OLD_ROWS })
+    expect(saved.summary.slotFollowMovedMakeups).toBe(0)
+    expect(saved.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(saved.summary.wholeDayTransferPlacedStudents).toBe(1)
+    expect(where(saved.nextWeeks, 'sA')).toEqual([`${THU3}#0:makeup:英`])
+  })
+
+  it('同じ生徒の 2 科目の時限を入れ替える（数 5→4・英 4→5）と、互いの INV-12 検査で動かず精算済みのまま（保守的・仕様に明記）', () => {
+    const rows0 = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4), row('r3', 't3', 'sA', '', 3, { slotNumber: 4, subject1: '英' })]
+    const rows1 = [row('r0', 't1', 'sA', '', 3, { slotNumber: 4 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4), row('r3', 't3', 'sA', '', 3, { slotNumber: 5, subject1: '英' })]
+    const board = transferredBoard(rows0)
+    const before = where(board.weeks, 'sA').sort()
+    const saved = save(board.weeks, rows1, board.suppressed, { previousRegularLessons: rows0 })
+    expect(saved.summary.slotFollowMovedMakeups + saved.summary.slotFollowPendingMakeups).toBe(0)
+    expect(where(saved.nextWeeks, 'sA').sort()).toEqual(before)
+  })
+
+  it('振替先の新しい時限のセルが無い（週トリム相当）なら動かさない', () => {
+    const board = transferredBoard()
+    const weeks = board.weeks.map((week) => week.filter((cell) => cell.id !== THU3))
+    const saved = save(weeks, MOVED_ROWS, board.suppressed, { previousRegularLessons: OLD_ROWS })
+    expect(saved.summary.slotFollowMovedMakeups + saved.summary.slotFollowPendingMakeups).toBe(0)
+    expect(liveIds(saved.nextWeeks, THU_CELL)).toContain('sA')
+  })
+
+  it('L-2: 動かした生徒は「置かず振替を優先」の人数に数えない（同じ生徒を 2 行で出さない）', () => {
+    const board = transferredBoard()
+    const saved = save(board.weeks, MOVED_ROWS, board.suppressed, { previousRegularLessons: OLD_ROWS })
+    expect(saved.summary.slotFollowMovedMakeups).toBe(1)
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(0)
   })
 })
