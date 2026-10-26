@@ -199,6 +199,8 @@ describe('操作の全ペア（順序つき）で保存則・冪等・不動点�
     // regression-reviewer H-A（2026-10-21）: 時限を変えた生徒に、同じ科目を同じ曜日の別の時限で足す。4限の行は足場 r6 より前＝水 4限 机 0（振替先 木 4限 机 0 の講師は移送された高橋）。
     { name: 'A の数を 4限にも足す（行を足す）', apply: (rows) => (rows.some((item) => item.id === 'r5') ? rows : insertBefore(rows, 'r6', row('r5', 't3', 'sA', '', 3, { slotNumber: 4 }))) },
     { name: 'A を 5限 → 3限 へ ＋ 4限にも足す（1 回の保存で 2 つ）', apply: (rows) => { const current = rowOfA(rows); const moved = !current || current.slotNumber === 3 ? rows : insertBefore(withoutA(rows).filter((item) => item.id !== 'r7'), 'r6', row('r7', 't1', 'sA', '', 3, { slotNumber: 3, subject1: current.subject1 })); return moved.some((item) => item.id === 'r5') ? moved : insertBefore(moved, 'r6', row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })) } },
+    // 決定記録 46（オーナー決定 2026-10-26「往復でも戻す」・Q40-9 M-2）: 3限へ移した A を 5限 机 0 へ戻す（r7 を外し r0 の生徒 1 に戻す）。往復の 2 回目でも振替が 5限へ戻ることを全順序で見る。
+    { name: 'A を 3限 → 5限 へ戻す', apply: (rows) => { const current = rowOfA(rows); if (!current || current.slotNumber !== 3 || current.id !== 'r7') return rows; return replaceRow(rows.filter((item) => item.id !== 'r7'), 'r0', { ...rows.find((item) => item.id === 'r0')!, student1Id: 'sA', subject1: current.subject1 }) } },
     { name: '何も変えない', apply: (rows) => rows },
   ]
   const BASE = [...OLD_ROWS.slice(0, 2), ...SCAFFOLD]

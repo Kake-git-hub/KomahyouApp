@@ -2739,7 +2739,7 @@ export function computeTemplateDiffApplyForBoard(input: {
     // 振替元の移動元記録も新しい時限の机へ移す。満席なら同じ机番号の下段（保留・緑）。在庫中立。
     const slotFollow = planSlotChangeTransferFollow({
       weeks: follow.weeks, pendingDesks: follow.nextPendingDesks, previousRegularLessons: params.previousRegularLessons, regularLessons: params.regularLessons,
-      settled: run.diff.wholeDayTransferSettled, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt,
+      settled: run.diff.wholeDayTransferSettled, templateCells: run.templateCells, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt,
       formatOriginLabel: formatStockOriginLabel, buildMovedSourceStatusEntry,
       // M-1（regression-reviewer 2026-10-26）: 丸ごと振替の両日（日単位の足場講師の抑止）だけを 1 対 1 の写像として扱う（1 コマの別日 D&D を動かさない＝INV-02）。
       wholeDayTransferDates: collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences),

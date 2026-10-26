@@ -916,3 +916,34 @@ describe('Q40-9 時限変更の追従 × 監査の兄弟（regression-reviewer 2
     expect(saved.summary.wholeDayTransferSkippedStudents).toBe(0)
   })
 })
+
+// 決定記録 46（オーナー決定 2026-10-26「往復でも戻す」・Q40-9 M-2）: 5限 → 3限 → 5限と往復すると、2 回目で振替と移動元記録も 5限へ戻る。
+describe('Q40-9 往復（5限 → 3限 → 5限）', () => {
+  const MOVED_ROWS = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+  for (const [label, classroomSettings] of [['普通の日', settings()], ['振替元が休日設定の日（決定記録 45・机は振替の今の机番号で戻す）', settings({ holidayDates: [WED] })]] as const) {
+    it(`${label}: 2 回目の保存で木 3限の振替が木 5限 机 0 へ戻り、もとの表示も 5限、水の移動元記録も 5限へ。在庫中立・−1 なし・不動点・3 回目の再保存で何も起きない`, () => {
+      const board = transferredBoard()
+      const before = balances(board.weeks, OLD_ROWS, board.ledgers, classroomSettings)
+      const first = save(board.weeks, MOVED_ROWS, board.suppressed, { previousRegularLessons: OLD_ROWS, classroomSettings })
+      expect(first.summary.slotFollowMovedMakeups).toBe(1)
+      const suppressed1 = suppressedAfter(board.suppressed, first)
+      const second = save(first.nextWeeks, OLD_ROWS, suppressed1, { previousRegularLessons: MOVED_ROWS, classroomSettings, templatePendingDesks: first.nextPendingDesks })
+      expect(second.summary.slotFollowMovedMakeups).toBe(1)
+      expect(second.slotFollowMoves[0]).toMatchObject({ oldSlotNumber: 3, newSlotNumber: 5, targetDateKey: THU, deskIndex: 0, placement: 'upper' })
+      expect(cellOf(second.nextWeeks, THU_CELL).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限' })
+      expect(liveIds(second.nextWeeks, `${THU}_3`)).not.toContain('sA')
+      expect(liveIds(second.nextWeeks, THU_CELL).filter((id) => id === 'sA')).toHaveLength(1)
+      expect(cellOf(second.nextWeeks, WED_CELL).desks.some((desk) => desk.statusSlots?.some((entry) => entry?.status === 'moved' && entry.managedStudentId === 'sA' && entry.lessonType === 'regular' && entry.moveDestinationDateKey === THU && entry.moveDestinationSlotNumber === 5))).toBe(true)
+      expect(cellOf(second.nextWeeks, `${WED}_3`).desks.some((desk) => desk.statusSlots?.some((entry) => entry?.managedStudentId === 'sA'))).toBe(false)
+      expect(liveIds(second.nextWeeks, WED_CELL)).toEqual([])
+      expect(second.wholeDayTransferCountAdjustments).toEqual([])
+      expect(second.manualMakeupOriginAdditions).toEqual([])
+      const after = balances(second.nextWeeks, OLD_ROWS, board.ledgers, classroomSettings, {}, second.nextPendingDesks)
+      expect(after['sA__数'] ?? 0).toBe(before['sA__数'] ?? 0)
+      expectFixpoint(second, OLD_ROWS, suppressed1, classroomSettings)
+      const suppressed2 = suppressedAfter(suppressed1, second)
+      const third = save(second.nextWeeks, OLD_ROWS, suppressed2, { previousRegularLessons: OLD_ROWS, classroomSettings, templatePendingDesks: second.nextPendingDesks })
+      expect(third.summary.slotFollowMovedMakeups + third.summary.slotFollowPendingMakeups + third.summary.wholeDayTransferPlacedStudents + third.summary.orphanedMakeupsRemoved).toBe(0)
+    })
+  }
+})
