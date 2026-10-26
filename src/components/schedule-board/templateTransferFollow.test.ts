@@ -321,6 +321,16 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(run(onlyTeacherless).placed).toEqual([expect.objectContaining({ deskId: 't5d2', teacherless: true })])
   })
 
+  it('L-1（regression-reviewer 2026-10-26・INV-12）: 振替先のコマの保留の下段に同じ生徒が居れば duplicate（上段に置くと解決で 2 か所になる）', () => {
+    const weeks = board()
+    const cLower = student('sC_lower', '千葉', { manualAdded: true, subject: '英' })
+    const pendingDesks = { [buildTemplatePendingDeskKey(`${THU}_5`, 't5d2')]: { lower: { lesson: { id: 'lw', studentSlots: [cLower, null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: WED, createdAt: 'x' } }
+    const plan = run(weeks, { pendingDesks })
+    expect(plan.placed).toHaveLength(0)
+    expect(plan.pendingPlaced).toHaveLength(0)
+    expect(plan.stocked[0]?.reason).toBe('duplicate')
+  })
+
   it('保留（2 行）の机は下段へ相乗り・同じコマに同じ生徒が生きている・振替先のセルが無いときは未消化。移動元記録が無い日と別の時限で精算済みの生徒は触らない', () => {
     const weeks = board()
     // 同じ机が保留で、別の机（t5d2）も保留 → 置ける机が無い＝満席扱いで未消化。別の机が空いていれば L-5 (a) でそちらへ。

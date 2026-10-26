@@ -1059,6 +1059,19 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(saved).toBe(`テンプレを保存しました（${month}/${day} 以降・置き換え 3机・保留 4机）。`)
   })
 
+  it('決定記録 46（2026-10-26・Q40-9）: 時限の追従の件数と理由の行（満席は保留〔下段〕）。0 件なら出さない', () => {
+    const summary = { ...createEmptyTemplateDiffApplySummary(), slotFollowMovedMakeups: 1, slotFollowPendingMakeups: 1 }
+    const detail = buildTemplateDiffConfirmDetail(EFFECTIVE, summary, { studentNotes: [
+      { kind: 'slot-followed', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
+      { kind: 'slot-follow-pending', studentName: '馬場', subject: '英', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
+    ] })
+    expect(detail).toContain('時限を変えた生徒の丸ごと振替の振替2件を新しい時限へ移します（満席の1件は同じ机の保留〔下段〕へ）。')
+    expect(detail).toContain('青木（数）: テンプレで時限を変えたので、丸ごと振替の振替を新しい時限へ移します（5限 → 3限・振替先 10/8）。')
+    expect(detail).toContain('馬場（英）: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（5限 → 3限・振替先 10/8）。')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary)).toContain('時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: 2件（満席で保留〔下段〕にした: 1件）。')
+    expect(buildTemplateDiffConfirmDetail(EFFECTIVE, createEmptyTemplateDiffApplySummary())).not.toContain('時限を変えた')
+  })
+
   it('2026-10-21: 確認文に「生徒ごとの理由」を名前つきで出す（件数の行はそのまま・12 行を超えると「ほか n 件」・無ければ見出しも出ない）', () => {
     const summary = { ...createEmptyTemplateDiffApplySummary(), skippedDuplicateStudents: 1, wholeDayTransferPlacedStudents: 1, wholeDayTransferStockedStudents: 1 }
     const notes: TemplateDiffStudentNote[] = [
@@ -1410,7 +1423,7 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
       expect(index).toBeGreaterThanOrEqual(0)
       return board.slice(index, index + length)
     }
-    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 12000) // 2026-10-21: 精算済み判定の材料と生徒ごとの理由が入口に増えたので範囲を広げた
+    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 16000) // 2026-10-21: 精算済み判定の材料と生徒ごとの理由が入口に増えたので範囲を広げた。2026-10-26: 時限の追従（決定記録 46）で再度広げた（assert は不変）
     // Q36（2026-10-03）: 保存と同じ抑止＝保存前の抑止から写しの分を外し（suppressed）、Q21-11 / Q35 で足した分を加える
     expect(entryFn).toContain('[...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]')
     expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed })')
