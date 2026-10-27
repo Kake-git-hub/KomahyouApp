@@ -45,6 +45,7 @@ import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
+  describeAdoptExistingKeptDeskTeacher,
   describeTemplatePendingCollapseFailure,
   findTemplatePendingDeskEntry,
   hasTemplatePendingLowerContent,
@@ -6595,6 +6596,10 @@ export function disposeTemplatePendingLowerStudents(params: {
  *  4. **席ごと（オーナー指示 2026-10-03・Q26-10）**: seatIndex を渡すと、その席の下段（seatLower）だけを対象にする＝取り下げるのはその席の
  *     テンプレ生徒（と下段の生徒と同じ生徒）だけ、机へ戻すのもその席の下段だけ。もう一方の席の下段（restLower）は保留のまま残る
  *     （確認リスト v1.5.577 その他欄「生徒 1 の手入力データを採用したのに生徒 2 の既存データが生徒 2 のテンプレを上書きしている」の修正）。
+ *  5. **手置き講師が同じコマの別の机に居るとき（確認リスト tp-64 その他欄・2026-10-27）**: 下段の手置き講師 B が同じコマの別の机（テンプレが B を別の机に
+ *     置いた形＝Q41-9 の表の「テンプレが同じコマの別の机に手置き講師と同じ講師を置く」）に居るなら、B を机へ戻さず（戻すと同じ講師が 2 机＝INV-01）、
+ *     机の講師はそのままで生徒だけ採用する（keptDeskTeacher に理由を返す）。以前は確認文で「取り下げます」と出した後に講師の一意性検査で止まり、
+ *     画面上は何も変わらなかった（11/2 5限 6机目: 下段の講習の生徒を採用しても上段のテンプレの生徒が消えない）。
  */
 export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk: DeskCell; entry: TemplatePendingDesk; seatIndex?: number }) {
   const { cell, desk } = params
@@ -6602,6 +6607,20 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
   const entry: TemplatePendingDesk = split ? { ...params.entry, lower: split.seatLower } : params.entry
   const restLower: TemplatePendingLower | null = split && hasTemplatePendingLowerContent(split.restLower) ? split.restLower : null
   const liveStudentsElsewhere = collectLiveStudentsElsewhereInCell(cell, desk.id)
+  // 5.（tp-64）: 戻す手置き講師が同じコマの別の机に居るか。判定は講師の一意性検査と同じ isTeacherElsewhereInCell を机 1 つずつに当てる（机番号を出すため）。
+  const lowerTeacher = entry.lower.teacher
+  const elsewhereDeskIndex = lowerTeacher && liveTemplatePendingStudents(entry.lower.lesson).length > 0
+    ? cell.desks.findIndex((other) => other.id !== desk.id && isTeacherElsewhereInCell({ desks: [other] }, desk.id, lowerTeacher))
+    : -1
+  const keptDeskTeacher = lowerTeacher && elsewhereDeskIndex >= 0
+    ? { lowerTeacher: lowerTeacher.teacher.trim(), elsewhereDeskNumber: elsewhereDeskIndex + 1, deskTeacher: desk.teacher.trim() }
+    : null
+  let collapseEntry: Pick<TemplatePendingDesk, 'lower'> = entry
+  if (keptDeskTeacher) {
+    const lowerWithoutTeacher: TemplatePendingLower = { ...entry.lower }
+    delete lowerWithoutTeacher.teacher
+    collapseEntry = { lower: lowerWithoutTeacher }
+  }
   const withdrawUpper = (seats: number[]) => {
     const withdrawnStudents = seats.map((seat) => desk.lesson?.studentSlots[seat] ?? null).filter((student): student is StudentEntry => Boolean(student))
     const remaining = (desk.lesson?.studentSlots ?? [null, null]).map((student, seat) => (seats.includes(seat) ? null : student)) as [StudentEntry | null, StudentEntry | null]
@@ -6609,7 +6628,8 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
     if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = detachTemplateLessonWithoutTemplateStudents({ ...desk.lesson, studentSlots: remaining }, desk.id)
     else delete nextUpper.lesson
     // Q41-6: 「既存を採用」は下段の手置き講師を机の講師に戻す（席ごとでも机の講師は 1 人なので、押していない席に残るテンプレの生徒もその講師の担当になる＝暫定・Q41-12 (2)）。
-    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower }
+    // ただし 5.（tp-64）の形は講師を戻さない（collapseEntry から講師を外す＝机の講師のまま）。
+    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, collapseEntry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower, keptDeskTeacher }
   }
   const first = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
   if (first.collapse.ok || first.collapse.reason === 'duplicate-student') return first
@@ -6709,6 +6729,7 @@ export function computePendingDeskResolution(params: {
     const withdrawn = attempt.withdrawnStudents
     // Q41-6: 講師を戻したかは合流結果（collapse.nextDesk）から決める（regression-reviewer M-2: 下段がメモだけの席では戻らない）。
     // 講師の一意性（INV-01 の兄弟）: 戻す手置き講師が同じコマの別の机に居るなら止める（同じ講師 2 机を作らない）。判定は 1 行に戻る経路と同じ isTeacherElsewhereInCell。
+    // ★tp-64（2026-10-27）: その形は planTemplatePendingAdoptExisting が講師を戻さずに合流する（keptDeskTeacher）ので、ここへは来ない。最後の守りとして残す（消さない）。
     const restoringTeacher = entry.lower.teacher && collapse.nextDesk.teacher.trim() === entry.lower.teacher.teacher.trim() && collapse.nextDesk.teacher.trim() !== desk.teacher.trim() ? entry.lower.teacher.teacher.trim() : ''
     if (restoringTeacher && entry.lower.teacher && isTeacherElsewhereInCell(cell, desk.id, entry.lower.teacher)) {
       return { status: 'blocked', message: `既存を採用できません。講師 ${restoringTeacher} が同じコマの別の机に居ます。` }
@@ -6766,7 +6787,7 @@ export function computePendingDeskResolution(params: {
       collapsed: !stillPending,
       returnedCount: 0,
       countAdjustedCount: countTargets.length,
-      message: `手入力データを採用しました${joinResultNotes([restoringTeacher ? `講師を ${restoringTeacher} に戻す` : '', withdrawnNames ? `${withdrawnNames} を取り下げ` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${stillPending ? 'もう一方の席は保留のまま。' : ''}`,
+      message: `手入力データを採用しました${joinResultNotes([restoringTeacher ? `講師を ${restoringTeacher} に戻す` : '', withdrawnNames ? `${withdrawnNames} を取り下げ` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${attempt.keptDeskTeacher ? `${describeAdoptExistingKeptDeskTeacher(attempt.keptDeskTeacher)}。` : ''}${stillPending ? 'もう一方の席は保留のまま。' : ''}`,
     }
   }
 
@@ -12761,8 +12782,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     if (mode === 'adopt-existing') {
       // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
-      const upperNames = names(planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex }).withdrawnStudents)
-      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : ''}よろしいですか？`
+      const plan = planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })
+      const upperNames = names(plan.withdrawnStudents)
+      // 講師（Q41-6・tp-64）: 戻すなら「講師は B に戻します」、同じコマの別の机に B が居て戻さないならその理由（結果の文と同じ関数）。
+      const restoringTeacher = plan.collapse.ok && plan.seatLower.teacher && plan.collapse.nextDesk.teacher.trim() === plan.seatLower.teacher.teacher.trim() && plan.collapse.nextDesk.teacher.trim() !== context.desk.teacher.trim()
+        ? plan.seatLower.teacher.teacher.trim()
+        : ''
+      const teacherNote = plan.keptDeskTeacher
+        ? `${describeAdoptExistingKeptDeskTeacher(plan.keptDeskTeacher)}。`
+        : restoringTeacher ? `講師は ${restoringTeacher} に戻します。` : ''
+      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : ''}${teacherNote}よろしいですか？`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
@@ -12779,10 +12808,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const context = templatePendingDeskMenuContext
     if (!context || !activeTemplatePendingDesks) return
     const confirmText = buildTemplatePendingResolutionConfirm(mode, lowerIndex)
-    if (!confirmText || !window.confirm(confirmText)) {
+    if (!confirmText) {
       setStatusMessage('保留の机の操作をキャンセルしました。')
       return
     }
+    // 確認の前に結果を出す（確認リスト tp-64 その他欄・2026-10-27）: 実行できない操作で「取り下げます。よろしいですか？」を出し、OK の後に
+    // 上のバーへ理由を出すだけで何も変わらない、を作らない。止まるなら確認を出さずに理由をダイアログで見せる（盤面は不変）。
     const result = computePendingDeskResolution({
       mode,
       weeks,
@@ -12797,7 +12828,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
     })
     if (result.status === 'blocked') {
+      window.alert(result.message)
       setStatusMessage(result.message)
+      return
+    }
+    if (!window.confirm(confirmText)) {
+      setStatusMessage('保留の机の操作をキャンセルしました。')
       return
     }
     commitWeeks(

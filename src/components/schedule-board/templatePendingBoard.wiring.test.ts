@@ -344,6 +344,29 @@ describe('解決操作は 1 操作 1 適用で commitWeeks を通る（Q26-6・I
     expect(body).toContain("if (result.status === 'blocked') {")
   })
 
+  it('確認の前に結果を出し、止まる操作は確認を出さずに理由をダイアログで見せる（確認リスト tp-64 その他欄・2026-10-27）', () => {
+    const body = sliceBody(BOARD_TSX, 'const handleResolveTemplatePendingDesk = (', 'const handleStartTemplatePendingLowerMove = (')
+    const computeAt = body.indexOf('computePendingDeskResolution({')
+    const blockedAt = body.indexOf("if (result.status === 'blocked') {")
+    const confirmAt = body.indexOf('window.confirm(confirmText)')
+    const commitAt = body.indexOf('commitWeeks(')
+    expect(computeAt).toBeGreaterThan(-1)
+    // 「取り下げます。よろしいですか？」の後に止まって何も変わらない、を作らない: 計算 → 止まるなら理由 → 確認 → 適用 の順
+    expect(computeAt).toBeLessThan(blockedAt)
+    expect(blockedAt).toBeLessThan(confirmAt)
+    expect(confirmAt).toBeLessThan(commitAt)
+    expect(body.slice(blockedAt, confirmAt)).toContain('window.alert(result.message)')
+    expect(body.match(/window\.confirm\(/g)).toHaveLength(1)
+  })
+
+  it('「手入力データを採用」の確認文は、講師を戻さない理由を結果の文と同じ関数で出す（tp-64・Q32-1）', () => {
+    const confirmFn = sliceBody(BOARD_TSX, 'const buildTemplatePendingResolutionConfirm = (', 'const handleResolveTemplatePendingDesk = (')
+    expect(confirmFn).toContain('planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })')
+    expect(confirmFn).toContain('describeAdoptExistingKeptDeskTeacher(plan.keptDeskTeacher)')
+    const resolution = sliceBody(BOARD_TSX, 'export function computePendingDeskResolution(', '// N-2: 下段から捨てた同日移動の通常授業')
+    expect(resolution).toContain('describeAdoptExistingKeptDeskTeacher(attempt.keptDeskTeacher)')
+  })
+
   it('下段の移動は computePendingLowerStudentMove の結果を commitWeeks へ 1 回だけ渡す', () => {
     const body = sliceBody(BOARD_TSX, 'const executeTemplatePendingLowerMove = (', 'const handleStudentClick = (')
     expect(body).toContain('computePendingLowerStudentMove({')
