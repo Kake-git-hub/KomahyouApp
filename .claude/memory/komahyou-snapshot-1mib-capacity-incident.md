@@ -16,11 +16,13 @@ metadata:
 
 **つなぎ(v1.5.646・2026-10-27)**: 圧縮 level 9(余裕約 56KB＝2〜4 週間)、書き込みを try で包み too-large / write-failed を記録＋メール、
 saveAttempts に documentByteLength / capacityRatio、85% 以上で capacity-warning(1 日 1 通・別の間引き文書 `{id}__capacity`)、
-画面は容量超過専用の案内(閉じない・再読み込みしない)。分類は純関数 `classifySnapshotWriteFailure`(functions/src/snapshotCapacity.ts)。
+画面は容量超過専用の案内(閉じない・再読み込みしない)。
+v1.5.647 操作痕跡の要約 400→2000 字(机を 14 台動かした 19:12 の操作が切れて読めなかった)。v1.5.648 保存できなかった内容を IndexedDB に控え、失敗時(初回・一時的な失敗は 3 回目から・隠れたタブでは聞かない)と次回起動時に「開発者へ送る」(質問・要望と同じ経路・版数衝突は控えない・書き戻しはしない)。
+消えた作業は 21:24 の保存に相乗りした操作痕跡 158 件から読み戻せた(失敗時のバックアップ JSON は室長 PC に無かった=「保存」ボタンの失敗でしか作られず、自動保存の失敗では作られない)。分類は純関数 `classifySnapshotWriteFailure`(functions/src/snapshotCapacity.ts)。
 見積もりだけで書き込みを止めない(Firestore の拒否を正とする・見積もりは実文書と 1 バイト単位で一致)。
 
 **恒久対策(オーナー承認 2026-10-27)**: 週単位の分割保存＋差分保存(目次文書＋週ごとの文書・1 トランザクションで版数照合・
-組み立て関数 1 つで今と同じ AppSnapshotPayload に戻す・新旧両読みを先に出す)。仕様は docs/spec-save-restore.md §9。
+組み立て関数 1 つで今と同じ AppSnapshotPayload に戻す・新旧両読みを先に出す)。仕様は docs/spec-save-restore.md §9(Q1〜Q6 全件オーナー確定 2026-10-27・INV-14 新設)。**次セッションの着手手順は docs/plan-2026-10-27-weekly-split-snapshot-handoff.md が正本**(段階 0〜D・期限に効くのは段階 B)。
 冬期講習(12 月)前に本番へ。過去週を閲覧専用にするかは「今は決めない」(オーナー 2026-10-27)。
 
 **Why:** 1 文書に教室全体を入れる設計は、データが時間とともに増える限り必ず上限に当たる。圧縮やエンコードの工夫は数か月の延命にしかならない。
