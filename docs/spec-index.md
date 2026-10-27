@@ -10,7 +10,7 @@
 | # | 領域 | 正本ファイル |
 |---|------|------------|
 | 1 | 教室権限・ログイン・開発者画面 | `spec-classroom-auth.md` |
-| 2 | 保存・バックアップ・復元（**データ保持期間＝どこまで遡れるかは §8 が正本**／**週単位の分割保存＝§9・2026-10-27 オーナー確定・未実装・引き継ぎ `plan-2026-10-27-weekly-split-snapshot-handoff.md`**） | `spec-save-restore.md` |
+| 2 | 保存・バックアップ・復元（**データ保持期間＝どこまで遡れるかは §8 が正本**／**週単位の分割保存＝§9・2026-10-27 オーナー確定・段階 0〜A（読める版）実装済み／段階 B 以降は未実装・引き継ぎ `plan-2026-10-27-weekly-split-snapshot-handoff.md`**） | `spec-save-restore.md` |
 | 3 | コマ表の基本配置（通常授業＝テンプレ方式） | `spec-board-regular-placement.md` |
 | 4 | 振替ストック | `spec-makeup-stock.md` |
 | 5 | 講習・講習ストック | `spec-lecture-stock.md` |

@@ -103,8 +103,15 @@ describe('buildSaveFailureAlertMail', () => {
     expect(SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS).toBe(24 * 60 * 60 * 1000)
   })
 
+  it('snapshot-assembly-failed(分割形式の組み立て失敗・INV-14)のメールは件名が【保存失敗】で、読み手名つきの detail とヒントが載る', () => {
+    const mail = buildSaveFailureAlertMail({ ...base, kind: 'snapshot-assembly-failed', saveId: '', updatedBy: 'system', detail: 'auto-backup: missing-part: week:2026-05-11' })
+    expect(mail.subject).toContain('【保存失敗】')
+    expect(mail.text).toContain('auto-backup: missing-part: week:2026-05-11')
+    expect(mail.text).toContain('snapshotParts')
+  })
+
   it('種類の一覧と判定', () => {
-    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning'])
+    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed'])
     expect(isSaveFailureAlertKind('stale-version')).toBe(true)
     expect(isSaveFailureAlertKind('other')).toBe(false)
   })
@@ -121,7 +128,9 @@ describe('index.ts の配線(ソース走査)', () => {
     expect(save).toContain("kind: 'snapshot-too-large'")
     expect(save).toContain("kind: 'write-failed'")
     expect(save).toContain("kind: 'capacity-warning'")
-    expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(6)
+    // 7 件目 = 段階 A の暫定ガード(分割形式の教室への保存を断る・parts-format-write-unsupported)の write-failed 通知(2026-10-27・K-5)。
+    expect(save).toContain('parts-format-write-unsupported: 分割形式の教室への保存はこの版(段階 A)では未対応')
+    expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(7)
   })
 
   it('メールの失敗は保存の応答に影響させない(関数内で握る・throw しない)。待ち時間は 5 秒で打ち切り、SMTP にも上限を付ける(M-1)', () => {

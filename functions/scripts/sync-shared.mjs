@@ -6,6 +6,7 @@
 //   - src/utils/parentSchedule.ts          → functions/src/generated/parentSchedule.ts
 //   - src/utils/developmentClassroomRegistry.ts → functions/src/generated/developmentClassroomRegistry.ts
 //   - src/utils/companyFeatureDefaults.ts       → functions/src/generated/companyFeatureDefaults.ts
+//   - src/utils/classroomSnapshotParts.ts       → functions/src/generated/classroomSnapshotParts.ts
 // - 出力はヘッダ 1 行 + 元ファイル(LF・決定的)。
 // - 生成物は **コミットする**(CI の vitest は functions build 前に走る)。
 //   ズレは `functions/src/<name>.parity.test.ts` が「生成物 = 元ファイル + ヘッダ」の文字列比較で検出する。
@@ -41,11 +42,18 @@ export const COMPANY_FEATURE_DEFAULTS_SOURCE_PATH = 'src/utils/companyFeatureDef
 export const COMPANY_FEATURE_DEFAULTS_OUTPUT_PATH = 'functions/src/generated/companyFeatureDefaults.ts'
 export const COMPANY_FEATURE_DEFAULTS_HEADER = buildSharedHeader(COMPANY_FEATURE_DEFAULTS_SOURCE_PATH)
 
+// 週単位の分割保存の共有純関数(2026-10-27・docs/spec-save-restore.md §9-5-1)。分割・組み立て・週キー・ハッシュ入力・
+// 目次の検査を**サーバー 1 つ・クライアント 1 つ**の同じ実装にするための複製(組み立て関数を 2 か所に書かない)。
+export const CLASSROOM_SNAPSHOT_PARTS_SOURCE_PATH = 'src/utils/classroomSnapshotParts.ts'
+export const CLASSROOM_SNAPSHOT_PARTS_OUTPUT_PATH = 'functions/src/generated/classroomSnapshotParts.ts'
+export const CLASSROOM_SNAPSHOT_PARTS_HEADER = buildSharedHeader(CLASSROOM_SNAPSHOT_PARTS_SOURCE_PATH)
+
 /** そのまま複製する TypeScript 権威モジュールの一覧(増やすときはここへ足す)。 */
 export const SHARED_TS_FILES = [
   { sourcePath: SHARED_SOURCE_PATH, outputPath: SHARED_OUTPUT_PATH },
   { sourcePath: DEVELOPMENT_CLASSROOM_REGISTRY_SOURCE_PATH, outputPath: DEVELOPMENT_CLASSROOM_REGISTRY_OUTPUT_PATH },
   { sourcePath: COMPANY_FEATURE_DEFAULTS_SOURCE_PATH, outputPath: COMPANY_FEATURE_DEFAULTS_OUTPUT_PATH },
+  { sourcePath: CLASSROOM_SNAPSHOT_PARTS_SOURCE_PATH, outputPath: CLASSROOM_SNAPSHOT_PARTS_OUTPUT_PATH },
 ]
 
 export function normalizeToLf(text) {

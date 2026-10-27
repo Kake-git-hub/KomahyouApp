@@ -10,7 +10,7 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing'
-import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore'
 
 const WORKSPACE = 'main'
 // 複数会社展開(Phase 0 / T0-3): 会社 = workspace。2 社目をわざと用意し、**同じ教室 ID 'A'** を持たせて
@@ -59,6 +59,10 @@ beforeEach(async () => {
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/A`), { name: '教室A' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/B`), { name: '教室B' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A`), { version: 1 })
+    // 週単位の分割保存(spec-save-restore §9-8): 教室 A/B と他社 A に部品を 1 件ずつ(CF が書く想定)。
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/snapshotParts/core~-~v1~x`), { classroomId: 'A', kind: 'core', key: '-', hash: 'h', encoding: 'gzip-base64', compressedData: 'H4sI' })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/B/snapshotParts/core~-~v1~x`), { classroomId: 'B', kind: 'core', key: '-', hash: 'h', encoding: 'gzip-base64', compressedData: 'H4sI' })
+    await setDoc(doc(db, `workspaces/${OTHER_WORKSPACE}/classroomSnapshots/A/snapshotParts/core~-~v1~x`), { classroomId: 'A', kind: 'core', key: '-', hash: 'h', encoding: 'gzip-base64', compressedData: 'H4sI' })
     // 保護者向け固定QR: 教室 A/B に未読の連絡を 1 件ずつ、トークン・索引・回数制限カウンタを 1 件ずつ(すべて CF が書く想定)。
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-A`), { classroomId: 'A', studentId: 's1', body: 'A', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/B/parentMessages/m-B`), { classroomId: 'B', studentId: 's9', body: 'B', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
@@ -323,6 +327,56 @@ describe('Firestore rules: 保護者向け固定QR(parentMessages は自教室�
 // 会社 = workspaces/{key}。DB は分けないので「会社の壁」はルールとメンバー台帳だけが担保する。
 // ★ ある会社の開発者は、別会社では**ただの他人**でなければならない(開発者権限は会社の中だけ)。
 // ★ 教室 ID は会社を跨いで衝突しうる(ここでは両社に教室 'A' がある)。ID 一致で通らないことを固定する。
+// 週単位の分割保存の部品(docs/spec-save-restore.md §9-8 の 1〜7・2026-10-27)。
+describe('Firestore rules: snapshotParts(分割保存の部品)は教室メンバー read のみ・書き込みは CF だけ', () => {
+  const partA = () => `workspaces/${WORKSPACE}/classroomSnapshots/A/snapshotParts/core~-~v1~x`
+  const partB = () => `workspaces/${WORKSPACE}/classroomSnapshots/B/snapshotParts/core~-~v1~x`
+  const newPartA = () => `workspaces/${WORKSPACE}/classroomSnapshots/A/snapshotParts/core~-~v2~y`
+  const partBody = { classroomId: 'A', kind: 'core', key: '-', hash: 'h2', encoding: 'gzip-base64', compressedData: 'H4sI' }
+
+  it('1. 室長は自教室の snapshotParts を読める(getDoc・クライアントの組み立て)', async () => {
+    await assertSucceeds(getDoc(doc(mgrAdb(), partA())))
+  })
+
+  it('2. 室長は担当外教室の snapshotParts を読めない(教室分離・INV-08)', async () => {
+    await assertFails(getDoc(doc(mgrAdb(), partB())))
+    await assertFails(getDoc(doc(mgrBdb(), partA())))
+  })
+
+  it('3. 室長は自教室でも snapshotParts を作成・更新・削除できない(保存は CF 一本・K-1)', async () => {
+    await assertFails(setDoc(doc(mgrAdb(), newPartA()), partBody))
+    await assertFails(updateDoc(doc(mgrAdb(), partA()), { hash: 'tampered' }))
+    await assertFails(deleteDoc(doc(mgrAdb(), partA())))
+  })
+
+  it('4. 開発者は任意の教室の snapshotParts を読めるが、作成・更新・削除はできない(開発者も直書き不可)', async () => {
+    await assertSucceeds(getDoc(doc(devdb(), partA())))
+    await assertSucceeds(getDoc(doc(devdb(), partB())))
+    await assertFails(setDoc(doc(devdb(), newPartA()), partBody))
+    await assertFails(updateDoc(doc(devdb(), partA()), { hash: 'tampered' }))
+    await assertFails(deleteDoc(doc(devdb(), partA())))
+  })
+
+  it('5. 未認証は snapshotParts を読めない', async () => {
+    await assertFails(getDoc(doc(anondb(), partA())))
+  })
+
+  it('6. 会社 A の開発者・室長は会社 B の snapshotParts を読めない(ワークスペース越境)', async () => {
+    const otherPart = `workspaces/${OTHER_WORKSPACE}/classroomSnapshots/A/snapshotParts/core~-~v1~x`
+    await assertFails(getDoc(doc(devdb(), otherPart)))
+    await assertFails(getDoc(doc(mgrAdb(), otherPart)))
+    await assertFails(getDoc(doc(otherDevdb(), partA())))
+    await assertFails(getDoc(doc(otherMgrdb(), partA())))
+    await assertSucceeds(getDoc(doc(otherMgrdb(), otherPart)))
+  })
+
+  it('7. 既存の「室長は classroomSnapshots を直書きできない」「開発者は直書きできる(教室作成用)」は変わらない', async () => {
+    await assertFails(setDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A`), { version: 2 }))
+    await assertSucceeds(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A`), { version: 2 }))
+    await assertSucceeds(getDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A`)))
+  })
+})
+
 describe('Firestore rules: ワークスペース(会社)越境の遮断', () => {
   it('会社Aの開発者は会社Bの workspace ドキュメントを読み書きできない', async () => {
     await assertFails(getDoc(doc(devdb(), `workspaces/${OTHER_WORKSPACE}`)))

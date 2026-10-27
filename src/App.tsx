@@ -26,6 +26,7 @@ import { canApplyUndoSnapshotToClassroom } from './utils/classroomScopedUndo'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
+import { resolveWorkspaceBackupImportTarget } from './utils/workspaceBackupImport'
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, markLectureSubmissionsNotified, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
@@ -5380,12 +5381,13 @@ function AuthenticatedApp() {
       } catch {
         // AppSnapshot形式でない場合、WorkspaceSnapshot形式を試す
         const workspaceSnapshot = parseWorkspaceSnapshot(text)
-        const targetClassroom = workspaceSnapshot.classrooms.find((c) => c.id === actingClassroomId)
-          ?? workspaceSnapshot.classrooms[0]
-        if (!targetClassroom) {
-          setPersistenceMessage('バックアップに教室データが含まれていません。')
+        // 開いている教室が JSON に無ければ止める(先頭の別教室へ落とさない・INV-08・分割保存の段階 A で「教室を除いた」バックアップが生まれたため)。
+        const importTarget = resolveWorkspaceBackupImportTarget(workspaceSnapshot, actingClassroomId)
+        if (!importTarget.ok) {
+          setPersistenceMessage(importTarget.message)
           return
         }
+        const targetClassroom = importTarget.classroom
         snapshot = {
           schemaVersion: workspaceSnapshot.schemaVersion,
           savedAt: workspaceSnapshot.savedAt,

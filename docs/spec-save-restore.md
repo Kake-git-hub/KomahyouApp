@@ -85,7 +85,7 @@ Cloud Function `saveClassroomSnapshot` は保存時に次の3層で本番デー�
 3. **saveId による冪等リプレイ**：同一 `saveId`・同一内容の再送は再保存せず検証済み結果を返す。同一 `saveId` で
    内容が異なる再送は `already-exists` で拒否する（ネットワーク再試行の二重書き込み・取り違えを防ぐ）。
 
-- **週単位の分割保存（§9・2026-10-27 方式採用・未実装）での実装は §9-4-6**。3 層とも残し、版数照合はトランザクション内へ、
+- **週単位の分割保存（§9・2026-10-27 方式採用・段階 0〜A 実装済み・保存側の B は未実装）での実装は §9-4-6**。3 層とも残し、版数照合はトランザクション内へ、
   読み戻し失敗時は目次を直前の内容へ戻す形に強化する。
 
 ## 3. オフライン時
@@ -241,7 +241,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 | 14 | **保存ごとの教室版履歴**（Storage `classroom-save-history/{ws}/{classroomId}/v{版数 8 桁}-{保存時刻}.json.gz`・2026-10-22 オーナー採用「即時対応のための案 1」）。`classroomSnapshots` の書き込みトリガで**新しい版**を 1 保存 1 本・gzip で追記。復元 UI は読まない（調査専用・`tools/snapshot-diff.mjs` で 2 本を比べる）。#9 の 1 世代上書きは据え置き | **90 日**（`CLASSROOM_SAVE_HISTORY_RETENTION_DAYS`）。作成時刻が読めないものは削除しない | `writeClassroomSaveHistory` / `pruneClassroomSaveHistory`（`cleanupOldSaveAttempts` が同じ巡回・独立予算 60 秒） |
 | 15 | **保存に相乗りした操作痕跡**（`classroomSnapshots/{id}/operationTraces/{saveId}`・前回保存以降の盤面の全確定・undo/redo など・2026-10-22 案 2・`docs/spec-developer-report.md` §D-3） | **90 日**（`OPERATION_TRACE_RETENTION_DAYS` で変更可・**最低 7 日**） | `persistOperationTrace` / 同上（`cleanupOldSaveAttempts` の対応表） |
 | 16 | **Firestore の過去時点読み取り（PITR）**（**2026-10-22 オーナーが有効化済み**・コード変更なし・案 4）。有効にすると `classroomSnapshots` を含む全文書を**過去 7 日・1 分刻み**の任意時点で Admin SDK から読める。#14 ができるまでのつなぎ／保険 | **7 日**（Firestore の固定仕様） | `gcloud firestore databases update --database='(default)' --enable-pitr`（手順 `docs/runbooks/monitoring.md` §7） |
-| 17 | **教室データの部品の旧版**（`classroomSnapshots/{id}/snapshotParts` のうち、目次から参照されなくなった版・§9 週単位の分割保存・**§9 の実装時に有効／2026-10-27 時点は未実装**）。目次が参照している部品は #1〜#4 の保持そのもの（無期限・現在値） | **参照が外れてから 3 日**（掃除の印から `SNAPSHOT_PART_GC_GRACE_DAYS`・最低 1 日・2026-10-27 オーナー確定＝§9-15 Q3）。目次が無い教室（削除済み）の部品は消さない | `resolveSnapshotPartGcActions`（仮）／`cleanupOldSaveAttempts` の同じ巡回・独立予算（§9-9） |
+| 17 | **教室データの部品の旧版**（`classroomSnapshots/{id}/snapshotParts` のうち、目次から参照されなくなった版・§9 週単位の分割保存・**掃除は段階 B で有効化／2026-10-27 時点は判定の純関数 `resolveSnapshotPartGcActions` だけ実装済み・巡回への同乗は未実装**）。目次が参照している部品は #1〜#4 の保持そのもの（無期限・現在値） | **参照が外れてから 3 日**（掃除の印から `SNAPSHOT_PART_GC_GRACE_DAYS`・最低 1 日・2026-10-27 オーナー確定＝§9-15 Q3）。目次が無い教室（削除済み）の部品は消さない | `resolveSnapshotPartGcActions`（`src/utils/classroomSnapshotParts.ts`）／`cleanupOldSaveAttempts` の同じ巡回・独立予算（§9-9） |
 
 補足：Hosting のリリース履歴（ロールバック A の戻し先）は `npm run hosting:retention:enforce`（既定 5 世代）で
 制御する**手動運用**。デプロイ CI は自動実行しない。
@@ -364,7 +364,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
   本節に明記してから実装する。
 
 
-## 9. 週単位の分割保存（教室データの恒久対策）— 2026-10-27 オーナー確定（方式・§9-15 の 6 論点とも）・未実装
+## 9. 週単位の分割保存（教室データの恒久対策）— 2026-10-27 オーナー確定（方式・§9-15 の 6 論点とも）・段階 0〜A（読める版）実装済み・B 以降未実装
 
 > **方式（目次＋部品・変わった部品だけ保存）はオーナー採用済み**（2026-10-27「その順で進めて」）。
 > 本章はそれを実装できる粒度へ補完したもの。**§9-15 の 6 論点は 2026-10-27 にオーナー確定**（すべて推奨案）。
