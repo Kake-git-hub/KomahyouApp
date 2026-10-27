@@ -16,7 +16,7 @@
 
 ## v1.5.652 (2026-10-27)
 
-- fix: テンプレの通常授業を「編集」で振替にしたコマを削除・格納・休み・別の週へ移動すると、読み込み直しで元の通常授業が盤面に戻って二重になっていた(修正前からの穴・v1.5.650 の調査で判明・本番の実害 0 件を日大前/緑が丘の盤面と 9 月以降の操作ログで確認)。編集で振替にした時点で元の授業の抑止キーを積む(純関数 `applyStudentEdit`・同日移動で積み済みなら積まない)。科目も変えたときは未消化を「その時コマ表に入っていた科目」で数える(オーナー確定)ため、元の科目の振替もその日・その時限で抑止する(休日設定で 1 コマが 2 件にならない)。元の科目・日付・時限と自分で積んだ分を控え `editedFromRegular` に残し、振替 → 通常 へ編集し直したら自分で積んだ分だけ外す。既存データは書き換えない・テンプレの時限/曜日を変えた保存での挙動は通常授業と同じで対象外(オーナー確定)。INV-02 マトリクス 8 行・INV-06 マトリクス 1 行(mutation で落ちることを確認)。確認リスト ed-2。INV-02・INV-06。(src/components/schedule-board/ScheduleBoardScreen.tsx・types.ts・inv02-manual-edit-persistence.matrix.test.ts・inv06-makeup-absence-stock.matrix.test.ts・docs/spec-invariants.md・docs/spec-makeup-stock.md §3)
+- fix: テンプレの通常授業を「編集」で振替にしたコマを削除・格納・休み・別の週へ移動すると、読み込み直しで元の通常授業が盤面に戻って二重になっていた(修正前からの穴・v1.5.650 の調査で判明・本番の実害 0 件を日大前/緑が丘の盤面と 9 月以降の操作ログで確認)。編集で振替にした時点で元の授業の抑止キーを積む(純関数 `applyStudentEdit`・同日移動で積み済みなら積まない)。科目も変えたときは未消化を「その時コマ表に入っていた科目」で数える(オーナー確定)ため、元の科目の振替もその日・その時限で抑止する(休日設定で 1 コマが 2 件にならない)。増コマへ変えたときも同じく積む(通常 → 増コマの直接編集も同じ穴だった)。元の科目・日付・時限と自分で積んだ分を控え `editedFromRegular` に残し、動かさず元の場所のまま「→ 通常」へ編集し直したときだけ自分で積んだ分を外す(振替 ⇄ 増コマや別の日へ動かした後では外さない・元の科目の振替の抑止は科目も戻したときだけ外す)。テンプレ差分反映の Q36 が写しを外すとき、編集で積んだ抑止キーは巻き込まない(`collectEditedFromRegularOccurrenceKeys`)。regression-reviewer の指摘 3 件(中-1〜中-3)と、科目を変えたまま通常へ戻すと生徒が消える誤減をあわせて修正。既存データは書き換えない・テンプレの時限/曜日を変えた保存での挙動は通常授業と同じで対象外(オーナー確定)。INV-02 マトリクス 14 行・INV-06 マトリクス 1 行(mutation で落ちることを確認)。確認リスト ed-2。INV-02・INV-06。(src/components/schedule-board/ScheduleBoardScreen.tsx・types.ts・inv02-manual-edit-persistence.matrix.test.ts・inv06-makeup-absence-stock.matrix.test.ts・docs/spec-invariants.md・docs/spec-makeup-stock.md §3)
 
 ## v1.5.651 (2026-10-27)
 

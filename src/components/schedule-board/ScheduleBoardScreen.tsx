@@ -38,7 +38,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, collectEditedFromRegularOccurrenceKeys, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -1576,7 +1576,9 @@ export function applyStudentEdit(params: {
   let suppressedMakeupOrigins = params.suppressedMakeupOrigins
   const next = applyStudentEditDraft(previous, params.draft)
 
-  if (next.editedToMakeup && previous.lessonType === 'regular' && !previous.manualAdded) {
+  // ★振替だけでなく増コマへ変えたときも積む（増コマもテンプレに従う授業ではない＝席が空けば元の授業が湧く・regression-reviewer 中-1 の兄弟）。
+  const leavesTemplateLesson = next.lessonType === 'makeup' || next.lessonType === 'extra'
+  if (leavesTemplateLesson && previous.lessonType === 'regular' && !previous.manualAdded) {
     // 元の授業の日付・時限は同日移動の元を優先する(collectClearedDayMakeupSuppressions と同じ規則＝テンプレ上の時限)。
     const original: EditedFromRegular = {
       subject: previous.subject,
@@ -1596,12 +1598,23 @@ export function applyStudentEdit(params: {
     return { student: { ...next, editedFromRegular: original }, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
   }
 
-  if (previous.lessonType === 'makeup' && next.lessonType !== 'makeup') {
-    const original = previous.editedFromRegular
-    if (original?.addedOccurrenceKey) {
+  // ★外すのは「→ 通常」で、しかも**元の授業の日付・時限にいるまま**のときだけ（regression-reviewer 中-1・中-2）。
+  //   振替 ⇄ 増コマの付け替えでは外さない（どちらもテンプレの授業ではない）。別の日・別の時限へ動かした後の「→ 通常」でも外さない
+  //   （元の日には授業が無いまま＝通常授業を別の日へ動かしたときに移動の抑止が残るのと同じ）。
+  const original = previous.editedFromRegular
+  //   元の場所の通常授業に戻れば、科目が違っても席の合流でテンプレの授業と同じ 1 件になる（通常授業の科目だけを編集したときと同じ）。
+  //   ★抑止キーを残すと合流先のテンプレ授業が消え、通常授業（印なし）は突き合わせで落ちる＝生徒が消える（誤減）ので必ず外す。
+  const backInPlace = Boolean(original)
+    && !previous.makeupSourceDate
+    && original!.dateKey === (previous.sameDayMoveSourceDate ?? cellDateKey)
+    && (previous.sameDayMoveSourceDate ? true : original!.slotNumber === cellSlotNumber)
+  if (original && previous.lessonType !== 'regular' && next.lessonType === 'regular' && backInPlace) {
+    if (original.addedOccurrenceKey) {
       suppressedRegularLessonOccurrences = removeSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, original.addedOccurrenceKey)
     }
-    if (original?.addedMakeupSuppressionKey) {
+    // 元の科目の振替の抑止は、科目も元に戻したときだけ外す（違う科目のままなら未消化はその科目で数える＝オーナー確定。残しても
+    // 元の科目の通常授業がその日に戻れば休日の返却は時限なしで畳まれるので害は無い）。
+    if (original.addedMakeupSuppressionKey && next.subject === original.subject) {
       suppressedMakeupOrigins = removeMakeupOrigin(suppressedMakeupOrigins, original.addedMakeupSuppressionKey, original.dateKey, original.slotNumber)
     }
     const { editedToMakeup: _editedToMakeup, editedFromRegular: _editedFromRegular, ...rest } = next
@@ -2960,7 +2973,9 @@ function runTemplateDiffApplyWithCopyReverts(params: {
     pendingDesks = result.pendingDesks
     stripped.push(...result.stripped)
     // 抑止キーを外すのは**実際に外した写し**の分だけ（regression-reviewer M-1）。
-    for (const revert of result.stripped) for (const key of resolveSameDayMoveCopyKeysToRemove(revert, suppressed)) removedSuppressed.add(key)
+    // 「編集」で振替・増コマにした授業が積んだキーは写しの履歴ではないので外さない（INV-02・2026-10-27）。
+    const editedKeys = collectEditedFromRegularOccurrenceKeys(weeks, pendingDesks)
+    for (const revert of result.stripped) for (const key of resolveSameDayMoveCopyKeysToRemove(revert, suppressed, editedKeys)) removedSuppressed.add(key)
     suppressed = suppressed.filter((key) => !removedSuppressed.has(key))
     diff = compute()
   }
