@@ -14,6 +14,7 @@
 
 ## 未リリース
 
+- fix: 丸ごと振替で、移した先の日の席に入れていたメモも消さず、空き席 → 同じコマの別の机 → 同じ番号の机の下の行(保留・緑)に残すようにした(オーナー指示 確認リスト tp-62 メモ「メモも消えないようにして」・受付 20261027-144006023-5e34fa4b)。振替先の机を `disposeDayDeskEntries({ clearMemoSlots: true })` に通していたのが原因。授業が先に空き席を取り、メモは残った席へ。空席判定にメモも含め、移ってきたメモの席に体験やメモを重ねない。下段は既存の保留(Q24 の `lower.memoSlots`)と同じ扱い。確認画面「残す: n件(メモ:○○…)」・上の帯「振替先のメモ n件を残す」・保留一覧に「メモ:○○」。在庫は動かない。確認リスト tp-65。INV-02 / INV-13 / INV-06。(src/components/schedule-board/wholeDayTransferDisplaced.ts・templatePendingDesks.ts・templatePendingList.ts・boardResultMessages.ts・ScheduleBoardScreen.tsx・inv13-whole-day-transfer-displaced.matrix.test.ts)
 - fix: 休日(休日設定・定休日)のコマへ、生徒の移動(メニュー・長押しD&D)・入れ替え・未消化振替/講習の配置で生徒を置けてしまい、再マージで黙って消えていた(移動元に「移)」だけ・講習は台帳 −1 だけが残る)のを入口で止めた(「休日のコマには生徒を置けません。」・休日から営業日へ出すだけの移動は可・オーナー指示 確認リスト tp-63 メモ・受付 20261027-144006023-5e34fa4b)。判定は `closedDayPlacementGuard.ts` に一元化。講師・日程表別タブ・自動割振・空欄メニューは既に止めていた(変更なし)。確認リスト tp-66。INV-02 / INV-06。(src/components/schedule-board/closedDayPlacementGuard.ts・ScheduleBoardScreen.tsx・inv02-manual-edit-persistence.matrix.test.ts・docs/spec-invariants.md)
 - fix: 操作痕跡の盤面差分の要約で、机 1 台が長い操作(丸ごと振替など)が 2000 字で机の途中から「…」で切れていたのを、文字数の予算(`OPERATION_TRACE_DIFF_CHAR_BUDGET`＝上限 −200)に収まる机だけを並べ、残りを「他N件」に回すようにした(確認リスト sc-2 を Claude が記録で確認したところ、10/28→10/29 の丸ごと振替が 16 台目の途中で切れていた・受付 20261027-144006023-5e34fa4b)。(src/utils/operationTrace.ts)
 ## v1.5.650 (2026-10-27)
