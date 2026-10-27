@@ -42,6 +42,11 @@ describe('buildWholeDayTransferResultMessage', () => {
     expect(buildWholeDayTransferResultMessage({ sourceDateKey: '2026-08-05', targetDateKey: '2026-08-19', movedStudentCount: 1, movedTeacherCount: 1, returnedCount: 0 }))
       .toBe('2026-08-05 → 2026-08-19 へ丸ごと振替しました（生徒1・講師1）。')
   })
+  it('振替先のメモを残した件数（2026-10-27・tp-62 のメモ欄・0 なら出さない）', () => {
+    expect(buildWholeDayTransferResultMessage({ sourceDateKey: '2026-08-05', targetDateKey: '2026-08-19', movedStudentCount: 2, movedTeacherCount: 1, returnedCount: 0, keptMemoCount: 2, pendingCount: 1 }))
+      .toBe('2026-08-05 → 2026-08-19 へ丸ごと振替しました（生徒2・講師1・振替先のメモ 2件を残す・保留(下段)に 1件）。')
+    expect(buildWholeDayTransferResultMessage({ sourceDateKey: '2026-08-05', targetDateKey: '2026-08-19', movedStudentCount: 2, movedTeacherCount: 1, returnedCount: 0, keptMemoCount: 0 })).not.toContain('メモ')
+  })
   it('どれも改行を含まない（1 行）', () => {
     expect(buildWholeDayTransferResultMessage({ sourceDateKey: 'a', targetDateKey: 'b', movedStudentCount: 1, movedTeacherCount: 1, returnedCount: 1 })).not.toContain('\n')
     expect(buildHolidayReleaseResultMessage({ dateKey: 'a', isClosedWeekday: false, restoredCount: 1, removedMakeupCount: 1, skippedCount: 1, skippedSummary: 'x' })).not.toContain('\n')

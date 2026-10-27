@@ -22,7 +22,7 @@ export type TemplatePendingListRow = {
   dayLabel: string
   slotLabel: string
   slotNumber: number
-  /** 下段（保留に残した側）の中身。生徒は「名前（科目）」、手置き講師は「講師 名前」、記録だけの席は「名前（記録）」。 */
+  /** 下段（保留に残した側）の中身。生徒は「名前（科目）」、手置き講師は「講師 名前」、記録だけの席は「名前（記録）」、メモは「メモ:内容」。 */
   lowerLabels: string[]
   /** 上段（今その机に居る側）の生徒。 */
   upperLabels: string[]
@@ -83,6 +83,9 @@ export function buildTemplatePendingList(map: TemplatePendingDeskMap | null | un
       }
       const status = lower.statusSlots?.[seat]
       if (status) lowerLabels.push(`${status.name}（${STATUS_LABELS[status.status] ?? '記録'}）`)
+      // 下段のメモ（テンプレ保存の Q24 と、2026-10-27 からの丸ごと振替の振替先のメモ）。メモだけの席も一覧で中身が分かるようにする。
+      const memo = lower.memoSlots?.[seat]
+      if (typeof memo === 'string' && memo.trim() !== '') lowerLabels.push(`メモ:${memo.replace(/\s+/g, ' ').trim()}`)
     }
     if (lower.teacher?.teacher) lowerLabels.push(`講師 ${lower.teacher.teacher}`)
     const upperSlots: ReadonlyArray<StudentEntry | null> = desk.lesson?.studentSlots ?? []

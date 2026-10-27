@@ -321,18 +321,19 @@ export function isTemplatePendingLowerEmpty(lower: TemplatePendingLower) {
  * 席ふさがりがいずれもこれを使う＝置き方を 3 か所に書かない）: 望みの机番号の下段の空いた席（望みの席 → もう一方）。埋まっていれば次の机の下段
  * （末尾まで行けば先頭へ）。全机の下段が埋まっていれば null（呼び出し側が従来の扱いへ）。入力の保留マップは変えない（純関数）。
  * 既にある保留（テンプレ保存の下段など）に相乗りするときは、その保留の由来（origin）・反映日・作成日時は上書きしない。
+ * 置く中身は生徒（student）かメモ（memo）のどちらか 1 つ（2026-10-27 オーナー指示「メモも消えないようにして」・確認リスト tp-62:
+ * 丸ごと振替の振替先の席のメモも同じ手順で下段へ残す。下段のメモは Q24 の既存の形＝lower.memoSlots。席の空き判定は生徒・記録・メモの共通）。
  */
 export function placeIntoPendingLower(params: {
   cell: SlotCell
   pendingDesks: TemplatePendingDeskMap
   preferredDeskIndex: number
   preferredSeat: number
-  student: StudentEntry
   effectiveStartDate: string
   createdAt: string
   kind: TemplatePendingOriginKind
   note: string
-}): { nextPendingDesks: TemplatePendingDeskMap; deskId: string; deskIndex: number; seatIndex: number } | null {
+} & ({ student: StudentEntry; memo?: undefined } | { memo: string; student?: undefined })): { nextPendingDesks: TemplatePendingDeskMap; deskId: string; deskIndex: number; seatIndex: number } | null {
   const { cell } = params
   const lowerSeatTaken = (entry: TemplatePendingDesk | undefined, index: number) => Boolean(entry?.lower.lesson?.studentSlots[index]) || Boolean(entry?.lower.statusSlots?.[index]) || Boolean(entry?.lower.memoSlots?.[index])
   for (let offset = 0; offset < cell.desks.length; offset += 1) {
@@ -344,12 +345,22 @@ export function placeIntoPendingLower(params: {
     const other = params.preferredSeat === 0 ? 1 : 0
     const seatIndex = !lowerSeatTaken(existing, params.preferredSeat) ? params.preferredSeat : (!lowerSeatTaken(existing, other) ? other : -1)
     if (seatIndex < 0) continue
-    const slots: StudentPair = [existing?.lower.lesson?.studentSlots[0] ?? null, existing?.lower.lesson?.studentSlots[1] ?? null]
-    slots[seatIndex] = params.student
-    const lessonId = existing?.lower.lesson?.id ?? `pending_lower_${cell.dateKey}_${cell.slotNumber}_${deskIndex}`
+    let lower: TemplatePendingLower
+    if (params.student) {
+      const slots: StudentPair = [existing?.lower.lesson?.studentSlots[0] ?? null, existing?.lower.lesson?.studentSlots[1] ?? null]
+      slots[seatIndex] = params.student
+      const lessonId = existing?.lower.lesson?.id ?? `pending_lower_${cell.dateKey}_${cell.slotNumber}_${deskIndex}`
+      lower = existing
+        ? { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: lessonId }), studentSlots: slots } }
+        : { lesson: { id: lessonId, studentSlots: slots } }
+    } else {
+      const memos: [string | null, string | null] = [existing?.lower.memoSlots?.[0] ?? null, existing?.lower.memoSlots?.[1] ?? null]
+      memos[seatIndex] = params.memo
+      lower = existing ? { ...existing.lower, memoSlots: memos } : { memoSlots: memos }
+    }
     const entry: TemplatePendingDesk = existing
-      ? { ...existing, lower: { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: lessonId }), studentSlots: slots } } }
-      : { lower: { lesson: { id: lessonId, studentSlots: slots } }, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt, origin: { kind: params.kind, note: params.note } }
+      ? { ...existing, lower }
+      : { lower, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt, origin: { kind: params.kind, note: params.note } }
     return { nextPendingDesks: { ...params.pendingDesks, [key]: entry }, deskId: desk.id, deskIndex, seatIndex }
   }
   return null
