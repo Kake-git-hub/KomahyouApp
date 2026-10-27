@@ -18,7 +18,7 @@ import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers, type TemplatePendingResolutionMode } from './ScheduleBoardScreen'
 import { buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, planManualTeacherDeskShifts, resolveManualTeacherOverlap } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, cloneTemplatePendingDeskMap, normalizeTemplatePendingDeskMap, collectTemplatePendingLowerTeacherNames, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { buildTemplatePendingTeacherChoiceConfirm, computePendingTeacherChoice, isTemplatePendingTeacherOnly, settleTemplatePendingDesk, settleTemplatePendingDesksAfterCommit, TEMPLATE_PENDING_MESSAGES } from './templatePendingResolution'
+import { buildTemplatePendingTeacherChoiceConfirm, computePendingTeacherChoice, isTemplatePendingTeacherOnly, resolveTemplatePendingDateBlockReason, settleTemplatePendingDesk, settleTemplatePendingDesksAfterCommit, TEMPLATE_PENDING_MESSAGES } from './templatePendingResolution'
 import { buildTemplatePendingList, describeTemplatePendingTeacherReason } from './templatePendingList'
 import { buildTeacherPayload } from '../../utils/scheduleHtml'
 import { isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
@@ -177,6 +177,8 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
     // 講師だけの保留は自動では解けない（Q28 の settle は何もしない）・Q41-5 の「そのコマに居る講師」に数える・一覧に講師の理由で出る
     expect(settleTemplatePendingDesk({ weeks: result.nextWeeks, templatePendingDesks: result.nextTemplatePendingDesks, key }).status).toBe('unchanged')
     expect(collectTemplatePendingLowerTeacherNames(result.nextTemplatePendingDesks, CELL_ID)).toEqual(['倉島'])
+    // Q31: 講師だけの保留も保留の机として数え、その日の休日設定・生徒を空にする・丸ごと振替を止める（regression-reviewer 2026-10-27 中-2・現行仕様を固定）
+    expect(resolveTemplatePendingDateBlockReason(result.nextTemplatePendingDesks, result.nextWeeks, cellOf(result.nextWeeks).dateKey, '休日設定')).toContain('保留の机が 1 机')
     const listRow = buildTemplatePendingList(result.nextTemplatePendingDesks, result.nextWeeks)
     expect(listRow).toHaveLength(1)
     expect(listRow[0].lowerLabels).toEqual(['講師 倉島'])
