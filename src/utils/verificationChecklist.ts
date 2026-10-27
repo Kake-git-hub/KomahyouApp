@@ -340,6 +340,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       check: [
         '「編集」で振替にした直後、その生徒の未消化振替の件数が変わらない(1 件減らない)',
         '「休み」にすると、その生徒の未消化振替が 1 件増える',
+        '振替にしたコマに「手動追加」の警告は出ず、生徒メニューの中身も今までの振替と同じ',
       ],
       introducedIn: 'v1.5.650',
     },
