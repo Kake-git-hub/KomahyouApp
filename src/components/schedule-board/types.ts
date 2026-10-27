@@ -41,6 +41,9 @@ export type StudentEntry = {
   specialSessionId?: string
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
+  // 生徒メニュー「編集」で区分を振替へ変えた印(2026-10-27・INV-06)。振替元の無いあいだは未消化を消化しない
+  // (isStockNeutralEditedMakeup)。manualAdded とは別にする(手打ちの警告・格納不可・時限つき返却などを持ち込まない)。
+  editedToMakeup?: boolean
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -86,6 +89,7 @@ export type StudentStatusEntry = {
   specialSessionId?: string
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
+  editedToMakeup?: boolean
   subject: SubjectLabel
   lessonType: LessonType
   teacherType: TeacherType

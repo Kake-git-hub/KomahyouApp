@@ -472,6 +472,14 @@ export function buildMakeupStockKey(studentKey: string, subject: string) {
   return `${studentKey}__${subject}`
 }
 
+// INV-06（2026-10-27 オーナー確定 案1）: 生徒メニュー「編集」で区分を振替へ変えた、振替元の無い振替か。
+// 編集は振替元を付けないので、消化に数えると「未消化を 1 コマ使った」扱いになり後の休みを黙って相殺する。
+// 消化(countPlannedMakeupsByKey / collectMakeupUsageByKey)と、全コマ削除系の返却(reconcileHolidayDeskStockReturns)だけがこれを見る。
+// 振替元が付いたら(別日へ移動した等)通常の振替の会計に戻す＝ここでは数えない側に倒さない。
+export function isStockNeutralEditedMakeup(entry: { lessonType?: string; editedToMakeup?: boolean; makeupSourceDate?: string | null } | null | undefined) {
+  return Boolean(entry && entry.lessonType === 'makeup' && entry.editedToMakeup && !entry.makeupSourceDate)
+}
+
 export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string) {
   const counts: Record<string, number> = {}
 
@@ -480,12 +488,12 @@ export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey:
       if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
-          if (!student || student.manualAdded || student.lessonType !== 'makeup') continue
+          if (!student || student.manualAdded || student.lessonType !== 'makeup' || isStockNeutralEditedMakeup(student)) continue
           const key = buildMakeupStockKey(resolveStudentKey(student), student.subject)
           counts[key] = (counts[key] ?? 0) + 1
         }
         for (const statusEntry of desk.statusSlots ?? []) {
-          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
+          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup' || isStockNeutralEditedMakeup(statusEntry)) continue
           if (statusEntry.status === 'absent') continue
           // ★holiday(休日設定で消えたコマの表示専用記録・2026-09-16)は配置ではないので数えない。
           // 数えると「休日設定で在庫へ返した1コマ」を同時に消化済みとも数えて在庫が消える(INV-06 誤減)。
@@ -750,7 +758,7 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
       if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
-          if (!student || student.manualAdded) continue
+          if (!student || student.manualAdded || isStockNeutralEditedMakeup(student)) continue
           const key = buildMakeupStockKey(resolveStudentKey(student), student.subject)
           if (student.lessonType === 'makeup') {
             counts[key] = (counts[key] ?? 0) + 1
@@ -760,7 +768,7 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
           }
         }
         for (const statusEntry of desk.statusSlots ?? []) {
-          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
+          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup' || isStockNeutralEditedMakeup(statusEntry)) continue
           if (statusEntry.status === 'absent') continue
           // ★holiday は消化に数えない(2026-09-16)。休日設定で在庫へ返した1コマを同時に消化とも数えると、
           // 返したはずの在庫が即座に打ち消されて消える(INV-06 誤減)。moved と同じ扱い。
