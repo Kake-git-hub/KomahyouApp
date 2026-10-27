@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.647 (2026-10-27)
+
+- fix: 操作痕跡の要約の上限を 400 → 2000 字、盤面差分で並べる机の上限を 6 → 20 台に広げた(オーナー判断 2026-10-27・案 B)。日大前校の保存失敗(10/26)で消えた作業を保存に相乗りした痕跡から読み戻したとき、机を何台も動かした操作が 400 字で切れて一部が読めなかったため。サーバー側 DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT も同じ値へ(突合テストあり)。文書 1 件の合計予算(20 万字)は据え置き。端末の localStorage には合計文字数の予算(80 万字)を設け、超えたら古い方から書かない。確認リスト sc-2。(src/utils/operationTrace.ts・functions/src/developerReport.ts)
+- docs: 週単位の分割保存(教室データ 1MiB 上限の恒久対策)の仕様 docs/spec-save-restore.md §9 を起こした(保存形式・差分保存・1 トランザクションの版数照合・組み立て関数・移行段階 A〜D・ルール・掃除・受け入れ条件 AC-1〜28)。未決 Q1〜Q6 はオーナー回答で確定(2026-10-27・全て推奨案: 3 部品に分ける/古い画面の保存は断る/旧版は 3 日/日大前校を先に/INV-14 を追加/2 回に分けて出す)。保証台帳に INV-14「教室データの全か無か」(準観察)を追加。
+
 ## v1.5.646 (2026-10-27)
 
 - fix: **日大前校の保存が通らない障害のつなぎ**。教室データ(8.3MB)を gzip+base64 で 1 文書に入れていて、Firestore の 1 文書上限(1,048,576 バイト)の 27 バイト手前まで来ていた。10/26 17:58〜21:15 と 10/27 14:46〜 の保存は全部 Firestore に拒否されていた(保存記録は started のまま・画面は「接続を確認して」・開発者へのメール無し)。(1) 教室スナップショットの圧縮を level 9 に(実データで 1,048,236 → 992,112 文字・余裕約 56KB・読む側は無変更)。(2) 本体の書き込みを try で包み、容量超過は saveAttempts に status=too-large・利用者へは resource-exhausted＋マーカー `SNAPSHOT_TOO_LARGE`(通信失敗の自動再試行に乗せない)・それ以外の書き込み失敗は status=write-failed で元の例外を投げ直す。どちらも開発者へメール(種類 snapshot-too-large / write-failed)。(3) 保存記録に文書サイズの見積もり documentByteLength と使用率 capacityRatio を残し、85% 以上で容量注意メール(capacity-warning・失敗の通知と別の間引きで 1 日 1 通)。(4) 画面は容量超過のとき「上限に達したため保存できませんでした。開発者へ自動で連絡済み。閉じず、再読み込みもしない」の専用の案内。見積もりだけで書き込みを止めることはしない(Firestore の拒否を正とする)。恒久対策は週単位の分割保存(開発ダッシュボード classroom-snapshot-capacity)。確認リスト sc-1。(functions/src/snapshotCapacity.ts・saveFailureAlert.ts・index.ts、src/utils/saveProgressMessages.ts、src/App.tsx)
