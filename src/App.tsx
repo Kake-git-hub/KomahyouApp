@@ -46,7 +46,7 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, collectOperationTraceSinceLastSave, markOperationTraceSaved, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildUnsentCloudSaveFailurePrompt, buildUnsentCloudSaveOpenPrompt, buildUnsentCloudSaveRecord, buildUnsentCloudSaveReportNote, clearUnsentCloudSaveIfSameSession, deleteUnsentCloudSave, deleteUnsentCloudSaveIfUnchanged, isUnsentCloudSaveExpired, readUnsentCloudSave, shouldPromptUnsentCloudSaveOnFailure, shouldPromptUnsentCloudSaveOnOpen, writeUnsentCloudSave, type UnsentCloudSaveRecord } from './utils/unsentCloudSave'
+import { buildUnsentCloudSaveOpenPrompt, buildUnsentCloudSaveRecord, buildUnsentCloudSaveReportBody, clearUnsentCloudSaveIfSameSession, deleteUnsentCloudSave, deleteUnsentCloudSaveIfUnchanged, isUnsentCloudSaveExpired, readUnsentCloudSave, resolveSaveFailureDialog, shouldPromptUnsentCloudSaveOnOpen, writeUnsentCloudSave, type UnsentCloudSaveRecord } from './utils/unsentCloudSave'
 import { handleCapturedClientError, installClientErrorCapture, setClientErrorAutoReporter } from './utils/clientErrorCapture'
 import { captureScreenToDataUrl } from './components/developer-report/screenCapture'
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportStudentLedger, type DeveloperReportSubmitResult } from './utils/developerReport'
@@ -63,7 +63,7 @@ import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsence
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
-import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE, SNAPSHOT_TOO_LARGE_STATUS_MESSAGE, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus, isSnapshotTooLargeError, isTransientFirebaseSyncError } from './utils/saveProgressMessages'
+import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE, SNAPSHOT_TOO_LARGE_STATUS_MESSAGE, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus, isSnapshotTooLargeError, isTransientFirebaseSyncError, SNAPSHOT_TOO_LARGE_GUIDANCE_WITHOUT_BACKUP_MESSAGE } from './utils/saveProgressMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { collectTemplatePendingCellIds, templatePendingDesksForSignature } from './components/schedule-board/templatePendingDesks'
@@ -81,6 +81,8 @@ const SAVE_FAILURE_GUIDANCE_MESSAGE = [
   '保存に失敗しました。接続を確認して、もう一度「保存」してください。',
   'バックアップをダウンロード済みです（直らないときは再ログイン →「バックアップを読み込む」）。',
 ].join('\n')
+/** 上の案内からダウンロードの行を外したもの(自動保存の失敗ではダウンロードしないので・2026-10-27)。 */
+const SAVE_FAILURE_GUIDANCE_WITHOUT_BACKUP_MESSAGE = SAVE_FAILURE_GUIDANCE_MESSAGE.split('\n')[0]
 
 // C1: 遅延読み込み画面のロード中に出す軽量フォールバック。
 function ScreenLoadingFallback() {
@@ -1532,6 +1534,8 @@ function AuthenticatedApp() {
   // 保存できなかった内容の控え(2026-10-27・utils/unsentCloudSave.ts): 失敗したその場で「開発者へ送る」を聞いた教室(この画面で初回だけ)と、
   // 送信の処理(submitDeveloperReport の後で定義するので ref 経由で呼ぶ)。
   const promptedUnsentCloudSaveClassroomIdsRef = useRef<Set<string>>(new Set())
+  // 同じ教室での連続失敗の回数(保存が成功したら 0 に戻す)。一瞬の回線切れではその場で聞かないため。
+  const consecutiveCloudSaveFailuresRef = useRef<Map<string, number>>(new Map())
   const sendUnsentCloudSaveRef = useRef<((record: UnsentCloudSaveRecord, trigger: 'on-failure' | 'on-open') => Promise<void>) | null>(null)
   // A1: 別端末が先に更新していて(版数衝突=STALE)クラウド保存が拒否された状態。
   // セットされると、同じ古いベースでの再送ループを止め、ユーザーに再読み込みを促す。
@@ -2457,6 +2461,7 @@ function AuthenticatedApp() {
               }
               // この画面で作った「保存できなかった内容の控え」は、この画面の内容が届いたので消す(別の画面の控えは消さない)。
               void clearUnsentCloudSaveIfSameSession(targetClassroom.id)
+              consecutiveCloudSaveFailuresRef.current.delete(targetClassroom.id)
               break
             } catch (error) {
               if (!manualFirebaseSaveStabilityEnabled || !isTransientFirebaseSyncError(error) || attempt >= maxAttempts) {
@@ -2472,19 +2477,23 @@ function AuthenticatedApp() {
             restoreOperationEvents(targetClassroom.id, operationEvents)
             recordOperationTrace('save', `保存失敗: ${error instanceof Error ? error.message : String(error)}`)
             // 送れなかった教室データを上書きされない控えとして端末に残す(自動保存の失敗でも・2026-10-27)。書き戻しには使わない。
-            try {
-              failedUnsentRecord = buildUnsentCloudSaveRecord({
-                classroomId: targetClassroom.id,
-                classroomName: targetClassroom.name,
-                snapshotSavedAt: nextItem.snapshot.savedAt,
-                error,
-                appVersion: __APP_VERSION__,
-                payload: targetClassroom.data,
-                recentOperations: collectOperationTraceSinceLastSave(targetClassroom.id),
-              })
-              void writeUnsentCloudSave(failedUnsentRecord)
-            } catch {
-              // 控えは補助。作れなくても保存失敗の流れは変えない。
+            // 版数衝突(別の端末が先に保存)は控えない: その経路は JSON の書き出しと再読み込みの案内を別に出す(二重に案内しない)。
+            if (!isStaleSnapshotConflictError(error)) {
+              try {
+                consecutiveCloudSaveFailuresRef.current.set(targetClassroom.id, (consecutiveCloudSaveFailuresRef.current.get(targetClassroom.id) ?? 0) + 1)
+                failedUnsentRecord = buildUnsentCloudSaveRecord({
+                  classroomId: targetClassroom.id,
+                  classroomName: targetClassroom.name,
+                  snapshotSavedAt: nextItem.snapshot.savedAt,
+                  error,
+                  appVersion: __APP_VERSION__,
+                  payload: targetClassroom.data,
+                  recentOperations: collectOperationTraceSinceLastSave(targetClassroom.id),
+                })
+                void writeUnsentCloudSave(failedUnsentRecord)
+              } catch {
+                // 控えは補助。作れなくても保存失敗の流れは変えない。
+              }
             }
             throw error
           }
@@ -2556,18 +2565,24 @@ function AuthenticatedApp() {
         }
         // バックアップを新規ダウンロードした失敗時のみ、再ログイン→復元の作業指示を明示する
         // (downloadFirebaseFailureBackup はスナップショット単位で重複DLを抑止するため、案内も重複しない)。
-        // この画面・この教室で初めての失敗なら、同じ案内に「開発者へ送りますか？」を添えて聞く(自動保存の失敗も・2026-10-27)。
-        const guidance = tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE
+        // 控えがあり、この画面・この教室でまだ聞いていなければ、同じ案内に「開発者へ送りますか？」を添えて聞く(2026-10-27)。
+        // 出し分けは純関数 resolveSaveFailureDialog(一瞬の回線切れ・隠れたタブでは聞かない・容量超過の「再読み込みしない」は残す)。
         const unsentRecord = failedUnsentRecord as UnsentCloudSaveRecord | null
-        if (unsentRecord && shouldPromptUnsentCloudSaveOnFailure(promptedUnsentCloudSaveClassroomIdsRef.current, unsentRecord.classroomId)) {
+        const failureDialog = resolveSaveFailureDialog({
+          guidance: tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE,
+          guidanceWithoutBackup: tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_WITHOUT_BACKUP_MESSAGE : SAVE_FAILURE_GUIDANCE_WITHOUT_BACKUP_MESSAGE,
+          downloadedBackup,
+          record: unsentRecord,
+          alreadyPrompted: unsentRecord ? promptedUnsentCloudSaveClassroomIdsRef.current.has(unsentRecord.classroomId) : true,
+          isVisible: typeof document === 'undefined' || document.visibilityState === 'visible',
+          isTransient: isTransientFirebaseSyncError(error),
+          consecutiveFailures: unsentRecord ? consecutiveCloudSaveFailuresRef.current.get(unsentRecord.classroomId) ?? 0 : 0,
+        })
+        if (failureDialog.type === 'confirm' && unsentRecord) {
           promptedUnsentCloudSaveClassroomIdsRef.current.add(unsentRecord.classroomId)
-          // ダウンロードしていない(自動保存の)失敗では「ダウンロード済み」の行を出さない。
-          const promptGuidance = downloadedBackup ? guidance : guidance.split('\n')[0]
-          if (window.confirm(buildUnsentCloudSaveFailurePrompt(promptGuidance))) {
-            void sendUnsentCloudSaveRef.current?.(unsentRecord, 'on-failure')
-          }
-        } else if (downloadedBackup) {
-          window.alert(guidance)
+          if (window.confirm(failureDialog.text)) void sendUnsentCloudSaveRef.current?.(unsentRecord, 'on-failure')
+        } else if (failureDialog.type === 'alert') {
+          window.alert(failureDialog.text)
         }
         nextItem.onFailure?.(error)
       } finally {
@@ -4206,22 +4221,18 @@ function AuthenticatedApp() {
   // 保存できなかった内容の控えを「開発者へ送る」(2026-10-27・オーナー決定)。既存の「質問・要望」と同じ経路で、
   // 控えの教室データと失敗時点までの操作痕跡を送る(開発者へメール)。送れたら控えを消す。
   const sendUnsentCloudSave = useCallback(async (record: UnsentCloudSaveRecord, trigger: 'on-failure' | 'on-open') => {
-    const body = buildDeveloperReportRequestBody({
-      classroomId: record.classroomId,
-      source: 'board',
-      category: 'bug',
-      note: buildUnsentCloudSaveReportNote(record, trigger),
-      appVersion: __APP_VERSION__,
-      userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
-      pageUrl: typeof window === 'undefined' ? '' : window.location.href,
-      screen: 'board',
-      boardDirty: true,
-      lastSavedAt: lastSavedAtRef.current,
-      recentOperations: record.recentOperations,
-      // ★保護者用QRの写しトークンは外す(質問・要望と同じ・レビュー指摘 2026-09-13)。
-      snapshotPayload: { ...record.payload, students: stripParentPortalTokensFromStudents<StudentRow>(record.payload.students as StudentRow[]) },
-    })
     try {
+      // 次の保存と同時に大きな報告を送ると遅い回線で保存が時間切れになりうるので、保存の通信が終わるのを待つ(最大 60 秒)。
+      for (let waited = 0; remoteSaveInFlightRef.current && waited < 60; waited += 1) {
+        await new Promise<void>((resolve) => { window.setTimeout(resolve, 1000) })
+      }
+      // 本文は純関数(送り先は控えの教室・保護者用QRのトークンは外す)。
+      const body = buildUnsentCloudSaveReportBody(record, {
+        trigger,
+        appVersion: __APP_VERSION__,
+        userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+        pageUrl: typeof window === 'undefined' ? '' : window.location.href,
+      })
       const result = await submitDeveloperReportViaFunction(body)
       await deleteUnsentCloudSaveIfUnchanged(record.classroomId, record.failedAt)
       recordOperationTrace('navigation', `保存できなかった内容を開発者へ送信 trigger=${trigger} reportId=${result.reportId}`)
@@ -4229,9 +4240,9 @@ function AuthenticatedApp() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       recordOperationTrace('navigation', `保存できなかった内容の送信に失敗 trigger=${trigger}: ${message}`)
-      window.alert('送れませんでした。この端末に控えは残っているので、次に開いたときにもう一度お知らせします。')
+      window.alert('送れませんでした。保存できなかった内容が端末に残っていれば、次に開いたときにもう一度お知らせします。')
     }
-  }, [lastSavedAtRef])
+  }, [])
   useEffect(() => {
     sendUnsentCloudSaveRef.current = sendUnsentCloudSave
   }, [sendUnsentCloudSave])

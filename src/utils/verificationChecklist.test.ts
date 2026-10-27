@@ -109,12 +109,12 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.644')
   })
 
-  it('第81版(2026-10-27・v1.5.644 据え置き): 保存できなかった内容を開発者へ送る確認 sc-3 は開発用教室だけ・盤面が勝手に戻らないことを見る', () => {
+  it('第81版(2026-10-27・v1.5.644 据え置き): 保存できなかった内容を開発者へ送る確認 sc-3 は開発用教室だけ・コマ表が勝手に戻らないことを見る', () => {
     const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sc-3')!
     expect(item).toBeDefined()
     expect(item.introducedIn).toBe('v1.5.648')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('sc-3')
-    expect(item.check?.join('\n')).toContain('盤面は勝手に戻らない')
+    expect(item.check?.join('\n')).toContain('コマ表は勝手に戻らない')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.644')
   })
 

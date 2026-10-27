@@ -22,6 +22,8 @@
 // ★本番データ保護: 端末の中だけ。Firestore へは書かない(送るのは利用者が「OK」を押したときの報告だけ)。
 
 import type { AppSnapshotPayload } from '../types/appState'
+import { stripParentPortalTokensFromStudents } from './developmentClassroom'
+import { buildDeveloperReportRequestBody, type DeveloperReportRequestBody } from './developerReport'
 import type { OperationTraceEntry } from './operationTrace'
 
 /** この画面(タブ)を見分ける id。再読み込みで変わる。控えが「この画面のもの」かを見分ける。 */
@@ -104,9 +106,80 @@ function formatJstLabel(iso: string): string {
   return `${jst.getUTCMonth() + 1}/${jst.getUTCDate()} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`
 }
 
-/** 失敗したその場の確認(OK=開発者へ送る)。上 2 行は従来の案内、3 行目が問い(オーナー指示 2026-10-25「1〜2 行」+ 問い)。 */
-export function buildUnsentCloudSaveFailurePrompt(guidance: string): string {
-  return `${guidance}\n保存できなかった内容を開発者へ送りますか？（原因と保存漏れの確認に使います）`
+/** 失敗したその場の確認(OK=開発者へ送る)。上は従来の案内、最後の行が問い(教室名つき・保存中に教室を切り替えても取り違えない)。 */
+export function buildUnsentCloudSaveFailurePrompt(guidance: string, classroomName = ''): string {
+  const classroom = classroomName ? `「${classroomName}」の` : ''
+  return `${guidance}\n${classroom}保存できなかった内容を開発者へ送りますか？（原因と保存漏れの確認に使います）`
+}
+
+/** その場で聞くのに必要な、同じ教室での連続失敗の回数(一瞬の回線切れでは聞かない・regression-reviewer 中)。 */
+export const UNSENT_CLOUD_SAVE_PROMPT_TRANSIENT_FAILURE_COUNT = 3
+
+export type SaveFailureDialog = { type: 'confirm'; text: string } | { type: 'alert'; text: string } | { type: 'none' }
+
+/**
+ * 保存が失敗したときに出すダイアログを決める(純関数・App.tsx の保存キューの catch が使う)。
+ *  - 控えがあり、この画面・この教室でまだ聞いておらず、画面が見えていて(隠れたタブで止めない)、
+ *    一時的な失敗でない(容量超過など)か同じ教室で 3 回続けて失敗したときだけ、案内に「開発者へ送りますか？」を添えて聞く。
+ *  - それ以外は従来どおり、バックアップをダウンロードしたときだけ案内を alert で出す。
+ *  - ダウンロードしていない(自動保存の)失敗では、案内から「ダウンロード済み」を外した文を使う。
+ */
+export function resolveSaveFailureDialog(input: {
+  guidance: string
+  guidanceWithoutBackup: string
+  downloadedBackup: boolean
+  record: Pick<UnsentCloudSaveRecord, 'classroomId' | 'classroomName'> | null
+  alreadyPrompted: boolean
+  isVisible: boolean
+  isTransient: boolean
+  consecutiveFailures: number
+}): SaveFailureDialog {
+  const text = input.downloadedBackup ? input.guidance : input.guidanceWithoutBackup
+  const persistent = !input.isTransient || input.consecutiveFailures >= UNSENT_CLOUD_SAVE_PROMPT_TRANSIENT_FAILURE_COUNT
+  if (input.record && !input.alreadyPrompted && input.isVisible && persistent) {
+    return { type: 'confirm', text: buildUnsentCloudSaveFailurePrompt(text, input.record.classroomName) }
+  }
+  if (input.downloadedBackup) return { type: 'alert', text: input.guidance }
+  return { type: 'none' }
+}
+
+/**
+ * 控えを開発者へ送る報告の本文(純関数)。送り先の教室は**控えの教室**(今開いている教室ではない・INV-08)。
+ * 保護者用QRの写しトークンは外す(「質問・要望」と同じ・レビュー指摘 2026-09-13)。
+ */
+export function buildUnsentCloudSaveReportBody(record: UnsentCloudSaveRecord, env: {
+  trigger: 'on-failure' | 'on-open'
+  appVersion: string
+  userAgent: string
+  pageUrl: string
+  now?: Date
+}): DeveloperReportRequestBody {
+  const students = Array.isArray(record.payload?.students) ? record.payload.students : []
+  return buildDeveloperReportRequestBody({
+    classroomId: record.classroomId,
+    source: 'board',
+    category: 'bug',
+    note: buildUnsentCloudSaveReportNote(record, env.trigger),
+    appVersion: env.appVersion,
+    userAgent: env.userAgent,
+    pageUrl: env.pageUrl,
+    screen: 'board',
+    boardDirty: true,
+    lastSavedAt: record.snapshotSavedAt,
+    recentOperations: Array.isArray(record.recentOperations) ? record.recentOperations : [],
+    snapshotPayload: { ...record.payload, students: stripParentPortalTokensFromStudents(students) } as AppSnapshotPayload,
+    ...(env.now ? { now: env.now } : {}),
+  })
+}
+
+/** 端末から読んだ控えの形を確かめる(壊れていれば使わない)。 */
+export function isUnsentCloudSaveRecord(value: unknown): value is UnsentCloudSaveRecord {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<UnsentCloudSaveRecord>
+  return typeof record.classroomId === 'string' && Boolean(record.classroomId)
+    && typeof record.sessionId === 'string'
+    && typeof record.failedAt === 'string'
+    && Boolean(record.payload) && typeof record.payload === 'object'
 }
 
 /** 次に開いたときの確認(OK=開発者へ送る・キャンセル=あとで)。 */
@@ -194,7 +267,24 @@ export function writeUnsentCloudSave(record: UnsentCloudSaveRecord): Promise<boo
 
 export function readUnsentCloudSave(classroomId: string): Promise<UnsentCloudSaveRecord | null> {
   if (!classroomId) return Promise.resolve(null)
-  return runStore('readonly', (store) => store.get(classroomId), (result) => (result && typeof result === 'object' ? result as UnsentCloudSaveRecord : null), null)
+  return runStore('readonly', (store) => store.get(classroomId), (result) => (isUnsentCloudSaveRecord(result) ? result : null), null)
+}
+
+/** 1 つの readwrite トランザクションの中で読み、条件に合えば消す(読んでから消すまでの隙を作らない)。 */
+function deleteUnsentCloudSaveWhere(classroomId: string, predicate: (record: UnsentCloudSaveRecord | null) => boolean): Promise<boolean> {
+  if (!classroomId) return Promise.resolve(false)
+  let deleted = false
+  return runStore('readwrite', (store) => {
+    const request = store.get(classroomId)
+    request.onsuccess = () => {
+      const record = isUnsentCloudSaveRecord(request.result) ? request.result : null
+      if (record && predicate(record)) {
+        store.delete(classroomId)
+        deleted = true
+      }
+    }
+    return request
+  }, () => deleted, false)
 }
 
 export function deleteUnsentCloudSave(classroomId: string): Promise<boolean> {
@@ -210,8 +300,7 @@ export function deleteUnsentCloudSave(classroomId: string): Promise<boolean> {
 export async function clearUnsentCloudSaveIfSameSession(classroomId: string): Promise<void> {
   if (!classroomIdsWithSessionRecord.has(classroomId)) return
   try {
-    const record = await readUnsentCloudSave(classroomId)
-    if (shouldClearUnsentCloudSaveOnSuccess(record)) await deleteUnsentCloudSave(classroomId)
+    await deleteUnsentCloudSaveWhere(classroomId, (record) => shouldClearUnsentCloudSaveOnSuccess(record))
     classroomIdsWithSessionRecord.delete(classroomId)
   } catch {
     // 控えは補助。消せなくても次回案内されるだけ。
@@ -221,9 +310,7 @@ export async function clearUnsentCloudSaveIfSameSession(classroomId: string): Pr
 /** 送れたら消す。ただし送っている間に新しい失敗で控えが書き換わっていたら消さない(新しい分はまだ届いていない)。 */
 export async function deleteUnsentCloudSaveIfUnchanged(classroomId: string, failedAt: string): Promise<void> {
   try {
-    const record = await readUnsentCloudSave(classroomId)
-    if (record && record.failedAt === failedAt) await deleteUnsentCloudSave(classroomId)
-    if (!record || record.failedAt === failedAt) classroomIdsWithSessionRecord.delete(classroomId)
+    await deleteUnsentCloudSaveWhere(classroomId, (record) => record?.failedAt === failedAt)
   } catch {
     // 消せなくても次回もう一度案内されるだけ。
   }

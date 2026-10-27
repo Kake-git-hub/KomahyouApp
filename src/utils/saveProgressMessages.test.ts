@@ -115,10 +115,11 @@ describe('容量超過で保存できないときの表示(2026-10-27 日大前�
     const app = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
     expect(app).toContain('const tooLarge = isSnapshotTooLargeError(error)')
     // 2026-10-27: 案内の文は guidance に選んでから、初回は「開発者へ送りますか？」付きの確認、それ以外は alert で出す(unsentCloudSave)。
-    expect(app).toContain('const guidance = tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE')
-    expect(app).toContain('window.alert(guidance)')
+    expect(app).toContain('guidance: tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE,')
+    expect(app).toContain('guidanceWithoutBackup: tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_WITHOUT_BACKUP_MESSAGE : SAVE_FAILURE_GUIDANCE_WITHOUT_BACKUP_MESSAGE,')
+    expect(app).toContain('window.alert(failureDialog.text)')
     // 再試行の判定は utils の 1 か所(App.tsx に写しを持たない)
-    expect(app).toContain('isTransientFirebaseSyncError } from \'./utils/saveProgressMessages\'')
+    expect(app).toMatch(/isTransientFirebaseSyncError[^}]*\} from '\.\/utils\/saveProgressMessages'/u)
     expect(app).not.toContain('function isTransientFirebaseSyncError(')
   })
 

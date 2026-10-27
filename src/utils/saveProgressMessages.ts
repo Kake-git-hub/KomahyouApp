@@ -65,6 +65,15 @@ export const SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE = [
 ].join('\n')
 
 /**
+ * 容量超過の案内のうち、バックアップをダウンロードしていない(自動保存の)失敗で出す文(2026-10-27 regression-reviewer 中)。
+ * 「閉じず、再読み込みもしない」は一番大事な指示なので残し、「ダウンロード済み」だけを外す。
+ */
+export const SNAPSHOT_TOO_LARGE_GUIDANCE_WITHOUT_BACKUP_MESSAGE = [
+  '教室のデータが上限に達したため保存できませんでした。開発者へ自動で連絡済みです。',
+  'この画面は閉じず、再読み込みもしないでください。',
+].join('\n')
+
+/**
  * クラウド保存の失敗が一時的(通信・タイムアウト・サーバー内部)で、自動で再試行してよいか(App.tsx の保存キューが使う)。
  * 容量超過(SNAPSHOT_TOO_LARGE)は何度送っても通らないので一時的としない(regression-reviewer L-1 で App.tsx から移した・2026-10-27)。
  */
