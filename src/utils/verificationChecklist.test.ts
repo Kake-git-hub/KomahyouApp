@@ -146,16 +146,16 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.651')
   })
 
-  it('第78版(2026-10-26・v1.5.644・決定記録 48 §3・§H Q42-6): 保留の机の週をまたいだ一覧 tp-64 を足し、テスト教室にも出し、版を上げる', () => {
+  it('第78版(2026-10-26・v1.5.644)→ 第83版(2026-10-27・オーナー確定「講師と生徒を別々に採用」): tp-64 を講師と生徒の別々の採用の確認へ書き換え、テスト教室にも出す', () => {
     const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tp-64')!
     expect(item).toBeDefined()
-    expect(item.introducedIn).toBe('v1.5.644')
+    expect(item.introducedIn).toBe('v1.5.651')
     expect(item.area).toBe('テンプレ作成')
-    expect(item.title).toContain('「保留 n」を押すと')
-    expect(item.check?.join('\n')).toContain('このコマへ')
-    expect(item.check?.join('\n')).toContain('n が 1 減る')
+    expect(item.title).toContain('生徒と講師を別々に採用できる')
+    expect(item.steps.join('\n')).toContain('「テンプレの講師を採用」')
+    expect(item.steps.join('\n')).toContain('「手入力の講師を採用」')
+    expect(item.check?.join('\n')).toContain('「よろしいですか？」が出ず')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-64')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.651')
   })
 
   it('第77版(2026-10-26・v1.5.643・決定記録 46): 時限を変えたときの追従は OK 済み(第83版で tp-51 は科目変更に絞った)', () => {
