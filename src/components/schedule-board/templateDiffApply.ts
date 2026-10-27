@@ -787,9 +787,30 @@ export function expandTemplateDiffSlotFilterForSameDayMoves(params: {
  * 移動元ラベルの時限 1 つだけ外すと、5→4→3 限と動かした写しの 4 限のキーが残り、テンプレの授業がどこにも戻らない）。
  * 休み・出席の記録が積んだキーは、記録のある生徒×科目を写しとしない（`isSameDayMovedTemplateCopy` の呼び出し側のガード・H-1）ので、ここには来ない。
  */
-export function resolveSameDayMoveCopyKeysToRemove(revert: Pick<SameDayMoveCopyRevert, 'student' | 'dateKey'>, suppressed: readonly string[]): string[] {
+// ★`protectedKeys`＝「編集」で振替・増コマにしたテンプレの通常授業が積んだ抑止キー（`editedFromRegular.addedOccurrenceKey`・2026-10-27 INV-02）。
+//   これは写しの移動の履歴ではなく「元の授業は振替・増コマに置き換わった」という記録なので外さない（外すと、同じ日に同じ科目の写しが
+//   もう 1 コマある生徒で、テンプレの時限変更の保存のたびに元の授業が上段に湧き、編集したコマが下段へ押し出される・regression-reviewer 中-3）。
+export function resolveSameDayMoveCopyKeysToRemove(revert: Pick<SameDayMoveCopyRevert, 'student' | 'dateKey'>, suppressed: readonly string[], protectedKeys?: ReadonlySet<string>): string[] {
   const prefix = `${studentSubjectKey(revert.student)}__${revert.dateKey}__`
-  return suppressed.filter((key) => key.startsWith(prefix))
+  return suppressed.filter((key) => key.startsWith(prefix) && !protectedKeys?.has(key))
+}
+
+/** 盤面（上段・保留の下段・出欠記録）にある「編集で積んだ抑止キー」を集める（`resolveSameDayMoveCopyKeysToRemove` の保護用）。 */
+export function collectEditedFromRegularOccurrenceKeys(weeks: SlotCell[][], pendingDesks?: TemplatePendingDeskMap | null): Set<string> {
+  const keys = new Set<string>()
+  const consider = (entry: { editedFromRegular?: { addedOccurrenceKey?: string } } | null | undefined) => {
+    const key = entry?.editedFromRegular?.addedOccurrenceKey
+    if (key) keys.add(key)
+  }
+  for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
+    for (const entry of desk.lesson?.studentSlots ?? []) consider(entry)
+    for (const entry of desk.statusSlots ?? []) consider(entry)
+  }
+  for (const pending of Object.values(pendingDesks ?? {})) {
+    for (const entry of pending.lower.lesson?.studentSlots ?? []) consider(entry)
+    for (const entry of pending.lower.statusSlots ?? []) consider(entry)
+  }
+  return keys
 }
 
 /** H-2(b) の保護キー（コマ ID × 生徒 id）。写しは外しても同じ id のまま別の場所へ行かないので、これで同じ写しを指せる。 */

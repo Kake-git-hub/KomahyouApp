@@ -1048,12 +1048,13 @@ describe('index.ts の配線(文字列走査)', () => {
     expect(body).toContain('requireParentPortalStudentExists(')
   })
 
-  it('スナップショットは readStoredSnapshotPayload で読み、日程は generated/parentSchedule の権威関数を使う', () => {
+  it('スナップショットは唯一の読み手 readClassroomSnapshotPayload(旧形式＋分割形式・fail-closed)で読み、日程は generated/parentSchedule の権威関数を使う', () => {
     expect(source).toContain("from './generated/parentSchedule'")
     const start = source.indexOf('function buildParentPortalDeps')
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, start + 6000)
-    expect(body).toContain('readStoredSnapshotPayload(')
+    expect(body).toContain('await readClassroomSnapshotPayload(')
+    expect(body).not.toContain('readLegacyStoredSnapshotPayload(')
     expect(body).toContain('buildParentScheduleView')
     expect(body).toContain('resolveParentScheduleRange')
     expect(body).toContain('isParentStudentActiveOnDate')

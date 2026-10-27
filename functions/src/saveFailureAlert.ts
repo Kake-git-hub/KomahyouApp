@@ -45,7 +45,7 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback:
 }
 export const SAVE_FAILURE_ALERT_COLLECTION = 'saveFailureAlerts'
 
-export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning'] as const
+export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed'] as const
 export type SaveFailureAlertKind = (typeof SAVE_FAILURE_ALERT_KINDS)[number]
 
 export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, string>> = {
@@ -55,6 +55,7 @@ export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, st
   'snapshot-too-large': '教室データが 1 文書の上限(1MiB)を超えて保存できない',
   'write-failed': '教室データの書き込みに失敗(Firestore が書き込みを拒否・想定外の例外)',
   'capacity-warning': '教室データが 1 文書の上限(1MiB)に近い(保存は成功)',
+  'snapshot-assembly-failed': '分割形式の教室データを組み立てられない(部品が欠ける・合わない・INV-14)',
 }
 
 /** 何を見れば原因に近づけるか(種類ごと)。メール本文に載せる。 */
@@ -65,6 +66,7 @@ export const SAVE_FAILURE_ALERT_HINTS: Readonly<Record<SaveFailureAlertKind, str
   'snapshot-too-large': '★この教室は直すまで保存が一切通らない。室長には「画面を閉じない・再読み込みしない」を伝える(未保存の内容は端末の失敗時バックアップ JSON にある)。saveAttempts の documentByteLength / capacityRatio で超過量を見る。恒久対策は週単位の分割保存(2026-10-27 日大前校の事故)。',
   'write-failed': 'saveAttempts の errorMessage に Firestore の原因文がある。続けて起きるなら Firestore 側の障害を疑う。容量超過なら種類は snapshot-too-large になる。',
   'capacity-warning': 'まだ保存はできているが、増え続けるといずれ保存が止まる。saveAttempts の capacityRatio の推移を見て、上限到達の前に対策(週単位の分割保存)を出す。この通知は教室ごとに 1 日 1 通。',
+  'snapshot-assembly-failed': '★その教室は読み手(自動バックアップ・直前ロールバック・版履歴・保護者ページ・在籍数台帳)が空で扱わず止めている(docs/spec-save-restore.md §9-5-3)。detail の読み手名と理由(missing-part / hash-mismatch / decode-failed / invalid-manifest と部品キー)を見て、目次 classroomSnapshots/{id} が指す snapshotParts/{docId} の有無を Firestore で確かめる。部品が掃除で消えた疑いなら PITR(7 日)で戻す。',
 }
 
 /** 教室ごとの間引き: 前回送信から 1 時間未満なら送らない。送信記録が無ければ送る。 */

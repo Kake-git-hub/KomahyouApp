@@ -32,10 +32,14 @@ describe('mirrorLatestClassroomRollback の配線(版履歴の同居・M-5)', ()
     expect(trigger.slice(rethrow + 'if (rollbackError) throw rollbackError\n})'.length).trim().split('\n').every((line) => line.trim() === '' || line.trim().startsWith('//'))).toBe(true)
   })
 
-  it('版履歴は after 文書(保存形式)をそのまま包み、作り直さない(CPU・メモリ)。書くかどうかは純関数 shouldWriteClassroomSaveHistory', () => {
+  it('版履歴は旧形式の after 文書(保存形式)をそのまま包み、作り直さない(CPU・メモリ)。分割形式の目次だけは組み立てた教室データ全体を単一文書にして書く(K-7・AC-22)。書くかどうかは純関数 shouldWriteClassroomSaveHistory', () => {
     const writer = indexTs.slice(indexTs.indexOf('async function writeClassroomSaveHistory('), indexTs.indexOf('function deserializeBoardState('))
-    expect(writer).toContain('snapshot: params.afterSnapshot,')
+    expect(writer).toContain("snapshot: isSnapshotPartsManifest(params.afterSnapshot)\n      ? await buildAssembledStoredSnapshotDoc(")
+    expect(writer).toContain(': params.afterSnapshot,')
     expect(writer).not.toContain('createStoredSnapshotDoc(')
+    // 分割形式の目次(data / compressedData を持たない)も「中身あり」として版履歴の対象にする。
+    const decider0 = indexTs.slice(indexTs.indexOf('function shouldWriteClassroomSaveHistory('), indexTs.indexOf('async function writeClassroomSaveHistory('))
+    expect(decider0).toContain('|| isSnapshotPartsManifest(after)')
     expect(writer).toContain('if (!shouldWriteClassroomSaveHistory(params.beforeSnapshot ?? null, params.afterSnapshot)) return false')
     const decider = indexTs.slice(indexTs.indexOf('function shouldWriteClassroomSaveHistory('), indexTs.indexOf('async function writeClassroomSaveHistory('))
     // メタだけの更新(版数も保存時刻も同じ)は書かない。版数か保存時刻が進めば書く。
