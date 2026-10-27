@@ -27,6 +27,16 @@ export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '�
 //   必ず 'moved' と同じ側へ入れる。
 export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended' | 'moved' | 'holiday'
 
+export type EditedFromRegular = {
+  subject: SubjectLabel
+  dateKey: string
+  slotNumber: number
+  /** 編集で新たに積んだ通常授業の抑止キー(既にあったときは無し＝外さない)。 */
+  addedOccurrenceKey?: string
+  /** 科目を変えたときに積んだ、元の科目の振替の抑止(在庫キー)。 */
+  addedMakeupSuppressionKey?: string
+}
+
 export type StudentEntry = {
   id: string
   name: string
@@ -44,6 +54,9 @@ export type StudentEntry = {
   // 生徒メニュー「編集」で区分を振替へ変えた印(2026-10-27・INV-06)。振替元の無いあいだは未消化を消化しない
   // (isStockNeutralEditedMakeup)。manualAdded とは別にする(手打ちの警告・格納不可・時限つき返却などを持ち込まない)。
   editedToMakeup?: boolean
+  // 「編集」で振替にした元の通常授業(2026-10-27・INV-03/INV-06)。テンプレの通常授業から変えたときだけ持つ。
+  // 編集で積んだ抑止(元の授業の抑止キー・科目を変えたときの元科目の振替抑止)を、振替 → 通常 の編集し直しで外すために控える。
+  editedFromRegular?: EditedFromRegular
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -90,6 +103,7 @@ export type StudentStatusEntry = {
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
   editedToMakeup?: boolean
+  editedFromRegular?: EditedFromRegular
   subject: SubjectLabel
   lessonType: LessonType
   teacherType: TeacherType

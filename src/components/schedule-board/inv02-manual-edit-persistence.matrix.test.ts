@@ -7,7 +7,9 @@ import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import {
+  applyStudentEdit,
   applyTeacherAutoAssignRequest,
+  buildStudentStatusEntry,
   buildManagedOccurrenceKey,
   buildManagedScheduleCellsForRange,
   computeTemplateDiffApplyForBoard,
@@ -31,6 +33,7 @@ import {
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
+import { collectEditedFromRegularOccurrenceKeys, resolveSameDayMoveCopyKeysToRemove } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, collectTemplatePendingCellIds, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { seatSortCells } from './deskSort'
 import { trimBoardWeeksForMemory } from './boardWeekTrim'
@@ -2297,5 +2300,258 @@ describe('INV-02 × 並べ替え → 再マージ: 生徒2から生徒1へ寄せ
   it('守り: テンプレ側で生徒1へ寄せた（生徒1=馬場だけのテンプレ）後は、盤面が生徒2のままでもテンプレに追従して生徒1になる', () => {
     const { afterDelete, suppressed } = deletedFirstStudent()
     expect(namesOf(cellOf(remerge(afterDelete, [row('sB', '')], suppressed)))).toEqual(['馬場', null])
+  })
+})
+
+// ============================================================================
+// INV-02 × 「編集」で振替にしたテンプレの通常授業（2026-10-27 オーナー確定・v1.5.650 の調査で判明・修正前からの穴）
+//
+// テンプレの通常授業を「編集」で振替にすると区分が通常でなくなり、以後の削除・格納・休み・移動が通常授業の抑止キー
+// （resolveSuppressedRegularLessonOccurrenceKey は通常だけを見る）を積まない。盤面は読み込みのたびにテンプレと突き合わせ直される
+// （remergeBoardWeeksWithManagedData）ので、振替のコマが席を空けると**元の通常授業が戻って二重になっていた**。
+// 編集で振替にした時点で元の授業の抑止キーを積む（applyStudentEdit）。振替 → 通常 へ編集し直したら、編集で積んだ分だけ外す。
+// 兄弟: 削除／休み／別の週へ移動／科目の入れ替え／同日移動済み（6/8 の形・抑止は移動が積み済み）／編集し直し。
+// ============================================================================
+describe('INV-02 × 編集で振替にしたテンプレの通常授業: 席を空けても読み込みで元の授業が戻らない', () => {
+  const DATE = '2026-10-07' // 水曜
+  const CELL_ID = `${DATE}_5`
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-18'
+  const studentRow: StudentRow = { id: 'sA', name: '青木', displayName: '青木', email: 'a@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' }
+  const teacherRows: TeacherRow[] = [['t1', '田中'], ['t2', '鈴木']].map(([id, name]) => ({
+    id, name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定',
+    subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '高3' }],
+  }))
+  const row: RegularLessonRow = {
+    id: 'r0', schoolYear: 2026, teacherId: 't1', student1Id: 'sA', subject1: '英', startDate: '', endDate: '',
+    student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '',
+    nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5,
+  }
+  const settings: ClassroomSettings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2 }
+  const editTo = (subject: '英' | '数', lessonType: 'makeup' | 'regular' = 'makeup') => ({ subject, lessonType, teacherType: 'normal' as const, noteSuffix: '' })
+  const resolveStockId = (entry: StudentEntry) => entry.managedStudentId ?? entry.id
+
+  function buildBoard(): SlotCell[][] {
+    const cells = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END, classroomSettings: settings,
+      teachers: teacherRows, students: [studentRow], regularLessons: [row], boardWeeks: [],
+    })
+    return [cells.filter((cell) => cell.dateKey <= '2026-10-11'), cells.filter((cell) => cell.dateKey > '2026-10-11')]
+  }
+  function seatOf(weeks: SlotCell[][], cellId = CELL_ID) {
+    const cell = weeks.flat().find((entry) => entry.id === cellId)!
+    for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+      const studentIndex = (cell.desks[deskIndex].lesson?.studentSlots ?? []).findIndex((entry) => entry?.managedStudentId === 'sA')
+      if (studentIndex >= 0) return { cell, desk: cell.desks[deskIndex], deskIndex, studentIndex }
+    }
+    throw new Error('seat not found')
+  }
+  // 生徒 sA の盤面上の授業（配置＋出欠記録）を「コマ:区分:科目」で並べる
+  function census(weeks: SlotCell[][]) {
+    const out: string[] = []
+    for (const cell of weeks.flat()) for (const desk of cell.desks) {
+      for (const entry of desk.lesson?.studentSlots ?? []) if (entry?.managedStudentId === 'sA') out.push(`${cell.id}:${entry.lessonType}:${entry.subject}`)
+      for (const entry of desk.statusSlots ?? []) if (entry?.managedStudentId === 'sA') out.push(`${cell.id}:[${entry.status}]${entry.lessonType}:${entry.subject}`)
+    }
+    return out.sort()
+  }
+  const reload = (weeks: SlotCell[][], suppressed: string[]) => remergeBoardWeeksWithManagedData(weeks, {
+    classroomSettings: settings, teachers: teacherRows, students: [studentRow], regularLessons: [row], suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-10-01',
+  })
+  function editInPlace(weeks: SlotCell[][], subject: '英' | '数', suppressed: string[] = []) {
+    const { cell, desk, studentIndex } = seatOf(weeks)
+    const edited = applyStudentEdit({
+      student: desk.lesson!.studentSlots[studentIndex]!, draft: editTo(subject), cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber,
+      suppressedRegularLessonOccurrences: suppressed, suppressedMakeupOrigins: {}, resolveStockId,
+    })
+    desk.lesson!.studentSlots[studentIndex] = edited.student
+    return edited
+  }
+
+  it('編集で振替にした時点で元の授業の抑止キーを積み、元の科目・日付・時限を控える', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    expect(edited.suppressedRegularLessonOccurrences).toEqual(['sA__英__2026-10-07__5'])
+    expect(edited.student.editedFromRegular).toEqual({ subject: '英', dateKey: DATE, slotNumber: 5, addedOccurrenceKey: 'sA__英__2026-10-07__5' })
+    expect(edited.suppressedMakeupOrigins).toEqual({}) // 科目を変えていなければ振替の抑止は積まない
+    // 振替のまま読み込み直しても授業は 1 件（元の通常授業と二重にならない）
+    expect(census(reload(weeks, edited.suppressedRegularLessonOccurrences)).filter((entry) => entry.startsWith(CELL_ID))).toEqual([`${CELL_ID}:makeup:英`])
+  })
+
+  it('回帰防止: 削除 → 読み込み直しで元の通常授業が戻らない（通常授業を削除したときと同じ）', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const { desk, studentIndex } = seatOf(weeks)
+    removeStudentFromDeskLesson(desk, studentIndex)
+    expect(census(reload(weeks, edited.suppressedRegularLessonOccurrences))).toEqual(['2026-10-14_5:regular:英'])
+  })
+
+  it('回帰防止: 休み → 読み込み直しで同じコマに休みの記録と通常授業が並ばない', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const { cell, desk, studentIndex } = seatOf(weeks)
+    const status = buildStudentStatusEntry(desk.lesson!.studentSlots[studentIndex]!, cell, desk, 'absent')
+    removeStudentFromDeskLesson(desk, studentIndex)
+    desk.statusSlots = studentIndex === 0 ? [status, null] : [null, status]
+    expect(census(reload(weeks, edited.suppressedRegularLessonOccurrences))).toEqual([`${CELL_ID}:[absent]makeup:英`, '2026-10-14_5:regular:英'])
+  })
+
+  it('回帰防止: 科目を入れ替えて振替にしたコマを削除しても、元の科目の通常授業が戻らない', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '数')
+    const { desk, studentIndex } = seatOf(weeks)
+    removeStudentFromDeskLesson(desk, studentIndex)
+    expect(census(reload(weeks, edited.suppressedRegularLessonOccurrences))).toEqual(['2026-10-14_5:regular:英'])
+  })
+
+  it('回帰防止: 別の週へ移動しても元の通常授業が戻らない（盤面からの抑止は同じ週しか見ない）', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const { desk, studentIndex } = seatOf(weeks)
+    const moving = desk.lesson!.studentSlots[studentIndex]!
+    removeStudentFromDeskLesson(desk, studentIndex)
+    const target = weeks[1].find((cell) => cell.id === '2026-10-14_4')!
+    target.desks[1].lesson = { id: 'manual-lesson', studentSlots: [{ ...moving, id: 'moved-entry' }, null] }
+    expect(census(reload(weeks, edited.suppressedRegularLessonOccurrences))).toEqual(['2026-10-14_4:makeup:英', '2026-10-14_5:regular:英'])
+  })
+
+  it('振替 → 通常 へ編集し直すと、編集で積んだ抑止キーだけを外し、読み込み直しても通常授業は 1 件', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const { cell, desk, studentIndex } = seatOf(weeks)
+    const reverted = applyStudentEdit({
+      student: desk.lesson!.studentSlots[studentIndex]!, draft: editTo('英', 'regular'), cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber,
+      suppressedRegularLessonOccurrences: [...edited.suppressedRegularLessonOccurrences, 'sX__数__2026-10-07__5'], suppressedMakeupOrigins: {}, resolveStockId,
+    })
+    expect(reverted.suppressedRegularLessonOccurrences).toEqual(['sX__数__2026-10-07__5'])
+    expect(reverted.student.editedToMakeup).toBeUndefined()
+    expect(reverted.student.editedFromRegular).toBeUndefined()
+    desk.lesson!.studentSlots[studentIndex] = reverted.student
+    expect(census(reload(weeks, reverted.suppressedRegularLessonOccurrences)).filter((entry) => entry.startsWith(CELL_ID))).toEqual([`${CELL_ID}:regular:英`])
+  })
+
+  it('同日移動済みの通常授業（6/8 の形）は移動が積んだ抑止キーを使い、編集し直しでもそれを外さない', () => {
+    const moved: StudentEntry = { id: 'sA_2026-10-07_英', name: '青木', managedStudentId: 'sA', grade: '中3', subject: '英', lessonType: 'regular', teacherType: 'normal', sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }
+    const moveKey = 'sA__英__2026-10-07__5'
+    const edited = applyStudentEdit({ student: moved, draft: editTo('数'), cellDateKey: DATE, cellSlotNumber: 4, suppressedRegularLessonOccurrences: [moveKey], suppressedMakeupOrigins: {}, resolveStockId })
+    expect(edited.suppressedRegularLessonOccurrences).toEqual([moveKey])
+    expect(edited.student.editedFromRegular).toMatchObject({ subject: '英', dateKey: DATE, slotNumber: 5 })
+    expect(edited.student.editedFromRegular?.addedOccurrenceKey).toBeUndefined()
+    const reverted = applyStudentEdit({ student: edited.student, draft: editTo('英', 'regular'), cellDateKey: DATE, cellSlotNumber: 4, suppressedRegularLessonOccurrences: edited.suppressedRegularLessonOccurrences, suppressedMakeupOrigins: edited.suppressedMakeupOrigins, resolveStockId })
+    expect(reverted.suppressedRegularLessonOccurrences).toEqual([moveKey])
+    expect(reverted.suppressedMakeupOrigins).toEqual({})
+  })
+
+  function editAt(weeks: SlotCell[][], draft: Parameters<typeof applyStudentEdit>[0]['draft'], ledgers: { suppressed: string[]; suppressedMakeup: Record<string, Array<{ dateKey: string; slotNumber?: number }>> }) {
+    const { cell, desk, studentIndex } = seatOf(weeks)
+    const edited = applyStudentEdit({
+      student: desk.lesson!.studentSlots[studentIndex]!, draft, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber,
+      suppressedRegularLessonOccurrences: ledgers.suppressed, suppressedMakeupOrigins: ledgers.suppressedMakeup, resolveStockId,
+    })
+    desk.lesson!.studentSlots[studentIndex] = edited.student
+    return edited
+  }
+  const editToExtra = (subject: '英' | '数') => ({ subject, lessonType: 'extra' as const, teacherType: 'normal' as const, noteSuffix: '' })
+
+  it('回帰防止: 振替 → 増コマ へ付け替えても抑止を外さない（増コマを削除して読み込んでも元の通常授業が戻らない）', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const extra = editAt(weeks, editToExtra('英'), { suppressed: edited.suppressedRegularLessonOccurrences, suppressedMakeup: {} })
+    expect(extra.suppressedRegularLessonOccurrences).toEqual(['sA__英__2026-10-07__5'])
+    const { desk, studentIndex } = seatOf(weeks)
+    removeStudentFromDeskLesson(desk, studentIndex)
+    expect(census(reload(weeks, extra.suppressedRegularLessonOccurrences))).toEqual(['2026-10-14_5:regular:英'])
+  })
+
+  it('回帰防止（兄弟）: 通常 → 増コマ の直接編集でも抑止を積む（削除して読み込んでも元の通常授業が戻らない）', () => {
+    const weeks = buildBoard()
+    const extra = editAt(weeks, editToExtra('英'), { suppressed: [], suppressedMakeup: {} })
+    expect(extra.suppressedRegularLessonOccurrences).toEqual(['sA__英__2026-10-07__5'])
+    expect(extra.student.editedToMakeup).toBeUndefined() // 未消化の消化の印は振替だけ
+    const { desk, studentIndex } = seatOf(weeks)
+    removeStudentFromDeskLesson(desk, studentIndex)
+    expect(census(reload(weeks, extra.suppressedRegularLessonOccurrences))).toEqual(['2026-10-14_5:regular:英'])
+  })
+
+  it('回帰防止: 科目を変えたまま 振替 → 通常 に戻しても生徒が消えない（抑止を外して席の合流でテンプレと 1 件に）・元の科目の振替の抑止は残す', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '数')
+    const reverted = editAt(weeks, editTo('数', 'regular'), { suppressed: edited.suppressedRegularLessonOccurrences, suppressedMakeup: edited.suppressedMakeupOrigins })
+    expect(reverted.suppressedRegularLessonOccurrences).toEqual([])
+    expect(reverted.suppressedMakeupOrigins).toEqual({ sA__英: [{ dateKey: DATE, slotNumber: 5 }] })
+    expect(census(reload(weeks, reverted.suppressedRegularLessonOccurrences)).filter((entry) => entry.startsWith(CELL_ID))).toEqual([`${CELL_ID}:regular:数`])
+  })
+
+  it('回帰防止: 別の日へ動かしてから 通常 に戻しても抑止を外さない（元の日に元の通常授業が戻って二重にならない）', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '英')
+    const { desk, studentIndex } = seatOf(weeks)
+    const moving = desk.lesson!.studentSlots[studentIndex]!
+    removeStudentFromDeskLesson(desk, studentIndex)
+    // 別の日へ動かすと振替元が付く（prepareStudentForMove と同じ形）
+    const movedEntry: StudentEntry = { ...moving, id: 'moved-entry', makeupSourceDate: DATE, makeupSourceLabel: '2026/10/7(水) 5限' }
+    const target = weeks[0].find((cell) => cell.id === '2026-10-08_5')!
+    target.desks[1].lesson = { id: 'manual-lesson', studentSlots: [movedEntry, null] }
+    const reverted = applyStudentEdit({
+      student: movedEntry, draft: editTo('英', 'regular'), cellDateKey: '2026-10-08', cellSlotNumber: 5,
+      suppressedRegularLessonOccurrences: edited.suppressedRegularLessonOccurrences, suppressedMakeupOrigins: {}, resolveStockId,
+    })
+    expect(reverted.suppressedRegularLessonOccurrences).toEqual(['sA__英__2026-10-07__5'])
+    target.desks[1].lesson!.studentSlots[0] = reverted.student
+    expect(census(reload(weeks, reverted.suppressedRegularLessonOccurrences)).filter((entry) => entry.startsWith('2026-10-07') || entry.startsWith('2026-10-08'))).toEqual(['2026-10-08_5:regular:英'])
+  })
+
+  it('回帰防止: テンプレ保存で同日移動の写しを外すとき、編集で積んだ抑止キーは巻き込まない（Q36・regression-reviewer 中-3）', () => {
+    const weeks = buildBoard()
+    const edited = editInPlace(weeks, '数')
+    const protectedKeys = collectEditedFromRegularOccurrenceKeys(weeks, {})
+    expect([...protectedKeys]).toEqual(['sA__英__2026-10-07__5'])
+    const copy: StudentEntry = { id: 'copy', name: '青木', managedStudentId: 'sA', grade: '中3', subject: '英', lessonType: 'regular', teacherType: 'normal' }
+    const suppressed = [...edited.suppressedRegularLessonOccurrences, 'sA__英__2026-10-07__4']
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copy, dateKey: DATE }, suppressed, protectedKeys)).toEqual(['sA__英__2026-10-07__4'])
+    // 保護を渡さない従来の呼び方では両方外れていた
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copy, dateKey: DATE }, suppressed)).toEqual(['sA__英__2026-10-07__5', 'sA__英__2026-10-07__4'])
+  })
+
+  it('回帰防止（経路）: 同じ日に英が 2 コマ・5 限を編集で数の振替・4 限は同日移動の写し → 4 限を 3 限へ変えてテンプレ保存しても、5 限に英が湧かず振替は上段に残る', () => {
+    const rows: RegularLessonRow[] = [row, { ...row, id: 'r1', teacherId: 't2', slotNumber: 4 }]
+    const cells = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START, endDate: '2026-10-11', periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START, fallbackEndDate: '2026-10-11', classroomSettings: settings,
+      teachers: teacherRows, students: [studentRow], regularLessons: rows, boardWeeks: [],
+    })
+    const weeks: SlotCell[][] = [cells]
+    const edited = editInPlace(weeks, '数')
+    const cell4 = weeks[0].find((cell) => cell.id === `${DATE}_4`)!
+    const copySource = cell4.desks.find((desk) => desk.lesson)!.lesson!.studentSlots.find(Boolean)!
+    const moved = computeStudentMove({
+      weeks, weekIndex: 0, cells: weeks[0], movingStudentId: copySource.id, cellId: `${DATE}_4`, deskIndex: 1, studentIndex: 0,
+      suppressedRegularLessonOccurrences: edited.suppressedRegularLessonOccurrences, managedStudentByAnyName: new Map([[studentRow.name, studentRow]]),
+      resolveBoardStudentDisplayName: (name: string) => name,
+    } as Parameters<typeof computeStudentMove>[0]) as unknown as { nextWeeks: SlotCell[][]; nextSuppressedRegularLessonOccurrences: string[] }
+    const nextRows: RegularLessonRow[] = [row, { ...row, id: 'r1', teacherId: 't2', slotNumber: 3 }]
+    const frozen = { ...settings, templateFreezeBeforeDate: WEEK_START }
+    const saved = computeTemplateDiffApplyForBoard({
+      scheduleCountAdjustments: [], weeks: moved.nextWeeks, classroomSettings: frozen, teachers: teacherRows, students: [studentRow], regularLessons: nextRows,
+      effectiveStartDate: WEEK_START, suppressedRegularLessonOccurrences: moved.nextSuppressedRegularLessonOccurrences, templatePendingDesks: {},
+      createdAt: '2026-10-01T00:00:00.000Z', manualMakeupAdjustments: {}, previousRegularLessons: rows,
+    } as unknown as Parameters<typeof computeTemplateDiffApplyForBoard>[0]) as unknown as { nextWeeks: SlotCell[][]; removedSuppressedRegularLessonOccurrences: string[]; addedSuppressedRegularLessonOccurrences: string[]; nextPendingDesks: TemplatePendingDeskMap }
+    expect(saved.removedSuppressedRegularLessonOccurrences).not.toContain('sA__英__2026-10-07__5')
+    const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
+    const nextSuppressed = [...moved.nextSuppressedRegularLessonOccurrences.filter((key) => !removed.has(key)), ...saved.addedSuppressedRegularLessonOccurrences]
+    const after = remergeBoardWeeksWithManagedData(saved.nextWeeks, {
+      classroomSettings: frozen, teachers: teacherRows, students: [studentRow], regularLessons: nextRows, suppressedRegularLessonOccurrences: nextSuppressed, todayKey: '2026-10-01',
+    })
+    expect(census(after).filter((entry) => entry.startsWith(CELL_ID))).toEqual([`${CELL_ID}:makeup:数`])
+    expect(Object.keys(saved.nextPendingDesks ?? {})).toEqual([])
+  })
+
+  it('出欠記録へ移しても控え（editedFromRegular）が落ちない', () => {
+    const weeks = buildBoard()
+    editInPlace(weeks, '数')
+    const { cell, desk, studentIndex } = seatOf(weeks)
+    const status = buildStudentStatusEntry(desk.lesson!.studentSlots[studentIndex]!, cell, desk, 'attended')
+    expect(status.editedFromRegular).toMatchObject({ subject: '英', dateKey: DATE, slotNumber: 5 })
   })
 })
