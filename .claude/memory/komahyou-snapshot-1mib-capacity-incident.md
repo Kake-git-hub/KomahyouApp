@@ -25,12 +25,12 @@ v1.5.647 操作痕跡の要約 400→2000 字(机を 14 台動かした 19:12 �
 組み立て関数 1 つで今と同じ AppSnapshotPayload に戻す・新旧両読みを先に出す)。仕様は docs/spec-save-restore.md §9(Q1〜Q6 全件オーナー確定 2026-10-27・INV-14 新設)。**次セッションの着手手順は docs/plan-2026-10-27-weekly-split-snapshot-handoff.md が正本**(段階 0〜D・期限に効くのは段階 B)。
 冬期講習(12 月)前に本番へ。過去週を閲覧専用にするかは「今は決めない」(オーナー 2026-10-27)。
 
-**進捗(2026-10-27 夜・ブランチ ccr-262fd584-vi8fi3・未マージ)**: 段階 0(共有純関数 `src/utils/classroomSnapshotParts.ts`・sync-shared 複製)と
+**進捗(2026-10-27 夜・v1.5.651 で main マージ・本番反映。ルールテストと staging はオーナーが緑を確認済み)**: 段階 0(共有純関数 `src/utils/classroomSnapshotParts.ts`・sync-shared 複製)と
 段階 A(読める版)を実装。サーバーは**唯一の読み手** `readClassroomSnapshotPayload`(旧形式 `readLegacyStoredSnapshotPayload`／目次は
 `snapshotPartsReader.ts` が getAll で組み立て・欠けたら例外)に 9 箇所を集約。クライアントは `readFirebaseSnapshotPayload` 先頭で目次判定
 (`snapshotPartsClientRead.ts`・DecompressionStream＋crypto.subtle)。段階 A の暫定ガード=分割形式の教室への保存・QR 取り込みは断る
 (段階 B で書き手に置き換える)。ルール `snapshotParts` は read のみ・write 全面禁止。INV-14 マトリクス 20 件。反映順は Functions → ルール → Hosting。
-`npm run test:rules` はクラウドのサンドボックス(Java 無し)で未実行。
+`npm run test:rules` はクラウドのサンドボックス(Java 無し)では回せないので、Actions「CI Tests」を手動実行してジョブ「Firestore rules isolation」で確かめる。段階 B の前に直すもの: reviewer M-2(開発者は 1 教室の組み立て失敗で全教室が開けない→教室単位の loadFailed)・L-5(トリガの二重組み立て)。
 
 **Why:** 1 文書に教室全体を入れる設計は、データが時間とともに増える限り必ず上限に当たる。圧縮やエンコードの工夫は数か月の延命にしかならない。
 **How to apply:** 保存の不具合報告では最初に saveAttempts の status 列と capacityRatio を読む(started が並ぶ＝書き込みで落ちている)。
