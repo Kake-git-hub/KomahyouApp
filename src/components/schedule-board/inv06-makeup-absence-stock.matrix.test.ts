@@ -1732,6 +1732,29 @@ describe('INV-06 マトリクス: 編集で区分を振替へ変えたコマは�
     expect(cleared.balance).toBe(1)
   })
 
+  it('回帰防止: 全コマ削除のあとその日を休日設定しても湧かない（元の通常授業と同じく抑止を積む＝Issue #58 と同型・残0）', () => {
+    // その場で編集した形（数学の通常授業 → 数学の振替）。テンプレの水曜 5限と同じコマ
+    const inPlace = applyStudentEditDraft(boardStudent(), editToMakeup)
+    const balanceAfterClearThenHoliday = (entry: StudentEntry) => {
+      const cell = cellWithDesk(deskWithStudent(entry))
+      const suppressedOrigins = collectClearedDayMakeupSuppressions({ cell, suppressedMakeupOrigins: {}, resolveStockId: resolveStudentKey })
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings({ holidayDates: [BOARD_DATE] }),
+        weeks: [[cellWithDesk({ id: 'desk-1', teacher: '田中講師' })]],
+        manualAdjustments: {},
+        suppressedOrigins,
+        resolveStudentKey,
+        today: TODAY,
+      })
+      return entries.find((item) => item.key === STOCK_KEY)?.balance ?? 0
+    }
+    expect(balanceAfterClearThenHoliday(boardStudent())).toBe(0) // 元の通常授業
+    expect(balanceAfterClearThenHoliday(inPlace)).toBe(0)
+  })
+
   it('兄弟: 別日へ移動して振替元が付いたら通常の振替の会計に戻る（印は残っても消化から外さない）', () => {
     const moved = prepareStudentForMove(edited, BOARD_DATE, 5, '2026-08-12')
     expect(moved.makeupSourceDate).toBe(BOARD_DATE)

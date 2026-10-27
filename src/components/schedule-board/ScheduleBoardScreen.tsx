@@ -6349,12 +6349,13 @@ export function collectClearedDayMakeupSuppressions(params: {
     )
   }
   for (const desk of cell.desks) {
+    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)も元は通常授業なので、通常授業と同じく積む。
     for (const student of desk.lesson?.studentSlots ?? []) {
-      if (!student || student.lessonType !== 'regular') continue
+      if (!student || (student.lessonType !== 'regular' && !isStockNeutralEditedMakeup(student))) continue
       appendSuppression(student)
     }
     for (const statusEntry of desk.statusSlots ?? []) {
-      if (!statusEntry || statusEntry.lessonType !== 'regular') continue
+      if (!statusEntry || (statusEntry.lessonType !== 'regular' && !isStockNeutralEditedMakeup(statusEntry))) continue
       if (statusEntry.status === 'absent') continue // mark-absent が台帳へ確定済み(抑制すると立っている在庫が消える)
       if (statusEntry.status === 'moved') continue // 会計は移動先の振替コマが持つ(抑制すると移動先を休みにした算出 origin まで消える)
       if (statusEntry.status === 'holiday') continue // 休日設定で在庫へ返却済みの表示専用記録(抑制すると返した在庫が消える)
@@ -14658,7 +14659,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     let deleteSubjectDelta: SpecialSessionSubjectDelta | undefined
     let statusSuffix = '振替対象にはしません。'
 
-    if (menuStudent.student.lessonType === 'regular') {
+    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)は元が通常授業なので、通常授業と同じく抑止を積む
+    // (積まないと、削除した日を後から休日設定したときにテンプレの自動発生が +1 で湧く＝Issue #58 と同型の誤増)。
+    if (menuStudent.student.lessonType === 'regular' || isStockNeutralEditedMakeup(menuStudent.student)) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
       nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey))
       statusSuffix = '振替対象にはしません。'

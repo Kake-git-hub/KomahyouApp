@@ -16,7 +16,7 @@
 
 ## v1.5.650 (2026-10-27)
 
-- fix: 生徒メニュー「編集」で授業区分を振替へ変えたコマは未消化振替を消化しないようにした(オーナー確定 2026-10-27・案1)。編集は振替元を付けないため「振替元の無い振替＝未消化を 1 コマ使った」と数えられ、後の休みで未消化へ入った 1 件を黙って相殺していた(日大前校 室長報告「休みにしても未消化に入らない」・6/8・6/10 に科目を入れ替えるため編集で振替にした 2 件が真因。日大前はこの 2 件だけ・緑が丘 0 件)。振替以外 → 振替 のときだけ専用の印 `editedToMakeup` を付け、振替元が無いあいだは消化に数えない(`isStockNeutralEditedMakeup`)。全コマ削除系では返さない(回数 −1＝元の通常授業と同じ)・休日設定では返す(時限なし)。手打ちの印 `manualAdded` は流用しない(regression-reviewer の指摘: 警告・格納不可・時限つき返却の誤増まで持ち込むため)。画面の見え方は変わらない。既存データは書き換えない(今後の編集だけ)。編集の確定を純関数 `applyStudentEditDraft` に切り出し、INV-06 マトリクス 10 行で固定(判定を外す mutation で落ちることを確認)。確認リスト ed-1。INV-06。(src/components/schedule-board/ScheduleBoardScreen.tsx・makeupStock.ts・types.ts・inv06-makeup-absence-stock.matrix.test.ts・docs/spec-makeup-stock.md §3・docs/spec-invariants.md INV-06)
+- fix: 生徒メニュー「編集」で授業区分を振替へ変えたコマは未消化振替を消化しないようにした(オーナー確定 2026-10-27・案1)。編集は振替元を付けないため「振替元の無い振替＝未消化を 1 コマ使った」と数えられ、後の休みで未消化へ入った 1 件を黙って相殺していた(日大前校 室長報告「休みにしても未消化に入らない」・6/8・6/10 に科目を入れ替えるため編集で振替にした 2 件が真因。日大前はこの 2 件だけ・緑が丘 0 件)。振替以外 → 振替 のときだけ専用の印 `editedToMakeup` を付け、振替元が無いあいだは消化に数えない(`isStockNeutralEditedMakeup`)。全コマ削除系では返さない(回数 −1＝元の通常授業と同じ)・休日設定では返す(時限なし)・単発削除と全コマ削除は通常授業と同じく振替の抑止を積む(後の休日設定で湧かない＝Issue #58 と同型)。手打ちの印 `manualAdded` は流用しない(regression-reviewer の指摘: 警告・格納不可・時限つき返却の誤増まで持ち込むため)。画面の見え方は変わらない。既存データは書き換えない(今後の編集だけ)。編集の確定を純関数 `applyStudentEditDraft` に切り出し、INV-06 マトリクス 11 行で固定(判定を外す mutation で落ちることを確認)。確認リスト ed-1。INV-06。(src/components/schedule-board/ScheduleBoardScreen.tsx・makeupStock.ts・types.ts・inv06-makeup-absence-stock.matrix.test.ts・docs/spec-makeup-stock.md §3・docs/spec-invariants.md INV-06)
 
 ## v1.5.649 (2026-10-27)
 
