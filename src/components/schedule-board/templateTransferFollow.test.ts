@@ -11,6 +11,8 @@ import { buildOriginToken, type ManualMakeupOrigin } from './makeupStock'
 import { resolveWholeDayTransferSettlement } from './templateDiffApply'
 import {
   collectOrphanedMakeups,
+  collectOrphanedMakeupSuppressionKeys,
+  collectReplacedTransferSeats,
   planWholeDayTransferPlacements,
   removeOrphanedMakeups,
   resolveWholeDayTransferDestination,
@@ -406,5 +408,68 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     const filter = { slotKeys: new Set([buildTemplateSlotKey(3, 5)]) }
     expect(extendTemplateDiffSlotFilterWithCells(filter, new Set())).toBe(filter)
     expect(extendTemplateDiffSlotFilterWithCells(filter, new Set(['2026-10-08_5']))?.cellIds).toEqual(new Set(['2026-10-08_5']))
+  })
+})
+
+// 確認リスト tp-51（2026-10-27・オーナー報告「同じコマ内で科目を変えたとき、反映以降の丸ごと振替した日のコマでその生徒がいなくなる」）。
+// 盤面の机の並びがテンプレの机番号とずれていると、科目変更の「足す」がテンプレの机番号の机（別の講師の机・満席なら次の机）へ入り、「休)」も別の机に付いていた。
+describe('科目変更の置き場の手がかり（collectReplacedTransferSeats・tp-51 2026-10-27）', () => {
+  const A_EN = student('sA_t', '青木', { subject: '英' })
+  const movedA = status(A, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 })
+  const movedB = status(B, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 })
+  // 振替元 水 5限: 机 0 に B の「休)」（席 1）、机 1 に A（数）の「休)」。振替先 木 5限: 机 0 は鈴木で B の振替（席 1）、机 1 は田中で A（数）の振替。テンプレの A の机は 0。
+  const shifted = () => [[
+    cell(WED, 5, [desk('w5d1', '', undefined, [null, movedB]), desk('w5d2', '', undefined, [movedA, null])]),
+    cell(THU, 5, [desk('t5d1', '鈴木', [null, makeupOf('sB_mk', '馬場', WED, labelWed5)]), desk('t5d2', '田中', [makeupOf('sA_mk', '青木', WED, labelWed5), null])]),
+  ]]
+  const templateWithAEnglish = [templateCellOf(WED, 5, [desk('tw5d1', '田中', [A_EN, null]), desk('tw5d2', '鈴木', [null, student('sB_t', '馬場')])])]
+  const skippedA = { student: A_EN, dateKey: WED, slotNumber: 5, deskIndex: 0, seatIndex: 0 }
+
+  it('外した旧科目の振替の机・席と、振替元の日の旧科目の記録の机・席を返す（外す前の盤面から引く）。下段の振替は対象外', () => {
+    const weeks = shifted()
+    const { removals } = collect({ weeks, templateCells: templateWithAEnglish })
+    expect(removals).toHaveLength(1)
+    expect(collectReplacedTransferSeats(weeks, removals)).toEqual([{ identity: 'sA', sourceDateKey: WED, sourceSlotNumber: 5, targetCellId: `${THU}_5`, targetDeskId: 't5d2', targetSeatIndex: 0, source: { cellId: `${WED}_5`, deskId: 'w5d2', seatIndex: 0 } }])
+    expect(collectReplacedTransferSeats(weeks, removals.map((item) => ({ ...item, inLower: true })))).toEqual([])
+    expect(collectReplacedTransferSeats(weeks, [])).toEqual([])
+  })
+
+  it('planWholeDayTransferPlacements: 手がかりがあれば新科目をその机・席へ置き、「休)」も旧科目の記録の机・席へ（別の机扱いにしない）。無ければ従来どおりテンプレの机番号', () => {
+    const weeks = shifted()
+    const { removals } = collect({ weeks, templateCells: templateWithAEnglish })
+    const replacedSeats = collectReplacedTransferSeats(weeks, removals)
+    const removed = removeOrphanedMakeups(weeks, removals).weeks
+    const plan = planWholeDayTransferPlacements({ weeks: removed, skipped: [skippedA], pendingDesks: {}, classroomSettings: settings(), effectiveStartDate: EFFECTIVE, settled: new Set(), prepareStudentForMove, buildMovedSourceStatusEntry, replacedSeats })
+    expect(plan.placed).toEqual([expect.objectContaining({ deskId: 't5d2', seatIndex: 0, fallbackDesk: false, teacherless: false })])
+    const thu = plan.weeks[0].find((entry) => entry.id === `${THU}_5`)!
+    expect(thu.desks[1].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', subject: '英', lessonType: 'makeup', makeupSourceDate: WED })
+    expect(thu.desks[0].lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual([null, 'sB'])
+    const wed = plan.weeks[0].find((entry) => entry.id === `${WED}_5`)!
+    expect(wed.desks[1].statusSlots?.[0]).toMatchObject({ status: 'moved', managedStudentId: 'sA', subject: '英', moveDestinationDateKey: THU })
+    expect(wed.desks[0].statusSlots?.[0] ?? null).toBeNull()
+    // 手がかり無し（v1.5.649 までの形）: テンプレの机番号＝木 5限 机 0（鈴木の机）へ入り、「休)」も水 5限 机 0 に付く＝報告の症状。
+    const legacy = planWholeDayTransferPlacements({ weeks: removed, skipped: [skippedA], pendingDesks: {}, classroomSettings: settings(), effectiveStartDate: EFFECTIVE, settled: new Set(), prepareStudentForMove, buildMovedSourceStatusEntry })
+    expect(legacy.placed).toEqual([expect.objectContaining({ deskId: 't5d1' })])
+    expect(legacy.weeks[0].find((entry) => entry.id === `${WED}_5`)!.desks[0].statusSlots?.[0]).toMatchObject({ managedStudentId: 'sA', subject: '英' })
+  })
+
+  it('手がかりは同じ生徒×振替元の日×時限×振替先のコマのときだけ使う（別の生徒・別の日の手がかりは使わない）', () => {
+    const weeks = shifted()
+    const { removals } = collect({ weeks, templateCells: templateWithAEnglish })
+    const replacedSeats = collectReplacedTransferSeats(weeks, removals)
+    const removed = removeOrphanedMakeups(weeks, removals).weeks
+    const runWith = (seats: typeof replacedSeats) => planWholeDayTransferPlacements({ weeks: removed, skipped: [skippedA], pendingDesks: {}, classroomSettings: settings(), effectiveStartDate: EFFECTIVE, settled: new Set(), prepareStudentForMove, buildMovedSourceStatusEntry, replacedSeats: seats })
+    expect(runWith(replacedSeats.map((seat) => ({ ...seat, identity: 'sB' }))).placed).toEqual([expect.objectContaining({ deskId: 't5d1' })])
+    expect(runWith(replacedSeats.map((seat) => ({ ...seat, sourceDateKey: '2026-10-14' }))).placed).toEqual([expect.objectContaining({ deskId: 't5d1' })])
+    expect(runWith(replacedSeats.map((seat) => ({ ...seat, sourceSlotNumber: 3 }))).placed).toEqual([expect.objectContaining({ deskId: 't5d1' })])
+    expect(runWith(replacedSeats.map((seat) => ({ ...seat, targetCellId: `${THU}_3` }))).placed).toEqual([expect.objectContaining({ deskId: 't5d1' })])
+  })
+
+  it('collectOrphanedMakeupSuppressionKeys: 外した振替の振替元の日の生徒×科目の抑止キー（時限は問わない）だけを返す。別の科目・別の日・日単位抑止は返さない', () => {
+    const weeks = shifted()
+    const { removals } = collect({ weeks, templateCells: templateWithAEnglish })
+    const suppressed = [`sA__数__${WED}__5`, `sA__数__${WED}__3`, `sA__英__${WED}__5`, `sA__数__${THU}__5`, `sB__数__${WED}__5`, `TEMPLATE_TEACHER__DAY__${WED}__0`, `sA__数__${WED}__5x`]
+    expect(collectOrphanedMakeupSuppressionKeys(removals, suppressed)).toEqual([`sA__数__${WED}__5`, `sA__数__${WED}__3`])
+    expect(collectOrphanedMakeupSuppressionKeys([], suppressed)).toEqual([])
   })
 })

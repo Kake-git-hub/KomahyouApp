@@ -273,6 +273,23 @@ export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly Or
   return { weeks: nextWeeks, removedMovedRecords, touchedCellIds, nextPendingDesks }
 }
 
+/**
+ * Q40-1 で外した振替の、振替元の日の**生徒×科目の抑止キー**（時限は問わない＝根拠・移動元記録の消去と同じ日単位）。保存がこのキーを抑止から取り除く。
+ * 2026-10-27（確認リスト tp-51 の兄弟監査・保存則の監査が「無言の消失」として検出）: 抑止キーは「その日のテンプレの授業は丸ごと振替（や D&D）で別の日へ
+ * 移した」という処分の印で、Q40-1 はその移した先の振替を消す。キーだけ残すと、後で同じ生徒×科目をその曜日のテンプレへ戻したとき（科目 数→英→数 の往復・
+ * 外す→戻す）に、キーが Q35 の「置かなかった生徒」も通常授業も止め、精算済みの説明（消した振替）も無い＝置かず・未消化にせず・−1 もせずに消えていた。
+ * 外すキーは新テンプレがその日に持たない生徒×科目のもの（Q40-1 の根拠 (a) が日単位）なので、この保存の盤面には効かない（再マージの不動点は変わらない）。
+ * 日単位抑止（TEMPLATE_TEACHER__DAY__）は生徒×科目の形でないので触らない（丸ごと振替の日の印はそのまま）。
+ */
+export function collectOrphanedMakeupSuppressionKeys(removals: readonly OrphanedMakeupRemoval[], suppressed: readonly string[]): string[] {
+  if (removals.length === 0) return []
+  const prefixes = new Set(removals.map((removal) => `${studentSubjectKey(removal.student)}__${removal.sourceDateKey}__`))
+  return suppressed.filter((key) => {
+    for (const prefix of prefixes) if (key.startsWith(prefix) && /^\d+$/u.test(key.slice(prefix.length))) return true
+    return false
+  })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. 丸ごと振替した日に足した生徒
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +394,59 @@ function isSeatFree(desk: DeskCell, seatIndex: number) {
 }
 
 /**
+ * 科目変更の置き場の手がかり（確認リスト tp-51・2026-10-27 オーナー報告「同じコマ内で科目を変えると、丸ごと振替した日のコマでその生徒がいなくなる」）。
+ * 同じ保存で Q40-1 が外した旧科目の振替（上段）と、振替元の日に残っていた旧科目の移動元記録の**盤面上の机と席**。
+ * Q40-2 は新科目を「テンプレの机番号」の机へ置くが、丸ごと振替の 1 対 1 の写像は**盤面の机番号**（振替元の机 i → 振替先の机 i）で、
+ * 盤面の机の並びはテンプレの机番号とずれうる（手置き講師・Q41-13 のずらし・同じコマ内の D&D・再マージの講師机の置き直し など）。ずれていると
+ * 新科目の振替が別の講師の机へ入り（その机が満席なら次の机・下段）、元の日の「休)」も別の机に付くか付かず、室長からは「移した先の机から生徒が消えた」と見える。
+ * 同じ生徒×振替元の日×時限で旧科目を外した席があれば、新科目はまずその席へ置く（＝科目だけ差し替わる。外す＋足すの「足す」を外した場所へ）。
+ */
+export type ReplacedTransferSeat = {
+  /** 生徒の同一性（studentIdentity）。科目は問わない（旧科目と新科目は別の生徒×科目）。 */
+  identity: string
+  sourceDateKey: string
+  /** 外した振替の振替元の時限（ラベルから取れないときは null＝日付と振替先のコマで突き合わせる）。 */
+  sourceSlotNumber: number | null
+  targetCellId: string
+  targetDeskId: string
+  targetSeatIndex: number
+  /** 振替元の日に残っていた旧科目の移動元記録の位置（見つからなければ無し＝テンプレの机番号へ記録する従来の形）。 */
+  source?: { cellId: string; deskId: string; seatIndex: number }
+}
+
+/** Q40-1 で外す旧科目の振替から、科目変更の置き場の手がかりを集める（外す**前**の盤面を渡す）。保留の下段の振替は対象外（下段は Q42 の机番号で置き直す）。 */
+export function collectReplacedTransferSeats(weeks: SlotCell[][], removals: readonly OrphanedMakeupRemoval[]): ReplacedTransferSeat[] {
+  const result: ReplacedTransferSeat[] = []
+  const usedSources = new Set<string>()
+  for (const removal of removals) {
+    if (removal.inLower) continue
+    const subjectKey = studentSubjectKey(removal.student)
+    let source: ReplacedTransferSeat['source']
+    for (const week of weeks) {
+      for (const cell of week) {
+        if (cell.dateKey !== removal.sourceDateKey) continue
+        if (removal.sourceSlotNumber != null && cell.slotNumber !== removal.sourceSlotNumber) continue
+        cell.desks.forEach((desk) => {
+          if (source) return
+          desk.statusSlots?.forEach((entry, seatIndex) => {
+            if (source || !entry || entry.status !== 'moved' || studentSubjectKey(entry) !== subjectKey) return
+            if (entry.moveDestinationDateKey && entry.moveDestinationDateKey !== removal.targetDateKey) return
+            const key = `${cell.id}__${desk.id}__${seatIndex}`
+            if (usedSources.has(key)) return
+            usedSources.add(key)
+            source = { cellId: cell.id, deskId: desk.id, seatIndex }
+          })
+        })
+        if (source) break
+      }
+      if (source) break
+    }
+    result.push({ identity: studentIdentity(removal.student), sourceDateKey: removal.sourceDateKey, sourceSlotNumber: removal.sourceSlotNumber, targetCellId: removal.cellId, targetDeskId: removal.deskId, targetSeatIndex: removal.seatIndex, ...(source ? { source } : {}) })
+  }
+  return result
+}
+
+/**
  * Q40-2: 丸ごと振替した日（振替元）に足した生徒を振替先へ置く計画。置けない生徒は未消化（休日なら自動・休日でなければ台帳へ）。
  */
 export function planWholeDayTransferPlacements(params: {
@@ -395,6 +465,11 @@ export function planWholeDayTransferPlacements(params: {
   buildMovedSourceStatusEntry: (params: { student: StudentEntry; sourceCell: SlotCell; sourceDesk: DeskCell; destinationDateKey: string; destinationSlotNumber: number }) => StudentStatusEntry
   /** 下段を作る日時（ISO・保存の createdAt）。省略時は現在時刻。 */
   createdAt?: string
+  /**
+   * 科目変更の置き場の手がかり（collectReplacedTransferSeats・tp-51 2026-10-27）。同じ生徒×振替元の日×時限で旧科目の振替を外した席があれば、
+   * 新科目はまずその机・席へ置き、元の日の「休)」も旧科目の記録があった机・席へ付ける。省略時は従来どおりテンプレの机番号から。
+   */
+  replacedSeats?: readonly ReplacedTransferSeat[]
 }): WholeDayTransferFollowPlan {
   const placed: WholeDayTransferPlacement[] = []
   const stocked: WholeDayTransferStocked[] = []
@@ -419,6 +494,7 @@ export function planWholeDayTransferPlacements(params: {
   }
 
   const settled: WholeDayTransferSettled[] = []
+  const unusedReplacedSeats = [...(params.replacedSeats ?? [])]
   for (const item of params.skipped) {
     if (params.settled.has(item)) {
       settled.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber })
@@ -438,23 +514,31 @@ export function planWholeDayTransferPlacements(params: {
     if (isStudentPresentInCell(targetCell, nextPendingDesks, identity)) { stock(item, 'duplicate'); continue }
     // 置ける机か（保留でない・空席がある。講師の有無は問わない＝オーナー指示 2026-10-21「講師のいない席でも割り振り、満席のときだけ未消化へ」。
     // 講師が居ない机に置いた授業は、室長が手で講師なしの机に置いた授業と同じ扱い＝講師が付くまで講師日程表に出ない）。
-    const freeSeatOf = (desk: DeskCell) => (isSeatFree(desk, item.seatIndex) ? item.seatIndex : (isSeatFree(desk, item.seatIndex === 0 ? 1 : 0) ? (item.seatIndex === 0 ? 1 : 0) : -1))
-    const judge = (desk: DeskCell | undefined): { seatIndex: number } | 'no-seat' => {
+    const freeSeatOf = (desk: DeskCell, preferredSeat = item.seatIndex) => (isSeatFree(desk, preferredSeat) ? preferredSeat : (isSeatFree(desk, preferredSeat === 0 ? 1 : 0) ? (preferredSeat === 0 ? 1 : 0) : -1))
+    const judge = (desk: DeskCell | undefined, preferredSeat = item.seatIndex): { seatIndex: number } | 'no-seat' => {
       if (!desk) return 'no-seat'
       if (params.pendingDesks[buildTemplatePendingDeskKey(targetCell.id, desk.id)]) return 'no-seat'
-      const seatIndex = freeSeatOf(desk)
+      const seatIndex = freeSeatOf(desk, preferredSeat)
       return seatIndex < 0 ? 'no-seat' : { seatIndex }
     }
-    // 優先順: 同じ机番号の机（丸ごと振替の 1 対 1 の写像）→ 同じコマの別の机で講師が居る机（机番号の順）→ 講師の居ない机（机番号の順）。
+    // tp-51（2026-10-27）: 同じ保存で旧科目の振替を外した席（同じ生徒×振替元の日×時限・振替先の同じコマ）があれば、それが「移した先の同じ机」。
+    // テンプレの机番号は盤面の机の並びとずれうる（collectReplacedTransferSeats の説明）ので、こちらを先に見る。
+    const replacedIndex = unusedReplacedSeats.findIndex((hint) => hint.identity === identity && hint.sourceDateKey === item.dateKey
+      && (hint.sourceSlotNumber == null || hint.sourceSlotNumber === item.slotNumber) && hint.targetCellId === targetCell.id)
+    const replaced = replacedIndex >= 0 ? unusedReplacedSeats.splice(replacedIndex, 1)[0] : undefined
+    const replacedDesk = replaced ? targetCell.desks.find((desk) => desk.id === replaced.targetDeskId) : undefined
+    const replacedJudge = replacedDesk ? judge(replacedDesk, replaced!.targetSeatIndex) : 'no-seat'
+    // 優先順: （科目変更なら旧科目を外した机）→ 同じ机番号の机（丸ごと振替の 1 対 1 の写像）→ 同じコマの別の机で講師が居る机（机番号の順）→ 講師の居ない机（机番号の順）。
     // どの机にも空席が無い（満席）ときだけ未消化（オーナー確定 2026-10-21・既知の限界 L-5）。
     const sameDesk = targetCell.desks[item.deskIndex]
     const sameDeskJudge = judge(sameDesk)
     let targetDesk: DeskCell | undefined
     let seatIndex = -1
     let fallbackDesk = false
-    if (typeof sameDeskJudge !== 'string') { targetDesk = sameDesk; seatIndex = sameDeskJudge.seatIndex }
+    if (replacedDesk && typeof replacedJudge !== 'string') { targetDesk = replacedDesk; seatIndex = replacedJudge.seatIndex }
+    else if (typeof sameDeskJudge !== 'string') { targetDesk = sameDesk; seatIndex = sameDeskJudge.seatIndex }
     else {
-      const candidates = [...targetCell.desks.filter((desk) => desk !== sameDesk && desk.teacher.trim()), ...targetCell.desks.filter((desk) => desk !== sameDesk && !desk.teacher.trim())]
+      const candidates = [...targetCell.desks.filter((desk) => desk !== sameDesk && desk !== replacedDesk && desk.teacher.trim()), ...targetCell.desks.filter((desk) => desk !== sameDesk && desk !== replacedDesk && !desk.teacher.trim())]
       for (const desk of candidates) {
         const verdict = judge(desk)
         if (typeof verdict === 'string') continue
@@ -466,10 +550,13 @@ export function planWholeDayTransferPlacements(params: {
     if (!targetDesk || seatIndex < 0) {
       // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机の**下段（保留・緑）**へ振替として置く（埋まっていれば次の机の下段）。
       // 下段の振替は在庫の消化に数える（INV-06 の 3 本目の走査）ので台帳には積まない＝在庫中立。L-5（台帳に積んでも残数が増えない消失）はこれで閉じる。
-      const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved, effectiveStartDate: destination.dateKey, createdAt: params.createdAt ?? new Date().toISOString(), kind: 'transfer-follow-full', note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
+      // tp-51（2026-10-27）: 科目変更で旧科目を外した机があればその机の下段を先に見る（旧科目の机が保留の机だったときなど）。
+      const lowerDeskIndex = replacedDesk ? targetCell.desks.indexOf(replacedDesk) : item.deskIndex
+      const lowerSeat = replaced && replacedDesk ? replaced.targetSeatIndex : item.seatIndex
+      const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: lowerDeskIndex, preferredSeat: lowerSeat, student: moved, effectiveStartDate: destination.dateKey, createdAt: params.createdAt ?? new Date().toISOString(), kind: 'transfer-follow-full', note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
       if (!lowerPlacement) { stock(item, 'no-seat'); continue }
       nextPendingDesks = lowerPlacement.nextPendingDesks
-      pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: lowerPlacement.deskId, deskIndex: lowerPlacement.deskIndex, seatIndex: lowerPlacement.seatIndex, fallbackDesk: lowerPlacement.deskIndex !== item.deskIndex })
+      pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: lowerPlacement.deskId, deskIndex: lowerPlacement.deskIndex, seatIndex: lowerPlacement.seatIndex, fallbackDesk: lowerPlacement.deskIndex !== lowerDeskIndex })
     } else {
       const teacherless = !targetDesk.teacher.trim()
       const slots = [...(targetDesk.lesson?.studentSlots ?? [null, null])] as StudentPair
@@ -483,12 +570,16 @@ export function planWholeDayTransferPlacements(params: {
     handledCount += 1
 
     // 振替元の日のテンプレの机に移動元記録（休)→ 先）を残す（丸ごと振替と同じ表示）。席が埋まっていれば記録は残さない（配置は成立）。
+    // tp-51（2026-10-27）: 科目変更なら、旧科目の記録があった机・席（Q40-1 が消した場所）を先に見る（テンプレの机番号は盤面の机とずれうる）。
     const sourceCellId = cellByDateSlot.get(dateSlotKey(item.dateKey, item.slotNumber))
     const sourceCell = sourceCellId ? cellById.get(sourceCellId) : undefined
-    const sourceDesk = sourceCell?.desks[item.deskIndex]
+    const replacedSourceDesk = replaced?.source && sourceCell && replaced.source.cellId === sourceCell.id ? sourceCell.desks.find((desk) => desk.id === replaced.source!.deskId) : undefined
+    const statusSeatOf = (desk: DeskCell, preferredSeat: number) => (isSeatFree(desk, preferredSeat) ? preferredSeat : (isSeatFree(desk, preferredSeat === 0 ? 1 : 0) ? (preferredSeat === 0 ? 1 : 0) : -1))
+    const useReplacedSource = Boolean(replacedSourceDesk && statusSeatOf(replacedSourceDesk, replaced!.source!.seatIndex) >= 0)
+    const sourceDesk = useReplacedSource ? replacedSourceDesk : sourceCell?.desks[item.deskIndex]
     if (sourceCell && sourceDesk) {
       // 記録を置く席は授業も記録も無い席（isSeatFree と同じ判定・L-3）。
-      const statusSeat = isSeatFree(sourceDesk, item.seatIndex) ? item.seatIndex : (isSeatFree(sourceDesk, item.seatIndex === 0 ? 1 : 0) ? (item.seatIndex === 0 ? 1 : 0) : -1)
+      const statusSeat = statusSeatOf(sourceDesk, useReplacedSource ? replaced!.source!.seatIndex : item.seatIndex)
       if (statusSeat >= 0) {
         // 丸ごと振替の組の印（決定記録 46・Q40-9 の根拠）。
         const entry: StudentStatusEntry = { ...params.buildMovedSourceStatusEntry({ student: item.student, sourceCell, sourceDesk, destinationDateKey: destination.dateKey, destinationSlotNumber: destination.slotNumber }), wholeDayTransfer: true }
