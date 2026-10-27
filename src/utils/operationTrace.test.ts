@@ -104,6 +104,26 @@ describe('operationTrace: リングバッファと要約', () => {
     for (let index = 0; index < 14; index += 1) expect(entry.summary).toContain(`#s${100 + index}`)
   })
 
+  it('回帰(2026-10-27 確認リスト sc-2): 机 1 台が長い操作(丸ごと振替)でも、末尾が机の途中で「…」切れにならず、入りきらない机は「他N件」に回る', () => {
+    // 受付 20261027-144006023-5e34fa4b: 10/28 → 10/29 の丸ごと振替(机 45 台)の要約が 2000 字で切れ、16 台目の途中で「…」になっていた。
+    const teachers = Array.from({ length: 30 }, (_, index) => `講師${index}`)
+    const longStudent = (index: number, slot: number) => student(`とても長い名前の生徒さんの氏名${index}-${slot}号`, { managedStudentId: `s${100 + index}`, subject: '数' })
+    const before = [[cell('2026-10-28', 5, teachers.map((name, index) => desk(name, [longStudent(index, 1), longStudent(index, 2)])))]]
+    const after = [[cell('2026-10-28', 5, teachers.map(() => desk('', [null, null])))]]
+    const prefix = '元に戻す: '
+    const suffix = ' / 付随変更: 休日設定・未消化振替(抑制)・未消化振替(手動)・未消化講習・回数補正・通常授業抑制'
+    const diff = summarizeWeeksDiff(before, after)
+    const entry = buildOperationTraceEntry('undo', `${prefix}${diff}${suffix}`)
+    expect(entry.summary.endsWith('…')).toBe(false)
+    expect(entry.summary.length).toBeLessThanOrEqual(OPERATION_TRACE_SUMMARY_LIMIT)
+    const rest = /他(\d+)件/u.exec(diff)
+    expect(rest).not.toBeNull()
+    const shownCount = diff.split(' | ').length - 1
+    expect(shownCount + Number(rest![1])).toBe(30)
+    // 並んだ机は途中で切れていない(最後の机も「→ 講師なし: 空 / 空」で終わる)
+    expect(diff.split(' | ').slice(0, -1).every((part) => part.endsWith('→ 講師なし: 空 / 空'))).toBe(true)
+  })
+
   it('localStorage へ書く分は合計文字数の予算に収め、新しい方を残す(メモリのバッファは減らさない)', () => {
     const entries = Array.from({ length: 10 }, (_, index) => buildOperationTraceEntry('board-commit', `${index}-${'x'.repeat(90)}`))
     const kept = selectOperationTraceWithinStorageBudget(entries, 500)
