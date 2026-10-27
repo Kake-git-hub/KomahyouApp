@@ -65,9 +65,9 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     title: '教室データの 1 文書上限(1MiB)超過の恒久対策(週単位の分割保存＋差分保存)',
     stage: 'in-progress',
     summary: '2026-10-26 17:58〜21:15 と 10/27 14:46〜 に日大前校の保存が全部失敗した(教室データ 8.3MB を gzip+base64 で 1 文書に入れており、上限まで 27 バイト・盤面の週が 7.35MB で過去週は増え続ける)。v1.5.646 のつなぎ: 圧縮を level 9 に(余裕約 56KB＝2〜4 週間)、容量超過は専用の案内(「接続を確認して」を出さない)・開発者へメール・saveAttempts に too-large / write-failed と使用率(capacityRatio)を残す、85% 以上で 1 日 1 通の容量注意メール。',
-    checklistItemIds: ['sc-1'],
-    nextAction: 'Claude: 週単位の分割保存(目次文書＋週ごとの文書・変わった週だけ送る・1 トランザクションで版数照合・組み立て関数 1 つで今と同じ形に戻す・新旧両方読める版を先に出す)の仕様を docs/spec-save-restore.md に起こし、実装して staging で確認。冬期講習(12 月)で週が重くなる前に本番へ。オーナー: 過去週を何か月前まで編集できる盤面に残すか(古い週を閲覧専用の保管へ回すか)を決める。',
-    references: ['functions/src/snapshotCapacity.ts', 'functions/src/saveFailureAlert.ts', 'functions/src/index.ts (saveClassroomSnapshotFromCallable / createStoredSnapshotDoc)', 'src/utils/saveProgressMessages.ts'],
+    checklistItemIds: ['sc-1', 'sc-2', 'sc-3'],
+    nextAction: '【2026-10-27 夕】仕様確定済み(spec-save-restore §9・Q1〜Q6 全件オーナー確定・INV-14 新設)。次セッションから実装(引き継ぎ正本 docs/plan-2026-10-27-weekly-split-snapshot-handoff.md): 段階 0 共有の純関数(分割/組み立て/週キー/ハッシュ・sync-shared＋パリティ)→ 段階 A 両形式を読める版(readStoredSnapshotPayload 全 10 箇所・クライアント・ルール 7 件・INV-14 マトリクス・Functions→ルール→Hosting)→ 段階 B サーバーで分割して書く(トランザクション・QR マージ・掃除・CLIENT_TOO_OLD・フラグ weeklySplitSnapshotStorage・開発用教室→staging 本番サイズ→日大前校→残り。★冬期講習前の期限に効くのはここまで)→ 段階 C 差分送信 → 段階 D 監視と第 2 段。過去週のアーカイブは「今は決めない」(オーナー 2026-10-27)。あわせて v1.5.647 操作痕跡の上限 400→2000 字・v1.5.648 保存できなかった内容の控え＋「開発者へ送る」(確認リスト sc-2 / sc-3 待ち)。',
+    references: ['docs/plan-2026-10-27-weekly-split-snapshot-handoff.md', 'docs/spec-save-restore.md §9', 'docs/spec-invariants.md INV-14', 'functions/src/snapshotCapacity.ts', 'functions/src/saveFailureAlert.ts', 'functions/src/index.ts (saveClassroomSnapshotFromCallable / createStoredSnapshotDoc / readStoredSnapshotPayload)', 'src/integrations/firebase/workspaceStore.ts (readFirebaseSnapshotPayload)', 'src/utils/saveProgressMessages.ts', 'src/utils/unsentCloudSave.ts'],
     updatedOn: '2026-10-27',
   },
   // ── 開発用教室だけで動いている先行機能 ──────────────────────────────────────
