@@ -239,8 +239,15 @@ describe('INV-14 行（読み手）: どの読み手も唯一の読み手を通�
     const autoBackup = slice(indexTs, 'async function runWorkspaceServerAutoBackup(', 'await pruneWorkspaceServerAutoBackups(')
     expect(autoBackup).toContain("buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })")
     expect(autoBackup).toContain('missingClassroomIds,')
+    // 全教室を並列に解凍しない(512MiB・L-6): 教室の組み立ては for…of で逐次(最初の 3 コレクション読みの Promise.all は対象外)。
+    expect(builder).toContain('for (const entry of classroomSnapshots.docs) {')
+    expect(builder).not.toContain('Promise.all(classroomSnapshots.docs')
     const incident = slice(indexTs, 'async function writeWorkspaceIncidentBackup(', 'async function writeLatestClassroomRollback(')
     expect(incident).toContain("{ onAssemblyFailure: 'throw', reader: 'incident-backup' }")
+    // 復元前の安全な控え: 組み立て失敗は握らず(M-1)、復元用ダウンロードは failed-precondition で止める。
+    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error)) throw error')
+    const download = slice(indexTs, 'await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)', 'const [content] = await file.download()')
+    expect(download).toContain("reason: 'incident-backup-assembly-failed'")
   })
 
   it('行: 直前ロールバック — before/after を唯一の読み手で組み立て、失敗は知らせて投げ直す（空の「直前の状態」を書かない）', () => {

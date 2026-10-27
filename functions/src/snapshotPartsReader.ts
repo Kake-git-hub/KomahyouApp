@@ -9,13 +9,14 @@
 import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import {
+  isSnapshotPartsAssemblyError,
   isSnapshotPartsManifest,
   readClassroomSnapshotFromParts,
   SNAPSHOT_PART_ENCODING,
   SnapshotPartsAssemblyError,
 } from './generated/classroomSnapshotParts'
 
-export { isSnapshotPartsManifest, SnapshotPartsAssemblyError }
+export { isSnapshotPartsAssemblyError, isSnapshotPartsManifest, SnapshotPartsAssemblyError }
 
 /** 部品ハッシュ(SHA-256・16 進)。入力は共有関数 buildSnapshotPartHashInput の文字列。 */
 export function hashSnapshotPartInput(input: string): string {

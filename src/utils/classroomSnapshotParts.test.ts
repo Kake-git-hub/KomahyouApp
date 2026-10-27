@@ -186,7 +186,7 @@ describe('classroomSnapshotParts: 分割→組み立ての同一性(AC-1・AC-2)
     expect(assembled.boardState).toBeNull()
   })
 
-  it('boardState キー自体が無い・boardState が文字列の教室は今日と同じく boardState: null。配列も今日の規則どおり(オブジェクト扱い)', () => {
+  it('boardState キー自体が無い・boardState が文字列の教室はサーバー(functions deserializeBoardState)と同じく boardState: null。配列も同じ規則(オブジェクト扱い)', () => {
     const withoutKey = buildPayload()
     delete (withoutKey as Record<string, unknown>).boardState
     expect(expectIdentity(withoutKey).assembled.boardState).toBeNull()
@@ -258,6 +258,18 @@ describe('classroomSnapshotParts: 分割→組み立ての同一性(AC-1・AC-2)
     // 規則そのものが firestoreSanitize.ts と同じ
     const tricky = { a: undefined, b: [undefined, 1], c: new Date(Number.NaN), d: new Map([['k', new Set([2n])]]), e: Number.NEGATIVE_INFINITY, f: Number.NaN, g: () => 1, h: Symbol('x'), i: { toJSON: () => ({ z: undefined, y: 1 }) } }
     expect(sanitizeSnapshotValue(tricky)).toEqual(sanitizeForFirestore(tricky))
+  })
+
+  it('ui の NaN / -0 / Infinity は旧形式(JSON 化)と同じく null / 0 / null になる(目次は平文で書くため JSON 往復でそろえる)', () => {
+    const base = buildPayload().boardState as Record<string, unknown>
+    const payload = buildPayload({ boardState: { ...base, weekIndex: Number.NaN, selectedDeskIndex: -0, studentScheduleRange: { from: Number.POSITIVE_INFINITY } } })
+    const { split, assembled } = expectIdentity(payload)
+    expect(Object.is(split.ui.board?.weekIndex, null)).toBe(true)
+    expect(Object.is(split.ui.board?.selectedDeskIndex, 0)).toBe(true)
+    expect(split.ui.board?.studentScheduleRange).toEqual({ from: null })
+    const legacy = JSON.parse(JSON.stringify(sanitizeForFirestore(payload))) as { boardState: Record<string, unknown> }
+    expect((assembled.boardState as Record<string, unknown>).weekIndex).toEqual(legacy.boardState.weekIndex)
+    expect(Object.is((assembled.boardState as Record<string, unknown>).selectedDeskIndex, legacy.boardState.selectedDeskIndex)).toBe(true)
   })
 
   it('日大前校サイズの合成データ(46 週・1 週 35 コマ・机 14 台)でも同一で、週キーは 46 件すべて一意', () => {
@@ -343,6 +355,8 @@ describe('classroomSnapshotParts: 目次の検査(fail-closed)', () => {
     ['週の形が違う', (m: SnapshotPartsManifest) => ({ ...m, weeks: [{ key: '2026-05-11' }] }), /weeks\[0\] の形が違う/],
     ['compositeHash が無い', (m: SnapshotPartsManifest) => ({ ...m, compositeHash: '' }), /compositeHash が無い/],
     ['ui が無い', (m: SnapshotPartsManifest) => ({ ...m, ui: null }), /ui がオブジェクトではない/],
+    ["文書 ID に '/' が入っている", (m: SnapshotPartsManifest) => ({ ...m, parts: { ...m.parts, core: { ...m.parts.core, docId: 'core~-~v7/../x' } } }), /parts\.core が無い/],
+    ['週キーが空', (m: SnapshotPartsManifest) => ({ ...m, weeks: [{ ...m.weeks[0], key: '' }] }), /weeks\[0\] の形が違う/],
   ])('%s → 失敗', (_label, mutate, pattern) => {
     const { manifest } = buildManifestAndParts(buildPayload())
     const result = validateSnapshotPartsManifest(mutate(manifest) as unknown)
@@ -430,6 +444,16 @@ describe('classroomSnapshotParts: 読み手の共通手順 readClassroomSnapshot
     expect(refetches).toHaveLength(1)
     const { io: ioNoRefetch } = buildIo(partial)
     await expect(readClassroomSnapshotFromParts(manifest, ioNoRefetch)).rejects.toBeInstanceOf(SnapshotPartsAssemblyError)
+  })
+
+  it('読み直した目次が同じ(compositeHash 同一)なら部品を取り直さず元の例外。読み直した文書が目次でなければ元の例外(原因を隠さない)', async () => {
+    const { manifest, parts } = buildManifestAndParts(buildPayload())
+    const partial = new Map([...parts].filter(([docId]) => docId !== manifest.weeks[0].docId))
+    const { io, fetched } = buildIo(partial, { refetchManifest: async () => ({ ...manifest }) })
+    await expect(readClassroomSnapshotFromParts(manifest, io)).rejects.toMatchObject({ reason: 'missing-part', partKeys: ['week:2026-05-11'] })
+    expect(fetched).toHaveLength(1)
+    const { io: ioLegacy } = buildIo(partial, { refetchManifest: async () => ({ schemaVersion: 1, data: {} }) })
+    await expect(readClassroomSnapshotFromParts(manifest, ioLegacy)).rejects.toMatchObject({ reason: 'missing-part' })
   })
 
   it('目次はあるが部品が 1 つも無い → 例外(空の教室にしない)', async () => {

@@ -61,7 +61,7 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
 import { buildSaveFailureAlertMail, resolveSaveFailureAlertThrottle, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
 import { classifySnapshotWriteFailure, estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
-import { assembleSnapshotPartsManifest, describeSnapshotAssemblyFailure, isSnapshotPartsManifest, SnapshotPartsAssemblyError } from './snapshotPartsReader'
+import { assembleSnapshotPartsManifest, describeSnapshotAssemblyFailure, isSnapshotPartsAssemblyError, isSnapshotPartsManifest, SnapshotPartsAssemblyError } from './snapshotPartsReader'
 import { SNAPSHOT_PARTS_SUBCOLLECTION } from './generated/classroomSnapshotParts'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
@@ -873,6 +873,9 @@ async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string
     logger.info(`[IncidentBackup] Saved pre-restore safety snapshot to ${storagePath}`)
     return { storagePath, savedAt }
   } catch (error) {
+    // ★組み立てられない教室があるときは握らない(INV-14・regression-reviewer M-1): 欠けた一式を「復元前の安全な控え」にせず、
+    //   呼び出し側(復元用ダウンロード)を止める。Storage の書き込み失敗は従来どおり握る(控え無しでも復元は進む)。
+    if (isSnapshotPartsAssemblyError(error)) throw error
     logger.error(`[IncidentBackup] Failed to save safety snapshot for workspace=${workspaceKey} reason=${reason}`, error)
     return null
   }
@@ -1397,20 +1400,20 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
   )
 
   const missingClassroomIds: string[] = []
-  const classroomResults = await Promise.all(classroomSnapshots.docs.map(async (entry) => {
+  const classrooms: WorkspaceClassroom[] = []
+  // 教室ごとに逐次組み立てる(分割形式は 1 教室 約 50 文書・非圧縮 8MB。全教室を並列に解凍すると 512MiB で逼迫する・regression-reviewer L-6)。
+  for (const entry of classroomSnapshots.docs) {
     const classroomData = entry.data() as FirebaseClassroomDoc
     const snapshotData = snapshotByClassroomId.get(entry.id)
     try {
       const payload = await readClassroomSnapshotPayload(workspaceRef.collection('classroomSnapshots').doc(entry.id), snapshotData)
-      return toWorkspaceClassroom(entry.id, classroomData, payload ?? null)
+      classrooms.push(toWorkspaceClassroom(entry.id, classroomData, payload ?? null))
     } catch (error) {
       await notifySnapshotAssemblyFailure({ workspaceKey, classroomId: entry.id, reader: options.reader, error })
       if (options.onAssemblyFailure === 'throw') throw error
       missingClassroomIds.push(entry.id)
-      return null
     }
-  }))
-  const classrooms = classroomResults.filter((classroom): classroom is WorkspaceClassroom => classroom !== null)
+  }
 
   const latestSourceSavedAt = getLatestSavedAt(
     classroomSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomDoc),
@@ -1432,6 +1435,8 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
       actingClassroomId: classrooms[0]?.id ?? null,
       users,
       classrooms,
+      // 組み立てられず除いた教室(INV-14)。JSON 読込側(src/utils/workspaceBackupImport.ts)が「開いている教室が無い」を別教室で埋めないために読む。
+      ...(missingClassroomIds.length > 0 ? { missingClassroomIds } : {}),
     } satisfies WorkspaceSnapshot,
   }
 }
@@ -2017,7 +2022,20 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   // 段階 A(読める版・docs/spec-save-restore.md §9-7-1): この版のサーバーは分割形式を**読む**だけで、まだ分割して書けない。
   // 分割形式の教室へ旧形式(1 文書)で上書きすると一方通行(§9-7-1)に反し、部品が宙に浮くので断る。段階 B でここが分割の書き手に置き換わる。
   if (isSnapshotPartsManifest(previousSnapshotData)) {
-    logger.error(`[saveClassroomSnapshot] 分割形式の教室への保存はこの版では未対応 classroom=${classroomId} saveId=${saveId}`)
+    const detail = `parts-format-write-unsupported: 分割形式の教室への保存はこの版(段階 A)では未対応 version=${previousSnapshotData.version ?? ''}`
+    logger.error(`[saveClassroomSnapshot] ${detail} classroom=${classroomId} saveId=${saveId}`)
+    // K-5: 拒否の痕跡を saveAttempts とメールに残す(段階 B 移行期に「古い Functions が残っていた」事故の鑑識用・regression-reviewer L-2)。
+    try {
+      await saveAttemptRef.set(buildSaveAttemptPayload({
+        classroomId, savedAt, saveId, payloadHash, status: 'write-failed', verified: false, writeMode: 'cloud-function-rejected',
+        dataByteLength: Buffer.byteLength(JSON.stringify(sanitizedPayload), 'utf8'), snapshotEncoding: 'none', updatedBy: memberRef.id,
+        createdAt: new Date().toISOString(), failedAt: new Date().toISOString(), errorMessage: detail,
+        snapshotVersion: previousSnapshotData.version, appVersion: incomingClient.appVersion, userAgent: incomingClient.userAgent,
+      }), { merge: true })
+    } catch (recordError) {
+      logger.error(`[saveClassroomSnapshot] Failed to record rejected saveAttempt classroom=${classroomId} saveId=${saveId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`)
+    }
+    await notifySaveFailureByMail({ kind: 'write-failed', workspaceKey, classroomId, saveId, savedAt, updatedBy: memberRef.id, client: incomingClient, detail })
     throw new HttpsError('failed-precondition', 'この教室は新しい保存形式のため、この版では保存できません。開発者へご連絡ください。', { reason: 'parts-format-write-unsupported' })
   }
   try {
@@ -2256,7 +2274,15 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
 }
 
 export const saveClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
-  return saveClassroomSnapshotFromCallable(request)
+  try {
+    return await saveClassroomSnapshotFromCallable(request)
+  } catch (error) {
+    // 分割形式の組み立て失敗(INV-14)は HttpsError でないため画面が INTERNAL になる(memory「関数が INTERNAL しか返さない」)。原因文つきで包む。
+    if (isSnapshotPartsAssemblyError(error)) {
+      throw new HttpsError('internal', '教室データを読み込めなかったため、保存を中止しました。画面を再読み込みしてください。直らなければ開発者へ連絡してください。', { reason: 'snapshot-assembly-failed', detail: describeSnapshotAssemblyFailure(error) })
+    }
+    throw error
+  }
 })
 
 export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
@@ -2762,7 +2788,12 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
     throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${storagePath})`)
   }
 
-  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
+  try {
+    await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
+  } catch (error) {
+    // 分割形式の教室を組み立てられず安全な控えを作れない → 復元を進めない(INV-14・M-1)。原因は builder が通知済み。
+    throw new HttpsError('failed-precondition', '復元前の安全な控えを作れないため、復元を進められません。開発者へご連絡ください。', { reason: 'incident-backup-assembly-failed', detail: describeSnapshotAssemblyFailure(error) })
+  }
 
   const [content] = await file.download()
   // ワークスペースバックアップは数十 MB に達する。Firebase callable のレスポンス上限(約10MB)を

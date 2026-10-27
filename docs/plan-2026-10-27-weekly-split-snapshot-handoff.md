@@ -37,6 +37,16 @@
   - INV-14 マトリクス `src/utils/inv14-snapshot-all-or-nothing.matrix.test.ts`（列 5 × アダプタ 2 ＋ 行 8 の配線）。台帳の担保状況を ○ に。
 - 入れていないもの（次セッション）: 分割形式の**書き手**全部（§9-4・段階 B）、機能フラグ `weeklySplitSnapshotStorage`、掃除の同乗、
   `CLIENT_TOO_OLD`、`docs/runbooks/rollback.md` A・B の制限追記（段階 B と同時）、staging の読取確認用に分割形式の教室を手で作るツール。
+- regression-reviewer（2026-10-27・高 0・中 4・低 9）のうち同日修正済み: M-1 復元前の安全スナップショットの組み立て失敗を握らず復元用ダウンロードを
+  `failed-precondition`（`incident-backup-assembly-failed`）で止める／M-3 バックアップ JSON に `missingClassroomIds` を載せ、JSON 読込は
+  `src/utils/workspaceBackupImport.ts` で「開いている教室が無ければ先頭教室へ落とさない」／L-1 `ui` を JSON 往復で正規化（NaN→null）／
+  L-2 段階 A ガードの拒否を `saveAttempts`（`write-failed`・`cloud-function-rejected`）とメールに残す／L-3 目次の docId を文字種で検査／
+  L-4 読み直した目次が同じなら部品を取り直さない／L-6 バックアップの組み立ては教室ごとに逐次／L-7 組み立て失敗を callable 境界で
+  `HttpsError('internal', …, { reason: 'snapshot-assembly-failed' })` に包む／L-8・L-9 文言。
+- **段階 B の前に直す（reviewer 指摘・未対応）**: **M-2** クライアントは 1 教室の組み立て失敗でワークスペース全体の読み込みを失敗にする
+  （室長は等価だが開発者は全教室が開けなくなる）。`WorkspaceClassroom` に `loadFailed` の印を付けて返し、App 側でその教室だけ案内を出し
+  `getCurrentClassroomSyncTargetIds` から外す（=保存停止）形へ。**L-5** トリガ（直前ロールバック＋版履歴）が同じ目次を 2 回組み立てる
+  （段階 B で 1 保存 約 100 文書・8MB 解凍×2）→ トリガ内で組み立て結果を使い回す。**M-4** ルールテストは反映前に必ず実行。
 - 次セッションの最初の仕事: (1) `npm run test:rules` を回す。(2) safe-release で Functions → ルール（Actions「Deploy Firestore rules」）→
   Hosting の順に反映。(3) staging に分割形式の目次＋部品を手で作る小さなツール（`tools/`・firebase-admin・staging 限定）を書いて
   「読める・欠けたら案内が出て盤面が出ない」を実機で確かめる。(4) 段階 B へ。

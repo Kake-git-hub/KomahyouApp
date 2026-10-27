@@ -99,7 +99,8 @@ describe('snapshotPartsReader: 目次から教室データ全体を組み立て�
     store.delete(manifest.weeks[0].docId)
     const { io, fetched } = buildIo(store, manifest)
     await expect(assembleSnapshotPartsManifest(manifest, io)).rejects.toBeInstanceOf(SnapshotPartsAssemblyError)
-    expect(fetched).toHaveLength(2)
+    // 読み直した目次が同じ(compositeHash 同一)なら部品を取り直さない(L-4)。
+    expect(fetched).toHaveLength(1)
     try {
       await assembleSnapshotPartsManifest(manifest, io)
     } catch (error) {

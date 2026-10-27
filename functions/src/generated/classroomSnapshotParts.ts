@@ -334,7 +334,7 @@ export function splitClassroomSnapshotPayload(payload: unknown): SplitClassroomS
   // オブジェクト扱いで通す=同一性の約束を厳密に守る。実データで配列になることはない)。
   const rawBoardState = source.boardState
   if (!rawBoardState || typeof rawBoardState !== 'object') {
-    return { core, board: null, weeks: [], ui, hasBoardState: false }
+    return { core, board: null, weeks: [], ui: normalizeSnapshotUiState(ui), hasBoardState: false }
   }
 
   const boardSource = rawBoardState as Record<string, unknown>
@@ -356,7 +356,15 @@ export function splitClassroomSnapshotPayload(payload: unknown): SplitClassroomS
   const keys = resolveSnapshotWeekKeys(normalizedWeeks)
   const weeks = normalizedWeeks.map((cells, index) => ({ key: keys[index], cells }))
 
-  return { core, board, weeks, ui, hasBoardState: true }
+  return { core, board, weeks, ui: normalizeSnapshotUiState(ui), hasBoardState: true }
+}
+
+/**
+ * ui は目次に**平文**で書く(部品は gzip JSON)。旧形式は JSON 化で NaN / -0 が null / 0 になるので、ui も JSON 往復で同じ正規化に
+ * そろえる(そろえないと組み立て後の weekIndex が NaN になる・regression-reviewer L-1)。キーの有無・null は保たれる。
+ */
+export function normalizeSnapshotUiState(ui: SnapshotUiState): SnapshotUiState {
+  return JSON.parse(JSON.stringify(ui)) as SnapshotUiState
 }
 
 /** 分割結果を「部品キー → 中身」の一覧にする(ハッシュ計算・送信の単位)。順番は core → board → 週。 */
@@ -460,10 +468,13 @@ export function isSnapshotPartsManifest(doc: unknown): doc is SnapshotPartsManif
   return Boolean(doc && typeof doc === 'object' && (doc as { storageFormat?: unknown }).storageFormat === SNAPSHOT_PARTS_STORAGE_FORMAT)
 }
 
+/** 部品文書 ID に使える文字(buildSnapshotPartDocId が作り得る形)。'/' などは Firestore のパスを壊すので目次の検査で落とす。 */
+export const SNAPSHOT_PART_DOC_ID_PATTERN = /^[A-Za-z0-9_~.:-]+$/
+
 function isPartInfo(value: unknown): value is SnapshotPartInfo {
   if (!value || typeof value !== 'object') return false
   const info = value as Record<string, unknown>
-  return typeof info.docId === 'string' && info.docId.length > 0 && typeof info.hash === 'string' && info.hash.length > 0
+  return typeof info.docId === 'string' && SNAPSHOT_PART_DOC_ID_PATTERN.test(info.docId) && typeof info.hash === 'string' && info.hash.length > 0
 }
 
 /**
@@ -669,7 +680,10 @@ export async function readClassroomSnapshotFromParts(
     if (!isSnapshotPartsAssemblyError(error) || !io.refetchManifest) throw error
     if (error.reason !== 'missing-part' && error.reason !== 'hash-mismatch') throw error
     const refetched = await io.refetchManifest()
-    if (!refetched) throw error
+    // 読み直した文書が目次でない(一方通行なので実運用では起きない)・目次が変わっていない(同じ compositeHash)なら、
+    // やり直しても同じ結果なので元の例外をそのまま伝える(全部品を 2 回読まない・元の原因を隠さない・regression-reviewer L-4)。
+    if (!isSnapshotPartsManifest(refetched)) throw error
+    if (isSnapshotPartsManifest(manifestDoc) && refetched.compositeHash === manifestDoc.compositeHash) throw error
     return attempt(refetched)
   }
 }
