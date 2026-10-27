@@ -11,7 +11,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { applyStudentEditDraft, buildManagedOccurrenceKey, buildStudentEntryFromStatus, buildStudentStatusEntry, prepareStudentForMove, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { applyStudentEdit, applyStudentEditDraft, buildManagedOccurrenceKey, buildStudentEntryFromStatus, buildStudentStatusEntry, prepareStudentForMove, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 
@@ -1753,6 +1753,31 @@ describe('INV-06 マトリクス: 編集で区分を振替へ変えたコマは�
     }
     expect(balanceAfterClearThenHoliday(boardStudent())).toBe(0) // 元の通常授業
     expect(balanceAfterClearThenHoliday(inPlace)).toBe(0)
+  })
+
+  it('回帰防止: 科目を入れ替えて振替にしたコマの日を休日設定 → 未消化は**その時入っていた科目だけ** 1 件（元の科目の自動発生は立たない）', () => {
+    // テンプレは数学(水曜 5限)。その場で「編集」で英語・振替へ入れ替えた（オーナー確定 2026-10-27: 未消化はその時コマ表に入っていた科目で数える）
+    const swapped = applyStudentEdit({
+      student: boardStudent(), draft: { ...editToMakeup, subject: '英' }, cellDateKey: BOARD_DATE, cellSlotNumber: 5,
+      suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, resolveStockId: resolveStudentKey,
+    })
+    expect(swapped.suppressedMakeupOrigins).toEqual({ [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 5 }] })
+    const settings = createSettings({ holidayDates: [BOARD_DATE] })
+    const desk = deskWithStudent(swapped.student)
+    const result = reconcileHolidayDeskStockReturns({
+      desk, cellDateKey: BOARD_DATE, cellSlotNumber: 5,
+      ledgers: { manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} },
+      managedStudentByAnyName: new Map([[student.name, student]]), resolveDisplayName: (name: string) => name, resolveStockId: resolveStudentKey,
+      ledgerOriginDatesByKey: {}, includeRegularLessons: true, includeManualAddedLessons: true,
+    })
+    const entries = buildMakeupStockEntries({
+      students: [student], teachers: [teacher], regularLessons: [regularLesson], classroomSettings: settings,
+      weeks: [[cellWithDesk({ ...desk, statusSlots: undefined, lesson: undefined })]],
+      manualAdjustments: result.ledgers.manualMakeupAdjustments, suppressedOrigins: swapped.suppressedMakeupOrigins,
+      resolveStudentKey, today: TODAY,
+    })
+    expect(entries.find((item) => item.key === 'student-1__英')?.balance ?? 0).toBe(1)
+    expect(entries.find((item) => item.key === STOCK_KEY)?.balance ?? 0).toBe(0)
   })
 
   it('兄弟: 別日へ移動して振替元が付いたら通常の振替の会計に戻る（印は残っても消化から外さない）', () => {

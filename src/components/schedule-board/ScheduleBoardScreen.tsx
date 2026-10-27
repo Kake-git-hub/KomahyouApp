@@ -34,7 +34,7 @@ import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLa
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
 export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
-import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
+import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
@@ -1551,6 +1551,64 @@ export function applyStudentEditDraft(
     noteSuffix: resolveLessonMinutesNoteSuffix(draft.lessonType, draft.noteSuffix),
     ...(becomesMakeup ? { editedToMakeup: true } : {}),
   }
+}
+
+// 「編集」の確定で、盤面の生徒と抑止の台帳をまとめて決める(純関数・handleConfirmEdit の本体)。
+// INV-03／INV-06（2026-10-27 オーナー確定）: テンプレの通常授業を編集で振替にすると区分が通常でなくなり、以後の削除・格納・休み・移動が
+//   通常授業の抑止キー(resolveSuppressedRegularLessonOccurrenceKey は通常だけを見る)を積まない。盤面は読み込みのたびにテンプレと
+//   突き合わせ直される(remergeBoardWeeksWithManagedData)ので、振替のコマが席を空けると**元の通常授業が戻って二重になっていた**。
+//   ★振替にした時点で元の授業の抑止キーを積む(同日移動で既に積まれていれば何もしない)。
+//   ★科目も変えたときは、元の科目の振替(その日・その時限)も抑止する。未消化は**その時コマ表に入っていた科目**で数える(オーナー確定)＝
+//     休日設定で元の科目の自動発生(テンプレ由来)まで立つと 1 コマが 2 件になるため。
+//   ★振替 → 通常 へ編集し直したら、ここで積んだ分だけ外して印を消す(同日移動など他の操作が積んだ抑止は外さない)。
+//   既存データ(この印を持たない振替)は書き換えない。
+export function applyStudentEdit(params: {
+  student: StudentEntry
+  draft: { subject: SubjectLabel; lessonType: LessonType; teacherType: TeacherType; noteSuffix: string }
+  cellDateKey: string
+  cellSlotNumber: number
+  suppressedRegularLessonOccurrences: string[]
+  suppressedMakeupOrigins: MakeupOriginMap
+  resolveStockId: (student: StudentEntry) => string
+}): { student: StudentEntry; suppressedRegularLessonOccurrences: string[]; suppressedMakeupOrigins: MakeupOriginMap } {
+  const { student: previous, cellDateKey, cellSlotNumber, resolveStockId } = params
+  let suppressedRegularLessonOccurrences = params.suppressedRegularLessonOccurrences
+  let suppressedMakeupOrigins = params.suppressedMakeupOrigins
+  const next = applyStudentEditDraft(previous, params.draft)
+
+  if (next.editedToMakeup && previous.lessonType === 'regular' && !previous.manualAdded) {
+    // 元の授業の日付・時限は同日移動の元を優先する(collectClearedDayMakeupSuppressions と同じ規則＝テンプレ上の時限)。
+    const original: EditedFromRegular = {
+      subject: previous.subject,
+      dateKey: previous.sameDayMoveSourceDate ?? cellDateKey,
+      slotNumber: parseOriginSlotNumberFromLabel(previous.sameDayMoveSourceLabel) ?? cellSlotNumber,
+    }
+    const occurrenceKey = buildManagedOccurrenceKey(previous, original.dateKey, original.slotNumber)
+    if (!suppressedRegularLessonOccurrences.includes(occurrenceKey)) {
+      suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, occurrenceKey)
+      original.addedOccurrenceKey = occurrenceKey
+    }
+    if (next.subject !== previous.subject) {
+      const stockKey = buildMakeupStockKey(resolveStockId(previous), previous.subject)
+      suppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, stockKey, original.dateKey, original.slotNumber)
+      original.addedMakeupSuppressionKey = stockKey
+    }
+    return { student: { ...next, editedFromRegular: original }, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
+  }
+
+  if (previous.lessonType === 'makeup' && next.lessonType !== 'makeup') {
+    const original = previous.editedFromRegular
+    if (original?.addedOccurrenceKey) {
+      suppressedRegularLessonOccurrences = removeSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, original.addedOccurrenceKey)
+    }
+    if (original?.addedMakeupSuppressionKey) {
+      suppressedMakeupOrigins = removeMakeupOrigin(suppressedMakeupOrigins, original.addedMakeupSuppressionKey, original.dateKey, original.slotNumber)
+    }
+    const { editedToMakeup: _editedToMakeup, editedFromRegular: _editedFromRegular, ...rest } = next
+    return { student: rest, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
+  }
+
+  return { student: next, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
 }
 
 export function reconsumeSessionLectureStock(params: {
@@ -3298,6 +3356,7 @@ export function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, d
     specialStockSource: student.specialStockSource,
     manualAdded: student.manualAdded,
     editedToMakeup: student.editedToMakeup,
+    editedFromRegular: student.editedFromRegular,
     subject: student.subject,
     lessonType: student.lessonType,
     teacherType: student.teacherType,
@@ -3348,6 +3407,7 @@ export function buildStudentEntryFromStatus(statusEntry: StudentStatusEntry): St
     specialStockSource: statusEntry.specialStockSource,
     manualAdded: statusEntry.manualAdded,
     editedToMakeup: statusEntry.editedToMakeup,
+    editedFromRegular: statusEntry.editedFromRegular,
     subject: statusEntry.subject,
     lessonType: statusEntry.lessonType,
     teacherType: statusEntry.teacherType,
@@ -13674,17 +13734,40 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     const targetStudent = targetDesk?.lesson?.studentSlots[studentMenu.studentIndex]
-    if (!targetStudent) return
+    if (!targetCell || !targetStudent) return
 
     if (targetStudent.lessonType === 'special' || editStudentDraft.lessonType === 'special') {
       setStatusMessage('講習授業はコマ表から編集できません。生徒日程表で登録解除して内容を直し、再登録してください。')
       return
     }
 
-    // INV-06: 区分を振替へ変えたら未消化を消化しない印を付ける(applyStudentEditDraft の注記)。
-    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = applyStudentEditDraft(targetStudent, editStudentDraft)
+    // INV-03／INV-06: 区分を振替へ変えたら未消化を消化しない印と元の授業の抑止を積む(applyStudentEditDraft / applyStudentEdit の注記)。
+    const edited = applyStudentEdit({
+      student: targetStudent,
+      draft: editStudentDraft,
+      cellDateKey: targetCell.dateKey,
+      cellSlotNumber: targetCell.slotNumber,
+      suppressedRegularLessonOccurrences,
+      suppressedMakeupOrigins,
+      resolveStockId: resolveBoardStudentStockId,
+    })
+    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = edited.student
 
-    commitWeeks(nextWeeks, weekIndex, studentMenu.cellId, studentMenu.deskIndex)
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      studentMenu.cellId,
+      studentMenu.deskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      edited.suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      edited.suppressedRegularLessonOccurrences,
+    )
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の情報を更新しました。`)
   }
 
