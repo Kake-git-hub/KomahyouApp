@@ -30,7 +30,7 @@
 ドメインブロックではない）。同じユーザー体験のバグが経路違いで再発してきた実績を受け、バグを再現経路でなく
 **保証（INV）単位**で固定する台帳（オーナー承認済み・2026-07-11 制度化）。
 
-- **正本**：[`spec-invariants.md`](spec-invariants.md) — 確定 11 件（**強制 7 ＋ 準観察 4**）。上限 15〜20 件。管理者＝spec-curator。
+- **正本**：[`spec-invariants.md`](spec-invariants.md) — 確定 14 件（**強制 8 ＋ 準観察 6**・2026-10-27 時点）。上限 15〜20 件。管理者＝spec-curator。
 - **2 層制**：強制 INV は**操作マトリクステスト（`*.matrix.test.ts`）を義務**化。準観察 INV は経路違い再発の
   2 件目（two-strike）で強制へ昇格。仕様未決セルは `it.todo` で可視化。
 - **CI 改定ガード**：`*.matrix.test.ts` を触る差分は同一 push に `spec-invariants.md` の改定を伴わないと落ちる
