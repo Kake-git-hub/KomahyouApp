@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import {
+  classifySnapshotWriteFailure,
   estimateFirestoreDocumentBytes,
   estimateFirestoreFieldsBytes,
   estimateFirestoreValueBytes,
@@ -102,9 +103,11 @@ describe('保存関数の配線(ソース走査・2026-10-27 日大前校の容�
 
   it('本体の書き込みは try で包み、失敗を started のまま放置しない(容量超過=too-large / それ以外=write-failed)', () => {
     expect(save).toMatch(/try \{\s*await snapshotRef\.set\(snapshotDoc\)\s*\} catch \(error\) \{/u)
-    expect(save).toContain("status: 'too-large'")
-    expect(save).toContain("status: 'write-failed'")
-    expect(save).toContain('if (isFirestoreDocumentTooLargeError(error)) {')
+    expect(save).toContain("recordSaveAttemptFailure('too-large', detail)")
+    expect(save).toContain("recordSaveAttemptFailure('write-failed', errorText)")
+    expect(save).toContain("if (classifySnapshotWriteFailure(error, documentByteLength) === 'too-large') {")
+    // 記録の書き込みの失敗で利用者へ返すエラーを差し替えない(L-2)
+    expect(save).toMatch(/const recordSaveAttemptFailure = async[\s\S]*?try \{[\s\S]*?\} catch \(recordError\) \{[\s\S]*?logger\.error/u)
   })
 
   it('容量超過は resource-exhausted + マーカーで返す(通信失敗の自動再試行に乗せない)。それ以外は元の例外を投げ直す', () => {
@@ -117,11 +120,38 @@ describe('保存関数の配線(ソース走査・2026-10-27 日大前校の容�
     expect(save).not.toContain('isSnapshotOverCapacity(')
   })
 
-  it('上限が近ければ保存成功の後に capacity-warning を送る(verified の記録より後)', () => {
+  it('上限が近ければ保存成功の後に capacity-warning を送る(verified の記録・操作ログ・台帳・痕跡より後＝L-3)', () => {
     const verifiedAt = save.indexOf("status: 'verified',")
+    const trace = save.lastIndexOf('await persistOperationTrace({')
     const warning = save.indexOf("kind: 'capacity-warning'")
     expect(verifiedAt).toBeGreaterThan(0)
     expect(warning).toBeGreaterThan(verifiedAt)
+    expect(warning).toBeGreaterThan(trace)
     expect(save).toContain('if (isSnapshotNearCapacity(documentByteLength)) {')
+  })
+})
+
+describe('書き込み拒否の分類(classifySnapshotWriteFailure・regression-reviewer M-1/M-2)', () => {
+  const over = FIRESTORE_DOCUMENT_MAX_BYTES + 25
+  const under = FIRESTORE_DOCUMENT_MAX_BYTES - 1000
+
+  it('Firestore の容量超過の文言なら見積もりに関係なく too-large', () => {
+    const error = Object.assign(new Error("3 INVALID_ARGUMENT: Document 'x' cannot be written because its size (1,048,601 bytes) exceeds the maximum allowed size of 1,048,576 bytes."), { code: 3 })
+    expect(classifySnapshotWriteFailure(error, under)).toBe('too-large')
+  })
+
+  it('文言が変わっても、引数エラー(gRPC 3 / invalid-argument)かつ見積もりが上限超えなら too-large', () => {
+    expect(classifySnapshotWriteFailure(Object.assign(new Error('3 INVALID_ARGUMENT: something new'), { code: 3 }), over)).toBe('too-large')
+    expect(classifySnapshotWriteFailure(Object.assign(new Error('bad'), { code: 'invalid-argument' }), over)).toBe('too-large')
+  })
+
+  it('引数エラーでも見積もりが上限以下なら other(容量超過と決めつけない)', () => {
+    expect(classifySnapshotWriteFailure(Object.assign(new Error('3 INVALID_ARGUMENT: other'), { code: 3 }), under)).toBe('other')
+  })
+
+  it('通信・一時障害は見積もりが上限超えでも other(元の例外を投げ直して自動再試行に任せる)', () => {
+    expect(classifySnapshotWriteFailure(Object.assign(new Error('14 UNAVAILABLE: No connection established'), { code: 14 }), over)).toBe('other')
+    expect(classifySnapshotWriteFailure(Object.assign(new Error('4 DEADLINE_EXCEEDED'), { code: 4 }), over)).toBe('other')
+    expect(classifySnapshotWriteFailure(undefined, over)).toBe('other')
   })
 })

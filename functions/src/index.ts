@@ -60,7 +60,7 @@ import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from 
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
 import { buildSaveFailureAlertMail, resolveSaveFailureAlertThrottle, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
-import { estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isFirestoreDocumentTooLargeError, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
+import { classifySnapshotWriteFailure, estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
@@ -1960,14 +1960,22 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   }
   // 容量超過は理由つきで記録し、開発者へ知らせ、利用者には「通信の失敗」と区別できるエラーで返す(2026-10-27)。
   // 以前は Firestore の拒否(HttpsError でない例外)がそのまま投げられ、記録は started のまま・画面は INTERNAL・メール無しだった。
+  // 失敗の記録の書き込み自体が落ちても、利用者へ返すエラー(容量超過のマーカーなど)を差し替えない(regression-reviewer L-2)。
+  const recordSaveAttemptFailure = async (status: 'too-large' | 'write-failed', errorMessage: string) => {
+    try {
+      await saveAttemptRef.set(buildSaveAttemptPayload({
+        ...saveAttemptBase,
+        status,
+        verified: false,
+        failedAt: new Date().toISOString(),
+        errorMessage,
+      }), { merge: true })
+    } catch (recordError) {
+      logger.error(`[saveClassroomSnapshot] Failed to record saveAttempt status=${status} classroom=${classroomId} saveId=${saveId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`)
+    }
+  }
   const rejectAsTooLarge = async (detail: string): Promise<never> => {
-    await saveAttemptRef.set(buildSaveAttemptPayload({
-      ...saveAttemptBase,
-      status: 'too-large',
-      verified: false,
-      failedAt: new Date().toISOString(),
-      errorMessage: detail,
-    }), { merge: true })
+    await recordSaveAttemptFailure('too-large', detail)
     await notifySaveFailureByMail({
       kind: 'snapshot-too-large',
       workspaceKey,
@@ -1996,18 +2004,12 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     await snapshotRef.set(snapshotDoc)
   } catch (error) {
     const errorText = error instanceof Error ? error.message : String(error)
-    // 見積もりの取りこぼしで Firestore が容量超過を返した場合も、容量超過として扱う。
-    if (isFirestoreDocumentTooLargeError(error)) {
+    // 分類は純関数(snapshotCapacity.ts classifySnapshotWriteFailure)。Firestore の文言か、引数エラー＋見積もり超過なら容量超過。
+    if (classifySnapshotWriteFailure(error, documentByteLength) === 'too-large') {
       await rejectAsTooLarge(`${capacityDetail}・Firestore: ${errorText}`)
     }
     // それ以外の書き込み失敗は理由を残して知らせ、元の例外をそのまま投げ直す(クライアントの再試行の判定を変えない)。
-    await saveAttemptRef.set(buildSaveAttemptPayload({
-      ...saveAttemptBase,
-      status: 'write-failed',
-      verified: false,
-      failedAt: new Date().toISOString(),
-      errorMessage: errorText,
-    }), { merge: true })
+    await recordSaveAttemptFailure('write-failed', errorText)
     await notifySaveFailureByMail({
       kind: 'write-failed',
       workspaceKey,
@@ -2055,20 +2057,6 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     verifiedAt: new Date().toISOString(),
   }), { merge: true })
 
-  // 保存は成功したが上限が近い(85% 以上)ときは開発者へ知らせる(教室ごとに 1 日 1 通・利用者の画面には出さない)。
-  if (isSnapshotNearCapacity(documentByteLength)) {
-    await notifySaveFailureByMail({
-      kind: 'capacity-warning',
-      workspaceKey,
-      classroomId,
-      saveId,
-      savedAt,
-      updatedBy: memberRef.id,
-      client: incomingClient,
-      detail: capacityDetail,
-    })
-  }
-
   // 操作ログは「保存が確定してから」書く。保存に失敗した操作は盤面にも残らないため、記録も残さない。
   await persistOperationEvents({
     snapshotRef,
@@ -2097,6 +2085,21 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     updatedBy: memberRef.id,
     client: incomingClient,
   })
+
+  // 保存は成功したが上限が近い(85% 以上)ときは開発者へ知らせる(教室ごとに 1 日 1 通・利用者の画面には出さない)。
+  // 操作ログ・台帳・痕跡の書き込みを待たせないよう最後に置く(regression-reviewer L-3)。
+  if (isSnapshotNearCapacity(documentByteLength)) {
+    await notifySaveFailureByMail({
+      kind: 'capacity-warning',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail: capacityDetail,
+    })
+  }
 
   return {
     classroomId,
@@ -3611,8 +3614,11 @@ export const lectureSubmissionApi = onRequest({
           version: typeof snapshotData?.version === 'number' ? snapshotData.version : undefined,
         }))
       })
-    } catch {
+    } catch (error) {
       // Non-fatal: submission is saved even if snapshot update fails
+      // (提出は lectureSubmissions に残り、管理者側は購読で反映する)。ただし黙って捨てない: 容量超過(1MiB)でも
+      // ここは失敗するので、原因をログに残す(2026-10-27 日大前校・regression-reviewer L-5)。
+      logger.error(`[submitLectureSubmission] Snapshot merge failed workspace=${data.workspaceKey} classroom=${data.classroomId}: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     res.json({ success: true, submittedAt: now })

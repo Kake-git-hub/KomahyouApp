@@ -9,6 +9,7 @@ import {
   formatSaveProgressClassroomLabel,
   formatSaveProgressStatus,
   isSnapshotTooLargeError,
+  isTransientFirebaseSyncError,
   SNAPSHOT_TOO_LARGE_ERROR_MARKER,
   SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE,
   SNAPSHOT_TOO_LARGE_STATUS_MESSAGE,
@@ -114,12 +115,17 @@ describe('容量超過で保存できないときの表示(2026-10-27 日大前�
     const app = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
     expect(app).toContain('const tooLarge = isSnapshotTooLargeError(error)')
     expect(app).toContain('window.alert(tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE)')
-    // 容量超過は通信の失敗として自動再試行しない(マーカー文に INTERNAL などを含めない)
-    expect(isTransientLike(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`)).toBe(false)
+    // 再試行の判定は utils の 1 か所(App.tsx に写しを持たない)
+    expect(app).toContain('isTransientFirebaseSyncError } from \'./utils/saveProgressMessages\'')
+    expect(app).not.toContain('function isTransientFirebaseSyncError(')
+  })
+
+  it('自動再試行: 通信・タイムアウト・INTERNAL は再試行、容量超過は文言に何が入っても再試行しない', () => {
+    expect(isTransientFirebaseSyncError(new Error('INTERNAL'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error('UNAVAILABLE'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error('deadline-exceeded: timed out'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`))).toBe(false)
+    expect(isTransientFirebaseSyncError(new Error(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:INTERNAL`))).toBe(false)
+    expect(isTransientFirebaseSyncError(new Error('STALE_SNAPSHOT:別の端末で更新'))).toBe(false)
   })
 })
-
-// App.tsx isTransientFirebaseSyncError と同じ判定(容量超過のエラー文が再試行に乗らないことの確認用)。
-function isTransientLike(message: string) {
-  return /INTERNAL|UNAVAILABLE|DEADLINE_EXCEEDED|timeout|timed out/i.test(message)
-}

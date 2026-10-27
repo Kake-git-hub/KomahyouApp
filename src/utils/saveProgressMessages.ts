@@ -63,3 +63,13 @@ export const SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE = [
   '教室のデータが上限に達したため保存できませんでした。開発者へ自動で連絡済みです。',
   'この画面は閉じず、再読み込みもしないでください（内容はダウンロード済みです）。',
 ].join('\n')
+
+/**
+ * クラウド保存の失敗が一時的(通信・タイムアウト・サーバー内部)で、自動で再試行してよいか(App.tsx の保存キューが使う)。
+ * 容量超過(SNAPSHOT_TOO_LARGE)は何度送っても通らないので一時的としない(regression-reviewer L-1 で App.tsx から移した・2026-10-27)。
+ */
+export function isTransientFirebaseSyncError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  if (message.includes(SNAPSHOT_TOO_LARGE_ERROR_MARKER)) return false
+  return /INTERNAL|UNAVAILABLE|DEADLINE_EXCEEDED|timeout|timed out/i.test(message)
+}

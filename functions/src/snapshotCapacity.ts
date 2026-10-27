@@ -88,3 +88,18 @@ export function isFirestoreDocumentTooLargeError(error: unknown): boolean {
  * SNAPSHOT_TOO_LARGE_ERROR_MARKER)と一致させること。版数衝突の STALE_SNAPSHOT と同じ作法。
  */
 export const SNAPSHOT_TOO_LARGE_ERROR_MARKER = 'SNAPSHOT_TOO_LARGE'
+
+/**
+ * 本体の書き込みが拒否されたときの分類(regression-reviewer M-1・2026-10-27)。
+ *  - too-large … Firestore の容量超過の文言、または「引数エラー(gRPC 3 / invalid-argument)かつ見積もりが上限超え」。
+ *    英文メッセージが変わっても、拒否された後に見積もりで裏づけられれば容量超過として扱う。
+ *    ★拒否された**後**にだけ使う(見積もりだけで書き込みを止めない設計は崩さない)。
+ *  - other … それ以外(通信・権限・一時的な障害など)。呼び出し側は元の例外をそのまま投げ直す。
+ */
+export function classifySnapshotWriteFailure(error: unknown, documentByteLength: number): 'too-large' | 'other' {
+  if (isFirestoreDocumentTooLargeError(error)) return 'too-large'
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  const isInvalidArgument = code === 3 || code === 'invalid-argument' || code === 'INVALID_ARGUMENT'
+  if (isInvalidArgument && isSnapshotOverCapacity(documentByteLength)) return 'too-large'
+  return 'other'
+}
