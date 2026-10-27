@@ -10,7 +10,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { applyStudentEditDraft, buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 
@@ -1634,4 +1634,57 @@ describe('INV-06 拡張: 保留（2 行）の解決操作で在庫が動く量�
 // 下段の振替は在庫の消化に数えられる（resolveMakeupScanWeeks）ので二重に数えられる。明示の抑止キーがあれば起きない。
 describe('INV-06 × テンプレ差分反映の保留: 振替元の抑止（既知の穴）', () => {
   it.todo('明示の抑止キーを持たない振替が保留の下段へ移っても、振替元の通常授業が湧かない（再マージが下段の振替も抑止の材料に数える）')
+})
+
+// ============================================================================
+// INV-06 × 生徒メニュー「編集」で区分を振替へ変えたコマ（2026-10-27 オーナー確定・案1）
+//
+// 日大前校 室長報告「明日の休みを休みにしても未消化に入らない」の真因: 6/8・6/10 に科目を入れ替えるため「編集」で
+// 区分を振替へ変えたコマが**振替元の無い振替**になり、未消化を 1 コマ使った扱い(consumeOriginDates の対応の取れない使用数)で
+// 後の休みが積んだ 1 件を黙って相殺していた。編集で振替にしたコマは手動追加の振替と同じ扱い(manualAdded)にして、
+// 未消化を消費しない。休みにすれば手動追加の振替と同じく未消化へ戻る(§B-3)。既存データは書き換えない(今後の編集だけ)。
+// 兄弟: 既に振替のコマの編集(在庫由来は消化のまま)／振替 → 通常(印は残す)／通常 → 増コマ(印を付けない)。
+// ============================================================================
+describe('INV-06 マトリクス: 編集で区分を振替へ変えたコマは未消化を消費しない', () => {
+  const editToMakeup = { subject: '数' as const, lessonType: 'makeup' as const, teacherType: 'normal' as const, noteSuffix: '' }
+  // 6/8 の形: 英語の通常授業を同じ日の別の机へ動かし、「編集」で数学・振替へ変えた
+  const swappedRegular = boardStudent({ subject: '英', lessonType: 'regular', sameDayMoveSourceDate: BOARD_DATE })
+  const pendingOrigin = { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }
+
+  it('通常 → 振替 の編集で手動追加の印が付く（科目・区分・講師区分は下書きどおり）', () => {
+    const edited = applyStudentEditDraft(swappedRegular, editToMakeup)
+    expect(edited).toMatchObject({ subject: '数', lessonType: 'makeup', teacherType: 'normal', manualAdded: true, sameDayMoveSourceDate: BOARD_DATE })
+    expect(edited.makeupSourceDate).toBeUndefined()
+  })
+
+  it('回帰防止: 編集で振替にしたコマは、別の休みで積んだ未消化 1 件を相殺しない（残1のまま）', () => {
+    const edited = applyStudentEditDraft(swappedRegular, editToMakeup)
+    expect(stockBalance({ desk: deskWithStudent(edited), manualAdjustments: pendingOrigin })).toBe(1)
+    // 印が無い(修正前の)形は振替元の無い振替＝未消化を 1 コマ使った扱いで残0になっていた
+    expect(stockBalance({ desk: deskWithStudent({ ...edited, manualAdded: undefined }), manualAdjustments: pendingOrigin })).toBe(0)
+  })
+
+  it('編集で振替にしたコマを休み → 手動追加の振替と同じく未消化へ戻る（既にあった 1 件と合わせて残2）', () => {
+    const edited = applyStudentEditDraft(swappedRegular, editToMakeup)
+    // 休みは振替元の無い振替に当日(同日移動なら元コマ日)の手動 origin を積む(markStudentAbsentAt)
+    const balance = stockBalance({
+      desk: deskWithStatus(boardStatus({ ...edited, studentId: edited.id, status: 'absent' })),
+      manualAdjustments: { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }, { dateKey: BOARD_DATE }] },
+    })
+    expect(balance).toBe(2)
+  })
+
+  it('兄弟: 既に振替のコマ（在庫由来）の科目などを編集しても印を付けない＝消化のまま（誤増しない）', () => {
+    const stockMakeup = boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })
+    const edited = applyStudentEditDraft(stockMakeup, { ...editToMakeup, teacherType: 'substitute' })
+    expect(edited.manualAdded).toBeUndefined()
+    expect(stockBalance({ desk: deskWithStudent(edited), manualAdjustments: pendingOrigin })).toBe(0)
+  })
+
+  it('兄弟: 振替 → 通常 は印を変えない／通常 → 増コマ は印を付けない', () => {
+    const editedMakeup = applyStudentEditDraft(swappedRegular, editToMakeup)
+    expect(applyStudentEditDraft(editedMakeup, { ...editToMakeup, lessonType: 'regular' }).manualAdded).toBe(true)
+    expect(applyStudentEditDraft(boardStudent(), { ...editToMakeup, lessonType: 'extra' }).manualAdded).toBeUndefined()
+    expect(applyStudentEditDraft(boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true }), editToMakeup).manualAdded).toBe(true)
+  })
 })

@@ -1527,6 +1527,30 @@ export function shouldReturnLectureStockOnAbsence(entry: { lessonType?: string |
   return entry.lessonType === 'special' && Boolean(entry.specialSessionId)
 }
 
+// 生徒メニュー「編集」の確定で、置いてある生徒を書き換える(純関数・handleConfirmEdit の本体)。
+// INV-06（2026-10-27 オーナー確定・日大前校 室長報告「休みにしても未消化に入らない」）:
+//   編集で区分を「振替」へ変えたコマは**手動追加の振替と同じ扱い**(manualAdded)にする。編集は振替元を付けないので、
+//   印が無いと「振替元の無い振替＝未消化から 1 コマ使った」と数えられ(consumeOriginDates の対応の取れない使用数)、
+//   後で休んで未消化へ入った 1 件を黙って相殺していた(実例: 6/8・6/10 の科目の入れ替えを編集で振替にした生徒)。
+//   未消化を使う振替は未消化一覧から置く経路がある。★振替以外 → 振替 のときだけ付ける。既に振替のコマ(在庫由来・移動由来)の
+//   科目などを直すときは触らない(付けると在庫由来の振替が消化を外れて未消化が再出現する＝誤増)。外す向き(振替 → 通常)も印は残す。
+export function applyStudentEditDraft(
+  student: StudentEntry,
+  draft: { subject: SubjectLabel; lessonType: LessonType; teacherType: TeacherType; noteSuffix: string },
+): StudentEntry {
+  const becomesMakeup = draft.lessonType === 'makeup' && student.lessonType !== 'makeup'
+  return {
+    ...student,
+    subject: draft.subject,
+    lessonType: draft.lessonType,
+    teacherType: draft.teacherType,
+    // 編集からも振替の授業時間を変更できる(追加でだけ選べて後から直せない非対称を作らない)。
+    // 講習は呼び出し側(handleConfirmEdit)で「コマ表から編集できません」と弾いているため、ここには来ない。
+    noteSuffix: resolveLessonMinutesNoteSuffix(draft.lessonType, draft.noteSuffix),
+    ...(becomesMakeup ? { manualAdded: true } : {}),
+  }
+}
+
 export function reconsumeSessionLectureStock(params: {
   manualLectureStockCounts: LectureStockCountMap
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
@@ -13649,15 +13673,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = {
-      ...targetStudent,
-      subject: editStudentDraft.subject,
-      lessonType: editStudentDraft.lessonType,
-      teacherType: editStudentDraft.teacherType,
-      // 編集からも振替の授業時間を変更できる(追加でだけ選べて後から直せない非対称を作らない)。
-      // 講習はこの関数の冒頭で「コマ表から編集できません」と弾いているため、ここには到達しない。
-      noteSuffix: resolveLessonMinutesNoteSuffix(editStudentDraft.lessonType, editStudentDraft.noteSuffix),
-    }
+    // INV-06: 区分を振替へ変えたら手動追加の振替扱い(applyStudentEditDraft の注記)。
+    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = applyStudentEditDraft(targetStudent, editStudentDraft)
 
     commitWeeks(nextWeeks, weekIndex, studentMenu.cellId, studentMenu.deskIndex)
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の情報を更新しました。`)
