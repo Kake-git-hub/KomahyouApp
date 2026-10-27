@@ -8,6 +8,11 @@ import {
   formatCloudSavingFallbackStatus,
   formatSaveProgressClassroomLabel,
   formatSaveProgressStatus,
+  isSnapshotTooLargeError,
+  isTransientFirebaseSyncError,
+  SNAPSHOT_TOO_LARGE_ERROR_MARKER,
+  SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE,
+  SNAPSHOT_TOO_LARGE_STATUS_MESSAGE,
 } from './saveProgressMessages'
 
 // 2026-10 アプリ内文言見直し(オーナー承認・文言一覧 #109〜#118 / #278〜#280)。
@@ -86,5 +91,41 @@ describe('配線(App.tsx / BoardToolbar.tsx が共通文言を使う)', () => {
     expect(toolbar).toContain("'クラウドと同じ内容です。'")
     expect(toolbar).not.toContain('データベース')
     expect(toolbar).not.toContain('Firebase 同期')
+  })
+})
+
+describe('容量超過で保存できないときの表示(2026-10-27 日大前校)', () => {
+  it('サーバーのマーカー付きエラーだけを容量超過と判定する(INTERNAL などの通信失敗は含めない)', () => {
+    expect(isSnapshotTooLargeError(new Error(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`))).toBe(true)
+    expect(isSnapshotTooLargeError(new Error('INTERNAL'))).toBe(false)
+    expect(isSnapshotTooLargeError(null)).toBe(false)
+  })
+
+  it('「接続を確認してもう一度保存」を言わず、閉じない・再読み込みしないを伝える。2 行・開発用語なし', () => {
+    expect(SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE.split('\n')).toHaveLength(2)
+    expect(SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE).not.toContain('接続を確認')
+    expect(SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE).toContain('閉じず')
+    expect(SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE).toContain('再読み込みもしないで')
+    expect(SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE).not.toMatch(DEVELOPER_TERMS)
+    expect(SNAPSHOT_TOO_LARGE_STATUS_MESSAGE).not.toMatch(DEVELOPER_TERMS)
+    expect(SNAPSHOT_TOO_LARGE_STATUS_MESSAGE).toContain('開発者へ自動で連絡済み')
+  })
+
+  it('App.tsx の保存失敗の経路が容量超過を見分けて専用の案内を出す(ソース走査)', () => {
+    const app = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
+    expect(app).toContain('const tooLarge = isSnapshotTooLargeError(error)')
+    expect(app).toContain('window.alert(tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE)')
+    // 再試行の判定は utils の 1 か所(App.tsx に写しを持たない)
+    expect(app).toContain('isTransientFirebaseSyncError } from \'./utils/saveProgressMessages\'')
+    expect(app).not.toContain('function isTransientFirebaseSyncError(')
+  })
+
+  it('自動再試行: 通信・タイムアウト・INTERNAL は再試行、容量超過は文言に何が入っても再試行しない', () => {
+    expect(isTransientFirebaseSyncError(new Error('INTERNAL'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error('UNAVAILABLE'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error('deadline-exceeded: timed out'))).toBe(true)
+    expect(isTransientFirebaseSyncError(new Error(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`))).toBe(false)
+    expect(isTransientFirebaseSyncError(new Error(`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:INTERNAL`))).toBe(false)
+    expect(isTransientFirebaseSyncError(new Error('STALE_SNAPSHOT:別の端末で更新'))).toBe(false)
   })
 })

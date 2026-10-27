@@ -22,13 +22,18 @@
 - `Deploy to Firebase Hosting` が毎デプロイ後に `tools/verify-firebase-hosting.mjs` で配信実体を検証。
 
 ### 3. 保存失敗の記録と監視メール（記録＝既存／メール＝2026-10-22 オーナー採用「即時対応のための案 6」）
-- 保存の各試行は `classroomSnapshots/{id}/saveAttempts/{saveId}` に status（started/verified/verification-failed）が残る。
+- 保存の各試行は `classroomSnapshots/{id}/saveAttempts/{saveId}` に status（started/verified/verification-failed/too-large/write-failed）が残る。
+  2026-10-27 から文書サイズの見積もり `documentByteLength` と 1 文書上限（1MiB）に対する使用率 `capacityRatio` も残る（推移で上限到達を予測する）。
+  **started のまま止まった記録が続くのは、本体の書き込みで落ちた印**（2026-10-27 以前の版。日大前校の容量超過はこの形だった）。
 - 保存不具合の調査時はここを**読み取り**で確認する（書き込み調査は staging で）。
-- **即時メール**: Cloud Function `saveClassroomSnapshot` が次の 3 つの失敗で開発者へメールを送る（利用者報告と同じ `REPORT_MAIL_*` 設定・追加設定なし）。
+- **即時メール**: Cloud Function `saveClassroomSnapshot` が次の失敗で開発者へメールを送る（利用者報告と同じ `REPORT_MAIL_*` 設定・追加設定なし）。
   件名 `【保存失敗】[コマ表アプリ 監視] <会社> / <教室> / <種類>`。本文に保存 ID・版数・端末情報・確かめること・置き場所（saveAttempts／operationTraces／版履歴）。
   - `stale-version` … 楽観ロックの版数衝突（別の端末が先に保存＝多端末同時編集の疑い）
   - `readback-failed` … 保存後の読み戻し検証に失敗
   - `data-loss-guard` … 空の管理データでの上書きを破壊防止ガードが止めた
+  - `snapshot-too-large` … 教室データが 1 文書の上限を超えて Firestore に拒否された（**直すまでその教室は保存が一切通らない**・2026-10-27）
+  - `write-failed` … 本体の書き込みで想定外の例外（容量超過以外）
+  - `capacity-warning` … 保存は成功したが使用率 85% 以上（件名は【容量注意】・**教室ごとに 1 日 1 通**・間引きは `saveFailureAlerts/{classroomId}__capacity`）
 - **教室ごとに 1 時間に 1 通**（`workspaces/{ws}/saveFailureAlerts/{classroomId}.lastSentAt`）。送らなかった分も `occurrenceCount`／`lastOccurredAt` に数える。
   メールの失敗は保存の応答に影響しない（関数ログ `[SaveFailureAlert]`）。純粋ロジックは `functions/src/saveFailureAlert.ts`。
 

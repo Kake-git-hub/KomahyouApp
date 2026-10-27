@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS,
   SAVE_FAILURE_ALERT_COLLECTION,
   SAVE_FAILURE_ALERT_KINDS,
   SAVE_FAILURE_ALERT_MIN_INTERVAL_MS,
@@ -11,6 +12,7 @@ import {
   withTimeout,
   buildSaveFailureAlertMail,
   isSaveFailureAlertKind,
+  resolveSaveFailureAlertThrottle,
   shouldSendSaveFailureAlert,
 } from './saveFailureAlert'
 
@@ -78,8 +80,31 @@ describe('buildSaveFailureAlertMail', () => {
     expect(mail.text).toContain('saveAttempts の errorMessage')
   })
 
+  it('容量超過: 「保存が一切通らない・画面を閉じない」を確かめることに出し、件名は【保存失敗】', () => {
+    const mail = buildSaveFailureAlertMail({ ...base, kind: 'snapshot-too-large', detail: '文書サイズ(見積もり)=1048601 / 上限=1048576' })
+    expect(mail.subject.startsWith('【保存失敗】')).toBe(true)
+    expect(mail.subject).toContain('教室データが 1 文書の上限(1MiB)を超えて保存できない'.split('(')[0])
+    expect(mail.text).toContain('保存が一切通らない')
+    expect(mail.text).toContain('文書サイズ(見積もり)=1048601')
+  })
+
+  it('上限が近い通知は件名【容量注意】・保存は成功している旨・1 日 1 通(失敗の文言を出さない)', () => {
+    const mail = buildSaveFailureAlertMail({ ...base, kind: 'capacity-warning' })
+    expect(mail.subject.startsWith('【容量注意】')).toBe(true)
+    expect(mail.text).toContain('保存は成功しています')
+    expect(mail.text).toContain('1 日 1 通')
+    expect(mail.text).not.toContain('保存に失敗したため')
+  })
+
+  it('間引き: 失敗は教室ごとの文書で 1 時間、上限が近い通知は別の文書で 1 日(本物の失敗の通知を黙らせない)', () => {
+    expect(resolveSaveFailureAlertThrottle('snapshot-too-large', 'c1')).toEqual({ docId: 'c1', minIntervalMs: SAVE_FAILURE_ALERT_MIN_INTERVAL_MS })
+    expect(resolveSaveFailureAlertThrottle('write-failed', 'c1')).toEqual({ docId: 'c1', minIntervalMs: SAVE_FAILURE_ALERT_MIN_INTERVAL_MS })
+    expect(resolveSaveFailureAlertThrottle('capacity-warning', 'c1')).toEqual({ docId: 'c1__capacity', minIntervalMs: SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS })
+    expect(SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS).toBe(24 * 60 * 60 * 1000)
+  })
+
   it('種類の一覧と判定', () => {
-    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard'])
+    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning'])
     expect(isSaveFailureAlertKind('stale-version')).toBe(true)
     expect(isSaveFailureAlertKind('other')).toBe(false)
   })
@@ -89,11 +114,14 @@ describe('index.ts の配線(ソース走査)', () => {
   const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
   const save = indexTs.slice(indexTs.indexOf('async function saveClassroomSnapshotFromCallable'), indexTs.indexOf('export const saveClassroomSnapshot = onCall('))
 
-  it('保存の 3 つの失敗点(破壊防止ガード・版数衝突・読み戻し失敗)でメールを送り、どれも throw の前に await する', () => {
+  it('保存の失敗点(破壊防止ガード・版数衝突・読み戻し失敗・容量超過・書き込み失敗)と上限が近いときにメールを送り、どれも await する', () => {
     expect(save).toContain("kind: 'data-loss-guard'")
     expect(save).toContain("kind: 'stale-version'")
     expect(save).toContain("kind: 'readback-failed'")
-    expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(3)
+    expect(save).toContain("kind: 'snapshot-too-large'")
+    expect(save).toContain("kind: 'write-failed'")
+    expect(save).toContain("kind: 'capacity-warning'")
+    expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(6)
   })
 
   it('メールの失敗は保存の応答に影響させない(関数内で握る・throw しない)。待ち時間は 5 秒で打ち切り、SMTP にも上限を付ける(M-1)', () => {
@@ -106,7 +134,9 @@ describe('index.ts の配線(ソース走査)', () => {
     expect(save).toContain("if (error instanceof HttpsError && error.code === 'failed-precondition') {")
     expect(save).toMatch(/kind: 'data-loss-guard',[\s\S]*?\}\)\s*\}\s*throw error/u)
     // 間引きの判定と発生回数の記録は教室ごとの文書(saveFailureAlerts/{classroomId})。
-    expect(body).toContain('.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(params.classroomId)')
+    expect(body).toContain('resolveSaveFailureAlertThrottle(params.kind, params.classroomId)')
+    expect(body).toContain('.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(throttle.docId)')
+    expect(body).toContain('minIntervalMs: throttle.minIntervalMs')
     expect(body).toContain('shouldSendSaveFailureAlert(')
     expect(body).toContain('FieldValue.increment(1)')
   })

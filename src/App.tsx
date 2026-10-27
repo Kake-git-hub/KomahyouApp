@@ -62,7 +62,7 @@ import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsence
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
-import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus } from './utils/saveProgressMessages'
+import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE, SNAPSHOT_TOO_LARGE_STATUS_MESSAGE, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus, isSnapshotTooLargeError, isTransientFirebaseSyncError } from './utils/saveProgressMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { collectTemplatePendingCellIds, templatePendingDesksForSignature } from './components/schedule-board/templatePendingDesks'
@@ -111,11 +111,6 @@ const STALE_SNAPSHOT_GUIDANCE_MESSAGE = [
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
-}
-
-function isTransientFirebaseSyncError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /INTERNAL|UNAVAILABLE|DEADLINE_EXCEEDED|timeout|timed out/i.test(message)
 }
 
 function useLatestState<T>(initialValue: T | (() => T)) {
@@ -2529,14 +2524,16 @@ function AuthenticatedApp() {
         const downloadedBackup = manualFirebaseSaveStabilityEnabled && nextItem.downloadBackupOnFailure
           ? downloadFirebaseFailureBackup(nextItem.snapshot)
           : false
-        if (isRemoteSyncVisibleRef.current) setPersistenceMessage(formatCloudSaveNotFinishedMessage(message))
-        if (isRemoteSyncVisibleRef.current && downloadedBackup) {
+        // 容量超過(2026-10-27 日大前校)は通信の失敗と区別する。「接続を確認してもう一度保存」は何度押しても通らないので出さない。
+        const tooLarge = isSnapshotTooLargeError(error)
+        if (isRemoteSyncVisibleRef.current) setPersistenceMessage(tooLarge ? SNAPSHOT_TOO_LARGE_STATUS_MESSAGE : formatCloudSaveNotFinishedMessage(message))
+        if (isRemoteSyncVisibleRef.current && downloadedBackup && !tooLarge) {
           setPersistenceMessage(formatCloudSaveNotFinishedMessage(message, true))
         }
         // バックアップを新規ダウンロードした失敗時のみ、再ログイン→復元の作業指示を明示する
         // (downloadFirebaseFailureBackup はスナップショット単位で重複DLを抑止するため、案内も重複しない)。
         if (downloadedBackup) {
-          window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
+          window.alert(tooLarge ? SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE : SAVE_FAILURE_GUIDANCE_MESSAGE)
         }
         nextItem.onFailure?.(error)
       } finally {

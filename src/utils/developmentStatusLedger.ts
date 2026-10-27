@@ -58,6 +58,18 @@ export type DevelopmentStatusEntry = {
 }
 
 export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
+
+  // ── 最優先(本番の保存が止まった事故の恒久対策) ─────────────────────────────
+  {
+    id: 'classroom-snapshot-capacity',
+    title: '教室データの 1 文書上限(1MiB)超過の恒久対策(週単位の分割保存＋差分保存)',
+    stage: 'in-progress',
+    summary: '2026-10-26 17:58〜21:15 と 10/27 14:46〜 に日大前校の保存が全部失敗した(教室データ 8.3MB を gzip+base64 で 1 文書に入れており、上限まで 27 バイト・盤面の週が 7.35MB で過去週は増え続ける)。v1.5.646 のつなぎ: 圧縮を level 9 に(余裕約 56KB＝2〜4 週間)、容量超過は専用の案内(「接続を確認して」を出さない)・開発者へメール・saveAttempts に too-large / write-failed と使用率(capacityRatio)を残す、85% 以上で 1 日 1 通の容量注意メール。',
+    checklistItemIds: ['sc-1'],
+    nextAction: 'Claude: 週単位の分割保存(目次文書＋週ごとの文書・変わった週だけ送る・1 トランザクションで版数照合・組み立て関数 1 つで今と同じ形に戻す・新旧両方読める版を先に出す)の仕様を docs/spec-save-restore.md に起こし、実装して staging で確認。冬期講習(12 月)で週が重くなる前に本番へ。オーナー: 過去週を何か月前まで編集できる盤面に残すか(古い週を閲覧専用の保管へ回すか)を決める。',
+    references: ['functions/src/snapshotCapacity.ts', 'functions/src/saveFailureAlert.ts', 'functions/src/index.ts (saveClassroomSnapshotFromCallable / createStoredSnapshotDoc)', 'src/utils/saveProgressMessages.ts'],
+    updatedOn: '2026-10-27',
+  },
   // ── 開発用教室だけで動いている先行機能 ──────────────────────────────────────
   {
     id: 'template-duplicate-save-guard',
