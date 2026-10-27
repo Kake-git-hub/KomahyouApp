@@ -103,7 +103,9 @@ describe('テンプレの流れは 1 行（オーナー指示 2026-10-24「モ�
     expect(BOARD).toContain("'テンプレ編集中（前回のテンプレを読み込みました）。'")
     expect(BOARD).toContain("setStatusMessage('保留の席です。残す方を選んでください。')")
     expect(BOARD).toContain('return `テンプレ授業を採用します。${dropped ? `下段の ${dropped} は外します。` : \'\'}よろしいですか？`')
-    expect(BOARD).toContain('return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : \'\'}よろしいですか？`')
+    // tp-64（2026-10-27）: 講師の扱い（戻す／机の講師のまま）を 1 文だけ足す（講師ごと保留の机だけ）。
+    expect(BOARD).toContain('return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : \'\'}${teacherNote}よろしいですか？`')
+    expect(read('./templatePendingResolution.ts')).toContain("return `講師は ${kept.deskTeacher || 'なし'} のまま（${kept.lowerTeacher} は机 ${kept.elsewhereDeskNumber} に居るため）`")
     expect(BOARD).toContain('以降をテンプレだけで作り直します。手入力・メモ・振替・講習は消えます。')
   })
   it('旧来の長い文が戻っていない', () => {

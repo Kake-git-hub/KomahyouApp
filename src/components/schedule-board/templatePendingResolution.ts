@@ -297,6 +297,13 @@ export function isTemplatePendingSeatLinked(desk: Pick<DeskCell, 'lesson'>, lowe
 // Q28：1 行に戻す（盤面への適用）
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 「手入力データを採用」で手置き講師を机へ戻さなかった理由の文（tp-64・2026-10-27）。確認文と結果の文が同じ関数を使う（Q32-1：表示と結果を食い違わせない）。
+ */
+export function describeAdoptExistingKeptDeskTeacher(kept: { lowerTeacher: string; elsewhereDeskNumber: number; deskTeacher: string }) {
+  return `講師は ${kept.deskTeacher || 'なし'} のまま（${kept.lowerTeacher} は机 ${kept.elsewhereDeskNumber} に居るため）`
+}
+
 export function describeTemplatePendingCollapseFailure(reason: Extract<TemplatePendingCollapseResult, { ok: false }>['reason']) {
   switch (reason) {
     case 'status-overflow':
@@ -307,7 +314,8 @@ export function describeTemplatePendingCollapseFailure(reason: Extract<TemplateP
     case 'both-rows-live':
       return '元の席が空いていません。上段の生徒を動かすか「テンプレを採用」を選んでください。'
     case 'teacher-duplicate':
-      return '手で置いた講師が同じコマの別の机に居ます。先にそちらを片づけてください。'
+      // tp-64（2026-10-27）: 「手入力データを採用」はこの形でも講師を戻さずに机の講師のまま採用できるようになったので、そちらを案内する。
+      return '手で置いた講師が同じコマの別の机に居ます。「手入力データを採用」なら机の講師のまま戻せます。'
   }
 }
 
