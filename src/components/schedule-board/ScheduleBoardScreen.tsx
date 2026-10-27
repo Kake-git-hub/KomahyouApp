@@ -63,7 +63,7 @@ import {
 } from './templatePendingResolution'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
-import { extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
+import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
@@ -6193,8 +6193,10 @@ export type WholeDayTransferSummary = {
    * 決定記録 48（2026-10-25・templateDiffApply の教室だけ）: 振替先に室長が置いていた体験・増コマ・手動追加を消さずに残した件数と名前。
    * kept＝元の机の空き席に残す／shifted＝同じコマの別の机へずらす／pending＝同じ机番号の下段（保留・緑）。
    * フラグ OFF（保留マップを渡さない）のときは undefined＝従来どおり消して −1（上の cleared* に数える）。
+   * 2026-10-27（tp-62 のメモ欄「メモも消えないようにして」）: 振替先の席のメモも同じ順で残し、件数（kept/shifted/pending）と名前（「メモ:内容」）に含める。
+   * memoCount / pendingMemoCount はメモを 1 件でも残したときだけ持つ（結果の帯に「振替先のメモ n件を残す」を添える・操作痕跡の displacedMemoCount）。
    */
-  displaced?: { keptCount: number; shiftedCount: number; pendingCount: number; names: string[] }
+  displaced?: { keptCount: number; shiftedCount: number; pendingCount: number; names: string[]; memoCount?: number; pendingMemoCount?: number }
 }
 
 export type ComputeWholeDayTransferResult =
@@ -7106,11 +7108,16 @@ export function computeWholeDayTransfer(params: {
 
   // 決定記録 48: 振替先の体験・増コマ・手動追加は処分の前に机から取り出しておく（Phase C の後で置き直す）。
   // 取り出した分は disposeDayDeskEntries を通らない＝件数にも −1 にも抑制にも入らない（消していないので当然）。
+  // 2026-10-27（tp-62 のメモ欄・オーナー指示「メモも消えないようにして」）: 振替先の席のメモも同じく取り出して置き直す
+  // （取り出した分は clearMemoSlots の「消去: メモ」に数えない）。フラグ OFF は従来どおり消す。
   const displacedByCellId = new Map<string, WholeDayTransferDisplacedStudent[]>()
+  const displacedMemosByCellId = new Map<string, WholeDayTransferDisplacedMemo[]>()
   if (keepDisplacedLessons) {
     for (const cell of targetCells) {
       const displaced = extractWholeDayTransferDisplacedStudents(cell)
       if (displaced.length > 0) displacedByCellId.set(cell.id, displaced)
+      const memos = extractWholeDayTransferDisplacedMemos(cell)
+      if (memos.length > 0) displacedMemosByCellId.set(cell.id, memos)
     }
   }
 
@@ -7260,6 +7267,7 @@ export function computeWholeDayTransfer(params: {
   if (keepDisplacedLessons && nextTemplatePendingDesks) {
     const createdAt = params.createdAt ?? new Date().toISOString()
     const outcomes: ReturnType<typeof placeWholeDayTransferDisplacedStudents>['outcomes'] = []
+    const memoOutcomes: WholeDayTransferDisplacedMemoOutcome[] = []
     for (const cell of targetCells) {
       const displaced = displacedByCellId.get(cell.id)
       if (!displaced || displaced.length === 0) continue
@@ -7290,7 +7298,17 @@ export function computeWholeDayTransfer(params: {
         summary.clearedManualCount += disposal.counts.clearedManualCount
       }
     }
-    summary.displaced = summarizeWholeDayTransferDisplaced(outcomes)
+    // メモは授業の置き直しの後（授業が先に空き席を取る）。同じ順（元の席 → 別の机 → 同じ机番号の下段）。
+    for (const cell of targetCells) {
+      const memos = displacedMemosByCellId.get(cell.id)
+      if (!memos || memos.length === 0) continue
+      const placed = placeWholeDayTransferDisplacedMemos({ cell, memos, pendingDesks: nextTemplatePendingDesks, sourceDateKey, targetDateKey, createdAt })
+      nextTemplatePendingDesks = placed.nextPendingDesks
+      memoOutcomes.push(...placed.outcomes)
+      // 下段にも入らなかったメモ（理論上は起きない）は黙って消さず、消去の件数に出す。
+      summary.clearedMemoCount += placed.overflow.length
+    }
+    summary.displaced = summarizeWholeDayTransferDisplaced(outcomes, memoOutcomes)
   }
 
   return {
@@ -11722,7 +11740,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       movedStudentCount: result.summary.movedStudentCount,
       movedTeacherCount: result.summary.movedTeacherCount,
       returnedCount,
-      ...(result.summary.displaced ? { displacedKeptCount: result.summary.displaced.keptCount, displacedShiftedCount: result.summary.displaced.shiftedCount, displacedPendingCount: pendingCount } : {}),
+      ...(result.summary.displaced ? { displacedKeptCount: result.summary.displaced.keptCount, displacedShiftedCount: result.summary.displaced.shiftedCount, displacedPendingCount: pendingCount, ...(result.summary.displaced.memoCount ? { displacedMemoCount: result.summary.displaced.memoCount } : {}) } : {}),
     })
     setStatusMessage(buildWholeDayTransferResultMessage({
       sourceDateKey,
@@ -11731,6 +11749,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       movedTeacherCount: result.summary.movedTeacherCount,
       returnedCount,
       pendingCount,
+      keptMemoCount: result.summary.displaced?.memoCount ?? 0,
     }))
   }
 

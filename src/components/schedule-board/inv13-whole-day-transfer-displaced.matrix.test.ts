@@ -353,3 +353,144 @@ describe('INV-13 マトリクス: 下段は盤面専用・不動点・Q28 で 1 
     expect(buildWholeDayTransferResultMessage({ sourceDateKey: SOURCE_DATE, targetDateKey: TARGET_DATE, movedStudentCount: 2, movedTeacherCount: 1, returnedCount: 0 })).not.toContain('保留')
   })
 })
+
+// ============================================================================
+// 列「メモ」（2026-10-27・オーナー指示「メモも消えないようにして」・確認リスト tp-62 のメモ欄）:
+// 振替先の席のメモ（desk.memoSlots）も体験・増コマ・手動追加と同じく消さず、元の席 → 同じコマの別の机 → 同じ机番号の下段（lower.memoSlots）に残す。
+// メモは授業ではないので在庫・希望回数は動かない（INV-06）。授業の置き直しが先（授業が先に空き席を取る）。フラグ OFF は従来どおり消す。
+// ============================================================================
+function withMemo(d: DeskCell, memos: [string | null, string | null]): DeskCell {
+  return { ...d, memoSlots: memos }
+}
+
+describe('INV-02 マトリクス 列「メモ」: 丸ごと振替で振替先の席のメモは消えない（tp-62 のメモ欄）', () => {
+  it('元の席が空いていればメモはその席に残る（kept）。「消去: メモ」に数えない', () => {
+    const { result, target, pending } = run(
+      [desk('s0', '田中講師', [entry(), null])],
+      [withMemo(desk('t0', '佐藤講師', null), [null, '持ち物確認'])],
+    )
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎'])
+    expect(target.desks[0].memoSlots).toEqual([null, '持ち物確認'])
+    expect(result.summary.clearedMemoCount).toBe(0)
+    expect(result.summary.displaced).toEqual({ keptCount: 1, shiftedCount: 0, pendingCount: 0, names: ['メモ:持ち物確認'], memoCount: 1, pendingMemoCount: 0 })
+    expect(pending).toEqual({})
+    const message = buildWholeDayTransferConfirmMessage(SOURCE_DATE, TARGET_DATE, result.summary)
+    expect(message).toContain('残す: 1件（メモ:持ち物確認）')
+    expect(message).not.toContain('メモ1件')
+    expect(message.split('\n')).toHaveLength(2)
+  })
+
+  it('元の机が移送で埋まれば、同じコマの別の机の空き席へずらす（講師が居る机を優先・shifted）', () => {
+    const { result, target, pending } = run(
+      [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })]), desk('s1', '', null), desk('s2', '佐藤講師', null)],
+      [withMemo(desk('t0', '', null), ['欠席連絡あり', null]), desk('t1', '', null), desk('t2', '', null)],
+    )
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎', 'makeup:鈴木 花子'])
+    expect(target.desks[0].memoSlots).toBeUndefined()
+    expect(target.desks[1].memoSlots).toBeUndefined()
+    expect(target.desks[2].memoSlots).toEqual(['欠席連絡あり', null])
+    expect(result.summary.displaced).toMatchObject({ keptCount: 0, shiftedCount: 1, pendingCount: 0, memoCount: 1 })
+    expect(result.summary.clearedMemoCount).toBe(0)
+    expect(pending).toEqual({})
+    expect(buildWholeDayTransferConfirmMessage(SOURCE_DATE, TARGET_DATE, result.summary)).toContain('残す: 1件（メモ:欠席連絡あり・別の机へ1件）')
+  })
+
+  it('空き席が無ければ同じ机番号の机の下段（lower.memoSlots・保留・緑）に残す（pending）。理由と対象日を持つ', () => {
+    const { result, target, pending } = run(
+      [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })])],
+      [withMemo(desk('t0', '佐藤講師', null), [null, '20分遅刻'])],
+    )
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎', 'makeup:鈴木 花子'])
+    expect(target.desks[0].memoSlots).toBeUndefined()
+    const key = buildTemplatePendingDeskKey(target.id, 't0')
+    expect(Object.keys(pending)).toEqual([key])
+    expect(pending[key].lower.memoSlots).toEqual([null, '20分遅刻'])
+    expect(pending[key].lower.lesson).toBeUndefined()
+    expect(pending[key].effectiveStartDate).toBe(TARGET_DATE)
+    expect(pending[key].origin?.kind).toBe('whole-day-transfer-displaced')
+    expect(result.summary.displaced).toEqual({ keptCount: 0, shiftedCount: 0, pendingCount: 1, names: ['メモ:20分遅刻'], memoCount: 1, pendingMemoCount: 1 })
+    expect(result.summary.clearedMemoCount).toBe(0)
+    expect(buildWholeDayTransferConfirmMessage(SOURCE_DATE, TARGET_DATE, result.summary)).toContain('残す: 1件（メモ:20分遅刻・保留(下段)に1件）')
+    // 結果の帯（1 行）: 残したメモの件数と、下段の件数（メモを含む）。
+    const banner = buildWholeDayTransferResultMessage({ sourceDateKey: SOURCE_DATE, targetDateKey: TARGET_DATE, movedStudentCount: 2, movedTeacherCount: 1, returnedCount: 0, pendingCount: result.summary.displaced!.pendingCount, keptMemoCount: result.summary.displaced!.memoCount })
+    expect(banner).toBe(`${SOURCE_DATE} → ${TARGET_DATE} へ丸ごと振替しました（生徒2・講師1・振替先のメモ 1件を残す・保留(下段)に 1件）。`)
+    expect(banner).not.toContain('\n')
+  })
+
+  it('授業が先に空き席を取り、メモは残りの席へ（体験とメモが同じ机の 2 席目を争う → 体験が席・メモは下段）', () => {
+    const { result, target, pending } = run(
+      [desk('s0', '田中講師', [entry(), null])],
+      [withMemo(desk('t0', '佐藤講師', [null, trial('a')]), ['連絡帳', null])],
+    )
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎', 'trial:体験生'])
+    const key = buildTemplatePendingDeskKey(target.id, 't0')
+    expect(pending[key].lower.memoSlots).toEqual(['連絡帳', null])
+    expect(result.summary.displaced).toEqual({ keptCount: 1, shiftedCount: 0, pendingCount: 1, names: ['体験:体験生', 'メモ:連絡帳'], memoCount: 1, pendingMemoCount: 1 })
+  })
+
+  it('振替元から移ってきたメモの席は埋まっている扱い: 振替先のメモ・授業はその席に重ねない（重ねるとメモか生徒が隠れる）', () => {
+    const { result, target, pending } = run(
+      [withMemo(desk('s0', '田中講師', [entry(), null]), [null, '元の日のメモ'])],
+      [withMemo(desk('t0', '佐藤講師', [null, trial('a')]), [null, '先の日のメモ']), desk('t1', '', null)],
+    )
+    // 振替元のメモは従来どおり机ごと移る（movedMemoCount）。振替先の体験とメモは同じ席に重ならず別の机へずれる。
+    expect(target.desks[0].memoSlots).toEqual([null, '元の日のメモ'])
+    expect(result.summary.movedMemoCount).toBe(1)
+    expect(liveNames(target.desks[0])).toEqual(['makeup:大槻 太郎'])
+    expect(liveNames(target.desks[1])).toEqual(['trial:体験生'])
+    expect(target.desks[1].memoSlots).toEqual(['先の日のメモ', null])
+    expect(target.desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-a' })
+    expect(pending).toEqual({})
+    expect(result.summary.displaced).toMatchObject({ keptCount: 0, shiftedCount: 2, pendingCount: 0 })
+  })
+
+  it('空白だけのメモは残す対象にしない（従来どおり処分）', () => {
+    const { result, target } = run(
+      [desk('s0', '田中講師', [entry(), null])],
+      [withMemo(desk('t0', '佐藤講師', null), [null, '  '])],
+    )
+    expect(target.desks[0].memoSlots).toBeUndefined()
+    expect(result.summary.displaced).toEqual({ keptCount: 0, shiftedCount: 0, pendingCount: 0, names: [] })
+  })
+
+  it('フラグ OFF（保留マップを渡さない）: 従来どおり振替先のメモは消え、「消去: メモ」に数える（本番 3 教室の挙動は不変）', () => {
+    const { result, target } = run(
+      [desk('s0', '田中講師', [entry(), null])],
+      [withMemo(desk('t0', '佐藤講師', null), [null, '持ち物確認'])],
+      { pending: null },
+    )
+    expect(target.desks[0].memoSlots).toBeUndefined()
+    expect(result.summary.clearedMemoCount).toBe(1)
+    expect(result.summary.displaced).toBeUndefined()
+    expect(buildWholeDayTransferConfirmMessage(SOURCE_DATE, TARGET_DATE, result.summary)).toContain('メモ1件')
+  })
+
+  it('INV-06: メモを残しても在庫・台帳・希望回数は前後で同じ', () => {
+    const { weeks, result, pending } = run(
+      [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })])],
+      [withMemo(desk('t0', '佐藤講師', null), ['a', 'b'])],
+    )
+    expect(result.nextManualMakeupAdjustments).toEqual({})
+    expect(result.nextManualLectureStockCounts).toEqual({})
+    expect(result.nextScheduleCountAdjustments).toEqual([])
+    for (const key of ['student-1__数', 'student-2__英']) {
+      expect(balanceOf(weeks, null, {}, key), key).toBe(balanceOf(result.nextWeeks, result, pending, key))
+    }
+    expect(Object.values(pending)[0].lower.memoSlots).toEqual(['a', 'b'])
+  })
+
+  it('INV-13: 上段の席が空くと Q28 で下段のメモが 1 行に戻る。保存の往復でメモが残る', () => {
+    const { result, pending, target } = run(
+      [desk('s0', '田中講師', [entry(), entry({ id: 'entry-2', name: '鈴木 花子', managedStudentId: 'student-2', subject: '英' })])],
+      [withMemo(desk('t0', '佐藤講師', null), [null, '20分遅刻'])],
+    )
+    expect(normalizeTemplatePendingDeskMap(JSON.parse(JSON.stringify(pending)))).toEqual(pending)
+    const oneSeat = result.nextWeeks.map((week) => week.map((c) => (c.id === target.id ? { ...c, desks: c.desks.map((d) => ({ ...d, lesson: d.lesson ? { ...d.lesson, studentSlots: [d.lesson.studentSlots[0], null] as [StudentEntry | null, StudentEntry | null] } : undefined })) } : c)))
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: result.nextWeeks, previousTemplatePendingDesks: pending, weeks: oneSeat, templatePendingDesks: pending })
+    expect(settled.collapsedKeys).toEqual(Object.keys(pending))
+    expect(settled.nextTemplatePendingDesks).toEqual({})
+    const settledDesk = settled.nextWeeks.flat().find((c) => c.dateKey === TARGET_DATE)!.desks[0]
+    expect(settledDesk.memoSlots).toEqual([null, '20分遅刻'])
+    expect(liveNames(settledDesk)).toEqual(['makeup:大槻 太郎'])
+  })
+})

@@ -153,6 +153,17 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     expect(empty.reason).toBe(TEMPLATE_SAVE_PENDING_REASON)
   })
 
+  it('下段のメモは「メモ:内容」で出る（2026-10-27・丸ごと振替の振替先のメモ／テンプレ保存のメモ。メモだけの席も中身が分かる）', () => {
+    const key = buildTemplatePendingDeskKey('2026-10-14_2', '2026-10-14_2_desk_1')
+    const rows = buildTemplatePendingList({
+      [key]: { lower: { memoSlots: [null, '20分\n遅刻'] }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT, origin: { kind: 'whole-day-transfer-displaced', note: 'n' } },
+    }, WEEKS)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].lowerLabels).toEqual(['メモ:20分 遅刻'])
+    // 空白だけのメモは出さない。
+    expect(buildTemplatePendingList({ [key]: { lower: { memoSlots: ['  ', null] }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT } }, WEEKS)[0].lowerLabels).toEqual([])
+  })
+
   it('保留が無ければ空・入力（保留マップ・週データ）を変えない', () => {
     expect(buildTemplatePendingList(null, WEEKS)).toEqual([])
     expect(buildTemplatePendingList({}, WEEKS)).toEqual([])
