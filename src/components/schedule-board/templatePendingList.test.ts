@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { countTemplatePendingDesksOnBoard } from './templatePendingResolution'
-import { buildTemplatePendingList, TEMPLATE_SAVE_PENDING_KIND_LABEL, TEMPLATE_SAVE_PENDING_REASON } from './templatePendingList'
+import { buildTemplatePendingList, describeTemplatePendingTeacherReason, TEMPLATE_SAVE_PENDING_KIND_LABEL, TEMPLATE_SAVE_PENDING_REASON } from './templatePendingList'
 
 function student(id: string, name: string, subject: StudentEntry['subject'] = '数', lessonType: StudentEntry['lessonType'] = 'regular'): StudentEntry {
   return { id, name, grade: '中1', subject, lessonType, teacherType: 'normal' }
@@ -133,13 +133,23 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
       dateLabel: '10/7',
       slotLabel: '5限',
       lowerLabels: ['手入力生（数）', '休み生（欠席）', '講師 手置き講師'],
-      upperLabels: ['上段一（数）', '上段二（数）'],
+      // tp-64（2026-10-27）: 講師の保留は上の行の講師も並べ、理由文に講師の選び方を足す
+      upperLabels: ['上段一（数）', '上段二（数）', '講師 講師A'],
       kindLabel: TEMPLATE_SAVE_PENDING_KIND_LABEL,
-      reason: TEMPLATE_SAVE_PENDING_REASON,
+      reason: `${TEMPLATE_SAVE_PENDING_REASON}${describeTemplatePendingTeacherReason('講師A', '手置き講師')}`,
     })
     expect(follow).toMatchObject({ lowerLabels: ['追従生（英）'], upperLabels: ['上段三（数）'], kindLabel: '時限変更の追従', reason: '時限変更の追従で新しい時限が満席だったため、保留(下段)に置きました。' })
     expect(displaced).toMatchObject({ deskId: '2026-10-14_2_desk_2', deskIndex: 1, lowerLabels: ['体験生（英）'], upperLabels: ['上段五（数）'], kindLabel: '丸ごと振替' })
     expect(displaced.reason).toContain('丸ごと振替(10/13 → 10/14)')
+  })
+
+  it('講師だけが残った保留（生徒の側は片づき済み・tp-64）も行に出て、理由は講師の選び方だけ', () => {
+    const key = buildTemplatePendingDeskKey('2026-10-07_5', '2026-10-07_5_desk_1')
+    const rows = buildTemplatePendingList({ [key]: { lower: { teacher: { teacher: '手置き講師', manualTeacher: true } }, effectiveStartDate: '2026-10-07', createdAt: CREATED_AT } }, WEEKS)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ lowerLabels: ['講師 手置き講師'], upperLabels: ['上段一（数）', '上段二（数）', '講師 講師A'], kindLabel: TEMPLATE_SAVE_PENDING_KIND_LABEL })
+    expect(rows[0].reason).toBe(describeTemplatePendingTeacherReason('講師A', '手置き講師'))
+    expect(rows[0].reason).toContain('緑の下の行の講師を押して')
   })
 
   it('由来の種別ごとに見出しが決まる（振替先が満席・休日解除）', () => {
@@ -151,6 +161,17 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     const empty = buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: '' } } }, WEEKS)[0]
     expect(empty.kindLabel).toBe('休日解除')
     expect(empty.reason).toBe(TEMPLATE_SAVE_PENDING_REASON)
+  })
+
+  it('下段のメモは「メモ:内容」で出る（2026-10-27・丸ごと振替の振替先のメモ／テンプレ保存のメモ。メモだけの席も中身が分かる）', () => {
+    const key = buildTemplatePendingDeskKey('2026-10-14_2', '2026-10-14_2_desk_1')
+    const rows = buildTemplatePendingList({
+      [key]: { lower: { memoSlots: [null, '20分\n遅刻'] }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT, origin: { kind: 'whole-day-transfer-displaced', note: 'n' } },
+    }, WEEKS)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].lowerLabels).toEqual(['メモ:20分 遅刻'])
+    // 空白だけのメモは出さない。
+    expect(buildTemplatePendingList({ [key]: { lower: { memoSlots: ['  ', null] }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT } }, WEEKS)[0].lowerLabels).toEqual([])
   })
 
   it('保留が無ければ空・入力（保留マップ・週データ）を変えない', () => {

@@ -62,6 +62,13 @@ export const OPERATION_TRACE_SUMMARY_LIMIT = 2000
 /** 盤面差分で列挙する机の上限。超えた分は「他N件」にまとめる。2026-10-27 に 6 → 20(机 1 台 ≒ 100 字 × 20 ≒ 要約の上限)。 */
 export const OPERATION_TRACE_DIFF_ITEM_LIMIT = 20
 /**
+ * 盤面差分の机の列挙に使える文字数(要約の上限から、前置き「元に戻す: 」「通常授業テンプレ保存・差分反映（…）: 」と
+ * 後ろの「 / 付随変更: …」「 | 他N件」の分を残した値)。2026-10-27 確認リスト sc-2(受付 20261027-144006023-5e34fa4b):
+ * 丸ごと振替は机 1 台が 110〜130 字あり、20 台並べると 2000 字を超えて末尾が「…」で机の途中から切れていた。
+ * 入りきらない机は途中で切らずに「他N件」へ回す(どの机が書かれていないかの境目が読めるように)。
+ */
+export const OPERATION_TRACE_DIFF_CHAR_BUDGET = OPERATION_TRACE_SUMMARY_LIMIT - 200
+/**
  * localStorage に書く痕跡の合計文字数の予算(教室ごと)。要約を 2000 字に広げたので、1000 件 × 2000 字の最悪でも
  * 5MB の枠を食い切らないよう、超えたら古い方から localStorage へ書かない(メモリ上のバッファはそのまま)。
  * 普段の要約は 100〜300 字なので、ふだんは 1000 件すべてが残る。
@@ -165,7 +172,16 @@ function summarizeWeeksDiffUnsafe(previousWeeks: SlotCell[][], nextWeeks: SlotCe
     changes.push(`${cell.dateKey} ${cell.slotNumber}限 机${deskIndex + 1}: ${prevText} → ${nextText}`)
   }
   if (changes.length === 0) return ''
-  const shown = changes.slice(0, OPERATION_TRACE_DIFF_ITEM_LIMIT)
+  // 机の数(最大 20)と文字数(OPERATION_TRACE_DIFF_CHAR_BUDGET)の両方に収まる分だけ並べる。1 台目は長くても載せる(後で上限長で切られる)。
+  const shown: string[] = []
+  let length = 0
+  for (const change of changes) {
+    if (shown.length >= OPERATION_TRACE_DIFF_ITEM_LIMIT) break
+    const added = (shown.length > 0 ? 3 : 0) + change.length
+    if (shown.length > 0 && length + added > OPERATION_TRACE_DIFF_CHAR_BUDGET) break
+    shown.push(change)
+    length += added
+  }
   const rest = changes.length - shown.length
   return `${shown.join(' | ')}${rest > 0 ? ` | 他${rest}件` : ''}`
 }

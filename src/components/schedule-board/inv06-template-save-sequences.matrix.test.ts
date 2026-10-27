@@ -202,6 +202,10 @@ describe('操作の全ペア（順序つき）で保存則・冪等・不動点�
     // 決定記録 46（オーナー決定 2026-10-26「往復でも戻す」・Q40-9 M-2）: 3限へ移した A を 5限 机 0 へ戻す（r7 を外し r0 の生徒 1 に戻す）。往復の 2 回目でも振替が 5限へ戻ることを全順序で見る。
     { name: 'A を 3限 → 5限 へ戻す', apply: (rows) => { const current = rowOfA(rows); if (!current || current.slotNumber !== 3 || current.id !== 'r7') return rows; return replaceRow(rows.filter((item) => item.id !== 'r7'), 'r0', { ...rows.find((item) => item.id === 'r0')!, student1Id: 'sA', subject1: current.subject1 }) } },
     { name: '何も変えない', apply: (rows) => rows },
+    // 2026-10-27（確認リスト tp-51 の兄弟監査）: 科目の往復（数 → 英 → 数）と、外した A を同じ机へ戻す。Q40-1 が振替を消しても振替元の日の抑止キーが残り、
+    // 戻した保存で授業が置かれず・未消化にもならず消えていた（保存則の「無言の消失」）。Q40-1 が外した振替の抑止キーも取り除く。
+    { name: 'A の科目を数へ戻す', apply: (rows) => { const current = rowOfA(rows); return current && current.subject1 !== '数' ? replaceRow(rows, current.id, { ...current, subject1: '数' }) : rows } },
+    { name: 'A を外した後で 5限 机 0 へ戻す', apply: (rows) => (rowOfA(rows) ? rows : replaceRow(rows, 'r0', { ...rows.find((item) => item.id === 'r0')!, student1Id: 'sA', subject1: '数' })) },
   ]
   const BASE = [...OLD_ROWS.slice(0, 2), ...SCAFFOLD]
 

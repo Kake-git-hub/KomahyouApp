@@ -1425,9 +1425,14 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     }
     const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 16000) // 2026-10-21: 精算済み判定の材料と生徒ごとの理由が入口に増えたので範囲を広げた。2026-10-26: 時限の追従（決定記録 46）で再度広げた（assert は不変）
     // Q36（2026-10-03）: 保存と同じ抑止＝保存前の抑止から写しの分を外し（suppressed）、Q21-11 / Q35 で足した分を加える
-    expect(entryFn).toContain('[...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]')
+    // 2026-10-27（tp-51 の兄弟監査）: Q40-1 で外した振替の振替元の日の生徒×科目の抑止キーも、保存と同じく再マージの抑止から外す（保存が外す分と同じ集合）。
+    expect(entryFn).toContain('const releasedOrphanSuppressed = new Set(collectOrphanedMakeupSuppressionKeys(orphaned.removals, run.suppressed))')
+    expect(entryFn).toContain('[...run.suppressed.filter((key) => !releasedOrphanSuppressed.has(key)), ...run.diff.addedSuppressedRegularLessonOccurrences]')
     expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed })')
-    expect(entryFn).toContain('removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed]')
+    expect(entryFn).toContain('removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed, ...releasedOrphanSuppressed]')
+    // tp-51（2026-10-27）: 科目変更の「足す」は外した旧科目の振替の机・席を第一候補にする（外す前の盤面から引いて配置計画へ渡す）。
+    expect(entryFn).toContain('const replacedSeats = collectReplacedTransferSeats(run.diff.nextWeeks, orphaned.removals)')
+    expect(entryFn).toMatch(/planWholeDayTransferPlacements\(\{[^\n]*replacedSeats \}\)/u)
     // Q36 事後条件（H-2）: 外した写しの通常授業が最終結果で生きていなければ、その写しを「外さない」側に加えて計算し直す。
     expect(entryFn).toContain('hasLiveRegularOnDate(nextWeeks, revert.dateKey, studentSubjectKey(revert.student))')
     expect(entryFn).toContain('protectedCopies.add(buildSameDayMoveCopyProtectionKey(revert.cellId, revert.student))')

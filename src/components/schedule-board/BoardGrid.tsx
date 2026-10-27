@@ -9,7 +9,7 @@ import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject
 import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent, resolveTemplatePendingBandSeat } from './templatePendingResolution'
+import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -269,6 +269,8 @@ type BoardGridProps = {
   // ★下段は盤面画面専用（INV-13）。盤面 PDF はクローンから .sa-pending-lower を外す（stripTemplatePendingLowerForPdf）。
   templatePendingDesks?: TemplatePendingDeskMap
   onTemplatePendingLowerClick?: (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => void
+  /** 緑の下の行の講師欄（下段の手置き講師）を押したとき。講師の選択（テンプレの講師を採用／手入力の講師を採用）を開く（tp-64・2026-10-27）。 */
+  onTemplatePendingLowerTeacherClick?: (cellId: string, deskIndex: number, x: number, y: number) => void
   // 保留の下段の生徒の長押し D&D（2026-10-13・オーナー指示）。有効時のみ渡す。下段の mousedown は上段（td）の onStudentMouseDown へ伝播させない
   // （上段の生徒を掴んでしまうのを防ぐ）。長押し判定・ドロップ先の解決は ScheduleBoardScreen 側（startLongPressDragSession）。
   onTemplatePendingLowerMouseDown?: (cellId: string, deskIndex: number, lowerIndex: number, button: number, x: number, y: number) => void
@@ -302,6 +304,7 @@ function BoardGridComponent({
   transferSourceRestDisplayEnabled = false,
   templatePendingDesks,
   onTemplatePendingLowerClick,
+  onTemplatePendingLowerTeacherClick,
   onTemplatePendingLowerMouseDown,
   highlightedPendingLower,
 }: BoardGridProps) {
@@ -839,15 +842,18 @@ function BoardGridComponent({
                           {cell.isOpenDay && pendingEntry?.lower.teacher ? (
                             <div
                               className="sa-pending-lower sa-pending-lower-teacher"
-                              title="保留中の下段（手で置いた講師）。押すと保留の机のメニューを開きます。"
+                              title="保留中の下段（手で置いた講師）。押すとテンプレの講師か手入力の講師かを選べます。"
                               data-testid={`pending-lower-teacher-${cell.id}-${deskIndex}`}
                               onClick={(event) => {
                                 event.stopPropagation()
-                                onTemplatePendingLowerClick?.(cell.id, deskIndex, resolveTemplatePendingBandSeat(pendingEntry.lower), event.clientX, event.clientY)
+                                // tp-64（オーナー確定 2026-10-27）: 講師と生徒を別々に採用。講師欄は講師の選択だけを開く（生徒の席のメニューは開かない）。
+                                onTemplatePendingLowerTeacherClick?.(cell.id, deskIndex, event.clientX, event.clientY)
                               }}
                               onMouseDown={(event) => event.stopPropagation()}
                             >
                               <div className="sa-pending-lower-inner sa-teacher-name">{pendingEntry.lower.teacher.teacher}</div>
+                              {/* 狭い画面は名前の代わりに帯（生徒の下段と同じ）。 */}
+                              <span className="sa-pending-lower-band">講師</span>
                             </div>
                           ) : null}
                         </td>,

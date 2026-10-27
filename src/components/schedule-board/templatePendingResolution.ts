@@ -11,7 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell } from './templateDiffApply'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -129,6 +129,8 @@ export function resolveTemplatePendingStudentMenuActions(row: 'upper' | 'lower',
 
 export const TEMPLATE_PENDING_MESSAGES = {
   teacherLocked: '保留の机は講師を変えられません。先に保留を片づけてください。',
+  /** tp-64（2026-10-27）: 下段に手置き講師が残っている机（講師欄のロック・生徒の保留を片づけた後に講師の選択が残るとき）。 */
+  teacherChoiceRemains: '講師はまだ選んでいません。緑の下の行の講師を押して、テンプレの講師か手入力の講師かを選んでください。',
   landingBlocked: '保留の席へは移動・配置できません。先に保留を片づけてください。',
   attendBlocked: '保留の席は出席を付けられません。先に保留を片づけてください。',
   lowerMoveNeedsEmptySeat: '下段の生徒は空いている席へだけ移動できます。',
@@ -159,8 +161,9 @@ function normalizeLower(lower: TemplatePendingLower): TemplatePendingLower {
   if (lower.lesson && liveStudentsOf(lower.lesson).length > 0) next.lesson = lower.lesson
   if (lower.statusSlots && (lower.statusSlots[0] || lower.statusSlots[1])) next.statusSlots = lower.statusSlots
   if (lower.memoSlots && (lower.memoSlots[0] != null || lower.memoSlots[1] != null)) next.memoSlots = lower.memoSlots
-  // Q41-6/-7: 下段の講師は、下段に生きている生徒が居る間だけ持つ（生徒が全部外れたら講師も外れる。メモ・記録だけの下段に講師だけ出さない）。
-  if (lower.teacher?.teacher.trim() && next.lesson) next.teacher = lower.teacher
+  // 講師と生徒を別々に採用（オーナー確定 2026-10-27・確認リスト tp-64）: 下段の手置き講師は、生徒の操作（採用・削除・移動）では外れない。
+  // 講師欄の「テンプレの講師を採用／手入力の講師を採用」（computePendingTeacherChoice）でだけ外れる。生徒が全部片づいても講師だけで保留に残る。
+  if (lower.teacher?.teacher.trim()) next.teacher = lower.teacher
   return next
 }
 
@@ -220,10 +223,8 @@ export function splitTemplatePendingLowerSeat(lower: TemplatePendingLower, seatI
     }
     return normalizeLower(next)
   }
-  // Q41-6（regression-reviewer M-4）: 講師は押した席の分け前（机へ戻す側）だけが持つ。残る席の保留は講師を持たない従来の保留になる（机の講師が手置き講師に戻った後に下段にも同じ講師が出ない）。
-  const seatLower = pick(seatIndex)
-  if (lower.teacher && seatLower.lesson) seatLower.teacher = { ...lower.teacher }
-  return { seatLower, restLower: pick(other) }
+  // tp-64（2026-10-27）: 講師はどちらの分け前にも入れない（席の操作は講師に触れない）。残す保留へ講師を付け直すのは呼び出し側（withTemplatePendingTeacherChoice）。
+  return { seatLower: pick(seatIndex), restLower: pick(other) }
 }
 
 /** 下段に中身（生きている生徒・出欠記録・メモ）が 1 つでもあるか。 */
@@ -306,9 +307,26 @@ export function describeTemplatePendingCollapseFailure(reason: Extract<TemplateP
       return '同じ生徒が 2 か所になります。先に上段を片づけてください。'
     case 'both-rows-live':
       return '元の席が空いていません。上段の生徒を動かすか「テンプレを採用」を選んでください。'
-    case 'teacher-duplicate':
-      return '手で置いた講師が同じコマの別の机に居ます。先にそちらを片づけてください。'
   }
+}
+
+/**
+ * 生徒の席の片づけの後に残す保留（講師と生徒を別々に採用・オーナー確定 2026-10-27・確認リスト tp-64）。
+ * lower（生徒・記録・メモの残り。講師は見ない）に中身があればそれに元の保留の手置き講師を付け直し、中身が無くても手置き講師が居れば講師だけの保留を残す。
+ * どちらも無ければ null（保留を消して 1 行へ）。入力は変えない。
+ */
+export function withTemplatePendingTeacherChoice(entry: TemplatePendingDesk, lower: TemplatePendingLower | null): TemplatePendingDesk | null {
+  const teacher = entry.lower.teacher?.teacher.trim() ? { ...entry.lower.teacher } : undefined
+  const rest: TemplatePendingLower = lower && hasTemplatePendingLowerContent(lower) ? cloneTemplatePendingLower(lower) : {}
+  delete rest.teacher
+  if (teacher) rest.teacher = teacher
+  if (!hasTemplatePendingLowerContent(rest) && !rest.teacher) return null
+  return { ...entry, lower: rest }
+}
+
+/** 下段が講師だけ（生徒・記録・メモが無く、手置き講師の選択だけが残る）か（tp-64）。 */
+export function isTemplatePendingTeacherOnly(lower: TemplatePendingLower) {
+  return Boolean(lower.teacher?.teacher.trim()) && !hasTemplatePendingLowerContent(lower)
 }
 
 /** 同じコマの別の机で生きている生徒（Q26-4 の一意性検査に使う）。 */
@@ -324,7 +342,8 @@ function replaceDesk(weeks: SlotCell[][], location: { weekIndex: number; cellInd
 
 export type TemplatePendingSettleResult =
   | { status: 'unchanged' }
-  | { status: 'collapsed'; nextWeeks: SlotCell[][]; nextTemplatePendingDesks: TemplatePendingDeskMap }
+  /** teacherPending＝生徒の側は 1 行に戻ったが、講師の選択（下段の手置き講師）が残っているので保留は講師だけで残した（tp-64）。 */
+  | { status: 'collapsed'; nextWeeks: SlotCell[][]; nextTemplatePendingDesks: TemplatePendingDeskMap; teacherPending: boolean }
   | { status: 'kept'; reason: Extract<TemplatePendingCollapseResult, { ok: false }>['reason'] }
 
 /**
@@ -345,19 +364,22 @@ export function settleTemplatePendingDesk(params: {
   if (!entry || !parsed) return { status: 'unchanged' }
   const location = locateDesk(params.weeks, parsed.cellId, parsed.deskId)
   if (!location) return { status: 'unchanged' }
+  // tp-64（2026-10-27）: 講師だけの保留（生徒の側は片づき済み）は、講師欄の選択でだけ解ける。自動では何もしない。
+  if (isTemplatePendingTeacherOnly(entry.lower)) return { status: 'unchanged' }
   const upperLive = liveStudentsOf(location.desk.lesson).length
   const lowerLive = liveStudentsOf(entry.lower.lesson).length
+  // Q41-7（2026-10-27 改定・tp-64）: 上段が空いて下段の生徒が机へ戻っても、机の講師は変えない（手置き講師は講師だけの保留に残る）。
   const collapse = computePendingDeskCollapse(location.desk, entry, {
     liveStudentsElsewhere: collectLiveStudentsElsewhereInCell(location.cell, location.desk.id),
     dateKey: location.cell.dateKey,
-    // Q41-7（INV-01）: 戻す手置き講師が同じコマの別の机に居れば合流しない。
-    teacherElsewhere: (teacher) => isTeacherElsewhereInCell(location.cell, location.desk.id, teacher),
   })
   if (!collapse.ok) return upperLive > 0 && lowerLive > 0 ? { status: 'unchanged' } : { status: 'kept', reason: collapse.reason }
   const nextTemplatePendingDesks = { ...params.templatePendingDesks }
-  delete nextTemplatePendingDesks[params.key]
+  const remaining = withTemplatePendingTeacherChoice(entry, null)
+  if (remaining) nextTemplatePendingDesks[params.key] = remaining
+  else delete nextTemplatePendingDesks[params.key]
   // 下段を机へ戻した机は管理授業でない机になるので、再マージと同じ形（非 manual 講師の講師 id を外す）に揃えて不動点を保つ。
-  return { status: 'collapsed', nextWeeks: replaceDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk)), nextTemplatePendingDesks }
+  return { status: 'collapsed', nextWeeks: replaceDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk)), nextTemplatePendingDesks, teacherPending: Boolean(remaining) }
 }
 
 function isBothRowsLive(weeks: readonly SlotCell[][], map: TemplatePendingDeskMap, key: string) {
@@ -428,4 +450,84 @@ export function settleTemplatePendingDesksAfterCommit(params: {
     }
   }
   return { nextWeeks, nextTemplatePendingDesks, collapsedKeys, newlyStuck }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 講師の選択（講師と生徒を別々に採用・オーナー確定 2026-10-27・確認リスト tp-64）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 'template'＝テンプレの講師を採用（机の講師のまま・手置き講師を外す）／'manual'＝手入力の講師を採用（机の講師を手置き講師にする）。 */
+export type TemplatePendingTeacherChoice = 'template' | 'manual'
+
+export type TemplatePendingTeacherChoiceResult =
+  | { status: 'blocked'; message: string }
+  | { status: 'applied'; nextWeeks: SlotCell[][]; nextTemplatePendingDesks: TemplatePendingDeskMap; collapsed: boolean; message: string }
+
+/** 手置き講師が同じコマの別の机に居ればその机番号（1 始まり）。居なければ null。判定は講師の一意性検査と同じ isTeacherElsewhereInCell。 */
+export function findTemplatePendingTeacherElsewhereDeskNumber(cell: Pick<SlotCell, 'desks'>, deskId: string, teacher: TemplatePendingLower['teacher']) {
+  if (!teacher?.teacher.trim()) return null
+  const index = cell.desks.findIndex((other) => other.id !== deskId && isTeacherElsewhereInCell({ desks: [other] }, deskId, teacher))
+  return index >= 0 ? index + 1 : null
+}
+
+/** 講師欄の確認文（実行する前に出す・Q32-1 の流儀で名前は本体と同じものを使う）。講師の選択が無い机は ''。 */
+export function buildTemplatePendingTeacherChoiceConfirm(desk: Pick<DeskCell, 'teacher' | 'lesson'>, entry: TemplatePendingDesk, choice: TemplatePendingTeacherChoice) {
+  const manualName = entry.lower.teacher?.teacher.trim()
+  if (!manualName) return ''
+  const templateName = desk.teacher.trim() || 'なし'
+  if (choice === 'template') return `テンプレの講師 ${templateName} を採用します。手で置いた講師 ${manualName} はこの机から外れます。よろしいですか？`
+  const upperNote = liveStudentsOf(desk.lesson).length > 0 ? `この机の生徒は ${manualName} の担当になります。` : ''
+  return `手入力の講師 ${manualName} を採用します。テンプレの講師 ${templateName} はこの机から外れます。${upperNote}よろしいですか？`
+}
+
+/**
+ * 講師欄の「テンプレの講師を採用／手入力の講師を採用」（tp-64）。生徒（上段・下段）には触れない。純関数・入力は変えない。
+ *  - template … 机の講師（テンプレの講師）のまま、下段の手置き講師を外す。
+ *  - manual   … 机の講師を手置き講師にする（manual のまま・再マージで変わらない＝INV-02）。手置き講師が同じコマの別の机に居れば止める
+ *               （同じ講師を 2 机にしない＝INV-01。理由は確認の前に出す）。
+ * 講師を外した後、下段に生徒・記録・メモが残れば保留は続く（残りに Q28 を当て、戻れるなら 1 行へ）。何も残らなければ 1 行へ戻る。
+ */
+export function computePendingTeacherChoice(params: {
+  weeks: SlotCell[][]
+  templatePendingDesks: TemplatePendingDeskMap
+  cellId: string
+  deskId: string
+  choice: TemplatePendingTeacherChoice
+}): TemplatePendingTeacherChoiceResult {
+  const found = findTemplatePendingDeskEntry(params.templatePendingDesks, params.cellId, params.deskId)
+  const location = locateDesk(params.weeks, params.cellId, params.deskId)
+  if (!found || !location) return { status: 'blocked', message: '保留の机が見つかりませんでした。表示を更新してから操作してください。' }
+  const teacher = found.entry.lower.teacher
+  const manualName = teacher?.teacher.trim()
+  if (!teacher || !manualName) return { status: 'blocked', message: 'この机には選ぶ講師がありません。' }
+  const templateName = location.desk.teacher.trim() || 'なし'
+  let nextWeeks = params.weeks
+  if (params.choice === 'manual') {
+    const elsewhere = findTemplatePendingTeacherElsewhereDeskNumber(location.cell, location.desk.id, teacher)
+    if (elsewhere !== null) {
+      return { status: 'blocked', message: `手入力の講師を採用できません。講師 ${manualName} が同じコマの机 ${elsewhere} に居ます（同じ講師を 2 つの机に置けません）。「テンプレの講師を採用」を選ぶか、机 ${elsewhere} の講師を片づけてから選んでください。` }
+    }
+    nextWeeks = replaceDesk(params.weeks, location, alignTeacherIdentityWithRemerge(applyTemplatePendingLowerTeacherToDesk(location.desk, teacher)))
+  }
+  const restLower = cloneTemplatePendingLower(found.entry.lower)
+  delete restLower.teacher
+  let nextTemplatePendingDesks: TemplatePendingDeskMap = { ...params.templatePendingDesks }
+  let collapsed = false
+  if (hasTemplatePendingLowerContent(restLower)) {
+    nextTemplatePendingDesks[found.key] = { ...found.entry, lower: restLower }
+    // 講師の重複が解けたので、残った生徒の側に Q28 を当てる（戻れるなら 1 行へ）。
+    const settled = settleTemplatePendingDesk({ weeks: nextWeeks, templatePendingDesks: nextTemplatePendingDesks, key: found.key })
+    if (settled.status === 'collapsed') {
+      nextWeeks = settled.nextWeeks
+      nextTemplatePendingDesks = settled.nextTemplatePendingDesks
+      collapsed = true
+    }
+  } else {
+    delete nextTemplatePendingDesks[found.key]
+    collapsed = true
+  }
+  const head = params.choice === 'template'
+    ? `テンプレの講師 ${templateName} を採用しました（手で置いた講師 ${manualName} は外す）。`
+    : `手入力の講師 ${manualName} を採用しました（テンプレの講師 ${templateName} は外す）。`
+  return { status: 'applied', nextWeeks, nextTemplatePendingDesks, collapsed, message: `${head}${collapsed ? '1 行に戻しました。' : '生徒の保留は残っています。'}` }
 }

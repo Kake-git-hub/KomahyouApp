@@ -11,6 +11,10 @@
 // ★在庫中立: 体験・増コマ・手動追加は在庫も希望回数も持たない（appendDeletedStudentScheduleCountAdjustment が manualAdded を飛ばす）ので、
 //   残しても消しても台帳は動かない。残す分は −1 の対象から外れる（消していないので当然）。
 // ★フラグ: 保留は templateDiffApply の教室だけに存在する。呼び出し側はフラグ OFF なら保留マップを渡さない（＝従来どおり消して −1）。
+// ★メモ（2026-10-27 オーナー指示「メモも消えないようにして」・確認リスト tp-62 のメモ欄）: 振替先の席のメモ（desk.memoSlots）も
+//   室長の手置きとして同じ順（元の席 → 同じコマの別の机の空き席 → 同じ机番号の机の下段＝lower.memoSlots）で残す。置き直しは授業の後
+//   （授業が先に空き席を取る）。メモは授業ではないので在庫・希望回数は動かない（INV-06）。席の空き判定は生徒・記録・メモの共通
+//   （メモと生徒が同じ席に重なると盤面は生徒だけを描き、メモが隠れる＝「隠さない」に反するため）。
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry } from './types'
@@ -34,6 +38,26 @@ export type WholeDayTransferDisplacedOutcome = {
   placement: 'kept' | 'shifted' | 'pending'
   /** 置いた机に講師が居ない（講師が付くまで講師日程表に出ない＝Q40-2 と同じ扱い）。 */
   teacherless: boolean
+}
+
+/** 振替先から押し出されるメモ（移送前のコマ・机・席）。 */
+export type WholeDayTransferDisplacedMemo = {
+  cellId: string
+  slotNumber: number
+  deskIndex: number
+  seatIndex: number
+  memo: string
+}
+
+export type WholeDayTransferDisplacedMemoOutcome = {
+  memo: string
+  deskIndex: number
+  placedDeskIndex: number
+  placement: 'kept' | 'shifted' | 'pending'
+}
+
+function hasMemoText(memo: string | null | undefined): memo is string {
+  return typeof memo === 'string' && memo.trim() !== ''
 }
 
 /** 室長の手置きとして残す授業か（テンプレ由来の通常・振替・講習は false＝従来どおり処分）。 */
@@ -60,8 +84,29 @@ export function extractWholeDayTransferDisplacedStudents(cell: SlotCell): WholeD
   return displaced
 }
 
+/**
+ * 振替先のコマから残すメモを**取り出して机から外す**（2026-10-27・tp-62 のメモ欄）。空白だけのメモは残す対象にせず、
+ * 呼び出し側の処分（disposeDayDeskEntries の clearMemoSlots）に任せる。
+ */
+export function extractWholeDayTransferDisplacedMemos(cell: SlotCell): WholeDayTransferDisplacedMemo[] {
+  const displaced: WholeDayTransferDisplacedMemo[] = []
+  cell.desks.forEach((desk, deskIndex) => {
+    const memoSlots = desk.memoSlots
+    if (!memoSlots) return
+    const rest: [string | null, string | null] = [memoSlots[0] ?? null, memoSlots[1] ?? null]
+    rest.forEach((memo, seatIndex) => {
+      if (!hasMemoText(memo)) return
+      displaced.push({ cellId: cell.id, slotNumber: cell.slotNumber, deskIndex, seatIndex, memo })
+      rest[seatIndex] = null
+    })
+    desk.memoSlots = rest.some((memo) => memo != null && memo !== '') ? rest : undefined
+  })
+  return displaced
+}
+
+// 席が空いているか: 生徒・出欠記録・メモのどれも無い（メモも席を取る＝isStudentSlotBlocked・templateDiffApply の occupancyOf と同じ）。
 function isSeatFree(desk: DeskCell, seatIndex: number) {
-  return !desk.lesson?.studentSlots[seatIndex] && !desk.statusSlots?.[seatIndex]
+  return !desk.lesson?.studentSlots[seatIndex] && !desk.statusSlots?.[seatIndex] && !hasMemoText(desk.memoSlots?.[seatIndex])
 }
 
 function pickFreeSeat(desk: DeskCell, preferredSeat: number): number {
@@ -155,15 +200,88 @@ export function placeWholeDayTransferDisplacedStudents(params: {
   return { outcomes, nextPendingDesks, overflow }
 }
 
-/** 確認ダイアログ・結果メッセージの件数と名前。 */
-export function summarizeWholeDayTransferDisplaced(outcomes: readonly WholeDayTransferDisplacedOutcome[]) {
+/**
+ * 移送後のコマ（cell は移送済み・机を直接書き換える）に、押し出されたメモを置き直す（授業の置き直しの**後**に呼ぶ）。
+ * 順序は授業と同じ: 元の机の空き席（元の席 → もう一方）→ 同じコマの別の机の空き席（講師が居る机 → 居ない机・机番号順・保留の机は使わない）
+ * → 同じ机番号の机の下段（lower.memoSlots・埋まっていれば次の机の下段）。overflow は下段にも入らなかったメモ（呼び出し側が消去として数える）。
+ */
+export function placeWholeDayTransferDisplacedMemos(params: {
+  cell: SlotCell
+  memos: readonly WholeDayTransferDisplacedMemo[]
+  pendingDesks: TemplatePendingDeskMap
+  sourceDateKey: string
+  targetDateKey: string
+  createdAt: string
+}): { outcomes: WholeDayTransferDisplacedMemoOutcome[]; nextPendingDesks: TemplatePendingDeskMap; overflow: WholeDayTransferDisplacedMemo[] } {
+  const { cell } = params
+  const outcomes: WholeDayTransferDisplacedMemoOutcome[] = []
+  const overflow: WholeDayTransferDisplacedMemo[] = []
+  let nextPendingDesks = params.pendingDesks
+  const isPendingDesk = (desk: DeskCell) => Boolean(nextPendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)])
+  const placeMemo = (desk: DeskCell, seatIndex: number, memo: string) => {
+    const slots: [string | null, string | null] = [desk.memoSlots?.[0] ?? null, desk.memoSlots?.[1] ?? null]
+    slots[seatIndex] = memo
+    desk.memoSlots = slots
+  }
+
+  for (const item of params.memos) {
+    const ownDesk = cell.desks[item.deskIndex]
+    if (ownDesk && !isPendingDesk(ownDesk)) {
+      const seat = pickFreeSeat(ownDesk, item.seatIndex)
+      if (seat >= 0) {
+        placeMemo(ownDesk, seat, item.memo)
+        outcomes.push({ memo: item.memo, deskIndex: item.deskIndex, placedDeskIndex: item.deskIndex, placement: 'kept' })
+        continue
+      }
+    }
+    const candidates = [
+      ...cell.desks.map((desk, index) => ({ desk, index })).filter(({ desk, index }) => index !== item.deskIndex && desk.teacher.trim()),
+      ...cell.desks.map((desk, index) => ({ desk, index })).filter(({ desk, index }) => index !== item.deskIndex && !desk.teacher.trim()),
+    ]
+    let shifted = false
+    for (const { desk, index } of candidates) {
+      if (isPendingDesk(desk)) continue
+      const seat = pickFreeSeat(desk, item.seatIndex)
+      if (seat < 0) continue
+      placeMemo(desk, seat, item.memo)
+      outcomes.push({ memo: item.memo, deskIndex: item.deskIndex, placedDeskIndex: index, placement: 'shifted' })
+      shifted = true
+      break
+    }
+    if (shifted) continue
+    // 下段へ置く手順は授業と同じ権威関数（placeIntoPendingLower）。
+    const placed = placeIntoPendingLower({
+      cell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, memo: item.memo,
+      effectiveStartDate: params.targetDateKey, createdAt: params.createdAt, kind: 'whole-day-transfer-displaced', note: buildWholeDayTransferDisplacedNote(params.sourceDateKey, params.targetDateKey),
+    })
+    if (placed) {
+      nextPendingDesks = placed.nextPendingDesks
+      outcomes.push({ memo: item.memo, deskIndex: item.deskIndex, placedDeskIndex: placed.deskIndex, placement: 'pending' })
+      continue
+    }
+    overflow.push(item)
+  }
+  return { outcomes, nextPendingDesks, overflow }
+}
+
+/** 確認ダイアログ・結果メッセージの件数と名前（メモも件数に含め、名前は「メモ:内容」）。 */
+export function summarizeWholeDayTransferDisplaced(outcomes: readonly WholeDayTransferDisplacedOutcome[], memoOutcomes: readonly WholeDayTransferDisplacedMemoOutcome[] = []) {
   // 講師の開示（regression-reviewer M-1・2026-10-25）: 振替先の講師は従来どおり移送で上書き／削除記録になるので、残した授業の講師は移ってきた講師に替わる。
   // 講師の居ない机に残す（残る）ときは「(講師なし)」を添える（Q40-2 の「講師のいない机なので講師を付けてください」と同じ扱い。下段は講師を持たないので付けない）。
   const label = (o: WholeDayTransferDisplacedOutcome) => `${o.student.lessonType === 'trial' ? '体験' : o.student.lessonType === 'extra' ? '増コマ' : '手動追加'}:${o.student.name}${o.placement !== 'pending' && o.teacherless ? '(講師なし)' : ''}`
+  // メモは改行を空白に詰め、長いものは 12 文字で切る（確認の画面を 1 行に収める）。
+  const memoLabel = (o: WholeDayTransferDisplacedMemoOutcome) => {
+    const text = o.memo.replace(/\s+/g, ' ').trim()
+    return `メモ:${text.length > 12 ? `${text.slice(0, 12)}…` : text}`
+  }
+  const all: ReadonlyArray<{ placement: WholeDayTransferDisplacedOutcome['placement'] }> = [...outcomes, ...memoOutcomes]
+  const pendingMemoCount = memoOutcomes.filter((o) => o.placement === 'pending').length
   return {
-    keptCount: outcomes.filter((o) => o.placement === 'kept').length,
-    shiftedCount: outcomes.filter((o) => o.placement === 'shifted').length,
-    pendingCount: outcomes.filter((o) => o.placement === 'pending').length,
-    names: outcomes.map(label),
+    keptCount: all.filter((o) => o.placement === 'kept').length,
+    shiftedCount: all.filter((o) => o.placement === 'shifted').length,
+    pendingCount: all.filter((o) => o.placement === 'pending').length,
+    names: [...outcomes.map(label), ...memoOutcomes.map(memoLabel)],
+    // メモを 1 件でも残したときだけ持つ（授業だけの丸ごと振替の件数の形は従来どおり）。
+    ...(memoOutcomes.length > 0 ? { memoCount: memoOutcomes.length, pendingMemoCount } : {}),
   }
 }
