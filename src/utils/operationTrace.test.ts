@@ -20,6 +20,8 @@ import {
   setOperationTraceClassroomId,
   summarizeBoardCommitForTrace,
   summarizeWeeksDiff,
+  OPERATION_TRACE_STORAGE_CHAR_BUDGET,
+  selectOperationTraceWithinStorageBudget,
 } from './operationTrace'
 import { clearOperationEvents, recordOperationEvent, setOperationLogClassroomId } from './operationLog'
 
@@ -67,7 +69,7 @@ describe('operationTrace: リングバッファと要約', () => {
   })
 
   it('要約は空白を畳み、上限長で切る', () => {
-    const entry = buildOperationTraceEntry('save', `  a\n\n b   ${'x'.repeat(1000)}`, new Date('2026-09-04T01:02:03.000Z'))
+    const entry = buildOperationTraceEntry('save', `  a\n\n b   ${'x'.repeat(OPERATION_TRACE_SUMMARY_LIMIT + 500)}`, new Date('2026-09-04T01:02:03.000Z'))
     expect(entry.at).toBe('2026-09-04T01:02:03.000Z')
     expect(entry.summary.startsWith('a b x')).toBe(true)
     expect(entry.summary.length).toBe(OPERATION_TRACE_SUMMARY_LIMIT)
@@ -87,6 +89,35 @@ describe('operationTrace: リングバッファと要約', () => {
     const before = [[cell('2026-09-04', 3, [desk('田中', [null, null])])]]
     const after = [[cell('2026-09-04', 3, [desk('田中', [student('青木', { managedStudentId: 's012' }), null])])]]
     expect(summarizeWeeksDiff(before, after)).toBe('2026-09-04 3限 机1: 田中: 空 / 空 → 田中: 青木#s012(通常 数) / 空')
+  })
+
+  it('回帰(2026-10-27 日大前校): 1 回で机を 14 台動かした操作も、要約が切れずに全部の机を読める', () => {
+    // 10/26 の保存失敗で、保存に相乗りした痕跡から消えた作業を読み戻したとき、机を何台も動かした操作が 400 字で切れていた。
+    expect(OPERATION_TRACE_SUMMARY_LIMIT).toBeGreaterThanOrEqual(2000)
+    expect(OPERATION_TRACE_DIFF_ITEM_LIMIT).toBeGreaterThanOrEqual(20)
+    const teachers = Array.from({ length: 14 }, (_, index) => `講師${index}`)
+    const before = [[cell('2026-11-11', 3, teachers.map((name) => desk(name, [null, null])))]]
+    const after = [[cell('2026-11-11', 3, teachers.map((name, index) => desk(name, [student(`生徒${index}`, { managedStudentId: `s${100 + index}` }), null])))]]
+    const entry = buildOperationTraceEntry('board-commit', summarizeWeeksDiff(before, after))
+    expect(entry.summary.endsWith('…')).toBe(false)
+    expect(entry.summary).not.toContain('他')
+    for (let index = 0; index < 14; index += 1) expect(entry.summary).toContain(`#s${100 + index}`)
+  })
+
+  it('localStorage へ書く分は合計文字数の予算に収め、新しい方を残す(メモリのバッファは減らさない)', () => {
+    const entries = Array.from({ length: 10 }, (_, index) => buildOperationTraceEntry('board-commit', `${index}-${'x'.repeat(90)}`))
+    const kept = selectOperationTraceWithinStorageBudget(entries, 500)
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThan(10)
+    expect(kept[kept.length - 1]?.summary.startsWith('9-')).toBe(true)
+    expect(selectOperationTraceWithinStorageBudget(entries)).toHaveLength(10)
+    // 最悪(1000 件 × 上限長)でも localStorage の 5MB 枠(UTF-16 で約 250 万字)を食い切らない予算
+    expect(OPERATION_TRACE_STORAGE_CHAR_BUDGET).toBeLessThanOrEqual(1_000_000)
+  })
+
+  it('要約の上限はサーバー(functions/src/developerReport.ts)と同じ値', () => {
+    const server = readFileSync(fileURLToPath(new URL('../../functions/src/developerReport.ts', import.meta.url)), 'utf8')
+    expect(server).toContain(`export const DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT = ${OPERATION_TRACE_SUMMARY_LIMIT}`)
   })
 
   it('summarizeWeeksDiff は列挙上限を超えた分を「他N件」にまとめ、机の追加/削除も拾う', () => {

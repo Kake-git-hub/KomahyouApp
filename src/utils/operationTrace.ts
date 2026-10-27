@@ -48,15 +48,25 @@ export type OperationTraceEntry = {
 /**
  * 端末内に保持する件数の上限。2026-10-22(案 2)に 300 → 1000 へ拡大(「昨日おかしかった」をより長く遡れるように)。
  * 報告に同梱するのは新しい方から DEVELOPER_REPORT_TRACE_LIMIT(300)件、保存に相乗りさせるのは前回保存以降(最大 300 件)なので、
- * Firestore 文書(1MiB)の予算はこの値に依らない。localStorage は 1000 件 × 最大 400 字 ≒ 400KB で 5MB の枠に収まる。
+ * Firestore 文書(1MiB)の予算はこの値に依らない。localStorage は合計文字数の予算(OPERATION_TRACE_STORAGE_CHAR_BUDGET)で抑える。
  */
 export const OPERATION_TRACE_LIMIT = 1000
 /** 1 回の保存に相乗りさせる件数の上限(新しい方から)。サーバー functions/src/operationTraces.ts と同じ値。 */
 export const OPERATION_TRACE_SAVE_LIMIT = 300
 /** 1件の要約の最大長。差分が巨大でも1行に抑える。 */
-export const OPERATION_TRACE_SUMMARY_LIMIT = 400
-/** 盤面差分で列挙する机の上限。超えた分は「他N件」にまとめる。 */
-export const OPERATION_TRACE_DIFF_ITEM_LIMIT = 6
+/**
+ * 2026-10-27 に 400 → 2000 へ拡大(オーナー判断 B)。日大前校の保存失敗(10/26)で、消えた作業をこの痕跡から読み戻したが、
+ * 1 回で机を何台も動かした操作が 400 字で切れて一部が読めなかった。サーバー側 DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT と同じ値。
+ */
+export const OPERATION_TRACE_SUMMARY_LIMIT = 2000
+/** 盤面差分で列挙する机の上限。超えた分は「他N件」にまとめる。2026-10-27 に 6 → 20(机 1 台 ≒ 100 字 × 20 ≒ 要約の上限)。 */
+export const OPERATION_TRACE_DIFF_ITEM_LIMIT = 20
+/**
+ * localStorage に書く痕跡の合計文字数の予算(教室ごと)。要約を 2000 字に広げたので、1000 件 × 2000 字の最悪でも
+ * 5MB の枠を食い切らないよう、超えたら古い方から localStorage へ書かない(メモリ上のバッファはそのまま)。
+ * 普段の要約は 100〜300 字なので、ふだんは 1000 件すべてが残る。
+ */
+export const OPERATION_TRACE_STORAGE_CHAR_BUDGET = 800_000
 const STORAGE_KEY_PREFIX = 'operation-trace:'
 /** 保存に相乗りさせた最後の痕跡の時刻(教室ごと)。再読み込みを跨いで「前回保存以降」を正しく切り出すため localStorage にも置く。 */
 const SAVED_MARKER_KEY_PREFIX = 'operation-trace-saved:'
@@ -224,11 +234,25 @@ function loadFromStorage(classroomId: string): OperationTraceEntry[] {
   }
 }
 
+/** localStorage へ書く分を、新しい方から合計文字数の予算に収まるだけ選ぶ(順序は古い→新しいのまま)。 */
+export function selectOperationTraceWithinStorageBudget(entries: readonly OperationTraceEntry[], budget: number = OPERATION_TRACE_STORAGE_CHAR_BUDGET): OperationTraceEntry[] {
+  let total = 0
+  let start = entries.length
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    const cost = entry.at.length + entry.kind.length + entry.summary.length + 32
+    if (total + cost > budget) break
+    total += cost
+    start = index
+  }
+  return entries.slice(start)
+}
+
 function persistToStorage(classroomId: string, entries: OperationTraceEntry[]) {
   const storage = resolveStorage()
   if (!storage) return
   try {
-    storage.setItem(storageKey(classroomId), JSON.stringify(entries))
+    storage.setItem(storageKey(classroomId), JSON.stringify(selectOperationTraceWithinStorageBudget(entries)))
   } catch {
     // 容量超過など。痕跡はあくまで補助情報なので握りつぶす。
   }

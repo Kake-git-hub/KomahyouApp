@@ -79,7 +79,7 @@ describe('buildOperationTraceDoc', () => {
   })
 
   it('文書 1MiB の予算を超える痕跡は古い方から落とす(報告と同じ規則)', () => {
-    // 300 件 × 最大長(約 436 字)は 13 万字で予算(20 万字)に収まる。予算超過は正規化を通らない直接呼び出し(600 件)で確かめる。
+    // 2026-10-27 に要約の上限を 2000 字へ広げたので、最大長が並ぶと 300 件でも予算(20 万字)を超え、古い方から落ちる(新しい方は必ず残る)。
     const huge = Array.from({ length: 600 }, (_, index) => ({ at: FALLBACK, kind: 'board-commit' as const, summary: `${index}-${'x'.repeat(DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT - 8)}` }))
     const doc = buildOperationTraceDoc({ classroomId: 'c1', saveId: 's', savedAt: FALLBACK, snapshotVersion: 1, updatedBy: 'u', entries: huge, recordedAt: FALLBACK })
     expect(doc.entryCount).toBeLessThan(600)

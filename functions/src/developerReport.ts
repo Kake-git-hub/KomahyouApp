@@ -15,7 +15,10 @@
 
 export const DEVELOPER_REPORT_NOTE_LIMIT = 2000
 export const DEVELOPER_REPORT_TRACE_LIMIT = 300
-export const DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT = 400
+// 2026-10-27 に 400 → 2000(クライアント src/utils/operationTrace.ts OPERATION_TRACE_SUMMARY_LIMIT と同じ値・テストで突合)。
+// 日大前校の保存失敗で、保存に相乗りした痕跡から消えた作業を読み戻したとき、机を何台も動かした操作が 400 字で切れていた。
+// 文書 1 件の合計は DEVELOPER_REPORT_TRACE_TOTAL_CHAR_LIMIT(200,000 字)のままなので 1MiB の予算は変わらない。
+export const DEVELOPER_REPORT_TRACE_SUMMARY_LIMIT = 2000
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_KEY_LIMIT = 12
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_VALUE_LIMIT = 200
 export const DEVELOPER_REPORT_SOURCES = ['board', 'schedule'] as const
