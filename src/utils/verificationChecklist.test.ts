@@ -109,6 +109,16 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.644')
   })
 
+  it('第79版(2026-10-27・v1.5.644 据え置き・日大前校の保存失敗): 保存の圧縮を変えた確認 sc-1 は開発用教室だけ。項目を足すだけなので版は据え置き', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sc-1')!
+    expect(item).toBeDefined()
+    expect(item.area).toBe('保存')
+    expect(item.introducedIn).toBe('v1.5.646')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('sc-1')
+    expect(item.check?.join('\n')).toContain('再読み込み後も')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.644')
+  })
+
   it('第78版(2026-10-26・v1.5.644・決定記録 48 §3・§H Q42-6): 保留の机の週をまたいだ一覧 tp-64 を足し、テスト教室にも出し、版を上げる', () => {
     const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tp-64')!
     expect(item).toBeDefined()
@@ -179,7 +189,7 @@ describe('確認リストの項目定義', () => {
     expect(ids.filter((id) => id.startsWith('qa-'))).toEqual([])
     expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
-    for (const id of ids.filter((id) => id !== 'tx-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    for (const id of ids.filter((id) => id !== 'tx-1' && id !== 'sc-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.644')
   })
@@ -193,7 +203,8 @@ describe('確認リストの項目定義', () => {
     // 第72版(2026-10-24): OK の 12 件と AI 回答の 23 問を外し、テスト教室の結果待ちの 7 件だけが残る。
     // 第73版(2026-10-24): テンプレの文章を 1 行にした確認 tp-61 を先頭に足した(版は据え置き)。
     // 第74版(2026-10-25): 長文を 1〜2 行にした確認 tx-1 を先頭に足した(開発用教室だけ・版は据え置き)。
-    expect(ids).toEqual(['tx-1', 'tp-61', 'tp-48', 'tp-49', 'tp-62', 'tp-63', 'tp-51', 'tp-64', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第79版(2026-10-27): 保存の圧縮を変えた確認 sc-1 を先頭に足した(開発用教室だけ・版は据え置き)。
+    expect(ids).toEqual(['sc-1', 'tx-1', 'tp-61', 'tp-48', 'tp-49', 'tp-62', 'tp-63', 'tp-51', 'tp-64', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)

@@ -59,7 +59,8 @@ import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from '.
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
-import { buildSaveFailureAlertMail, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
+import { buildSaveFailureAlertMail, resolveSaveFailureAlertThrottle, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
+import { estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isFirestoreDocumentTooLargeError, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
@@ -1010,7 +1011,8 @@ function createStoredSnapshotDoc(params: {
     schemaVersion,
     savedAt: params.savedAt,
     dataEncoding: FIREBASE_COMPRESSED_SNAPSHOT_ENCODING,
-    compressedData: gzipSync(Buffer.from(json, 'utf8')).toString('base64'),
+    // 圧縮は最大(level 9)。1 文書 1MiB 上限への余裕を作る(2026-10-27 日大前校の容量超過・snapshotCapacity.ts)。
+    compressedData: gzipSync(Buffer.from(json, 'utf8'), { level: SNAPSHOT_GZIP_LEVEL }).toString('base64'),
     dataByteLength,
     updatedBy: params.updatedBy,
     updatedAt,
@@ -1136,10 +1138,13 @@ function buildSaveAttemptPayload(params: {
   savedAt: string
   saveId: string
   payloadHash: string
-  status: 'started' | 'verification-failed' | 'verified'
+  status: 'started' | 'verification-failed' | 'verified' | 'too-large' | 'write-failed'
   verified: boolean
   writeMode: string
   dataByteLength: number
+  /** 保存する文書 1 件の見積もりサイズ(Firestore の計算方法・上限 1MiB)と使用率(2026-10-27)。 */
+  documentByteLength?: number
+  capacityRatio?: number
   snapshotEncoding: string
   updatedBy: string
   createdAt: string
@@ -1162,6 +1167,8 @@ function buildSaveAttemptPayload(params: {
     verified: params.verified,
     writeMode: params.writeMode,
     dataByteLength: params.dataByteLength,
+    ...(typeof params.documentByteLength === 'number' ? { documentByteLength: params.documentByteLength } : {}),
+    ...(typeof params.capacityRatio === 'number' ? { capacityRatio: params.capacityRatio } : {}),
     snapshotEncoding: params.snapshotEncoding,
     updatedBy: params.updatedBy,
     createdAt: params.createdAt,
@@ -1721,7 +1728,9 @@ async function notifySaveFailureByMailUnbounded(params: {
       return false
     }
     const workspaceRef = firestore.collection('workspaces').doc(params.workspaceKey)
-    const throttleRef = workspaceRef.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(params.classroomId)
+    // 間引きの記録は教室ごと。上限が近い通知(capacity-warning)だけ別の文書・1 日 1 通(本物の失敗の通知を黙らせない)。
+    const throttle = resolveSaveFailureAlertThrottle(params.kind, params.classroomId)
+    const throttleRef = workspaceRef.collection(SAVE_FAILURE_ALERT_COLLECTION).doc(throttle.docId)
     const nowIso = new Date().toISOString()
     const throttleSnapshot = await throttleRef.get()
     const throttleData = (throttleSnapshot.data() ?? {}) as { lastSentAt?: string; occurrenceCount?: number }
@@ -1731,7 +1740,7 @@ async function notifySaveFailureByMailUnbounded(params: {
       lastKind: params.kind,
       occurrenceCount: FieldValue.increment(1),
     }, { merge: true })
-    if (!shouldSendSaveFailureAlert({ lastSentAtIso: throttleData.lastSentAt, nowMs: Date.parse(nowIso) })) {
+    if (!shouldSendSaveFailureAlert({ lastSentAtIso: throttleData.lastSentAt, nowMs: Date.parse(nowIso), minIntervalMs: throttle.minIntervalMs })) {
       logger.info(`[SaveFailureAlert] Throttled kind=${params.kind} classroom=${params.classroomId} lastSentAt=${throttleData.lastSentAt ?? ''}`)
       return false
     }
@@ -1929,6 +1938,9 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   })
   const writeMode = snapshotDoc.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? 'cloud-function-compressed' : 'cloud-function-inline'
   const dataByteLength = snapshotDoc.dataByteLength ?? Buffer.byteLength(JSON.stringify(snapshotDoc.data ?? {}), 'utf8')
+  // 1 文書 1MiB 上限に対する見積もり(2026-10-27 日大前校の容量超過・snapshotCapacity.ts)。保存記録に残して推移を追えるようにする。
+  const documentByteLength = estimateFirestoreDocumentBytes(snapshotRef.path, snapshotDoc as unknown as Record<string, unknown>)
+  const capacityRatio = resolveSnapshotCapacityRatio(documentByteLength)
   const saveAttemptCreatedAt = new Date().toISOString()
   const saveAttemptBase = {
     classroomId,
@@ -1943,13 +1955,71 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     snapshotVersion: nextVersion,
     appVersion: incomingClient.appVersion,
     userAgent: incomingClient.userAgent,
+    documentByteLength,
+    capacityRatio,
   }
+  // 容量超過は理由つきで記録し、開発者へ知らせ、利用者には「通信の失敗」と区別できるエラーで返す(2026-10-27)。
+  // 以前は Firestore の拒否(HttpsError でない例外)がそのまま投げられ、記録は started のまま・画面は INTERNAL・メール無しだった。
+  const rejectAsTooLarge = async (detail: string): Promise<never> => {
+    await saveAttemptRef.set(buildSaveAttemptPayload({
+      ...saveAttemptBase,
+      status: 'too-large',
+      verified: false,
+      failedAt: new Date().toISOString(),
+      errorMessage: detail,
+    }), { merge: true })
+    await notifySaveFailureByMail({
+      kind: 'snapshot-too-large',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail,
+    })
+    throw new HttpsError(
+      'resource-exhausted',
+      `${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`,
+      { reason: 'snapshot-too-large', documentByteLength, maxBytes: FIRESTORE_DOCUMENT_MAX_BYTES },
+    )
+  }
+  const capacityDetail = `文書サイズ(見積もり)=${documentByteLength} / 上限=${FIRESTORE_DOCUMENT_MAX_BYTES}(使用率 ${(capacityRatio * 100).toFixed(2)}%)・教室データ(非圧縮)=${dataByteLength}`
+  // ★見積もりだけで書き込みを止めることはしない(見積もりが実際より数バイト大きいと、通るはずの保存を断ってしまう)。
+  //   判定は Firestore の拒否(下の catch)を正とし、見積もりは記録と「上限が近い」通知にだけ使う。
   await saveAttemptRef.set(buildSaveAttemptPayload({
     ...saveAttemptBase,
     status: 'started',
     verified: false,
   }))
-  await snapshotRef.set(snapshotDoc)
+  try {
+    await snapshotRef.set(snapshotDoc)
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error)
+    // 見積もりの取りこぼしで Firestore が容量超過を返した場合も、容量超過として扱う。
+    if (isFirestoreDocumentTooLargeError(error)) {
+      await rejectAsTooLarge(`${capacityDetail}・Firestore: ${errorText}`)
+    }
+    // それ以外の書き込み失敗は理由を残して知らせ、元の例外をそのまま投げ直す(クライアントの再試行の判定を変えない)。
+    await saveAttemptRef.set(buildSaveAttemptPayload({
+      ...saveAttemptBase,
+      status: 'write-failed',
+      verified: false,
+      failedAt: new Date().toISOString(),
+      errorMessage: errorText,
+    }), { merge: true })
+    await notifySaveFailureByMail({
+      kind: 'write-failed',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail: `${errorText}・${capacityDetail}`,
+    })
+    throw error
+  }
 
   const readbackSnapshot = await snapshotRef.get()
   const readbackPayload = readStoredSnapshotPayload(readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)
@@ -1984,6 +2054,20 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     readbackHash,
     verifiedAt: new Date().toISOString(),
   }), { merge: true })
+
+  // 保存は成功したが上限が近い(85% 以上)ときは開発者へ知らせる(教室ごとに 1 日 1 通・利用者の画面には出さない)。
+  if (isSnapshotNearCapacity(documentByteLength)) {
+    await notifySaveFailureByMail({
+      kind: 'capacity-warning',
+      workspaceKey,
+      classroomId,
+      saveId,
+      savedAt,
+      updatedBy: memberRef.id,
+      client: incomingClient,
+      detail: capacityDetail,
+    })
+  }
 
   // 操作ログは「保存が確定してから」書く。保存に失敗した操作は盤面にも残らないため、記録も残さない。
   await persistOperationEvents({

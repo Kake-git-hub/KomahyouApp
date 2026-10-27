@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.646 (2026-10-27)
+
+- fix: **日大前校の保存が通らない障害のつなぎ**。教室データ(8.3MB)を gzip+base64 で 1 文書に入れていて、Firestore の 1 文書上限(1,048,576 バイト)の 27 バイト手前まで来ていた。10/26 17:58〜21:15 と 10/27 14:46〜 の保存は全部 Firestore に拒否されていた(保存記録は started のまま・画面は「接続を確認して」・開発者へのメール無し)。(1) 教室スナップショットの圧縮を level 9 に(実データで 1,048,236 → 992,112 文字・余裕約 56KB・読む側は無変更)。(2) 本体の書き込みを try で包み、容量超過は saveAttempts に status=too-large・利用者へは resource-exhausted＋マーカー `SNAPSHOT_TOO_LARGE`(通信失敗の自動再試行に乗せない)・それ以外の書き込み失敗は status=write-failed で元の例外を投げ直す。どちらも開発者へメール(種類 snapshot-too-large / write-failed)。(3) 保存記録に文書サイズの見積もり documentByteLength と使用率 capacityRatio を残し、85% 以上で容量注意メール(capacity-warning・失敗の通知と別の間引きで 1 日 1 通)。(4) 画面は容量超過のとき「上限に達したため保存できませんでした。開発者へ自動で連絡済み。閉じず、再読み込みもしない」の専用の案内。見積もりだけで書き込みを止めることはしない(Firestore の拒否を正とする)。恒久対策は週単位の分割保存(開発ダッシュボード classroom-snapshot-capacity)。確認リスト sc-1。(functions/src/snapshotCapacity.ts・saveFailureAlert.ts・index.ts、src/utils/saveProgressMessages.ts、src/App.tsx)
+
 ## v1.5.645 (2026-10-26)
 
 - docs: Claude のメモリ(69 ファイル)をユーザーフォルダからリポジトリの `.claude/memory/` へ移設し、CLAUDE.md から索引を読み込むようにした(どの端末・クラウドのセッションでも同じ記憶を使えるように)。公開リポジトリのため生徒・講師の実名とオーナーのメールアドレス・UID は生徒ID/「生徒A」「講師A」「オーナー」へ伏せ字化。新しい記憶もこちらへ書く規則を CLAUDE.md に明記。アプリ本体は無変更。
