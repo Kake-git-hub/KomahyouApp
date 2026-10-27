@@ -613,7 +613,7 @@ export type ParentPortalDeps = {
   loadToken: (token: string) => Promise<StudentPortalTokenDoc | null>
   /** `workspaces/{ws}/classrooms/{classroomId}`。無ければ null。 */
   loadClassroom: (workspaceKey: string, classroomId: string) => Promise<{ name: string } | null>
-  /** `workspaces/{ws}/classroomSnapshots/{classroomId}` を readStoredSnapshotPayload で展開したもの。無ければ null。 */
+  /** `workspaces/{ws}/classroomSnapshots/{classroomId}` を唯一の読み手 readClassroomSnapshotPayload(旧形式＋分割形式)で展開したもの。無ければ null。組み立てられなければ例外(INV-14)。 */
   loadSnapshot: (workspaceKey: string, classroomId: string) => Promise<{ payload: unknown; savedAt: string | null } | null>
   /** generated/parentSchedule の buildParentScheduleView。生徒が無ければ null。 */
   buildScheduleView: (payload: unknown, studentId: string, range: ParentPortalRange) => { studentName: string; days: unknown[]; hasLectureLessons?: boolean } | null

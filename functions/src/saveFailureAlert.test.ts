@@ -104,7 +104,7 @@ describe('buildSaveFailureAlertMail', () => {
   })
 
   it('種類の一覧と判定', () => {
-    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning'])
+    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed'])
     expect(isSaveFailureAlertKind('stale-version')).toBe(true)
     expect(isSaveFailureAlertKind('other')).toBe(false)
   })

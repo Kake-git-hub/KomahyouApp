@@ -116,6 +116,14 @@ service cloud.firestore {
           allow create, update, delete: if isDeveloper(workspaceKey);
         }
 
+        // 週単位の分割保存の部品(docs/spec-save-restore.md §9-8・2026-10-27): 目次 classroomSnapshots/{id} が指す中身。
+        // 読むのは教室メンバー(クライアントの組み立て)。書くのは Cloud Function だけ(開発者も直書き不可・保存は CF 一本=K-1)。
+        // 旧「分割保存」の chunks / parts / boardWeeks とは別物。write:false を緩めない。
+        match /snapshotParts/{partId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow write: if false;
+        }
+
         // 保護者向け固定QR(docs/spec-parent-portal.md §E-2・2026-09-13): 保護者からの連絡。
         // 書くのは Cloud Function parentPortalApi(POST)と markParentMessagesNotified(既読化)だけ。
         // 教室メンバー(室長)は自教室ぶんを購読して通知モーダルに出す。write:false を緩めない

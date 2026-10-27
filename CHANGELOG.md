@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- feat: **週単位の分割保存 段階 0・A(両形式を読める版・まだ書く形式は旧形式のまま)**(docs/spec-save-restore.md §9・引き継ぎ docs/plan-2026-10-27-weekly-split-snapshot-handoff.md・INV-14)。(1) 共有純関数 `src/utils/classroomSnapshotParts.ts`(分割 core/board/週/ui・組み立て・週キー〔最小 dateKey・重複は ~2〕・部品/全体ハッシュの入力・目次の検査・読み手の共通手順〔欠けたら目次を 1 回読み直し、それでも欠ければ例外〕・送る部品/掃除の判定)を sync-shared で functions へ複製(パリティテスト・ブラウザ/Node の SHA-256 一致・分割→組み立ての同一性 AC-1〜3 を 46 週の合成データでも固定)。(2) サーバー: 唯一の読み手 `readClassroomSnapshotPayload`(旧形式は従来どおり・目次は snapshotParts を getAll で組み立て)で旧 `readStoredSnapshotPayload` の 9 箇所(空データ上書き拒否・読み戻し・直前ロールバック・版履歴・バックアップ・在籍数台帳・QR マージ・保護者ページ 2)を置き換え。組み立てられない教室は**空にせず例外**(INV-14): 自動バックアップはその教室を除いて `missingClassroomIds` に残し、復元前の安全スナップショットは失敗、直前ロールバック/版履歴は書かずに通知、在籍数台帳は記録しない。版履歴は分割形式でも組み立てた教室データ全体を単一文書で書く(K-7)。通知の種類 `snapshot-assembly-failed`。段階 A の暫定ガード: 分割形式の教室への保存(`parts-format-write-unsupported`)と QR 取り込みは断る(段階 B で書き手に置き換える)。(3) クライアント: `readFirebaseSnapshotPayload` の先頭で目次を判定し、DecompressionStream＋crypto.subtle で照合して組み立てる(`snapshotPartsClientRead.ts`)。欠ければ教室名つきの「読み込めませんでした…」で読み込み全体を失敗にし、盤面を出さない(＝保存も止まる)。(4) ルール `snapshotParts`(教室メンバー read・write は全面禁止)＋ルールテスト 7 件(要 `npm run test:rules`)。(5) INV-14 マトリクス `inv14-snapshot-all-or-nothing.matrix.test.ts`(列 5 × 読み手アダプタ 2 ＋ 行 8 の配線)新設・台帳の担保状況を ○ に。確認リスト sp-1。反映順は Functions → ルール → Hosting(safe-release)。(functions/src/index.ts・snapshotPartsReader.ts・saveFailureAlert.ts・generated/classroomSnapshotParts.ts、src/integrations/firebase/workspaceStore.ts・snapshotPartsClientRead.ts、firebase/firestore.rules)
+
 ## v1.5.649 (2026-10-27)
 
 - docs: 週単位の分割保存の次セッション向け引き継ぎ `docs/plan-2026-10-27-weekly-split-snapshot-handoff.md`(読む順・確定した設計の要点と根拠・段階 0〜D の作業分解・巻き戻し禁止の注意・数値メモ・関連する未完了)。開発ダッシュボードの台帳 classroom-snapshot-capacity と spec-index・memory も同じ所在へ更新。

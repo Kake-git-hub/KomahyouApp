@@ -4,6 +4,8 @@ import type { SlotCell } from '../../components/schedule-board/types'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { clearClassroomSnapshotVersions, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
+import { isSnapshotPartsManifest, SNAPSHOT_PARTS_SUBCOLLECTION } from '../../utils/classroomSnapshotParts'
+import { buildSnapshotPartsLoadFailedMessage, isSnapshotPartsAssemblyError, readSnapshotPartsPayloadInBrowser } from './snapshotPartsClientRead'
 
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const FIREBASE_CHUNKED_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64-chunked'
@@ -70,6 +72,9 @@ type FirebaseClassroomSnapshotDoc = {
   updatedAt: string
   // A1: 楽観ロック用の版数。保存ごとに +1。旧データには無いので optional。
   version?: number
+  // 週単位の分割保存(docs/spec-save-restore.md §9-3-4): この印があれば目次(中身は snapshotParts/ の部品)。
+  // 目次の項目の正本は src/utils/classroomSnapshotParts.ts の SnapshotPartsManifest(読み手はそちらで検査する)。
+  storageFormat?: string
 }
 
 type FirebaseClassroomSnapshotChunkDoc = {
@@ -334,6 +339,11 @@ function getSnapshotPartsCollection(snapshotRef: DocumentReference) {
   return collection(snapshotRef, 'parts')
 }
 
+// 週単位の分割保存の部品(2026-10-27)。旧 chunks / parts / boardWeeks とは別名(取り違え防止)。
+function getSnapshotWeeklyPartsCollection(snapshotRef: DocumentReference) {
+  return collection(snapshotRef, SNAPSHOT_PARTS_SUBCOLLECTION)
+}
+
 function getSnapshotBoardWeeksCollection(snapshotRef: DocumentReference) {
   return collection(snapshotRef, 'boardWeeks')
 }
@@ -401,6 +411,13 @@ async function gunzipBase64ToText(value: string) {
 async function readFirebaseSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null | undefined, snapshotRef?: DocumentReference) {
   if (!snapshot) return null
 
+  // 週単位の分割保存(目次 + snapshotParts)。★旧 3 形式の枝より先に判定する(目次は data / compressedData を持たないので、下の
+  // 枝に落ちると null=「空の教室」になり、欠けた教室を表示・保存してしまう・INV-14)。組み立てられなければ例外(空にしない)。
+  if (isSnapshotPartsManifest(snapshot)) {
+    if (!snapshotRef) throw new Error('教室データの参照がありません。開発者へご連絡ください。')
+    return readWeeklyPartsSnapshotPayload(snapshot, snapshotRef)
+  }
+
   if (snapshot.dataEncoding === FIREBASE_SPLIT_SNAPSHOT_ENCODING && snapshotRef) {
     return readSplitSnapshotPayload(snapshot, snapshotRef)
   }
@@ -434,6 +451,25 @@ async function readFirebaseSnapshotPayload(snapshot: FirebaseClassroomSnapshotDo
   }
 
   return null
+}
+
+// 分割形式(weekly-parts)の目次から教室データ全体を組み立てる(docs/spec-save-restore.md §9-5)。部品は目次が指す文書 ID だけを
+// 並列 getDoc で取る(サブコレクション全体は読まない)。読み手の共通手順(欠けたら目次を 1 回読み直す・fail-closed)は共有純関数。
+async function readWeeklyPartsSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc, snapshotRef: DocumentReference): Promise<AppSnapshotPayload> {
+  const partsCollection = getSnapshotWeeklyPartsCollection(snapshotRef)
+  const assembled = await readSnapshotPartsPayloadInBrowser(snapshot, {
+    getPartDoc: async (docId) => {
+      const partSnapshot = await getDoc(doc(partsCollection, docId))
+      return partSnapshot.exists() ? partSnapshot.data() : null
+    },
+    getManifest: async () => {
+      const latest = await getDoc(snapshotRef)
+      return latest.exists() ? latest.data() : null
+    },
+    gunzipBase64ToText,
+  })
+  // 共有関数の組み立て結果は今日の deserializeSnapshotPayload と同じ形(同一性の約束 §9-5-1)。
+  return assembled as unknown as AppSnapshotPayload
 }
 
 async function readSplitSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc, snapshotRef: DocumentReference) {
@@ -680,7 +716,18 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     const data = entry.data() as FirebaseClassroomDoc
     const snapshot = snapshotByClassroomId.get(entry.id)
     const settingsDoc = settingsByClassroomId.get(entry.id)
-    const payload = await readFirebaseSnapshotPayload(snapshot, doc(getSnapshotsCollection(firestore), entry.id))
+    let payload: AppSnapshotPayload | null
+    try {
+      payload = await readFirebaseSnapshotPayload(snapshot, doc(getSnapshotsCollection(firestore), entry.id))
+    } catch (error) {
+      // ★組み立てられない教室(INV-14): 空の教室にせず、読み込み全体を失敗にして盤面を出さない(= その教室の保存も止まる)。
+      //   開発者向けの原因(部品キー・理由)は console に残し、画面には平易な文言だけを出す(§9-5-3)。
+      if (isSnapshotPartsAssemblyError(error)) {
+        console.error(`[workspaceStore] 教室データを組み立てられません classroomId=${entry.id} reason=${error.reason} parts=${error.partKeys.join(',')} ${error.details.join(' / ')}`)
+        throw new Error(buildSnapshotPartsLoadFailedMessage(data.name ?? ''))
+      }
+      throw error
+    }
     if (payload && settingsDoc && (settingsDoc.savedAt ?? '') > (snapshot?.savedAt ?? '')) {
       payload.classroomSettings = settingsDoc.settings
     }

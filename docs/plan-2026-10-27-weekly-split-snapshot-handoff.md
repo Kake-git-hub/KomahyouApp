@@ -1,6 +1,7 @@
 # 週単位の分割保存（教室データ 1MiB 上限の恒久対策）— 次セッションへの引き継ぎ（2026-10-27）
 
-> 状態: **仕様はオーナー確定済み・実装は未着手。** 仕様の正本は `docs/spec-save-restore.md` §9（約 440 行・§9-15 の 6 論点はすべて確定）と
+> 状態: **仕様はオーナー確定済み・段階 0（共有純関数）と段階 A（両形式を読める版）は 2026-10-27 に実装済み（v1.5.650・ブランチ `ccr-262fd584-vi8fi3`）。
+> 次は段階 A の反映（Functions → ルール → Hosting）と staging での読取確認、その後 段階 B（サーバーが分割して書く）。** 仕様の正本は `docs/spec-save-restore.md` §9（約 440 行・§9-15 の 6 論点はすべて確定）と
 > `docs/spec-invariants.md` INV-14。この文書は「次のセッションが迷わず着手するための要約と手順」で、仕様の中身を複製しない
 > （食い違ったら §9 が正）。オーナー指示 2026-10-27「分割保存の実装を次セッションから進めるのでまとめて」。
 
@@ -14,6 +15,31 @@
 - **恒久対策**: 目次＋部品（管理データ `core`・盤面の週以外 `board`・週 `week:{週キー}`）に分けて保存し、変わった部品だけ送る。
   **冬期講習（12 月）で週が重くなる前に、段階 B（サーバーで分割して書く）を日大前校まで反映する**のが期限。
 - **緑が丘校**も 827KB（79%）で同じ道をたどる。薬円台校はサーバーに教室データ無し。
+
+## 0-1. 2026-10-27 の実装内容（段階 0・A）と次セッションの最初の仕事
+
+- 入れたもの（すべてテスト付き・main マージ前に regression-reviewer 推奨）:
+  - 共有純関数 `src/utils/classroomSnapshotParts.ts`（分割・組み立て・週キー・部品/全体ハッシュの入力・目次の検査・読み手の共通手順
+    `readClassroomSnapshotFromParts`・送る部品の判定・掃除の判定）。`functions/scripts/sync-shared.mjs` で
+    `functions/src/generated/classroomSnapshotParts.ts` へ複製（パリティテスト `functions/src/classroomSnapshotParts.parity.test.ts`）。
+  - サーバー `functions/src/snapshotPartsReader.ts`（zlib / crypto / getAll を渡す薄い層）と `index.ts` の**唯一の読み手**
+    `readClassroomSnapshotPayload`（旧形式は `readLegacyStoredSnapshotPayload`・目次は組み立て・欠けたら例外）。旧 `readStoredSnapshotPayload`
+    の 9 呼び出し箇所を全部置き換え（空データ上書き拒否・読み戻し・直前ロールバック before/after・版履歴・ワークスペースバックアップ・
+    在籍数台帳・QR マージ・保護者ページ日程・発行時の実在確認）。自動バックアップは組み立てられない教室を除いて `missingClassroomIds`、
+    復元前の安全スナップショットは例外、通知の種類 `snapshot-assembly-failed` を追加。
+  - **段階 A の暫定ガード**: 分割形式の教室への保存は `failed-precondition`（reason `parts-format-write-unsupported`）で断る。QR マージも
+    分割形式の教室では取り込まない（提出は `lectureSubmissions` に残る）。どちらも段階 B で分割の書き手に置き換える。
+  - クライアント `src/integrations/firebase/snapshotPartsClientRead.ts`（DecompressionStream / crypto.subtle / 並列 getDoc）と
+    `workspaceStore.ts` の `readFirebaseSnapshotPayload` 先頭の分岐。組み立てられない教室は教室名つきの案内で読み込み全体を失敗にし、
+    盤面を出さない（＝保存も止まる）。
+  - ルール `snapshotParts`（教室メンバー read・write は全面禁止）とルールテスト 7 件（`npm run test:rules`・要 Java＋エミュレータ・
+    このセッションの sandbox では未実行 → 反映前にオーナー PC か Actions「Firestore rules isolation」で回す）。
+  - INV-14 マトリクス `src/utils/inv14-snapshot-all-or-nothing.matrix.test.ts`（列 5 × アダプタ 2 ＋ 行 8 の配線）。台帳の担保状況を ○ に。
+- 入れていないもの（次セッション）: 分割形式の**書き手**全部（§9-4・段階 B）、機能フラグ `weeklySplitSnapshotStorage`、掃除の同乗、
+  `CLIENT_TOO_OLD`、`docs/runbooks/rollback.md` A・B の制限追記（段階 B と同時）、staging の読取確認用に分割形式の教室を手で作るツール。
+- 次セッションの最初の仕事: (1) `npm run test:rules` を回す。(2) safe-release で Functions → ルール（Actions「Deploy Firestore rules」）→
+  Hosting の順に反映。(3) staging に分割形式の目次＋部品を手で作る小さなツール（`tools/`・firebase-admin・staging 限定）を書いて
+  「読める・欠けたら案内が出て盤面が出ない」を実機で確かめる。(4) 段階 B へ。
 
 ## 1. 読む順（着手前に必ず）
 

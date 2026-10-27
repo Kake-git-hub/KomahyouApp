@@ -61,6 +61,8 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
 import { buildSaveFailureAlertMail, resolveSaveFailureAlertThrottle, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
 import { classifySnapshotWriteFailure, estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
+import { assembleSnapshotPartsManifest, describeSnapshotAssemblyFailure, isSnapshotPartsManifest, SnapshotPartsAssemblyError } from './snapshotPartsReader'
+import { SNAPSHOT_PARTS_SUBCOLLECTION } from './generated/classroomSnapshotParts'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
@@ -184,6 +186,13 @@ type FirebaseClassroomSnapshotDoc = {
   updatedAt?: string
   // A1: 楽観ロック用の単調増加版数。保存ごとに +1。旧データには無いので optional。
   version?: number
+  // 週単位の分割保存(docs/spec-save-restore.md §9-3-4): この印があれば目次(中身は snapshotParts/ の部品)。
+  // 目次の全項目は generated/classroomSnapshotParts.ts の SnapshotPartsManifest。ここでは読み手が触る分だけ書く。
+  storageFormat?: string
+  storageFormatVersion?: number
+  saveId?: string
+  compositeHash?: string
+  managementCount?: number
 }
 
 type WorkspaceUser = {
@@ -245,6 +254,8 @@ type WorkspaceAutoBackupSummaryDoc = {
   sourceSavedAt: string
   storagePath: string
   createdAt: string
+  /** 分割形式で組み立てられず除いた教室(INV-14・§9-5-3)。無い＝旧版が書いた記録。 */
+  missingClassroomIds?: string[]
   googleDriveBackupStatus?: GoogleDriveBackupStatus
   googleDriveBackupFileId?: string
   googleDriveBackupFileName?: string
@@ -409,6 +420,7 @@ function countClassroomManagementData(payload: Record<string, unknown>) {
 }
 
 async function assertNoSnapshotDataLoss(params: {
+  snapshotRef: FirebaseFirestore.DocumentReference
   previousSnapshot: FirebaseClassroomSnapshotDoc | null
   nextPayload: Record<string, unknown>
 }) {
@@ -416,8 +428,14 @@ async function assertNoSnapshotDataLoss(params: {
   if (nextManagementCount > 0) return
   if (!params.previousSnapshot) return
 
-  const previousPayload = readStoredSnapshotPayload(params.previousSnapshot)
-  const previousManagementCount = previousPayload ? countClassroomManagementData(previousPayload) : 1
+  // 前回の件数: 分割形式の目次なら managementCount をそのまま使う(部品を読まない・§9-4-6)。旧形式なら 1 回だけ解凍して数える。
+  // 組み立てられない教室は例外のまま上へ(空の教室データで「前回 0 件」と誤判定して上書きを通さない・INV-14)。
+  const previousManagementCount = isSnapshotPartsManifest(params.previousSnapshot) && typeof params.previousSnapshot.managementCount === 'number'
+    ? params.previousSnapshot.managementCount
+    : await (async () => {
+      const previousPayload = await readClassroomSnapshotPayload(params.snapshotRef, params.previousSnapshot)
+      return previousPayload ? countClassroomManagementData(previousPayload) : 1
+    })()
   if (previousManagementCount <= 0) return
 
   // 安全弁(空の管理データで既存データを上書きしない)。画面には平易な文言だけを出し、件数は details とログへ残す。
@@ -842,7 +860,7 @@ function buildWorkspaceIncidentBackupStoragePath(workspaceKey: string, reason: s
 async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string) {
   const savedAt = new Date().toISOString()
   try {
-    const { snapshot } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
+    const { snapshot } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'throw', reader: 'incident-backup' })
     const storagePath = buildWorkspaceIncidentBackupStoragePath(workspaceKey, reason, savedAt)
     const bucket = storage.bucket(STORAGE_BUCKET)
     await bucket.file(storagePath).save(serializeWorkspaceBackupJson(snapshot), {
@@ -868,13 +886,31 @@ function stringifySnapshotPayload(payload: Record<string, unknown> | null) {
 async function writeLatestClassroomRollback(params: {
   workspaceKey: string
   classroomId: string
+  snapshotRef: FirebaseFirestore.DocumentReference
   beforeSnapshot: FirebaseClassroomSnapshotDoc
   afterSnapshot?: FirebaseClassroomSnapshotDoc | null
 }) {
-  const beforePayload = readStoredSnapshotPayload(params.beforeSnapshot)
+  // 分割形式の目次なら部品から**教室データ全体**を組み立てて単一文書の形で書く(K-7・§9-6)。組み立てられなければ書かずに
+  // 知らせて投げ直す(空や一部欠けの教室データを「直前の状態」として残さない・INV-14)。
+  // 前後が同じ(メタだけの更新)なら書かない。分割形式どうしは全体ハッシュで判定してよい(§9-6)ので、after の部品は読まない。
+  const afterSnapshot = params.afterSnapshot ?? null
+  if (isSnapshotPartsManifest(params.beforeSnapshot) && isSnapshotPartsManifest(afterSnapshot) && params.beforeSnapshot.compositeHash === afterSnapshot.compositeHash) {
+    return false
+  }
+  let beforePayload: Record<string, unknown> | null
+  let afterPayload: Record<string, unknown> | null = null
+  try {
+    beforePayload = await readClassroomSnapshotPayload(params.snapshotRef, params.beforeSnapshot)
+    // 旧形式の after だけ中身で比べる(分割形式の after は上のハッシュ比較で済ませ、50 文書の読み取りを省く)。
+    if (afterSnapshot && !isSnapshotPartsManifest(afterSnapshot)) {
+      afterPayload = await readClassroomSnapshotPayload(params.snapshotRef, afterSnapshot)
+    }
+  } catch (error) {
+    await notifySnapshotAssemblyFailure({ workspaceKey: params.workspaceKey, classroomId: params.classroomId, reader: 'latest-rollback', error })
+    throw error
+  }
   if (!beforePayload) return false
 
-  const afterPayload = readStoredSnapshotPayload(params.afterSnapshot ?? null)
   if (afterPayload && stringifySnapshotPayload(beforePayload) === stringifySnapshotPayload(afterPayload)) {
     return false
   }
@@ -911,7 +947,9 @@ async function writeLatestClassroomRollback(params: {
  * メタだけの更新(例: 自動バックアップの印)なので書かない。版数か保存時刻が進んでいれば保存なので書く(内容が同じ再保存も 1 回の保存として残す)。
  */
 function shouldWriteClassroomSaveHistory(before: FirebaseClassroomSnapshotDoc | null, after: FirebaseClassroomSnapshotDoc): boolean {
-  const hasPayload = Boolean(after.data && typeof after.data === 'object') || (after.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING && typeof after.compressedData === 'string' && after.compressedData.length > 0)
+  const hasPayload = Boolean(after.data && typeof after.data === 'object')
+    || (after.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING && typeof after.compressedData === 'string' && after.compressedData.length > 0)
+    || isSnapshotPartsManifest(after)
   if (!hasPayload) return false
   if (!before) return true
   return before.version !== after.version || before.savedAt !== after.savedAt
@@ -927,6 +965,7 @@ function shouldWriteClassroomSaveHistory(before: FirebaseClassroomSnapshotDoc | 
 async function writeClassroomSaveHistory(params: {
   workspaceKey: string
   classroomId: string
+  snapshotRef: FirebaseFirestore.DocumentReference
   beforeSnapshot?: FirebaseClassroomSnapshotDoc | null
   afterSnapshot: FirebaseClassroomSnapshotDoc
 }) {
@@ -936,13 +975,17 @@ async function writeClassroomSaveHistory(params: {
   const savedAt = params.afterSnapshot.savedAt ?? capturedAt
   const version = typeof params.afterSnapshot.version === 'number' ? params.afterSnapshot.version : 0
   const storagePath = buildClassroomSaveHistoryStoragePath(params.workspaceKey, params.classroomId, savedAt, version)
-  // after 文書は既に保存形式(data または gzip-base64 の compressedData)なので、作り直さずそのまま包む(M-5: CPU とメモリを半分に)。
+  // 旧形式の after 文書は既に保存形式(data または gzip-base64 の compressedData)なので、作り直さずそのまま包む(M-5: CPU とメモリを半分に)。
+  // 分割形式の目次は中身を持たない(部品は掃除で消える)ので、**組み立てた教室データ全体**を単一文書の形にして書く(K-7・§9-6・AC-22)。
+  // 組み立てられなければ書かずに知らせて投げる(呼び出し側がログだけにする・空で書かない)。
   const storageDoc: ClassroomSaveHistoryStorageDoc = {
     classroomId: params.classroomId,
     sourceSavedAt: savedAt,
     capturedAt,
     version,
-    snapshot: params.afterSnapshot,
+    snapshot: isSnapshotPartsManifest(params.afterSnapshot)
+      ? await buildAssembledStoredSnapshotDoc({ workspaceKey: params.workspaceKey, classroomId: params.classroomId, snapshotRef: params.snapshotRef, manifest: params.afterSnapshot, reader: 'save-history' })
+      : params.afterSnapshot,
   }
 
   const bucket = storage.bucket(STORAGE_BUCKET)
@@ -1181,7 +1224,9 @@ function buildSaveAttemptPayload(params: {
   }
 }
 
-function readStoredSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null | undefined) {
+// 旧形式(1 文書: data 平文 / gzip-base64 の compressedData)だけを解く。★読み手はこれを直接呼ばず readClassroomSnapshotPayload を使う
+// (分割形式の目次をこの関数に渡すと null=「空の教室」になり、欠けた教室を表示・保存してしまう・INV-14)。配線テスト snapshotPartsRead.wiring.test.ts。
+function readLegacyStoredSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null | undefined) {
   if (!snapshot) return null
 
   if (snapshot.data && typeof snapshot.data === 'object') {
@@ -1194,6 +1239,78 @@ function readStoredSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null
   }
 
   return null
+}
+
+/**
+ * 教室スナップショット文書を教室データへ展開する**唯一の読み手**(docs/spec-save-restore.md §9-5-4)。
+ * - 旧形式(1 文書)は従来どおり同期的に解く。分割形式の目次(storageFormat='weekly-parts')は部品 snapshotParts/{docId} を
+ *   firestore.getAll で取り、解凍・ハッシュ照合して組み立てる(共有純関数 generated/classroomSnapshotParts.ts)。
+ * - 文書が無い(null)ときだけ null(新しい教室)。★目次があるのに組み立てられないときは例外(SnapshotPartsAssemblyError)で、
+ *   空の教室データも一部だけの教室データも返さない(INV-14)。呼び出し側は空データで計算・書き込みをしない。
+ * - トランザクションの中では目次だけ transaction.get し、部品は不変なのでトランザクション外(この関数)で読んでよい。
+ */
+async function readClassroomSnapshotPayload(
+  snapshotRef: FirebaseFirestore.DocumentReference,
+  snapshot: FirebaseClassroomSnapshotDoc | null | undefined,
+): Promise<Record<string, unknown> | null> {
+  if (!snapshot) return null
+  if (!isSnapshotPartsManifest(snapshot)) return readLegacyStoredSnapshotPayload(snapshot)
+  const partsCollection = snapshotRef.collection(SNAPSHOT_PARTS_SUBCOLLECTION)
+  return assembleSnapshotPartsManifest(snapshot, {
+    fetchPartDocs: async (docIds) => {
+      const docs = await firestore.getAll(...docIds.map((docId) => partsCollection.doc(docId)))
+      return docs.map((doc) => (doc.exists ? doc.data() ?? null : null))
+    },
+    refetchManifest: async () => {
+      const latest = await snapshotRef.get()
+      return latest.exists ? latest.data() ?? null : null
+    },
+  })
+}
+
+type SnapshotAssemblyReader = 'latest-rollback' | 'save-history' | 'auto-backup' | 'incident-backup' | 'student-count-ledger' | 'lecture-submission-merge'
+
+/** 組み立て失敗(INV-14)をログと開発者メールで知らせる。メールの失敗は握る(呼び出し側の失敗処理を変えない)。 */
+async function notifySnapshotAssemblyFailure(params: { workspaceKey: string; classroomId: string; reader: SnapshotAssemblyReader; error: unknown }) {
+  const detail = `${params.reader}: ${describeSnapshotAssemblyFailure(params.error)}`
+  logger.error(`[SnapshotAssembly] 教室データを組み立てられません workspace=${params.workspaceKey} classroom=${params.classroomId} ${detail}`)
+  await notifySaveFailureByMail({
+    kind: 'snapshot-assembly-failed',
+    workspaceKey: params.workspaceKey,
+    classroomId: params.classroomId,
+    saveId: '',
+    savedAt: new Date().toISOString(),
+    updatedBy: 'system',
+    client: { appVersion: '', userAgent: '' },
+    detail,
+  })
+}
+
+/** 分割形式の目次から教室データ全体を組み立て、旧来の単一文書の形(createStoredSnapshotDoc)にする(版履歴・直前ロールバック用・K-7)。 */
+async function buildAssembledStoredSnapshotDoc(params: {
+  workspaceKey: string
+  classroomId: string
+  snapshotRef: FirebaseFirestore.DocumentReference
+  manifest: FirebaseClassroomSnapshotDoc
+  reader: SnapshotAssemblyReader
+}): Promise<FirebaseClassroomSnapshotDoc> {
+  let payload: Record<string, unknown> | null
+  try {
+    payload = await readClassroomSnapshotPayload(params.snapshotRef, params.manifest)
+  } catch (error) {
+    await notifySnapshotAssemblyFailure({ workspaceKey: params.workspaceKey, classroomId: params.classroomId, reader: params.reader, error })
+    throw error
+  }
+  if (!payload) throw new SnapshotPartsAssemblyError('invalid-manifest', [], ['目次から教室データが得られない'])
+  const savedAt = params.manifest.savedAt ?? new Date().toISOString()
+  return createStoredSnapshotDoc({
+    payload,
+    savedAt,
+    updatedBy: params.manifest.updatedBy ?? 'system',
+    updatedAt: params.manifest.updatedAt ?? savedAt,
+    schemaVersion: params.manifest.schemaVersion ?? 1,
+    version: params.manifest.version,
+  })
 }
 
 function createEmptyAppSnapshotPayload() {
@@ -1260,7 +1377,13 @@ function getLatestSavedAt(classrooms: FirebaseClassroomDoc[], snapshots: Firebas
   return candidates.sort((left, right) => right.localeCompare(left))[0] ?? fallbackSavedAt
 }
 
-async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt: string) {
+/**
+ * ワークスペース全体のバックアップ用スナップショット(教室データ全体の JSON・K-8)。
+ * 分割形式の教室は部品から組み立てる。組み立てられない教室(INV-14):
+ *  - onAssemblyFailure='exclude'(15 分毎の自動バックアップ): その教室を**空で書かず**に除き、missingClassroomIds に残して開発者へ知らせる(§9-5-3・AC-21)。
+ *  - onAssemblyFailure='throw'(復元前の安全スナップショット・開発者の書き出し): 例外(欠けた一式を「安全な控え」にしない)。
+ */
+async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt: string, options: { onAssemblyFailure: 'exclude' | 'throw'; reader: SnapshotAssemblyReader }) {
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
   const [memberSnapshots, classroomSnapshots, snapshotSnapshots] = await Promise.all([
     workspaceRef.collection('members').get(),
@@ -1273,11 +1396,21 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
     snapshotSnapshots.docs.map((entry) => [entry.id, entry.data() as FirebaseClassroomSnapshotDoc]),
   )
 
-  const classrooms = classroomSnapshots.docs.map((entry) => {
+  const missingClassroomIds: string[] = []
+  const classroomResults = await Promise.all(classroomSnapshots.docs.map(async (entry) => {
     const classroomData = entry.data() as FirebaseClassroomDoc
     const snapshotData = snapshotByClassroomId.get(entry.id)
-    return toWorkspaceClassroom(entry.id, classroomData, readStoredSnapshotPayload(snapshotData) ?? null)
-  })
+    try {
+      const payload = await readClassroomSnapshotPayload(workspaceRef.collection('classroomSnapshots').doc(entry.id), snapshotData)
+      return toWorkspaceClassroom(entry.id, classroomData, payload ?? null)
+    } catch (error) {
+      await notifySnapshotAssemblyFailure({ workspaceKey, classroomId: entry.id, reader: options.reader, error })
+      if (options.onAssemblyFailure === 'throw') throw error
+      missingClassroomIds.push(entry.id)
+      return null
+    }
+  }))
+  const classrooms = classroomResults.filter((classroom): classroom is WorkspaceClassroom => classroom !== null)
 
   const latestSourceSavedAt = getLatestSavedAt(
     classroomSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomDoc),
@@ -1287,6 +1420,7 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
 
   return {
     latestSourceSavedAt,
+    missingClassroomIds,
     snapshot: {
       schemaVersion: 1,
       savedAt,
@@ -1880,8 +2014,15 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   }
   const previousSnapshot = await snapshotRef.get()
   const previousSnapshotData = previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null
+  // 段階 A(読める版・docs/spec-save-restore.md §9-7-1): この版のサーバーは分割形式を**読む**だけで、まだ分割して書けない。
+  // 分割形式の教室へ旧形式(1 文書)で上書きすると一方通行(§9-7-1)に反し、部品が宙に浮くので断る。段階 B でここが分割の書き手に置き換わる。
+  if (isSnapshotPartsManifest(previousSnapshotData)) {
+    logger.error(`[saveClassroomSnapshot] 分割形式の教室への保存はこの版では未対応 classroom=${classroomId} saveId=${saveId}`)
+    throw new HttpsError('failed-precondition', 'この教室は新しい保存形式のため、この版では保存できません。開発者へご連絡ください。', { reason: 'parts-format-write-unsupported' })
+  }
   try {
     await assertNoSnapshotDataLoss({
+      snapshotRef,
       previousSnapshot: previousSnapshotData,
       nextPayload: sanitizedPayload,
     })
@@ -2024,7 +2165,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   }
 
   const readbackSnapshot = await snapshotRef.get()
-  const readbackPayload = readStoredSnapshotPayload(readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)
+  const readbackPayload = await readClassroomSnapshotPayload(snapshotRef, readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)
   const readbackHash = readbackPayload ? hashSnapshotPayload(readbackPayload) : ''
   if (readbackHash !== payloadHash) {
     await saveAttemptRef.set(buildSaveAttemptPayload({
@@ -2749,6 +2890,8 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
 }, async (event) => {
   const beforeSnapshot = event.data?.before.data() as FirebaseClassroomSnapshotDoc | undefined
   const afterSnapshot = event.data?.after.data() as FirebaseClassroomSnapshotDoc | undefined
+  // 分割形式の目次なら部品(snapshotParts)を読む必要があるので、目次文書の参照を渡す(before / after は同じパス)。
+  const snapshotRef = firestore.collection('workspaces').doc(event.params.workspaceKey).collection('classroomSnapshots').doc(event.params.classroomId)
 
   // ★順序(regression-reviewer M-5): 直前ロールバック(手動復旧の最後の砦)を**先に**書く。版履歴を先に待つと、版履歴が
   //   時間切れ・OOM で止まったとき直前ロールバックまで書かれない。直前ロールバックの失敗は従来どおり最後に投げ直す。
@@ -2758,6 +2901,7 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
       await writeLatestClassroomRollback({
         workspaceKey: event.params.workspaceKey,
         classroomId: event.params.classroomId,
+        snapshotRef,
         beforeSnapshot,
         afterSnapshot,
       })
@@ -2774,6 +2918,7 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
       await writeClassroomSaveHistory({
         workspaceKey: event.params.workspaceKey,
         classroomId: event.params.classroomId,
+        snapshotRef,
         beforeSnapshot,
         afterSnapshot,
       })
@@ -3104,9 +3249,16 @@ async function recordStudentCountLedgerEntry(workspaceKey: string, snapshotDate:
   )
   const recordedAt = new Date().toISOString()
 
-  const entries = classroomSnapshots.docs.map((entry) => {
+  // 組み立てられない教室があれば例外(在籍 0 名として恒久記録に残さない・INV-14)。write-once の台帳なので誤った値を書かない方が安全。
+  const entries = await Promise.all(classroomSnapshots.docs.map(async (entry) => {
     const classroomData = entry.data() as FirebaseClassroomDoc
-    const payload = readStoredSnapshotPayload(snapshotByClassroomId.get(entry.id))
+    let payload: Record<string, unknown> | null
+    try {
+      payload = await readClassroomSnapshotPayload(workspaceRef.collection('classroomSnapshots').doc(entry.id), snapshotByClassroomId.get(entry.id))
+    } catch (error) {
+      await notifySnapshotAssemblyFailure({ workspaceKey, classroomId: entry.id, reader: 'student-count-ledger', error })
+      throw error
+    }
     const { studentCount, studentIds } = countActiveStudentsOnDate(payload?.students, snapshotDate)
     return {
       classroomId: entry.id,
@@ -3119,7 +3271,7 @@ async function recordStudentCountLedgerEntry(workspaceKey: string, snapshotDate:
       recordedBy,
       source,
     }
-  })
+  }))
 
   const studentCountTotal = entries.reduce((total, entry) => total + entry.studentCount, 0)
   const batch = firestore.batch()
@@ -3249,7 +3401,10 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id
     logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind})`)
-    const { snapshot, latestSourceSavedAt } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
+    const { snapshot, latestSourceSavedAt, missingClassroomIds } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })
+    if (missingClassroomIds.length > 0) {
+      logger.error(`[AutoBackup] 組み立てられない教室を除いて書く(INV-14) workspace=${workspaceKey} missingClassroomIds=${missingClassroomIds.join(',')}`)
+    }
     const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
     const snapshotJson = serializeWorkspaceBackupJson(snapshot)
 
@@ -3273,6 +3428,8 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
         sourceSavedAt: latestSourceSavedAt,
         storagePath,
         createdAt: savedAt,
+        // 組み立てられずに除いた教室(§9-5-3)。空配列でも残し、15 分毎のバックアップが整合監視を兼ねるようにする。
+        missingClassroomIds,
       } satisfies WorkspaceAutoBackupSummaryDoc, { merge: true }),
       workspaceDoc.ref.set({
         serverAutoBackupLastSavedAt: savedAt,
@@ -3574,7 +3731,13 @@ export const lectureSubmissionApi = onRequest({
         if (!snapshotDoc.exists) return
 
         const snapshotData = snapshotDoc.data() as FirebaseClassroomSnapshotDoc
-        const payload = readStoredSnapshotPayload(snapshotData)
+        // 段階 A(読める版): 分割形式の目次は旧形式(1 文書)で上書きできない(部品が宙に浮く・一方通行 §9-7-1)。マージせずログに残す。
+        // 提出は lectureSubmissions に残り、室長側は購読で反映する(現行の失敗時と同じ・INV-07)。段階 B で core 部品の差し替えに置き換わる。
+        if (isSnapshotPartsManifest(snapshotData)) {
+          logger.error(`[submitLectureSubmission] 分割形式の教室へのスナップショット取り込みはこの版では未対応 workspace=${data.workspaceKey} classroom=${data.classroomId}`)
+          return
+        }
+        const payload = readLegacyStoredSnapshotPayload(snapshotData)
         if (!payload?.specialSessions || !Array.isArray(payload.specialSessions)) return
 
         const sessions = payload.specialSessions as Array<Record<string, unknown>>
@@ -3676,8 +3839,9 @@ function buildParentPortalDeps(): ParentPortalDeps {
       const snapshot = await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).get()
       if (!snapshot.exists) return null
       const data = snapshot.data() as FirebaseClassroomSnapshotDoc
-      // inline data / gzip-base64 compressedData の両方をこの 1 関数が解く(lectureSubmissionApi と同じ)。
-      const payload = readStoredSnapshotPayload(data)
+      // 旧形式(inline data / gzip-base64)と分割形式(weekly-parts)を唯一の読み手 readClassroomSnapshotPayload が解く。
+      // 組み立てられなければ例外(保護者ページは 500・空の日程を出さない・INV-14)。
+      const payload = await readClassroomSnapshotPayload(parentPortalClassroomSnapshotRef(workspaceKey, classroomId), data)
       if (!payload) return null
       return { payload, savedAt: typeof data.savedAt === 'string' && data.savedAt ? data.savedAt : null }
     },
@@ -3820,8 +3984,9 @@ async function requireParentPortalEnabledClassroom(workspaceKey: string, classro
 // 名簿(保存済みスナップショット)にその生徒が実在するか。発行時のゴミ文書と、名簿から消えた生徒への
 // 発行を防ぐ。在籍(退塾・卒業)はここでは見ない: 閲覧可否は API 側が当日の日付で判定する(§G-2 4 段目)。
 async function requireParentPortalStudentExists(workspaceKey: string, classroomId: string, studentId: string) {
-  const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).get()
-  const payload = snapshot.exists ? readStoredSnapshotPayload(snapshot.data() as FirebaseClassroomSnapshotDoc) : null
+  const snapshotRef = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId)
+  const snapshot = await snapshotRef.get()
+  const payload = snapshot.exists ? await readClassroomSnapshotPayload(snapshotRef, snapshot.data() as FirebaseClassroomSnapshotDoc) : null
   if (!payload || !findParentPortalStudent(payload, studentId)) {
     throw new HttpsError('not-found', 'この生徒が見つかりません。基本データを保存してからもう一度お試しください。')
   }
