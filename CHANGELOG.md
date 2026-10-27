@@ -14,6 +14,7 @@
 
 ## 未リリース
 
+- fix: 休日(休日設定・定休日)のコマへ、生徒の移動(メニュー・長押しD&D)・入れ替え・未消化振替/講習の配置で生徒を置けてしまい、再マージで黙って消えていた(移動元に「移)」だけ・講習は台帳 −1 だけが残る)のを入口で止めた(「休日のコマには生徒を置けません。」・休日から営業日へ出すだけの移動は可・オーナー指示 確認リスト tp-63 メモ・受付 20261027-144006023-5e34fa4b)。判定は `closedDayPlacementGuard.ts` に一元化。講師・日程表別タブ・自動割振・空欄メニューは既に止めていた(変更なし)。確認リスト tp-66。INV-02 / INV-06。(src/components/schedule-board/closedDayPlacementGuard.ts・ScheduleBoardScreen.tsx・inv02-manual-edit-persistence.matrix.test.ts・docs/spec-invariants.md)
 - fix: 操作痕跡の盤面差分の要約で、机 1 台が長い操作(丸ごと振替など)が 2000 字で机の途中から「…」で切れていたのを、文字数の予算(`OPERATION_TRACE_DIFF_CHAR_BUDGET`＝上限 −200)に収まる机だけを並べ、残りを「他N件」に回すようにした(確認リスト sc-2 を Claude が記録で確認したところ、10/28→10/29 の丸ごと振替が 16 台目の途中で切れていた・受付 20261027-144006023-5e34fa4b)。(src/utils/operationTrace.ts)
 ## v1.5.650 (2026-10-27)
 
