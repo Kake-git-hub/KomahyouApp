@@ -38,18 +38,20 @@ import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonT
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
-  describeAdoptExistingKeptDeskTeacher,
+  buildTemplatePendingTeacherChoiceConfirm,
+  computePendingTeacherChoice,
   describeTemplatePendingCollapseFailure,
   findTemplatePendingDeskEntry,
   hasTemplatePendingLowerContent,
   hasTemplatePendingLowerSeatContent,
+  isTemplatePendingTeacherOnly,
   isTemplatePendingSeatLinked,
   removeTemplatePendingLowerMemo,
   removeTemplatePendingLowerStudents,
@@ -60,6 +62,7 @@ import {
   settleTemplatePendingDesksAfterCommit,
   splitTemplatePendingLowerSeat,
   TEMPLATE_PENDING_MESSAGES,
+  withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
@@ -6508,7 +6511,8 @@ type TemplatePendingResolutionContext = {
   ledgerOriginDatesByKey: Record<string, string[]>
 }
 
-export type TemplatePendingResolutionMode = 'adopt-template' | 'adopt-existing' | 'delete-lower-student' | 'delete-lower-memo'
+/** adopt-template-teacher / adopt-existing-teacher＝講師欄の「テンプレの講師を採用／手入力の講師を採用」（tp-64・2026-10-27）。 */
+export type TemplatePendingResolutionMode = 'adopt-template' | 'adopt-existing' | 'delete-lower-student' | 'delete-lower-memo' | 'adopt-template-teacher' | 'adopt-existing-teacher'
 
 export type TemplatePendingResolutionResult =
   | {
@@ -6596,10 +6600,9 @@ export function disposeTemplatePendingLowerStudents(params: {
  *  4. **席ごと（オーナー指示 2026-10-03・Q26-10）**: seatIndex を渡すと、その席の下段（seatLower）だけを対象にする＝取り下げるのはその席の
  *     テンプレ生徒（と下段の生徒と同じ生徒）だけ、机へ戻すのもその席の下段だけ。もう一方の席の下段（restLower）は保留のまま残る
  *     （確認リスト v1.5.577 その他欄「生徒 1 の手入力データを採用したのに生徒 2 の既存データが生徒 2 のテンプレを上書きしている」の修正）。
- *  5. **手置き講師が同じコマの別の机に居るとき（確認リスト tp-64 その他欄・2026-10-27）**: 下段の手置き講師 B が同じコマの別の机（テンプレが B を別の机に
- *     置いた形＝Q41-9 の表の「テンプレが同じコマの別の机に手置き講師と同じ講師を置く」）に居るなら、B を机へ戻さず（戻すと同じ講師が 2 机＝INV-01）、
- *     机の講師はそのままで生徒だけ採用する（keptDeskTeacher に理由を返す）。以前は確認文で「取り下げます」と出した後に講師の一意性検査で止まり、
- *     画面上は何も変わらなかった（11/2 5限 6机目: 下段の講習の生徒を採用しても上段のテンプレの生徒が消えない）。
+ *  5. **講師には触れない（オーナー確定 2026-10-27・確認リスト tp-64「講師と生徒をリンクさせないでそれぞれ採用」）**: 下段の手置き講師（Q41）は
+ *     机へ戻さない（机の講師は上段＝テンプレ側のまま）。講師は保留に残り、講師欄の「テンプレの講師を採用／手入力の講師を採用」で決める
+ *     （computePendingTeacherChoice）。以前は採用で講師も戻そうとし、手置き講師が同じコマの別の机に居ると確認の後に何も起きなかった。
  */
 export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk: DeskCell; entry: TemplatePendingDesk; seatIndex?: number }) {
   const { cell, desk } = params
@@ -6607,29 +6610,14 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
   const entry: TemplatePendingDesk = split ? { ...params.entry, lower: split.seatLower } : params.entry
   const restLower: TemplatePendingLower | null = split && hasTemplatePendingLowerContent(split.restLower) ? split.restLower : null
   const liveStudentsElsewhere = collectLiveStudentsElsewhereInCell(cell, desk.id)
-  // 5.（tp-64）: 戻す手置き講師が同じコマの別の机に居るか。判定は講師の一意性検査と同じ isTeacherElsewhereInCell を机 1 つずつに当てる（机番号を出すため）。
-  const lowerTeacher = entry.lower.teacher
-  const elsewhereDeskIndex = lowerTeacher && liveTemplatePendingStudents(entry.lower.lesson).length > 0
-    ? cell.desks.findIndex((other) => other.id !== desk.id && isTeacherElsewhereInCell({ desks: [other] }, desk.id, lowerTeacher))
-    : -1
-  const keptDeskTeacher = lowerTeacher && elsewhereDeskIndex >= 0
-    ? { lowerTeacher: lowerTeacher.teacher.trim(), elsewhereDeskNumber: elsewhereDeskIndex + 1, deskTeacher: desk.teacher.trim() }
-    : null
-  let collapseEntry: Pick<TemplatePendingDesk, 'lower'> = entry
-  if (keptDeskTeacher) {
-    const lowerWithoutTeacher: TemplatePendingLower = { ...entry.lower }
-    delete lowerWithoutTeacher.teacher
-    collapseEntry = { lower: lowerWithoutTeacher }
-  }
   const withdrawUpper = (seats: number[]) => {
     const withdrawnStudents = seats.map((seat) => desk.lesson?.studentSlots[seat] ?? null).filter((student): student is StudentEntry => Boolean(student))
     const remaining = (desk.lesson?.studentSlots ?? [null, null]).map((student, seat) => (seats.includes(seat) ? null : student)) as [StudentEntry | null, StudentEntry | null]
     const nextUpper: DeskCell = { ...desk }
     if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = detachTemplateLessonWithoutTemplateStudents({ ...desk.lesson, studentSlots: remaining }, desk.id)
     else delete nextUpper.lesson
-    // Q41-6: 「既存を採用」は下段の手置き講師を机の講師に戻す（席ごとでも机の講師は 1 人なので、押していない席に残るテンプレの生徒もその講師の担当になる＝暫定・Q41-12 (2)）。
-    // ただし 5.（tp-64）の形は講師を戻さない（collapseEntry から講師を外す＝机の講師のまま）。
-    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, collapseEntry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower, keptDeskTeacher }
+    // 5.（tp-64）: 'adopt' は両方の行に生徒が居ても合流を試す指定。講師は computePendingDeskCollapse が変えない（机の講師のまま）。
+    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower }
   }
   const first = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
   if (first.collapse.ok || first.collapse.reason === 'duplicate-student') return first
@@ -6649,6 +6637,9 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
  *    合流できなければ実行しない。
  *  - delete-lower-student / delete-lower-memo … 下段の 1 件を消す。下段に生きている生徒がいなくなれば 1 行へ戻す
  *    （戻せなければ 2 行のまま・消す操作自体は成立）。
+ *  - adopt-template-teacher / adopt-existing-teacher … 講師欄の「テンプレの講師を採用／手入力の講師を採用」（tp-64・computePendingTeacherChoice へ委譲・台帳は触らない）。
+ * ★講師と生徒を別々に採用（オーナー確定 2026-10-27・確認リスト tp-64）: 生徒の席の操作は講師に触れない。下段の手置き講師が居る机は、
+ *   生徒の側が片づいても講師だけの保留（緑）で残る（withTemplatePendingTeacherChoice）。
  */
 export function computePendingDeskResolution(params: {
   mode: TemplatePendingResolutionMode
@@ -6671,6 +6662,21 @@ export function computePendingDeskResolution(params: {
     return next
   }
   const liveStudentsElsewhere = collectLiveStudentsElsewhereInCell(cell, desk.id)
+  // 生徒の側を片づけた後に残す保留（講師の選択が残れば講師だけで残す・tp-64）。
+  const withoutSeats = () => {
+    const next = { ...params.templatePendingDesks }
+    const remaining = withTemplatePendingTeacherChoice(entry, null)
+    if (remaining) next[key] = remaining
+    else delete next[key]
+    return next
+  }
+  const teacherChoiceNote = (map: TemplatePendingDeskMap) => (map[key] && isTemplatePendingTeacherOnly(map[key].lower) ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : '')
+
+  if (params.mode === 'adopt-template-teacher' || params.mode === 'adopt-existing-teacher') {
+    const choice = computePendingTeacherChoice({ weeks: params.weeks, templatePendingDesks: params.templatePendingDesks, cellId: params.cellId, deskId: params.deskId, choice: params.mode === 'adopt-existing-teacher' ? 'manual' : 'template' })
+    if (choice.status === 'blocked') return choice
+    return { status: 'applied', nextWeeks: choice.nextWeeks, nextTemplatePendingDesks: choice.nextTemplatePendingDesks, ledgers: params.ledgers, collapsed: choice.collapsed, returnedCount: 0, countAdjustedCount: 0, message: choice.message }
+  }
 
   if (params.mode === 'adopt-template') {
     // 席ごと（オーナー指示 2026-10-03・Q26-10）: lowerIndex を渡されたら押した席の下段（生徒・メモ・表示専用の記録）だけを捨てる。
@@ -6697,7 +6703,7 @@ export function computePendingDeskResolution(params: {
         collapsed: settled.status === 'collapsed',
         returnedCount: disposal.returnedCount,
         countAdjustedCount: countAdjustment.count,
-        message: describe(settled.status === 'collapsed' ? '' : 'もう一方の席は保留のまま。', countAdjustment),
+        message: describe(settled.status === 'collapsed' ? teacherChoiceNote(settled.nextTemplatePendingDesks) : 'もう一方の席は保留のまま。', countAdjustment),
       }
     }
     const collapse = computePendingDeskCollapse(desk, nextEntry, { liveStudentsElsewhere })
@@ -6705,15 +6711,17 @@ export function computePendingDeskResolution(params: {
     const nextWeeks = replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk))
     // 同日移動の通常授業を捨てたときだけ Q26-1 と同じ判定で希望回数 −1（N-2。それ以外の種別は希望回数を動かさない）。
     const countAdjustment = applyDiscardedLowerSameDayMoveCountAdjustments(disposal.ledgers.scheduleCountAdjustments, removed, cell.dateKey, nextWeeks)
+    // tp-64: 下段の手置き講師は外さない（講師欄の選択で決める）。
+    const nextTemplatePendingDesks = withoutSeats()
     return {
       status: 'applied',
       nextWeeks,
-      nextTemplatePendingDesks: withoutKey(),
+      nextTemplatePendingDesks,
       ledgers: { ...disposal.ledgers, scheduleCountAdjustments: countAdjustment.scheduleCountAdjustments },
       collapsed: true,
       returnedCount: disposal.returnedCount,
       countAdjustedCount: countAdjustment.count,
-      message: describe('', countAdjustment),
+      message: describe(teacherChoiceNote(nextTemplatePendingDesks), countAdjustment),
     }
   }
 
@@ -6727,13 +6735,8 @@ export function computePendingDeskResolution(params: {
     const collapse = attempt.collapse
     if (!collapse.ok) return { status: 'blocked', message: `既存を採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
     const withdrawn = attempt.withdrawnStudents
-    // Q41-6: 講師を戻したかは合流結果（collapse.nextDesk）から決める（regression-reviewer M-2: 下段がメモだけの席では戻らない）。
-    // 講師の一意性（INV-01 の兄弟）: 戻す手置き講師が同じコマの別の机に居るなら止める（同じ講師 2 机を作らない）。判定は 1 行に戻る経路と同じ isTeacherElsewhereInCell。
-    // ★tp-64（2026-10-27）: その形は planTemplatePendingAdoptExisting が講師を戻さずに合流する（keptDeskTeacher）ので、ここへは来ない。最後の守りとして残す（消さない）。
-    const restoringTeacher = entry.lower.teacher && collapse.nextDesk.teacher.trim() === entry.lower.teacher.teacher.trim() && collapse.nextDesk.teacher.trim() !== desk.teacher.trim() ? entry.lower.teacher.teacher.trim() : ''
-    if (restoringTeacher && entry.lower.teacher && isTeacherElsewhereInCell(cell, desk.id, entry.lower.teacher)) {
-      return { status: 'blocked', message: `既存を採用できません。講師 ${restoringTeacher} が同じコマの別の机に居ます。` }
-    }
+    // 講師（tp-64・2026-10-27 オーナー確定）: 生徒の採用は机の講師に触れない（collapse.nextDesk の講師＝机の講師のまま）。
+    // 手置き講師を机へ戻す・その一意性検査（INV-01 の兄弟・旧 Q41-6）は、講師欄の「手入力の講師を採用」（computePendingTeacherChoice）へ移した。
     // Q26-4・INV-12: 下段を机へ戻した結果、同じコマに同じ生徒が 2 か所で生きるなら止める（既存の findDuplicateStudentInCellByKey と同じ検査）。
     const surfacedCell: SlotCell = { ...cell, desks: cell.desks.map((current) => (current.id === desk.id ? collapse.nextDesk : current)) }
     const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, params.managedStudentByAnyName, params.resolveDisplayName)
@@ -6776,18 +6779,21 @@ export function computePendingDeskResolution(params: {
     }
     const withdrawnNames = templatePendingStudentNames(withdrawn, params.resolveDisplayName)
     // 席ごと（Q26-10）: もう一方の席の下段が残れば、その席は保留のまま（キーを残す）。残りの席が Q28 で戻れるならここで戻す。
-    const restPending = attempt.restLower ? { ...params.templatePendingDesks, [key]: { ...entry, lower: attempt.restLower } } : null
+    // tp-64: 下段の手置き講師は残す（もう一方の席の下段に付けたまま、または講師だけの保留）。
+    const remainingEntry = withTemplatePendingTeacherChoice(entry, attempt.restLower)
+    const restPending = remainingEntry ? { ...params.templatePendingDesks, [key]: remainingEntry } : null
     const settledRest = restPending ? settleTemplatePendingDesk({ weeks: nextWeeks, templatePendingDesks: restPending, key }) : null
-    const stillPending = Boolean(restPending) && settledRest?.status !== 'collapsed'
+    const nextTemplatePendingDesks = settledRest?.status === 'collapsed' ? settledRest.nextTemplatePendingDesks : (restPending ?? withoutKey())
+    const stillPending = Boolean(nextTemplatePendingDesks[key] && hasTemplatePendingLowerContent(nextTemplatePendingDesks[key].lower))
     return {
       status: 'applied',
       nextWeeks: settledRest?.status === 'collapsed' ? settledRest.nextWeeks : nextWeeks,
-      nextTemplatePendingDesks: settledRest?.status === 'collapsed' ? settledRest.nextTemplatePendingDesks : (restPending ?? withoutKey()),
+      nextTemplatePendingDesks,
       ledgers: { ...params.ledgers, suppressedRegularLessonOccurrences, suppressedMakeupOrigins, scheduleCountAdjustments },
       collapsed: !stillPending,
       returnedCount: 0,
       countAdjustedCount: countTargets.length,
-      message: `手入力データを採用しました${joinResultNotes([restoringTeacher ? `講師を ${restoringTeacher} に戻す` : '', withdrawnNames ? `${withdrawnNames} を取り下げ` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${attempt.keptDeskTeacher ? `${describeAdoptExistingKeptDeskTeacher(attempt.keptDeskTeacher)}。` : ''}${stillPending ? 'もう一方の席は保留のまま。' : ''}`,
+      message: `手入力データを採用しました${joinResultNotes([withdrawnNames ? `${withdrawnNames} を取り下げ` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${stillPending ? 'もう一方の席は保留のまま。' : teacherChoiceNote(nextTemplatePendingDesks)}`,
     }
   }
 
@@ -6824,7 +6830,20 @@ export function computePendingDeskResolution(params: {
       collapsed: true,
       returnedCount: disposal.returnedCount,
       countAdjustedCount: countAdjustment.count,
-      message: `${removedLabel}1 行に戻しました。`,
+      message: settled.teacherPending ? `${removedLabel}${TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains}` : `${removedLabel}1 行に戻しました。`,
+    }
+  }
+  // tp-64: 下段が講師だけになった（生徒の側は片づいた・講師の選択だけが残る）。
+  if (isTemplatePendingTeacherOnly(nextEntry.lower)) {
+    return {
+      status: 'applied',
+      nextWeeks,
+      nextTemplatePendingDesks: updatedMap,
+      ledgers,
+      collapsed: true,
+      returnedCount: disposal.returnedCount,
+      countAdjustedCount: countAdjustment.count,
+      message: `${removedLabel}${TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains}`,
     }
   }
   return {
@@ -6922,11 +6941,11 @@ export function computePendingLowerStudentMove(params: {
     const settled = settleTemplatePendingDesk({ weeks: nextWeeks, templatePendingDesks: updatedMap, key: found.key })
     const movedLabel = `${params.resolveBoardStudentDisplayName(lowerStudent.name)} を同じ机の生徒${params.studentIndex + 1}の席へ戻しました。`
     if (settled.status === 'collapsed') {
-      return { status: 'moved', message: `${movedLabel}保留の机は 1 行に戻しました。`, nextWeeks: settled.nextWeeks, nextTemplatePendingDesks: settled.nextTemplatePendingDesks, collapsed: true }
+      return { status: 'moved', message: `${movedLabel}${settled.teacherPending ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : '保留の机は 1 行に戻しました。'}`, nextWeeks: settled.nextWeeks, nextTemplatePendingDesks: settled.nextTemplatePendingDesks, collapsed: true }
     }
     return {
       status: 'moved',
-      message: settled.status === 'kept' ? `${movedLabel}${describeTemplatePendingCollapseFailure(settled.reason)}` : movedLabel,
+      message: settled.status === 'kept' ? `${movedLabel}${describeTemplatePendingCollapseFailure(settled.reason)}` : `${movedLabel}${isTemplatePendingTeacherOnly(nextEntry.lower) ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : ''}`,
       nextWeeks,
       nextTemplatePendingDesks: updatedMap,
       collapsed: false,
@@ -6974,11 +6993,11 @@ export function computePendingLowerStudentMove(params: {
   const updatedMap = { ...params.templatePendingDesks, [found.key]: nextEntry }
   const settled = settleTemplatePendingDesk({ weeks: nextWeeks, templatePendingDesks: updatedMap, key: found.key })
   if (settled.status === 'collapsed') {
-    return { status: 'moved', message: `${result.message}保留の机は 1 行に戻しました。`, nextWeeks: settled.nextWeeks, nextTemplatePendingDesks: settled.nextTemplatePendingDesks, collapsed: true }
+    return { status: 'moved', message: `${result.message}${settled.teacherPending ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : '保留の机は 1 行に戻しました。'}`, nextWeeks: settled.nextWeeks, nextTemplatePendingDesks: settled.nextTemplatePendingDesks, collapsed: true }
   }
   return {
     status: 'moved',
-    message: settled.status === 'kept' ? `${result.message}${describeTemplatePendingCollapseFailure(settled.reason)}` : result.message,
+    message: settled.status === 'kept' ? `${result.message}${describeTemplatePendingCollapseFailure(settled.reason)}` : `${result.message}${isTemplatePendingTeacherOnly(nextEntry.lower) ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : ''}`,
     nextWeeks,
     nextTemplatePendingDesks: updatedMap,
     collapsed: false,
@@ -7543,7 +7562,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 描画・メニュー・ハンドラとも従来どおり（保留データの保存・往復だけはフラグに依らず続く＝Q33-3）。
   const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null
   // 保留の机のメニュー（下段の中身・採用ボタン）。deskId で持つ（机の並べ替えで index がずれても同じ机を指す）。
-  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number } | null>(null)
+  // target: 'teacher'＝下段の講師欄から開いた講師の選択（テンプレの講師を採用／手入力の講師を採用・tp-64 2026-10-27）。無し＝席の 4 択。
+  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number; target?: 'teacher' } | null>(null)
   const templatePendingDeskMenuRef = useRef<HTMLDivElement | null>(null)
   // 保留の机の週をまたいだ一覧（決定記録 48 §3・spec-template-behavior §H Q42-6）。「保留 n」バッジで開く。読むだけ（解決は保留の机メニュー）。
   const [isTemplatePendingListOpen, setTemplatePendingListOpen] = useState(false)
@@ -11311,9 +11331,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
     // spec-template-behavior Q26-5（第 1 段 (B)・フラグ ON の教室だけ）: 保留（2 行）の机では講師メニューを開かない。
-    if (resolveTemplatePendingDeskAt(cellId, deskIndex)) {
+    // tp-64: 下段に手置き講師が居る机は、講師欄の下の行で講師を選べることを案内する。
+    const pendingAtTeacher = resolveTemplatePendingDeskAt(cellId, deskIndex)
+    if (pendingAtTeacher) {
       setTeacherMenu(null)
-      setStatusMessage(TEMPLATE_PENDING_MESSAGES.teacherLocked)
+      setStatusMessage(pendingAtTeacher.entry.lower.teacher ? TEMPLATE_PENDING_MESSAGES.teacherChoiceRemains : TEMPLATE_PENDING_MESSAGES.teacherLocked)
       return
     }
 
@@ -12737,9 +12759,32 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setTeacherMenu(null)
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
+    // tp-64: 生徒の側が片づいて講師の選択だけが残る机は、講師の選択を開く。
+    if (isTemplatePendingTeacherOnly(found.entry.lower)) {
+      setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: 0, x, y, target: 'teacher' })
+      setStatusMessage('講師の保留です。テンプレの講師か手入力の講師かを選んでください。')
+      return true
+    }
     setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y })
     setStatusMessage('保留の席です。残す方を選んでください。')
     return true
+  }
+
+  // 講師と生徒を別々に採用（オーナー確定 2026-10-27・確認リスト tp-64）: 緑の下の行の講師欄を押すと、講師の選択（2 択）を開く。
+  const handleTemplatePendingLowerTeacherClick = (cellId: string, deskIndex: number, x: number, y: number) => {
+    if (templatePendingLowerMove) {
+      setStatusMessage(TEMPLATE_PENDING_MESSAGES.lowerMoveNeedsEmptySeat)
+      return
+    }
+    const deskId = cells.find((item) => item.id === cellId)?.desks[deskIndex]?.id
+    const found = deskId ? resolveTemplatePendingDeskAt(cellId, deskIndex) : null
+    if (!deskId || !found?.entry.lower.teacher) return
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    setSelectedCellId(cellId)
+    setSelectedDeskIndex(deskIndex)
+    setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: 0, x, y, target: 'teacher' })
+    setStatusMessage('講師の保留です。テンプレの講師か手入力の講師かを選んでください。')
   }
 
   const handleTemplatePendingLowerClick = (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => {
@@ -12769,6 +12814,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const buildTemplatePendingResolutionConfirm = (mode: TemplatePendingResolutionMode, lowerIndex: number | undefined) => {
     const context = templatePendingDeskMenuContext
     if (!context) return ''
+    // tp-64: 講師欄の 2 択（講師だけを決める・生徒には触れない）。
+    if (mode === 'adopt-template-teacher' || mode === 'adopt-existing-teacher') return buildTemplatePendingTeacherChoiceConfirm(context.desk, context.entry, mode === 'adopt-existing-teacher' ? 'manual' : 'template')
     const names = (students: Array<StudentEntry | null> | undefined) => (students ?? []).filter((student): student is StudentEntry => Boolean(student)).map((student) => resolveBoardStudentDisplayName(student.name)).join('・')
     // 席ごと（オーナー指示 2026-10-03・Q26-10）: 採用の 2 つも押した席（lowerIndex）の下段だけを対象にする。確認文に出す名前もその席の分だけ
     // （確認リスト v1.5.577 その他欄「生徒 1 の手入力データ削除を操作しているのに、生徒 2 の生徒名が説明欄にでてくる」）。
@@ -12782,16 +12829,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     if (mode === 'adopt-existing') {
       // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
-      const plan = planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })
-      const upperNames = names(plan.withdrawnStudents)
-      // 講師（Q41-6・tp-64）: 戻すなら「講師は B に戻します」、同じコマの別の机に B が居て戻さないならその理由（結果の文と同じ関数）。
-      const restoringTeacher = plan.collapse.ok && plan.seatLower.teacher && plan.collapse.nextDesk.teacher.trim() === plan.seatLower.teacher.teacher.trim() && plan.collapse.nextDesk.teacher.trim() !== context.desk.teacher.trim()
-        ? plan.seatLower.teacher.teacher.trim()
-        : ''
-      const teacherNote = plan.keptDeskTeacher
-        ? `${describeAdoptExistingKeptDeskTeacher(plan.keptDeskTeacher)}。`
-        : restoringTeacher ? `講師は ${restoringTeacher} に戻します。` : ''
-      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : ''}${teacherNote}よろしいですか？`
+      // 講師には触れない（tp-64）ので講師の文は出さない。
+      const upperNames = names(planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex }).withdrawnStudents)
+      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : ''}よろしいですか？`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
@@ -12854,8 +12894,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       undefined,
       result.nextTemplatePendingDesks,
     )
-    // 2 行のまま（下段にまだ中身がある）ならメニューを開いたままにする。
-    setTemplatePendingDeskMenu(result.collapsed ? null : templatePendingDeskMenu)
+    // 2 行のまま（下段にまだ中身がある）ならメニューを開いたままにする。講師の選択（tp-64）は 1 回で閉じる。
+    setTemplatePendingDeskMenu(result.collapsed || templatePendingDeskMenu?.target === 'teacher' ? null : templatePendingDeskMenu)
     setStatusMessage(result.message)
   }
 
@@ -15081,6 +15121,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const stableHandleSelectDesk = useStableCallback(handleSelectDesk)
   const stableHandleStudentClick = useStableCallback(handleStudentClick)
   const stableHandleTemplatePendingLowerClick = useStableCallback(handleTemplatePendingLowerClick)
+  const stableHandleTemplatePendingLowerTeacherClick = useStableCallback(handleTemplatePendingLowerTeacherClick)
   const stableHandleTemplatePendingLowerMouseDown = useStableCallback(handleTemplatePendingLowerMouseDown)
   const stableHandleStudentMouseDown = useStableCallback(handleStudentMouseDown)
   const stableHandleTeacherMouseDown = useStableCallback(handleTeacherMouseDown)
@@ -15427,6 +15468,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             transferSourceRestDisplayEnabled={transferSourceRestDisplayEnabled}
             templatePendingDesks={isTemplateMode ? undefined : (activeTemplatePendingDesks ?? undefined)}
             onTemplatePendingLowerClick={isTemplateMode || !activeTemplatePendingDesks ? undefined : stableHandleTemplatePendingLowerClick}
+            onTemplatePendingLowerTeacherClick={isTemplateMode || !activeTemplatePendingDesks ? undefined : stableHandleTemplatePendingLowerTeacherClick}
             onTemplatePendingLowerMouseDown={isTemplateMode || !activeTemplatePendingDesks || !studentDragMoveEnabled ? undefined : stableHandleTemplatePendingLowerMouseDown}
           />
           {!isTemplateMode && templatePendingDeskMenuContext && templatePendingDeskMenu ? (
@@ -15439,12 +15481,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               data-testid="template-pending-desk-menu"
             >
               <div className="student-menu-head">
-                <strong>{`保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（手入力データ＝生徒${templatePendingDeskMenu.lowerIndex + 1}の下段）`}</strong>
+                <strong>{templatePendingDeskMenu.target === 'teacher'
+                  ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${templatePendingDeskMenuContext.desk.teacher.trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
+                  : `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（手入力データ＝生徒${templatePendingDeskMenu.lowerIndex + 1}の下段）`}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setTemplatePendingDeskMenu(null)}>x</button>
               </div>
               {/* 4 択だけ（確認リスト v1.5.576 その他欄「このメニューがわかりにくい。まず選択肢として テンプレ授業を採用／手入力データを採用／
                   手入力データを削除／手入力データを移動 だけを表示して」）。手入力データ＝押した席の下段（生徒・メモ）。確認文はボタンを押したあとに出す。 */}
-              {(() => {
+              {templatePendingDeskMenu.target === 'teacher' ? (
+                // 講師と生徒を別々に採用（オーナー確定 2026-10-27・確認リスト tp-64）: 講師だけを決める 2 択。生徒の席には触れない。
+                <div className="student-menu-section template-pending-desk-menu-actions" data-testid="template-pending-teacher-menu-actions">
+                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template-teacher')} data-testid="template-pending-adopt-template-teacher-button">テンプレの講師を採用</button>
+                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing-teacher')} data-testid="template-pending-adopt-existing-teacher-button">手入力の講師を採用</button>
+                </div>
+              ) : (() => {
                 const lower = templatePendingDeskMenuContext.entry.lower
                 const index = templatePendingDeskMenu.lowerIndex
                 const lowerStudent = lower.lesson?.studentSlots[index] ?? null

@@ -42,6 +42,14 @@ const ORIGIN_KIND_LABELS: Record<TemplatePendingOriginKind, string> = {
 export const TEMPLATE_SAVE_PENDING_KIND_LABEL = 'テンプレ保存'
 export const TEMPLATE_SAVE_PENDING_REASON = 'テンプレ保存で、手入力の授業とテンプレの授業が同じ席にぶつかったため、手入力の授業を保留(下段)に残しました。「テンプレを採用」「既存を採用」か、下段の生徒を動かして片づけてください。'
 
+/**
+ * 講師の保留（Q41・手置き講師×テンプレの別の講師）の理由文（tp-64・オーナー確定 2026-10-27「講師と生徒を別々に採用」）。
+ * 講師だけが残った机（生徒の側は片づき済み）も一覧に出るので、何を選べば片づくかを書く。
+ */
+export function describeTemplatePendingTeacherReason(templateTeacher: string, manualTeacher: string) {
+  return `テンプレの講師（${templateTeacher || 'なし'}）と手で置いた講師（${manualTeacher}）がこの机で重なっています。緑の下の行の講師を押して、どちらの講師にするか選んでください。`
+}
+
 const STATUS_LABELS: Record<StudentStatusEntry['status'], string> = {
   absent: '欠席',
   'absent-no-makeup': '振無休',
@@ -87,6 +95,11 @@ export function buildTemplatePendingList(map: TemplatePendingDeskMap | null | un
     if (lower.teacher?.teacher) lowerLabels.push(`講師 ${lower.teacher.teacher}`)
     const upperSlots: ReadonlyArray<StudentEntry | null> = desk.lesson?.studentSlots ?? []
     const upperLabels = upperSlots.filter((student): student is StudentEntry => Boolean(student)).map(studentLabel)
+    // tp-64: 講師の保留は上の行の講師も並べ、理由文に講師の選び方を足す（講師だけが残った机は講師の理由だけ）。
+    if (lower.teacher?.teacher && desk.teacher.trim()) upperLabels.push(`講師 ${desk.teacher.trim()}`)
+    const teacherOnly = Boolean(lower.teacher?.teacher) && lowerLabels.length === 1 && !(lower.memoSlots ?? []).some((memo) => typeof memo === 'string' && memo.trim() !== '')
+    const baseReason = entry.origin?.note || TEMPLATE_SAVE_PENDING_REASON
+    const teacherReason = lower.teacher?.teacher ? describeTemplatePendingTeacherReason(desk.teacher.trim(), lower.teacher.teacher) : ''
     rows.push({
       key,
       cellId: cell.id,
@@ -100,7 +113,7 @@ export function buildTemplatePendingList(map: TemplatePendingDeskMap | null | un
       lowerLabels,
       upperLabels,
       kindLabel: entry.origin ? ORIGIN_KIND_LABELS[entry.origin.kind] : TEMPLATE_SAVE_PENDING_KIND_LABEL,
-      reason: entry.origin?.note || TEMPLATE_SAVE_PENDING_REASON,
+      reason: teacherOnly ? teacherReason : [baseReason, teacherReason].filter(Boolean).join(''),
     })
   }
   rows.sort((left, right) => (

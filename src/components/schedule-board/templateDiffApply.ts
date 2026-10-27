@@ -641,6 +641,14 @@ function applyTeacherFields(desk: DeskCell, fields: TemplateDeskTeacherFields): 
   return next
 }
 
+/**
+ * 「手入力の講師を採用」（保留の下段の手置き講師を机の講師にする・オーナー確定 2026-10-27・確認リスト tp-64）。
+ * 下段の講師フィールド（保存前の机の講師の写し＝manualTeacher・由来・講師 ID）をそのまま机へ。Q41-6 の旧「既存を採用で講師を戻す」と同じ書き方。
+ */
+export function applyTemplatePendingLowerTeacherToDesk(desk: DeskCell, teacher: TemplateDeskTeacherFields): DeskCell {
+  return applyTeacherFields(desk, teacher)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 席の割り当て（Q21-10）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1022,7 +1030,7 @@ export function resolveAdoptExistingWithdrawSeats(desk: Pick<DeskCell, 'lesson'>
 
 export type TemplatePendingCollapseResult =
   | { ok: true; nextDesk: DeskCell }
-  | { ok: false; reason: 'both-rows-live' | 'status-overflow' | 'memo-overflow' | 'duplicate-student' | 'teacher-duplicate' }
+  | { ok: false; reason: 'both-rows-live' | 'status-overflow' | 'memo-overflow' | 'duplicate-student' }
 
 /** Q41-6/-7（INV-01）: そのコマの別の机に同じ講師が居るか（表示名・講師 ID・呼び名の対応で見る）。1 行に戻る経路・既存を採用・再保存の 3 か所が同じ判定を使う。 */
 export function isTeacherElsewhereInCell(cell: { desks: readonly DeskCell[] }, deskId: string, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>, resolveAliases: TeacherAliasResolver = defaultTeacherAliases) {
@@ -1050,18 +1058,17 @@ export function computePendingDeskCollapse(desk: DeskCell, pending: Pick<Templat
   /** コマの日付（席ごとの合流で、管理授業に足した生徒が再マージで落ちないかの判定に使う）。 */
   dateKey?: string
   /**
-   * Q41-6/-7: 下段に手置き講師が居る机の扱い。'auto'（既定）＝両方の行に生徒が居る間は自動で合流しない（講師の重複は利用者が決める）。
-   * 上段が空になって下段が机へ戻るときは机の講師を手置き講師に戻す。'adopt'＝「既存を採用」。合流の可否は従来どおりで、戻した机の講師を手置き講師にする。
+   * Q41-6/-7: 下段に手置き講師が居る机の扱い。'auto'（既定）＝両方の行に生徒が居る間は自動で合流しない（室長の採用操作を待つ）。
+   * 'adopt'＝「手入力データを採用」。合流の可否は従来どおり。
+   * ★講師はここでは決めない（オーナー確定 2026-10-27・確認リスト tp-64「講師と生徒をリンクさせないでそれぞれ採用」）: 戻した机の講師は常に
+   *   机の講師のまま。下段の手置き講師は保留に残り、講師欄の「テンプレの講師を採用／手入力の講師を採用」でだけ決まる（computePendingTeacherChoice）。
    */
   lowerTeacher?: 'auto' | 'adopt'
-  /** Q41-7（INV-01）: 戻す手置き講師が同じコマの別の机に居るか（居れば auto では合流しない）。 */
-  teacherElsewhere?: (teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => boolean
 } = {}): TemplatePendingCollapseResult {
   const upperLive = liveStudents(desk.lesson)
   const lowerLive = liveStudents(pending.lower.lesson)
   const lowerTeacherMode = options.lowerTeacher ?? 'auto'
   if (lowerTeacherMode === 'auto' && pending.lower.teacher && upperLive.length > 0 && lowerLive.length > 0) return { ok: false, reason: 'both-rows-live' }
-  if (lowerTeacherMode === 'auto' && pending.lower.teacher && upperLive.length === 0 && lowerLive.length > 0 && options.teacherElsewhere?.(pending.lower.teacher)) return { ok: false, reason: 'teacher-duplicate' }
   let baseLesson: DeskLesson | undefined
   if (upperLive.length > 0 && lowerLive.length > 0) {
     const merged = mergeLowerStudentsIntoFreeSeats(desk, pending.lower.lesson!, upperLive, options)
@@ -1106,15 +1113,14 @@ export function computePendingDeskCollapse(desk: DeskCell, pending: Pick<Templat
     occupancy[seat] = true
   }
 
-  let nextDesk: DeskCell = { ...desk }
+  const nextDesk: DeskCell = { ...desk }
   if (baseLesson) nextDesk.lesson = baseLesson
   else delete nextDesk.lesson
   if (isEmptyPair(nextStatus)) delete nextDesk.statusSlots
   else nextDesk.statusSlots = nextStatus
   if (isEmptyPair(nextMemo, (memo) => memo != null)) delete nextDesk.memoSlots
   else nextDesk.memoSlots = nextMemo
-  // Q41-7: 上段が空になって下段だけが机へ戻るとき（または「既存を採用」）は、机の講師を下段の手置き講師に戻す。下段が空で上段が残るときはテンプレの講師のまま。
-  if (pending.lower.teacher && lowerLive.length > 0 && (lowerTeacherMode === 'adopt' || upperLive.length === 0)) nextDesk = applyTeacherFields(nextDesk, pending.lower.teacher)
+  // Q41-7（2026-10-27 改定・tp-64）: 下段の生徒が机へ戻っても机の講師は変えない（下段の手置き講師は保留に残り、講師欄の選択で決める）。
   return { ok: true, nextDesk }
 }
 
@@ -2105,7 +2111,9 @@ function applyTemplateDiffToCell(context: {
       // ぶつかる生徒がいなければ 1 行へ（下段の記録・メモは空いた席へ・表示専用の記録は捨てる＝Q28）。
       const collapsed = computePendingDeskCollapse(upperDesk, { lower })
       if (collapsed.ok) {
-        delete context.nextPendingDesks[pendingKey]
+        // tp-64（2026-10-27）: 講師の選択が残っていれば（下段の手置き講師）保留は講師だけで残す（生徒の合流と講師の選択を結び付けない）。
+        if (lower.teacher) context.nextPendingDesks[pendingKey] = { lower: { teacher: { ...lower.teacher } }, effectiveStartDate: pending.effectiveStartDate, createdAt: pending.createdAt, ...(pending.origin ? { origin: pending.origin } : {}) }
+        else delete context.nextPendingDesks[pendingKey]
         if (!upperLesson) {
           summary.kept += 1
           const restored = collapsed.nextDesk

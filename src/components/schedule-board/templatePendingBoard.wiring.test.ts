@@ -359,12 +359,24 @@ describe('解決操作は 1 操作 1 適用で commitWeeks を通る（Q26-6・I
     expect(body.match(/window\.confirm\(/g)).toHaveLength(1)
   })
 
-  it('「手入力データを採用」の確認文は、講師を戻さない理由を結果の文と同じ関数で出す（tp-64・Q32-1）', () => {
+  it('講師欄の 2 択（tp-64・講師と生徒を別々に採用）: 下段の講師欄は講師の選択だけを開き、確認文は本体と同じ純関数・解決は computePendingTeacherChoice', () => {
+    // 盤面: 下段の講師欄は生徒の席のメニュー（onTemplatePendingLowerClick）ではなく講師の選択を開く
+    const grid = readFileSync(fileURLToPath(new NodeURL('./BoardGrid.tsx', import.meta.url)), 'utf8')
+    const teacherNode = sliceBody(grid, 'data-testid={`pending-lower-teacher-${cell.id}-${deskIndex}`}', '</div>')
+    expect(teacherNode).toContain('onTemplatePendingLowerTeacherClick?.(cell.id, deskIndex, event.clientX, event.clientY)')
+    expect(teacherNode).not.toContain('onTemplatePendingLowerClick?.(')
+    // メニュー: 講師の選択は 2 択だけ
+    const menu = sliceBody(BOARD_TSX, 'data-testid="template-pending-teacher-menu-actions"', '</div>')
+    expect(menu).toContain("handleResolveTemplatePendingDesk('adopt-template-teacher')")
+    expect(menu).toContain("handleResolveTemplatePendingDesk('adopt-existing-teacher')")
+    expect(menu.match(/<button /g)).toHaveLength(2)
+    // 確認文は純関数（本体と同じ名前）・生徒の「手入力データを採用」の確認文は講師に触れない
     const confirmFn = sliceBody(BOARD_TSX, 'const buildTemplatePendingResolutionConfirm = (', 'const handleResolveTemplatePendingDesk = (')
-    expect(confirmFn).toContain('planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })')
-    expect(confirmFn).toContain('describeAdoptExistingKeptDeskTeacher(plan.keptDeskTeacher)')
+    expect(confirmFn).toContain("return buildTemplatePendingTeacherChoiceConfirm(context.desk, context.entry, mode === 'adopt-existing-teacher' ? 'manual' : 'template')")
+    expect(confirmFn).toContain('planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex }).withdrawnStudents')
     const resolution = sliceBody(BOARD_TSX, 'export function computePendingDeskResolution(', '// N-2: 下段から捨てた同日移動の通常授業')
-    expect(resolution).toContain('describeAdoptExistingKeptDeskTeacher(attempt.keptDeskTeacher)')
+    expect(resolution).toContain('computePendingTeacherChoice({')
+    expect(resolution).not.toContain('isTeacherElsewhereInCell(')
   })
 
   it('下段の移動は computePendingLowerStudentMove の結果を commitWeeks へ 1 回だけ渡す', () => {
