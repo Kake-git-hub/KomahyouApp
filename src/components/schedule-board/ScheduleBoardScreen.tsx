@@ -40,7 +40,7 @@ import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_N
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
 import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildSameDayMoveCopyProtectionKey, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, isTeacherElsewhereInCell, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isSameDayMovedTemplateCopy, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, resolveSameDayMoveCopyKeysToRemove, shouldSeatSurviveRemerge, stripSameDayMoveCopies, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type SameDayMoveCopyRevert, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
-import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
+import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
   clearTemplatePendingLowerSeatForAdopt,
@@ -2771,8 +2771,14 @@ export function computeTemplateDiffApplyForBoard(input: {
       pendingDesks: run.diff.nextPendingDesks,
     })
     const removal = removeOrphanedMakeups(run.diff.nextWeeks, orphaned.removals, run.diff.nextPendingDesks)
+    // 2026-10-27（tp-51 の兄弟監査）: 外した振替の振替元の日の生徒×科目の抑止キーも取り除く（残すと、同じ生徒×科目をその曜日へ戻す保存〔科目の往復・外す→戻す〕で
+    // 授業が置かれず・未消化にもならず消える）。外すキーは新テンプレがその日に持たない生徒×科目のものなので、この保存の盤面には効かない。
+    const releasedOrphanSuppressed = new Set(collectOrphanedMakeupSuppressionKeys(orphaned.removals, run.suppressed))
     // 決定記録 48（2026-10-25・(b)-1）: 満席の生徒は未消化へ逃がさず、同じ机番号の机の下段（保留・緑）へ振替として置く（follow.nextPendingDesks を保存の保留マップにする）。
-    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: removal.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry, createdAt: params.createdAt })
+    // tp-51（2026-10-27 オーナー報告「同じコマ内で科目を変えると、丸ごと振替した日のコマでその生徒がいなくなる」）: 科目変更は「外す＋足す」。外した旧科目の振替の机・席と
+    // 元の日の旧科目の記録の机・席を、足す新科目の置き場の第一候補にする（テンプレの机番号は盤面の机の並びとずれうる＝別の講師の机へ入っていた）。外す前の盤面から引く。
+    const replacedSeats = collectReplacedTransferSeats(run.diff.nextWeeks, orphaned.removals)
+    const follow = planWholeDayTransferPlacements({ weeks: removal.weeks, skipped: run.diff.wholeDayTransferSkipped, pendingDesks: removal.nextPendingDesks, classroomSettings: params.classroomSettings, effectiveStartDate: params.effectiveStartDate, settled: new Set(run.diff.wholeDayTransferSettled), prepareStudentForMove, buildMovedSourceStatusEntry, createdAt: params.createdAt, replacedSeats })
     // 決定記録 46（2026-10-26・Q40-9）: 時限を変えた生徒の、丸ごと振替で移送済みの振替（＝新しい時限の分を精算済みにしている授業）を新しい時限へ動かす。
     // 振替元の移動元記録も新しい時限の机へ移す。満席なら同じ机番号の下段（保留・緑）。在庫中立。
     const slotFollow = planSlotChangeTransferFollow({
@@ -2804,7 +2810,7 @@ export function computeTemplateDiffApplyForBoard(input: {
     ]
     // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の次の反復の絞り込みは入口のまま＝反復ごとに範囲が広がらない・regression-reviewer M-1）。
     const settleSlotFilter = extendTemplateDiffSlotFilterWithCells(params.slotFilter, new Set([...removal.touchedCellIds, ...follow.touchedCellIds, ...slotFollow.touchedCellIds]))
-    const settledSuppressed = [...run.suppressed, ...run.diff.addedSuppressedRegularLessonOccurrences]
+    const settledSuppressed = [...run.suppressed.filter((key) => !releasedOrphanSuppressed.has(key)), ...run.diff.addedSuppressedRegularLessonOccurrences]
     // 保存結果を再マージの不動点にする（regression-reviewer L-7 兄弟 2・INV-02 / INV-03）。差分反映はテンプレを机の位置どおりに置くが、
     // 再マージ（mergeManagedWeek）は講師だけの管理机を「同じコマに同じ講師名が居れば足さない → 先頭の空き机へ置き直す」ので、講師名が重なる
     // 講師だけの机（講師のいない行＝「講師未割当」が 2 本・同じ講師が 2 机）が空くと、保存直後の再マージで講師の机がずれていた。
@@ -2838,8 +2844,8 @@ export function computeTemplateDiffApplyForBoard(input: {
         /** 決定記録 46（Q40-9）: 時限の追従で新しい時限へ動かした振替。 */
         slotFollowMoves: slotFollow.moves,
         wholeDayTransferCountAdjustments,
-        /** Q36 で外した通常授業の抑止キー（保存が抑止から取り除く）。 */
-        removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed],
+        /** Q36 で外した通常授業の抑止キー＋Q40-1 で外した振替の振替元の日の生徒×科目の抑止キー（2026-10-27）。保存が抑止から取り除く。 */
+        removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed, ...releasedOrphanSuppressed],
         /** Q39-9: 入口がその日を全コマにした日（昇順）。確認文に出す。 */
         scopedFullDates: [...(params.slotFilter?.fullDates ?? [])].sort(),
         /** Q40-1: 外した振替（確認・テスト用）。 */
