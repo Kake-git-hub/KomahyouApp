@@ -30,6 +30,7 @@ import {
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, isStockNeutralEditedMakeup, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
+import { resolveClosedDayStudentPlacementBlock, resolveStudentMoveClosedDayBlock } from './closedDayPlacementGuard'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
 export { packSortCellDesks } from './deskSort'
@@ -11867,6 +11868,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetDesk = targetCell?.desks[deskIndex]
     if (!targetCell || !targetDesk) return
 
+    // INV-02 / INV-06（オーナー指示 2026-10-27・tp-63）: 休日（休校）のコマには置かない。判定は開校ルール適用後の cells。
+    const closedDayPlacementBlock = resolveClosedDayStudentPlacementBlock(cells.find((cell) => cell.id === cellId))
+    if (closedDayPlacementBlock) {
+      setStatusMessage(closedDayPlacementBlock)
+      return
+    }
+
     if (targetDesk.lesson?.studentSlots[studentIndex]) {
       setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
       return
@@ -11961,6 +11969,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === cellId)
     const targetDesk = targetCell?.desks[deskIndex]
     if (!targetCell || !targetDesk) return
+
+    // INV-02 / INV-06（オーナー指示 2026-10-27・tp-63）: 休日（休校）のコマには置かない。判定は開校ルール適用後の cells。
+    const closedDayPlacementBlock = resolveClosedDayStudentPlacementBlock(cells.find((cell) => cell.id === cellId))
+    if (closedDayPlacementBlock) {
+      setStatusMessage(closedDayPlacementBlock)
+      return
+    }
 
     if (targetDesk.lesson?.studentSlots[studentIndex]) {
       setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
@@ -12375,6 +12390,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const movingStudentId = sourceStudentIdOverride ?? selectedStudentId
     if (!movingStudentId) {
       setStatusMessage('移動する生徒はメニューの「移動」から選択してください。')
+      return
+    }
+
+    // INV-02 / INV-06（オーナー指示 2026-10-27・確認リスト tp-63）: 休日（休校）のコマへは移動・入れ替えで生徒を置かない。
+    // 休日の再マージは盤面の授業を持ち込まない（8559c28）ので、置けても再マージで黙って消える。判定は開校ルール適用後の
+    // normalizedWeeks で行う（生 weeks の isOpenDay は古いことがある）。選択は維持して置き直せるようにする（blocked と同じ）。
+    const closedDayMoveBlock = resolveStudentMoveClosedDayBlock({ cells: normalizedWeeks.flat(), movingStudentId, cellId, deskIndex, studentIndex })
+    if (closedDayMoveBlock) {
+      setStatusMessage(closedDayMoveBlock)
       return
     }
 
@@ -13498,6 +13522,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     if (!targetCell || !targetDesk) return
 
+    // INV-02 / INV-06（オーナー指示 2026-10-27・tp-63）: 休日（休校）のコマには追加しない（メニューは休日では開かないが、
+    // 開いている間に休日になった場合の保険）。判定は開校ルール適用後のセル（emptyMenuContext は cells から引く）。
+    const closedDayPlacementBlock = resolveClosedDayStudentPlacementBlock(emptyMenuContext.cell)
+    if (closedDayPlacementBlock) {
+      setStatusMessage(closedDayPlacementBlock)
+      return
+    }
+
     if (targetDesk.lesson?.studentSlots[studentMenu.studentIndex]) {
       setStatusMessage('この生徒マスにはすでに生徒が入っています。')
       return
@@ -13621,6 +13653,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     if (!targetCell || !targetDesk) return
+
+    // INV-02 / INV-06（オーナー指示 2026-10-27・tp-63）: 休日（休校）のコマには追加しない（メニューは休日では開かないが、
+    // 開いている間に休日になった場合の保険）。判定は開校ルール適用後のセル（emptyMenuContext は cells から引く）。
+    const closedDayPlacementBlock = resolveClosedDayStudentPlacementBlock(emptyMenuContext.cell)
+    if (closedDayPlacementBlock) {
+      setStatusMessage(closedDayPlacementBlock)
+      return
+    }
 
     if (targetDesk.lesson?.studentSlots[studentMenu.studentIndex]) {
       setStatusMessage('この生徒マスにはすでに生徒が入っています。')
