@@ -25,11 +25,14 @@ import {
   computeStudentWithdrawSweep,
   computePendingDeskResolution,
   computePendingLowerStudentMove,
+  applyClassroomAvailability,
+  carryBoardStatusRecordsOntoClosedDayCell,
   type HistoryEntry,
   type TemplatePendingResolutionLedgers,
 } from './ScheduleBoardScreen'
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
+import { CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE, CLOSED_DAY_STUDENT_SWAP_MESSAGE, resolveClosedDayStudentPlacementBlock, resolveStudentMoveClosedDayBlock } from './closedDayPlacementGuard'
 import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildTemplatePendingDeskKey, collectTemplatePendingCellIds, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { seatSortCells } from './deskSort'
@@ -2297,5 +2300,111 @@ describe('INV-02 × 並べ替え → 再マージ: 生徒2から生徒1へ寄せ
   it('守り: テンプレ側で生徒1へ寄せた（生徒1=馬場だけのテンプレ）後は、盤面が生徒2のままでもテンプレに追従して生徒1になる', () => {
     const { afterDelete, suppressed } = deletedFirstStudent()
     expect(namesOf(cellOf(remerge(afterDelete, [row('sB', '')], suppressed)))).toEqual(['馬場', null])
+  })
+})
+
+// ============================================================================
+// INV-02 × 休日のコマへの配置（オーナー指示 2026-10-27・確認リスト tp-63 のメモ「そもそも休日に生徒はおけない。おけなくて良い。」）
+//
+// 休日（休校＝開校ルール適用後の isOpenDay=false。休日設定・定休日のどちらも）の再マージは盤面の授業を持ち込まない（8559c28・
+// carryBoardStatusRecordsOntoClosedDayCell）。そのため休日へ置いた生徒は再マージで黙って消える＝手動編集が巻き戻る。
+// 「持ち込まない」は意図的なガードなので崩さず、室長の操作の入口（移動・入替・未消化振替/講習の配置・生徒追加・体験追加）で止める。
+// 行: 前提（休日の再マージは授業を持ち込まない）／移動・D&D／入替（移動先が休日・移動元が休日）／休日から出すだけの移動は通す／
+//     配置系 1 コマ検査／判定は開校ルール適用後のセル／配線（5 経路が commit より前にガードを通る）。
+// 兄弟: 日程表（別タブ）の移動は scheduleViewMove が「移動先は休校日のため移動できません。」で既に止める・講師は computeTeacherMove が
+// 「休校コマには講師を配置できません。」で既に止める・自動割振は isOpenDay=false のセルを候補にしない（いずれも本ファイルの対象外）。
+// ============================================================================
+describe('INV-02 × 休日のコマへの配置: 再マージで残れない配置は入口で止める（tp-63）', () => {
+  const HOLIDAY = '2026-06-02'
+  const openCell = (overrides: Partial<SlotCell> = {}) => createCell({ id: '2026-06-01_1', ...overrides })
+  const closedCell = (overrides: Partial<SlotCell> = {}) => createCell({ id: `${HOLIDAY}_1`, dateKey: HOLIDAY, dateLabel: '6/2', dayLabel: '火', isOpenDay: false, ...overrides })
+  const studentA = createStudent({ id: 'move-A', managedStudentId: 'sA' })
+  const studentB = createStudent({ id: 'move-B', name: '生徒B', managedStudentId: 'sB' })
+  const withStudent = (student: StudentEntry) => createDesk({ id: 'd0', lesson: { id: 'l0', studentSlots: [student, null] } })
+
+  it('前提: 休日の再マージは盤面の授業を持ち込まない（置けても消える＝入口で止める根拠）', () => {
+    const board = closedCell({ desks: [withStudent(studentA)] })
+    const managed = closedCell({ desks: [createDesk({ id: 'd0' })] })
+    const merged = carryBoardStatusRecordsOntoClosedDayCell(managed, board)
+    expect(findStudentInCells([merged], 'sA')).toBeNull()
+  })
+
+  it('移動・D&D: 移動先が休日なら止める（空席）', () => {
+    const cells = [openCell({ desks: [withStudent(studentA)] }), closedCell({ desks: [createDesk({ id: 'd0' })] })]
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: `${HOLIDAY}_1`, deskIndex: 0, studentIndex: 0 })).toBe(CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE)
+  })
+
+  it('入替: 移動先が休日なら止める（相手が居ても）', () => {
+    const cells = [openCell({ desks: [withStudent(studentA)] }), closedCell({ desks: [withStudent(studentB)] })]
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: `${HOLIDAY}_1`, deskIndex: 0, studentIndex: 0 })).toBe(CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE)
+  })
+
+  it('入替: 移動元が休日なら止める（相手が休日のコマへ入るため）', () => {
+    const cells = [closedCell({ desks: [withStudent(studentA)] }), openCell({ desks: [withStudent(studentB)] })]
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: '2026-06-01_1', deskIndex: 0, studentIndex: 0 })).toBe(CLOSED_DAY_STUDENT_SWAP_MESSAGE)
+  })
+
+  it('守り: 休日のコマから営業日の空席へ出すだけの移動は通す（過去に置けてしまった生徒を片づける道）', () => {
+    const cells = [closedCell({ desks: [withStudent(studentA)] }), openCell({ desks: [createDesk({ id: 'd0' })] })]
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: '2026-06-01_1', deskIndex: 0, studentIndex: 0 })).toBeNull()
+  })
+
+  it('守り: 営業日どうしの移動・入替は従来どおり通す', () => {
+    const cells = [openCell({ desks: [withStudent(studentA)] }), openCell({ id: '2026-06-01_2', slotNumber: 2, desks: [withStudent(studentB)] })]
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: '2026-06-01_2', deskIndex: 0, studentIndex: 0 })).toBeNull()
+    expect(resolveStudentMoveClosedDayBlock({ cells, movingStudentId: 'move-A', cellId: '2026-06-01_2', deskIndex: 0, studentIndex: 1 })).toBeNull()
+  })
+
+  it('配置系（未消化振替・未消化講習・生徒追加・体験追加）: 休日のコマは止め、営業日は通す', () => {
+    expect(resolveClosedDayStudentPlacementBlock(closedCell())).toBe(CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE)
+    expect(resolveClosedDayStudentPlacementBlock(openCell())).toBeNull()
+    expect(resolveClosedDayStudentPlacementBlock(undefined)).toBeNull()
+  })
+
+  it('判定は開校ルール適用後のセルで行う（生 weeks が isOpenDay=true のままでも、休日設定・定休日なら止める／休日に開けた日は通す）', () => {
+    const rawWeeks = [[openCell({ id: `${HOLIDAY}_1`, dateKey: HOLIDAY, desks: [createDesk({ id: 'd0' })] }), openCell({ id: '2026-06-07_1', dateKey: '2026-06-07', desks: [createDesk({ id: 'd0' })] })]]
+    const holidaySettings: ClassroomSettings = { ...classroomSettings, deskCount: 1, holidayDates: [HOLIDAY] }
+    const applied = applyClassroomAvailability(rawWeeks, holidaySettings).flat()
+    expect(resolveClosedDayStudentPlacementBlock(applied.find((cell) => cell.dateKey === HOLIDAY))).toBe(CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE)
+    // 2026-06-07 は日曜（closedWeekdays: [0]）＝定休日も同じ扱い。
+    expect(resolveClosedDayStudentPlacementBlock(applied.find((cell) => cell.dateKey === '2026-06-07'))).toBe(CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE)
+    const forced = applyClassroomAvailability(rawWeeks, { ...holidaySettings, forceOpenDates: [HOLIDAY] }).flat()
+    expect(resolveClosedDayStudentPlacementBlock(forced.find((cell) => cell.dateKey === HOLIDAY))).toBeNull()
+  })
+
+  describe('配線（ScheduleBoardScreen の 5 経路が commit より前にガードを通る）', () => {
+    const boardSource = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+    const bodyOf = (start: string) => {
+      const startIndex = boardSource.indexOf(start)
+      expect(startIndex, start).toBeGreaterThanOrEqual(0)
+      const endIndex = boardSource.indexOf('\n  const ', startIndex + start.length)
+      return boardSource.slice(startIndex, endIndex > startIndex ? endIndex : undefined)
+    }
+    const expectGuardBefore = (body: string, guardCall: string, laterCall: string) => {
+      const guardIndex = body.indexOf(guardCall)
+      expect(guardIndex, guardCall).toBeGreaterThanOrEqual(0)
+      expect(body.indexOf(laterCall), laterCall).toBeGreaterThan(guardIndex)
+    }
+
+    it('生徒の移動（メニューの移動・長押しD&D）: executeMoveStudent が開校ルール適用後の全週で検査してから computeStudentMove', () => {
+      const body = bodyOf('const executeMoveStudent = (')
+      expectGuardBefore(body, 'resolveStudentMoveClosedDayBlock({ cells: normalizedWeeks.flat()', 'computeStudentMove(')
+    })
+
+    it.each([
+      ['未消化振替の配置', 'const handlePlaceMakeupFromStock = ('],
+      ['未消化講習の配置', 'const handlePlaceLectureFromStock = ('],
+    ])('%s: 開校ルール適用後の cells で検査してから commit', (_label, start) => {
+      const body = bodyOf(start)
+      expectGuardBefore(body, 'resolveClosedDayStudentPlacementBlock(cells.find((cell) => cell.id === cellId))', 'commitWeeks(')
+    })
+
+    it.each([
+      ['生徒追加', 'const handleSaveAddedStudent = ('],
+      ['体験追加', 'const handleSaveTrialStudent = ('],
+    ])('%s: emptyMenuContext のセルで検査してから commit', (_label, start) => {
+      const body = bodyOf(start)
+      expectGuardBefore(body, 'resolveClosedDayStudentPlacementBlock(emptyMenuContext.cell)', 'commitWeeks(')
+    })
   })
 })
