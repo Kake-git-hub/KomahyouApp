@@ -28,7 +28,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, isStockNeutralEditedMakeup, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
@@ -1527,6 +1527,32 @@ export function shouldReturnLectureStockOnAbsence(entry: { lessonType?: string |
   return entry.lessonType === 'special' && Boolean(entry.specialSessionId)
 }
 
+// 生徒メニュー「編集」の確定で、置いてある生徒を書き換える(純関数・handleConfirmEdit の本体)。
+// INV-06（2026-10-27 オーナー確定 案1・日大前校 室長報告「休みにしても未消化に入らない」）:
+//   編集は区分を書き換えるだけで振替元を付けないため、印の無い振替元なしの振替は「未消化を 1 コマ使った」と数えられ
+//   (consumeOriginDates の対応の取れない使用数)、後で休んで未消化へ入った 1 件を黙って相殺していた
+//   (実例: 6/8・6/10 の科目の入れ替えを編集で振替にした生徒)。未消化を使う振替は未消化一覧から置く経路がある。
+//   ★振替以外 → 振替 のときだけ専用の印 editedToMakeup を付ける(isStockNeutralEditedMakeup が消化から外す)。
+//   ★manualAdded は使わない(regression-reviewer 2026-10-27): 流用すると手打ちの警告・格納不可・削除で回数を減らさない・
+//   休日設定で時限つき返却(テンプレの自動発生と畳まれず誤増)・同日移動で手置きの通常に化ける、まで持ち込む。
+//   既に振替のコマ(在庫由来・移動由来)の編集では付けない(付けると在庫由来が消化を外れて誤増)。既存データは書き換えない。
+export function applyStudentEditDraft(
+  student: StudentEntry,
+  draft: { subject: SubjectLabel; lessonType: LessonType; teacherType: TeacherType; noteSuffix: string },
+): StudentEntry {
+  const becomesMakeup = draft.lessonType === 'makeup' && student.lessonType !== 'makeup'
+  return {
+    ...student,
+    subject: draft.subject,
+    lessonType: draft.lessonType,
+    teacherType: draft.teacherType,
+    // 編集からも振替の授業時間を変更できる(追加でだけ選べて後から直せない非対称を作らない)。
+    // 講習は呼び出し側(handleConfirmEdit)で「コマ表から編集できません」と弾いているため、ここには来ない。
+    noteSuffix: resolveLessonMinutesNoteSuffix(draft.lessonType, draft.noteSuffix),
+    ...(becomesMakeup ? { editedToMakeup: true } : {}),
+  }
+}
+
 export function reconsumeSessionLectureStock(params: {
   manualLectureStockCounts: LectureStockCountMap
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
@@ -1708,7 +1734,7 @@ export function reconcileHolidayDeskStockReturns(params: {
   //   （2026-10-07 オーナー確定・Issue #73・INV-06。§B-3「休み」と同根拠＝実績カウントは manualAdded を含む）。
   //   false（全コマ削除・丸ごと振替・テンプレ保留の採用）では従来どおり返さない＝returnedEntryIds にも入れない。
   const returnEntryToStock = (
-    entry: Pick<StudentEntry, 'id' | 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded'>,
+    entry: Pick<StudentEntry, 'id' | 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded' | 'editedToMakeup'>,
     makeupOriginDateKey: string,
     /** 手動追加を返すときだけ使う origin の時限（テンプレ由来の通常授業は従来どおり時限なしで積む・下記 M-1）。 */
     makeupOriginSlotNumber: number | null,
@@ -1751,7 +1777,10 @@ export function reconcileHolidayDeskStockReturns(params: {
     if (entry.lessonType === 'trial') {
       return { kind: 'none' } // 体験は振替の概念が無い（休みボタンも無い）＝休日設定で手動追加を返すときも対象外（§B-2-2b）
     }
-    if (!entry.manualAdded || includeManualAddedLessons) {
+    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)も在庫を消費していないので、手動追加と同じく
+    // 休日設定以外(全コマ削除・丸ごと振替の振替先処分・テンプレ保留の採用)では返さない＝returnedEntryIds に入れず、呼び出し側が回数 −1 する
+    // (元は通常授業なので通常授業と同じ結果)。休日設定では返す。origin は時限なし(テンプレ由来＝自動 origin と畳まれる・下の M-1)。
+    if ((!entry.manualAdded && !isStockNeutralEditedMakeup(entry)) || includeManualAddedLessons) {
       returnedEntryIds.push(entry.id) // 手動追加は在庫を消費していないので休日設定以外では返さない＝ここに入れない
       const stockKey = buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
       // ★手動追加は**時限つき**で積む（2026-10-07 regression-reviewer M-1・origin の同一性は日付＋時限＝2026-07-31 オーナー確定）。
@@ -3251,7 +3280,7 @@ function resolveDeskLabel(desk: DeskCell, deskIndex: number) {
   return desk.teacher.trim() || `${deskIndex + 1}机目`
 }
 
-function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell, status: StudentStatusKind): StudentStatusEntry {
+export function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell, status: StudentStatusKind): StudentStatusEntry {
   return {
     id: `${student.id}_${status}_${Date.now().toString(36)}`,
     studentId: student.id,
@@ -3268,6 +3297,7 @@ function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: De
     specialSessionId: student.specialSessionId,
     specialStockSource: student.specialStockSource,
     manualAdded: student.manualAdded,
+    editedToMakeup: student.editedToMakeup,
     subject: student.subject,
     lessonType: student.lessonType,
     teacherType: student.teacherType,
@@ -3302,7 +3332,7 @@ export function buildMovedSourceStatusEntry(params: {
   }
 }
 
-function buildStudentEntryFromStatus(statusEntry: StudentStatusEntry): StudentEntry {
+export function buildStudentEntryFromStatus(statusEntry: StudentStatusEntry): StudentEntry {
   return {
     id: statusEntry.studentId,
     name: statusEntry.name,
@@ -3317,6 +3347,7 @@ function buildStudentEntryFromStatus(statusEntry: StudentStatusEntry): StudentEn
     specialSessionId: statusEntry.specialSessionId,
     specialStockSource: statusEntry.specialStockSource,
     manualAdded: statusEntry.manualAdded,
+    editedToMakeup: statusEntry.editedToMakeup,
     subject: statusEntry.subject,
     lessonType: statusEntry.lessonType,
     teacherType: statusEntry.teacherType,
@@ -6318,12 +6349,13 @@ export function collectClearedDayMakeupSuppressions(params: {
     )
   }
   for (const desk of cell.desks) {
+    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)も元は通常授業なので、通常授業と同じく積む。
     for (const student of desk.lesson?.studentSlots ?? []) {
-      if (!student || student.lessonType !== 'regular') continue
+      if (!student || (student.lessonType !== 'regular' && !isStockNeutralEditedMakeup(student))) continue
       appendSuppression(student)
     }
     for (const statusEntry of desk.statusSlots ?? []) {
-      if (!statusEntry || statusEntry.lessonType !== 'regular') continue
+      if (!statusEntry || (statusEntry.lessonType !== 'regular' && !isStockNeutralEditedMakeup(statusEntry))) continue
       if (statusEntry.status === 'absent') continue // mark-absent が台帳へ確定済み(抑制すると立っている在庫が消える)
       if (statusEntry.status === 'moved') continue // 会計は移動先の振替コマが持つ(抑制すると移動先を休みにした算出 origin まで消える)
       if (statusEntry.status === 'holiday') continue // 休日設定で在庫へ返却済みの表示専用記録(抑制すると返した在庫が消える)
@@ -13649,15 +13681,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = {
-      ...targetStudent,
-      subject: editStudentDraft.subject,
-      lessonType: editStudentDraft.lessonType,
-      teacherType: editStudentDraft.teacherType,
-      // 編集からも振替の授業時間を変更できる(追加でだけ選べて後から直せない非対称を作らない)。
-      // 講習はこの関数の冒頭で「コマ表から編集できません」と弾いているため、ここには到達しない。
-      noteSuffix: resolveLessonMinutesNoteSuffix(editStudentDraft.lessonType, editStudentDraft.noteSuffix),
-    }
+    // INV-06: 区分を振替へ変えたら未消化を消化しない印を付ける(applyStudentEditDraft の注記)。
+    targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = applyStudentEditDraft(targetStudent, editStudentDraft)
 
     commitWeeks(nextWeeks, weekIndex, studentMenu.cellId, studentMenu.deskIndex)
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の情報を更新しました。`)
@@ -14634,7 +14659,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     let deleteSubjectDelta: SpecialSessionSubjectDelta | undefined
     let statusSuffix = '振替対象にはしません。'
 
-    if (menuStudent.student.lessonType === 'regular') {
+    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)は元が通常授業なので、通常授業と同じく抑止を積む
+    // (積まないと、削除した日を後から休日設定したときにテンプレの自動発生が +1 で湧く＝Issue #58 と同型の誤増)。
+    if (menuStudent.student.lessonType === 'regular' || isStockNeutralEditedMakeup(menuStudent.student)) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
       nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey))
       statusSuffix = '振替対象にはしません。'
