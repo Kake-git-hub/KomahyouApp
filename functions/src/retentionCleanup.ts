@@ -52,6 +52,8 @@ export const INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS = 90_000
 export const CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS = 60_000
 // 版履歴の一覧取得の 1 ページ。GCS の上限 1000。15 教室 × 1 日 30 保存 × 90 日 ≒ 4 万本を毎晩なめるので大きめにする。
 export const CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT = 1000
+/** 旧版の部品(snapshotParts)の掃除に使ってよい時間(docs/spec-save-restore.md §9-9)。incident / 版履歴 / Firestore 巡回と独立。 */
+export const SNAPSHOT_PART_GC_TIME_BUDGET_MS = 60_000
 // 定期掃除関数(cleanupOldSaveAttempts)の timeoutSeconds。3 つの時間予算の合計がこれを超えないことをテストで固定する。
 export const RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS = 540
 

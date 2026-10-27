@@ -146,14 +146,23 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
 
-  it('第83版(2026-10-27・v1.5.644 据え置き): 分割保存の段階 A(読める版)の確認 sp-1 は開発用教室だけ・いつもどおり読めて保存できることを見る', () => {
-    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sp-1')!
-    expect(item).toBeDefined()
-    expect(item.area).toBe('保存')
-    expect(item.introducedIn).toBe('v1.5.651')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('sp-1')
-    expect(item.check?.join('\n')).toContain('読み込めませんでした')
-    for (const word of ['部品', '目次', 'ハッシュ']) expect(`${item.title}${item.steps?.join('')}${item.check?.join('')}`).not.toContain(word)
+  it('第85版(2026-10-28・v1.5.653 据え置き): 分割保存の段階 B(サーバーが分割して書く版)の確認 sp-2・sp-3 は開発用教室だけ。段階 A の sp-1 はオーナー確認 OK で外した', () => {
+    const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
+    expect(ids).not.toContain('sp-1')
+    const save = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sp-2')!
+    const qr = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sp-3')!
+    expect(save).toBeDefined()
+    expect(qr).toBeDefined()
+    for (const item of [save, qr]) {
+      expect(item.area).toBe('保存')
+      expect(item.introducedIn).toBe('v1.5.654')
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain(item.id)
+      // 内輪語(部品・目次・ハッシュ・トランザクション)を出さない。
+      for (const word of ['部品', '目次', 'ハッシュ', 'トランザクション', 'manifest']) expect(`${item.title}${item.prep ?? ''}${item.steps.join('')}${item.check?.join('') ?? ''}`).not.toContain(word)
+    }
+    expect(save.check?.join('\n')).toContain('読み込めませんでした')
+    expect(save.check?.join('\n')).toContain('再読み込み後も')
+    expect(qr.check?.join('\n')).toContain('提出内容')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
 
@@ -205,7 +214,7 @@ describe('確認リストの項目定義', () => {
     expect(ids.filter((id) => id.startsWith('qa-'))).toEqual([])
     expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
-    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'sp-1' && id !== 'hd-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'sp-2' && id !== 'sp-3' && id !== 'hd-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
@@ -226,7 +235,8 @@ describe('確認リストの項目定義', () => {
     // 第83版(2026-10-27): 分割保存の段階 A(読める版)の確認 sp-1 を sc-3 の後に足した(開発用教室だけ・版は据え置き)。
     // 第83版(2026-10-27): 編集で振替にした通常授業を消しても戻らない確認 ed-2 を先頭に足した(開発用教室だけ・版は据え置き)。
     // 第84版(2026-10-27): 受付 20261027-144006023-5e34fa4b で OK の 7 件を外し、hd-1 を ed-1 の後・tp-65 を tp-64 の後に足した。
-    expect(ids).toEqual(['ed-2', 'ed-1', 'hd-1', 'sc-2', 'sp-1', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第85版(2026-10-28): 分割保存の段階 A の sp-1 をオーナー確認 OK で外し、段階 B の sp-2・sp-3 を同じ場所に足した(版は据え置き)。
+    expect(ids).toEqual(['ed-2', 'ed-1', 'hd-1', 'sc-2', 'sp-2', 'sp-3', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)

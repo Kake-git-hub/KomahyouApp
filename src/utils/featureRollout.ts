@@ -202,6 +202,17 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Template save applies per-desk diffs (replace unmarked desks, keep/adopt/pend marked desks as 2-row pending) instead of overwriting everything on/after the effective date.',
   },
+  // 週単位の分割保存(docs/spec-save-restore.md §9・段階 B 2026-10-28): サーバーが教室データを目次＋部品(core/board/週)に分けて書く。
+  // ★権威は**サーバー**(functions/src/snapshotStorageFormat.ts isWeeklySplitSnapshotStorageEnabledForClassroom・書く形式の選択にだけ使う)。
+  //   クライアントはこのフラグを見ない(読んだ文書が分割形式かどうかだけで振る舞う・§9-7-1)。ここに置くのは進行中テーマ台帳
+  //   (developmentStatusLedger)の整合テストと「段階がどこか」を 1 か所で読めるようにするため。scope はサーバーの
+  //   WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE と同じ値にする(functions/src/snapshotStorageFormat.test.ts が突合)。
+  // ★一方通行: 分割形式になった教室はフラグ OFF でも旧形式へ戻らない。段階は 開発用教室 → staging(本番サイズ) → 日大前校
+  //   (サーバーの教室指定 WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST) → 全教室(オーナー確定 §9-15 Q4)。
+  weeklySplitSnapshotStorage: {
+    scope: 'staging-environment',
+    description: 'Server writes classroom snapshots as a manifest plus per-week parts (1MiB document limit fix); the server predicate is authoritative.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
