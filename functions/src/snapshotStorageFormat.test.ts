@@ -34,29 +34,37 @@ describe('weeklySplitSnapshotStorage のサーバー述語(2 段解決・開発�
     vi.mocked(resolveCompanyFeatureDefault).mockReset()
   })
 
-  it('段階 B の開始時点: 基本スコープは staging-environment・教室指定は空(開発用教室 → staging の段)', () => {
-    expect(WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE).toBe('staging-environment')
+  it('全教室展開(オーナー指示 2026-10-28・v1.5.656): 基本スコープは all-classrooms・教室指定は空のまま。回帰で戻さない', () => {
+    expect(WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE).toBe('all-classrooms')
     expect(WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST).toEqual([])
   })
 
-  it('会社既定の行が無ければ: 本番の開発用教室とテスト教室は ON・本番 3 教室は OFF・staging は全教室 ON', () => {
+  it('会社既定の行が無ければ: 本番の全教室(日大前・緑が丘・薬円台・開発用・テスト教室)も staging も ON。会社や教室 ID が空なら OFF(fail-closed)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: DEV_CLASSROOM, projectId: PROD })).toBe(true)
     expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: 'test_classroom_20260507_dai', projectId: PROD })).toBe(true)
-    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: NICHIDAI, projectId: PROD })).toBe(false)
-    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: 'KzFnOQoTFLsCxwUp1tvh', projectId: PROD })).toBe(false)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: NICHIDAI, projectId: PROD })).toBe(true)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: 'KzFnOQoTFLsCxwUp1tvh', projectId: PROD })).toBe(true)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: '6xnnbSTbwgGrBLy0EJKb', projectId: PROD })).toBe(true)
     expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: 'any-staging-classroom', projectId: STAGING })).toBe(true)
-    // 別会社の同じ教室 ID は登録台帳に無いので OFF(fail-closed)。
-    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'company-b', classroomId: DEV_CLASSROOM, projectId: PROD })).toBe(false)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'company-b', classroomId: 'c-other', projectId: PROD })).toBe(true)
     expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: '', classroomId: DEV_CLASSROOM, projectId: STAGING })).toBe(false)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: '', projectId: PROD })).toBe(false)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', WEEKLY_SPLIT_SNAPSHOT_FEATURE_KEY)
   })
 
-  it("会社既定 'on' で本番教室も ON・'off' で開発用教室も OFF(保護者ポータルと同じ 2 段解決)", () => {
+  it("会社既定 'off' でその会社の全教室を止められる(新しく移る教室を止めるだけ・既に分割形式の教室は一方通行で分割形式のまま=resolveSnapshotWriteFormat)", () => {
+    vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('off')
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: NICHIDAI, projectId: PROD })).toBe(false)
+    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: DEV_CLASSROOM, projectId: PROD })).toBe(false)
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('on')
     expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: NICHIDAI, projectId: PROD })).toBe(true)
-    vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('off')
-    expect(isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey: 'main', classroomId: DEV_CLASSROOM, projectId: PROD })).toBe(false)
+  })
+
+  it('基本スコープが staging-environment だったときの判定(段階 B の開始時点の形・純関数で固定)', () => {
+    expect(isWeeklySplitSnapshotScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: true, isAllowlisted: false })).toBe(true)
+    expect(isWeeklySplitSnapshotScopeEnabled('staging-environment', { isStaging: true, isDevelopmentClassroom: false, isAllowlisted: false })).toBe(true)
+    expect(isWeeklySplitSnapshotScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false, isAllowlisted: false })).toBe(false)
   })
 
   it('教室指定(allowlist)はスコープに関係なく ON・all-classrooms は全部 ON', () => {

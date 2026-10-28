@@ -207,10 +207,11 @@ export const featureRolloutRegistry = {
   //   クライアントはこのフラグを見ない(読んだ文書が分割形式かどうかだけで振る舞う・§9-7-1)。ここに置くのは進行中テーマ台帳
   //   (developmentStatusLedger)の整合テストと「段階がどこか」を 1 か所で読めるようにするため。scope はサーバーの
   //   WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE と同じ値にする(functions/src/snapshotStorageFormat.test.ts が突合)。
-  // ★一方通行: 分割形式になった教室はフラグ OFF でも旧形式へ戻らない。段階は 開発用教室 → staging(本番サイズ) → 日大前校
-  //   (サーバーの教室指定 WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST) → 全教室(オーナー確定 §9-15 Q4)。
+  // ★一方通行: 分割形式になった教室はフラグ OFF でも旧形式へ戻らない。開発用教室で先行(v1.5.654・2026-10-28 に移行と QR 取り込みを確認)
+  //   → オーナー指示(2026-10-28「staging は確認しなくていいので、問題なければ本番環境へ全教室展開して」)で全教室へ昇格(v1.5.656・
+  //   staging と日大前校だけの段は省略)。回帰で development-only / staging-environment へ戻さない(戻すと新しく移る教室が止まる)。
   weeklySplitSnapshotStorage: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Server writes classroom snapshots as a manifest plus per-week parts (1MiB document limit fix); the server predicate is authoritative.',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>

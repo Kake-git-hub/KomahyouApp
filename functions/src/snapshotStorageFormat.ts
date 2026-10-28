@@ -5,10 +5,11 @@
 //   クライアント側の featureRolloutRegistry.weeklySplitSnapshotStorage は台帳(developmentStatusLedger)と整合テストのための印で、
 //   クライアントは「読んだ文書が分割形式かどうか」だけで振る舞う(フラグを見ない)。権威はこのサーバー述語。
 // ★一方通行(§9-7-1): 分割形式になった教室はフラグ OFF でも旧形式へ戻さない。判定は resolveSnapshotWriteFormat が 1 か所で行う。
-// ★段階(オーナー確定 §9-15 Q4): 開発用教室 → staging(本番サイズ) → 日大前校 → 残り。
-//   「教室指定」の段は WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST に (workspaceKey, classroomId) を足す。全教室へ出すときは
-//   会社既定(src/utils/companyFeatureDefaults.ts に 'on' の行)か、下の BASE_SCOPE を 'all-classrooms' に変える(クライアントの
-//   featureRollout.ts の scope も同時に変える・パリティテストが検出)。
+// ★段階: 開発用教室(v1.5.654・2026-10-28 に移行を確認) → **全教室**(オーナー指示 2026-10-28「staging は確認しなくていいので、問題なければ
+//   本番環境へ全教室展開して」= §9-15 Q4 の staging・日大前校の段を省略)。BASE_SCOPE を 'all-classrooms' に上げた(v1.5.656)。
+//   クライアントの featureRollout.ts の scope も同じ値(パリティテストが検出)。教室指定 WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST は
+//   「全教室より先に特定の教室だけ出す」ための段で、全教室展開後は空のまま残す(回帰で development-only / staging-environment へ戻さない:
+//   戻すと新しく移る教室が止まるだけで、既に分割形式の教室は分割形式のまま=一方通行)。
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 
@@ -19,9 +20,9 @@ export const WEEKLY_SPLIT_SNAPSHOT_STAGING_PROJECT_ID = 'komahyouapp-staging'
  * 基本スコープ(クライアント featureRollout.ts の scope と同じ語彙・同じ意味)。
  *  - 'staging-environment' … staging プロジェクトの全教室 ＋ どの環境でも登録済みの検証用教室(開発用・テスト教室)。
  *  - 'all-classrooms'      … 全教室。
- * 段階 B の開始時点は 'staging-environment'(開発用教室 → staging の段)。
+ * 段階 B の開始時点(v1.5.654)は 'staging-environment'。2026-10-28 オーナー指示で 'all-classrooms' へ(v1.5.656)。
  */
-export const WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE: 'staging-environment' | 'all-classrooms' = 'staging-environment'
+export const WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE: 'staging-environment' | 'all-classrooms' = 'all-classrooms'
 
 export type WeeklySplitSnapshotClassroomRef = { workspaceKey: string; classroomId: string; label: string }
 
@@ -30,7 +31,7 @@ export type WeeklySplitSnapshotClassroomRef = { workspaceKey: string; classroomI
  * 足すときは同じ push で CHANGELOG・台帳 developmentStatusLedger・確認リストを更新し、室長へ「切り替え日に一度ハードリロード」を案内する(§9-7-3)。
  */
 export const WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST: readonly WeeklySplitSnapshotClassroomRef[] = [
-  // 2026-10-28 段階 B 開始時点は空(開発用教室 → staging の段)。日大前校(5w5OMueETerSKrSf14HC)は staging の本番サイズ確認の後に足す。
+  // 2026-10-28 段階 B 開始時点は空。同日オーナー指示で基本スコープを全教室へ上げたので、教室指定の段は使わなかった(空のまま)。
 ]
 
 export type WeeklySplitSnapshotClassroomIdentity = {
