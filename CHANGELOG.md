@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.660 (2026-10-28)
+
+- docs: 自動バックアップの教室別化の論点 Q1〜Q9 を**すべて推奨案でオーナー確定**(2026-10-28「全部推奨案で確定して台帳に書いて」): 全体 1 本は残さない・Storage も gzip・日次も教室別・Drive は教室ごと(25 教室超で保持を再判断)・復元画面は変えない・間引きは時点単位・Issue #77 の分割実行は後回し・控えは教室別で残しローカル同期では書かない・期限は 2 社目受け入れ前に段階 2 まで。計画書 §4 を確定表に、台帳 auto-backup-per-classroom の次の一手を「§10 を書いて段階 0 から」に更新。(docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md・src/utils/developmentStatusLedger.ts・.claude/memory)
+
 ## v1.5.659 (2026-10-28)
 
 - docs: **15 分毎の自動バックアップの教室別化の着手計画書** docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md を新設(オーナー指示 2026-10-28「自動バックアップの教室別化はすぐに次セッションで着手できるようにして」・spec-curator)。本番の実測(main は 4 教室・1 本 31.7MB・gzip 3.0MB・15min に 170 本 5.38GB・生成 1 教室 1.5〜2 秒)、最初に詰まるのは生成(540 秒/2GiB)でなく復元用 callable(512MiB)が 1 本を丸ごと読む側(日大前校サイズで 1 社 8〜10 教室から室長の自教室復元が壊れる見込み)、現状の仕組みの事実(生成・保持・Drive・incident・復元の入口 4 系統・1 本の形に依存する箇所の grep)、設計案 A〜D(推奨 A=教室ごと 1 本 gzip＋時点ごとの index・要約に教室一覧は載せない=INV-08・目次は最後に公開=INV-14)、変えないもの BK-1〜BK-9、論点 Q1〜Q9(推奨つき・オーナー確定待ち)、段階 0〜3、AC-B1〜B21、教室数 4/5/10/20/30 の試算、確認リスト案 ab-1〜ab-4、確定後に spec §10 へ書く骨子。台帳に auto-backup-per-classroom(未着手・計画あり)を追加し、backup-per-workspace(Issue #77)は教室別化に吸収して保留へ。(docs/・src/utils/developmentStatusLedger.ts・.claude/memory)
