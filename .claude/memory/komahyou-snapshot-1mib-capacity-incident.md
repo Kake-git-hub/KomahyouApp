@@ -25,7 +25,7 @@ v1.5.647 操作痕跡の要約 400→2000 字(机を 14 台動かした 19:12 �
 組み立て関数 1 つで今と同じ AppSnapshotPayload に戻す・新旧両読みを先に出す)。仕様は docs/spec-save-restore.md §9(Q1〜Q6 全件オーナー確定 2026-10-27・INV-14 新設)。**次セッションの着手手順は docs/plan-2026-10-27-weekly-split-snapshot-handoff.md が正本**(段階 0〜D・期限に効くのは段階 B)。
 冬期講習(12 月)前に本番へ。過去週を閲覧専用にするかは「今は決めない」(オーナー 2026-10-27)。
 
-**進捗(2026-10-28・段階 B 実装 v1.5.654)**: 段階 A(v1.5.651)は本番反映済み・sp-1 オーナー確認 OK。段階 B＝サーバーが分割して書く:
+**進捗(2026-10-28・段階 B 本番反映 v1.5.654・開発用教室は分割形式へ移行済み)**: 段階 A(v1.5.651)は本番反映済み・sp-1 オーナー確認 OK。段階 B＝サーバーが分割して書く(2026-10-28 00:10 UTC 反映・開発用教室は版 822 で移行＝48 部品・最大文書 60KB＝5.8%／版 823・824 は変わった部品だけ／QR マージは版 823 のまま core 部品を書いた・sp-2/sp-3 OK):
 フラグ述語 `functions/src/snapshotStorageFormat.ts`(基本スコープ staging-environment＝検証用教室＋staging／教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`〔日大前校はここに足す〕／会社既定・一方通行・`CLIENT_TOO_OLD`＝v1.5.651 未満の画面を拒否)、
 書き手の純関数 `functions/src/snapshotPartsWriter.ts`(`planSnapshotPartsCommit`・`verifySnapshotPartsReadback`・QR マージ・容量通知)、`index.ts` の `saveClassroomSnapshotAsParts`(1 トランザクション→読み戻し→失敗は目次を直前へ戻す)・
 `pruneSnapshotParts`(掃除・`SNAPSHOT_PART_GC_DRY_RUN=1`)。仕様との差分は spec §9-17。次: Functions→Hosting 反映 → 開発用教室 sp-2/sp-3 → staging(本番サイズ・copy-prod-classroom-to-staging はオーナー PC)→ 日大前校(allowlist)→ 全教室(scope all-classrooms・クライアント側も)。段階 C(差分送信)は未着手。

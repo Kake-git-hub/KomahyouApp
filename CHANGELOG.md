@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.655 (2026-10-28)
+
+- docs: 分割保存 段階 B(v1.5.654)の本番反映後の確認結果を反映。開発用教室は 03:26 UTC の保存で分割形式へ移行(版 822・48 部品 49 書き込み・最大文書 60KB＝使用率 5.8%・移行前 93%)、続く保存は変わった部品だけ(版 823 は board＋週 1・版 824 は core だけ・再利用 46〜47)、QR 提出は版 823 のまま core 部品(core~-~v823~q…)を書いた(K-9)。関数ログにエラー無し・組み立て失敗の通知無し。確認リスト sp-2 / sp-3 はオーナー OK(受付 20261028-032942134-2f5ab955)で外した(第86版・版は据え置き)。台帳 classroom-snapshot-capacity の次の一手を staging(本番サイズ)→ 日大前校 へ更新。(src/utils/verificationChecklist.ts・developmentStatusLedger.ts・.claude/memory)
+
 ## v1.5.654 (2026-10-28)
 
 - fix: 上の regression-reviewer(2026-10-28・高 0・中 2・低 7)の指摘を同日修正。中-1 部品文書 ID の書き手を saveId の SHA-256 先頭 12 文字(保存)／`q`＋36 進ミリ秒 8 文字＋乱数 3 文字(QR)にして一意に(saveId は時刻始まりで先頭 12 文字が同じ時間帯で一致し、同じ秒の QR 2 件も同じ ID になって「部品は不変」が崩れていた)・QR の部品は create。中-2 読み戻しの直前に QR マージが割り込んだとき(saveId 据え置き・compositeHash だけ変わる)は core 以外の書いた部品が参照されていれば成功と扱い、目次の巻き戻しは saveId と compositeHash が一致するときだけ(純関数 shouldRollbackManifestAfterReadbackFailure・巻き戻すと確定済みの保存と QR の反映を両方消していた)。低-1 STALE・空データを saveAttempts に終端 status(stale / empty-management-data)で記録(started のまま残さない)。低-2 QR 枝の解凍失敗を decode-failed で通知。低-5 SHA-256 の実装を 1 つに・CLIENT_TOO_OLD の版を定数から。低-7 掃除の印付けにも時間予算。掃除の参照集合 resolveReferencedSnapshotPartDocIds と select 項目を純関数＋テストに(項目漏れで全教室スキップにならないことを固定)。spec §9-17 に追記。(functions/src/snapshotPartsWriter.ts・index.ts・snapshotPartsWriter.test.ts・src/utils/inv14-snapshot-all-or-nothing.matrix.test.ts・docs/spec-save-restore.md)
