@@ -22,6 +22,8 @@ export const SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000
 /** 間引きの記録文書の id と間隔。capacity-warning だけ失敗の通知と別の文書で数える。 */
 export function resolveSaveFailureAlertThrottle(kind: SaveFailureAlertKind, classroomId: string): { docId: string; minIntervalMs: number } {
   if (kind === 'capacity-warning') return { docId: `${classroomId}__capacity`, minIntervalMs: SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS }
+  // 第 2 段着手の合図(分割保存 §9-3-7)も失敗ではないので別文書で 1 日 1 通。
+  if (kind === 'split-capacity-notice') return { docId: `${classroomId}__split`, minIntervalMs: SAVE_CAPACITY_ALERT_MIN_INTERVAL_MS }
   return { docId: classroomId, minIntervalMs: SAVE_FAILURE_ALERT_MIN_INTERVAL_MS }
 }
 /**
@@ -45,7 +47,7 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback:
 }
 export const SAVE_FAILURE_ALERT_COLLECTION = 'saveFailureAlerts'
 
-export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed'] as const
+export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice'] as const
 export type SaveFailureAlertKind = (typeof SAVE_FAILURE_ALERT_KINDS)[number]
 
 export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, string>> = {
@@ -56,6 +58,8 @@ export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, st
   'write-failed': '教室データの書き込みに失敗(Firestore が書き込みを拒否・想定外の例外)',
   'capacity-warning': '教室データが 1 文書の上限(1MiB)に近い(保存は成功)',
   'snapshot-assembly-failed': '分割形式の教室データを組み立てられない(部品が欠ける・合わない・INV-14)',
+  'client-too-old': '古い版の画面からの保存を拒否(分割形式を読めない版・§9-7-3)',
+  'split-capacity-notice': '分割保存の部品か 1 回の書き込みが上限の 50% を超えた(保存は成功・第 2 段の着手の合図)',
 }
 
 /** 何を見れば原因に近づけるか(種類ごと)。メール本文に載せる。 */
@@ -67,6 +71,8 @@ export const SAVE_FAILURE_ALERT_HINTS: Readonly<Record<SaveFailureAlertKind, str
   'write-failed': 'saveAttempts の errorMessage に Firestore の原因文がある。続けて起きるなら Firestore 側の障害を疑う。容量超過なら種類は snapshot-too-large になる。',
   'capacity-warning': 'まだ保存はできているが、増え続けるといずれ保存が止まる。saveAttempts の capacityRatio の推移を見て、上限到達の前に対策(週単位の分割保存)を出す。この通知は教室ごとに 1 日 1 通。',
   'snapshot-assembly-failed': '★その教室は読み手(自動バックアップ・直前ロールバック・版履歴・保護者ページ・在籍数台帳)が空で扱わず止めている(docs/spec-save-restore.md §9-5-3)。detail の読み手名と理由(missing-part / hash-mismatch / decode-failed / invalid-manifest と部品キー)を見て、目次 classroomSnapshots/{id} が指す snapshotParts/{docId} の有無を Firestore で確かめる。部品が掃除で消えた疑いなら PITR(7 日)で戻す。',
+  'client-too-old': 'その端末は段階 A(v1.5.651)より古い画面で分割形式の教室を開いている(空の教室に見えている可能性)。室長に一度ハードリロード(Ctrl+Shift+R)してもらう。未保存の内容は端末の失敗時バックアップ JSON と「開発者へ送る」の控えにある。detail に端末の版。',
+  'split-capacity-notice': 'まだ保存はできている。detail の数値(core/board の部品サイズ・書き込み件数/合計)を見て、第 2 段(部品の先書き・specialSessions の講習ごとの分割・docs/spec-save-restore.md §9-3-7 / §9-4-5)を起票する。この通知は教室ごとに 1 日 1 通。',
 }
 
 /** 教室ごとの間引き: 前回送信から 1 時間未満なら送らない。送信記録が無ければ送る。 */
@@ -111,7 +117,7 @@ export type SaveFailureAlertMailInput = {
 export function buildSaveFailureAlertMail(input: SaveFailureAlertMailInput): { subject: string; text: string } {
   const classroom = input.classroomName?.trim() || input.classroomId
   const label = SAVE_FAILURE_ALERT_LABELS[input.kind]
-  const isCapacityWarning = input.kind === 'capacity-warning'
+  const isCapacityWarning = input.kind === 'capacity-warning' || input.kind === 'split-capacity-notice'
   const subject = `${isCapacityWarning ? '【容量注意】' : '【保存失敗】'}[コマ表アプリ 監視] ${input.workspaceKey} / ${classroom} / ${label.split('(')[0]}`
   const attemptPath = `workspaces/${input.workspaceKey}/classroomSnapshots/${input.classroomId}/saveAttempts/${input.saveId}`
   const lines = [

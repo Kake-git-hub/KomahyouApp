@@ -218,15 +218,29 @@ describe('INV-14 行（読み手）: どの読み手も唯一の読み手を通�
     const load = workspaceStoreTs.slice(workspaceStoreTs.indexOf('export async function loadFirebaseWorkspaceSnapshot('))
     expect(load).toContain("throw new Error(buildSnapshotPartsLoadFailedMessage(data.name ?? ''))")
     expect(load).toContain('throw error')
+    // 開発者は 1 教室の失敗で全教室が開けなくならないよう、その教室だけ一覧から外す(M-2・2026-10-28)。外した教室は開けない＝保存もされない。
+    expect(load).toContain("if (membership.role === 'developer') {")
+    expect(load).toContain('return null')
+    expect(load).not.toContain('createEmptyClassroomPayload()\n')
   })
 
-  it('行: QR 提出のマージ — 分割形式の目次は旧形式で上書きせずマージを止める（提出は lectureSubmissions に残る・INV-07）', () => {
+  it('行: QR 提出のマージ — 分割形式の目次は core 部品を読んで照合し、新しい core 部品＋目次の core 差し替えで書く（版数・savedAt・saveId 据え置き＝K-9）。core が欠ける・合わなければマージせず知らせる（提出は lectureSubmissions に残る・INV-07）', () => {
     const merge = slice(indexTs, "// Also update the classroom snapshot so admin sees the data immediately", 'res.json({ success: true, submittedAt: now })')
     const guard = merge.indexOf('if (isSnapshotPartsManifest(snapshotData)) {')
     const legacy = merge.indexOf('readLegacyStoredSnapshotPayload(snapshotData)')
     expect(guard).toBeGreaterThan(-1)
     expect(legacy).toBeGreaterThan(guard)
-    expect(merge.slice(guard, legacy)).toContain('return')
+    const partsBranch = merge.slice(guard, legacy)
+    expect(partsBranch).toContain("throw new SnapshotPartsAssemblyError('missing-part', ['core'])")
+    expect(partsBranch).toContain("throw new SnapshotPartsAssemblyError('hash-mismatch', ['core'])")
+    expect(partsBranch).toContain('const mergedCore = mergeLectureSubmissionIntoPayload(core as Record<string, unknown>, mergeInput)')
+    // 部品は不変: 新しい ID で create(衝突したらマージを中止)。解凍失敗も decode-failed で知らせる。
+    expect(partsBranch).toContain('transaction.create(snapshotRef.collection(SNAPSHOT_PARTS_SUBCOLLECTION).doc(next.docId), next.doc)')
+    expect(partsBranch).toContain("throw new SnapshotPartsAssemblyError('decode-failed', ['core']")
+    expect(partsBranch).toContain('transaction.set(snapshotRef, next.manifest)')
+    // 旧形式の目次を分割形式の教室へ書かない（createStoredSnapshotDoc は旧形式の枝だけ）。
+    expect(partsBranch).not.toContain('createStoredSnapshotDoc(')
+    expect(merge).toContain("reader: 'lecture-submission-merge', error })")
   })
 
   it('行: 自動バックアップ — 組み立てられない教室を空で書かずに除き、missingClassroomIds に残して開発者へ知らせる（他の教室は書く）', () => {
@@ -284,12 +298,100 @@ describe('INV-14 行（読み手）: どの読み手も唯一の読み手を通�
     expect(ledger).toContain("reader: 'student-count-ledger', error })\n      throw error")
   })
 
-  it('行: 保存の読み戻しと空データ上書き拒否 — 唯一の読み手で読み、段階 A では分割形式の教室へ旧形式で上書きしない', () => {
+  it('行: 保存の読み戻しと空データ上書き拒否（旧形式の書き手）— 唯一の読み手で読む。書く形式は resolveSnapshotWriteFormat が決め、分割形式の教室は旧形式で上書きしない（一方通行）', () => {
     const save = slice(indexTs, 'async function saveClassroomSnapshotFromCallable', 'export const saveClassroomSnapshot = onCall(')
     expect(save).toContain('const readbackPayload = await readClassroomSnapshotPayload(snapshotRef, readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)')
-    expect(save).toContain("reason: 'parts-format-write-unsupported'")
+    expect(save).toContain('previousIsPartsManifest: isSnapshotPartsManifest(previousSnapshotData),')
+    // 分割形式で書く保存は旧形式の書き手（createStoredSnapshotDoc）へ進まず、分割形式の書き手へ分岐する。
+    const branch = save.indexOf("if (writeFormat === 'weekly-parts') {\n    return saveClassroomSnapshotAsParts({")
+    expect(branch).toBeGreaterThan(-1)
+    expect(branch).toBeLessThan(save.indexOf('const snapshotDoc = createStoredSnapshotDoc({'))
+    expect(save).not.toContain('parts-format-write-unsupported')
     const guard = slice(indexTs, 'async function assertNoSnapshotDataLoss(', 'function isGoogleDriveBackupConfigured(')
     expect(guard).toContain('await readClassroomSnapshotPayload(params.snapshotRef, params.previousSnapshot)')
     expect(guard).toContain('params.previousSnapshot.managementCount')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 保存する側の約束（段階 B・2026-10-28）: 保存で作られる目次は、参照するすべての部品が書けて読み戻しで一致したときだけ有効になる。
+// 判定は純関数（functions/src/snapshotPartsWriter.ts・snapshotPartsWriter.test.ts で固定）。ここは index.ts の配線を固定する。
+// ---------------------------------------------------------------------------
+describe('INV-14 行（書き手）: 分割形式の保存は 1 トランザクション・読み戻し検証・失敗なら目次を直前へ戻す（ソース走査）', () => {
+  const writer = slice(indexTs, 'async function saveClassroomSnapshotAsParts(', '// 講習履歴(生徒1人の出席・休み・振替・配置の一覧)を返す。')
+
+  it('部品の書き込みと目次の切り替えは同じ runTransaction の中（部品だけ新しい目次は作らない・§9-4-5）。中では判定と書き込みだけ', () => {
+    const tx = slice(writer, 'txResult = await firestore.runTransaction(async (transaction) => {', '  } catch (error) {')
+    expect(tx).toContain('const current = await transaction.get(snapshotRef)')
+    expect(tx).toContain('const plan = planSnapshotPartsCommit({')
+    expect(tx).toContain('for (const write of plan.partWrites) transaction.set(partsCollection.doc(write.docId), write.doc)')
+    expect(tx).toContain('transaction.set(snapshotRef, plan.manifest)')
+    expect(tx).toContain("if (plan.outcome !== 'commit') return { plan, previousDoc: currentDoc }")
+    // メール・saveAttempts の記録・Firestore の別読みはトランザクションの外（再実行されうる）。
+    expect(tx).not.toContain('notifySaveFailureByMail(')
+    expect(tx).not.toContain('saveAttemptRef.set(')
+    expect(tx).not.toContain('.get()')
+  })
+
+  it('STALE・空データ・上限超過は何も書かずに失敗を返す（部品は 1 件も増えない・AC-10 / AC-11 / AC-14）', () => {
+    expect(writer).toContain("if (plan.outcome === 'stale') {")
+    expect(writer).toContain("if (plan.outcome === 'empty-management-data') {")
+    // started のまま残さない(1MiB 事故の目印「started が並ぶ」を誤らせない・regression-reviewer 低-1)。
+    expect(writer).toContain("await recordSaveAttemptFailure('stale'")
+    expect(writer).toContain("await recordSaveAttemptFailure('empty-management-data'")
+    expect(writer).toContain("if (plan.outcome === 'too-large') {")
+    expect(writer).toContain('throw await buildTooLargeError(')
+    expect(writer).toContain('`${STALE_SNAPSHOT_ERROR_MARKER}:別の端末でこの教室のデータが更新されています')
+    expect(writer).toContain("`${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`")
+  })
+
+  it('読み戻し検証は目次とこの保存で書いた部品すべて（verifySnapshotPartsReadback）。失敗なら目次を直前の内容へ戻し（目次の saveId がこの saveId のときだけ）、verification-failed を記録して internal（AC-15）', () => {
+    expect(writer).toContain('const readback = verifySnapshotPartsReadback({')
+    expect(writer).toContain('writtenParts,')
+    expect(writer).toContain('partDocs: readbackPartDocs,')
+    const rollback = slice(writer, 'if (!readback.ok) {', "throw new HttpsError('internal', '保存後の確認に失敗しました。もう一度保存してください。', { reason: 'readback-verification-failed' })")
+    // 戻すのは純関数 shouldRollbackManifestAfterReadbackFailure が true(saveId と compositeHash が一致＝QR マージが割り込んでいない)のときだけ。
+    expect(rollback).toContain('if (!shouldRollbackManifestAfterReadbackFailure({ latestDoc, saveId, compositeHash: committedManifest.compositeHash })) return')
+    expect(rollback).toContain('if (previousDoc) transaction.set(snapshotRef, previousDoc)')
+    expect(rollback).toContain('else transaction.delete(snapshotRef)')
+    expect(rollback).toContain("await recordSaveAttemptFailure('verification-failed'")
+    expect(rollback).toContain("kind: 'readback-failed'")
+    // 確定済みの再送の読み戻し失敗では目次を戻さない（確定済みの保存を取り消さない）。
+    expect(rollback).toContain("if (plan.outcome === 'commit') {")
+  })
+
+  it('verified の記録 → 操作ログ・台帳・痕跡（K-6）→ 容量通知（最後・K-5）の順。応答は分割形式の印と全体ハッシュを返す', () => {
+    const verified = writer.indexOf("status: 'verified'")
+    const events = writer.indexOf('await persistOperationEvents(')
+    const notices = writer.indexOf('resolveSnapshotPartsCapacityNotices(plan)')
+    expect(verified).toBeGreaterThan(-1)
+    expect(events).toBeGreaterThan(verified)
+    expect(notices).toBeGreaterThan(events)
+    expect(writer).toContain("writeMode: 'cloud-function-parts',")
+    expect(writer).toContain('storageFormat: SNAPSHOT_PARTS_STORAGE_FORMAT,')
+    expect(writer).toContain('compositeHash: readback.manifest.compositeHash,')
+  })
+
+  it('古い画面（段階 A より前）からの分割形式の保存は書く前に拒否する（AC-18）。一方通行の判定は resolveSnapshotWriteFormat', () => {
+    const save = slice(indexTs, 'async function saveClassroomSnapshotFromCallable', 'export const saveClassroomSnapshot = onCall(')
+    const tooOld = save.indexOf("if (writeFormat === 'weekly-parts' && !isClientNewEnoughForSnapshotParts(incomingClient.appVersion)) {")
+    const branch = save.indexOf("if (writeFormat === 'weekly-parts') {\n    return saveClassroomSnapshotAsParts({")
+    expect(tooOld).toBeGreaterThan(-1)
+    expect(tooOld).toBeLessThan(branch)
+    expect(save).toContain("throw new HttpsError('failed-precondition', buildClientTooOldMessage(), { reason: 'client-too-old' })")
+    expect(save).toContain('const writeFormat = resolveSnapshotWriteFormat({')
+  })
+
+  it('旧版の部品の掃除は目次が無い教室に触れず、削除の直前に目次を読み直して参照を再確認する（AC-25）', () => {
+    const gc = slice(indexTs, 'async function pruneSnapshotParts(', 'async function runSaveAttemptCleanup() {')
+    expect(gc).toContain('resolveSnapshotPartGcActions({')
+    expect(gc).toContain('const latestManifest = await snapshotDoc.ref.get()')
+    expect(gc).toContain('if (latestReferenced.has(docId)) {')
+    expect(gc).toContain("partsCollection.select('gcMarkedAt').get()")
+    expect(gc).toContain('SNAPSHOT_PART_GC_DRY_RUN')
+    // 壊れた目次（検査に落ちる）は触らない（null）。目次が無い教室は classroomSnapshots の一覧に出ないので巡回されない。
+    // 参照集合の判定は純関数 resolveReferencedSnapshotPartDocIds(snapshotPartsWriter.ts・テストで固定)。
+    expect(gc).toContain('resolveReferencedSnapshotPartDocIds(snapshotDoc.data())')
+    expect(gc).toContain('.select(...SNAPSHOT_MANIFEST_SELECT_FIELDS).get()')
   })
 })

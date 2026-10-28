@@ -1,7 +1,8 @@
 # 週単位の分割保存（教室データ 1MiB 上限の恒久対策）— 次セッションへの引き継ぎ（2026-10-27）
 
-> 状態: **仕様はオーナー確定済み・段階 0（共有純関数）と段階 A（両形式を読める版）は 2026-10-27 に実装済み（v1.5.651・ブランチ `ccr-262fd584-vi8fi3`）。
-> 次は段階 A の反映（Functions → ルール → Hosting）と staging での読取確認、その後 段階 B（サーバーが分割して書く）。** 仕様の正本は `docs/spec-save-restore.md` §9（約 440 行・§9-15 の 6 論点はすべて確定）と
+> 状態: **仕様はオーナー確定済み・段階 0（共有純関数）と段階 A（両形式を読める版）は 2026-10-27 に実装・本番反映済み（v1.5.651・確認リスト sp-1 はオーナー確認 OK 2026-10-28）。
+> 段階 B（サーバーが分割して書く）は 2026-10-28 に実装（v1.5.654・§0-2）。次は段階 B の反映（Functions → Hosting）→ 開発用教室の確認リスト sp-2 / sp-3 →
+> staging（本番サイズ）→ 日大前校（教室指定）→ 全教室。** 仕様の正本は `docs/spec-save-restore.md` §9（§9-15 の 6 論点はすべて確定・§9-17 に段階 B の実装メモ）と
 > `docs/spec-invariants.md` INV-14。この文書は「次のセッションが迷わず着手するための要約と手順」で、仕様の中身を複製しない
 > （食い違ったら §9 が正）。オーナー指示 2026-10-27「分割保存の実装を次セッションから進めるのでまとめて」。
 
@@ -50,6 +51,31 @@
 - 次セッションの最初の仕事: (1) `npm run test:rules` を回す。(2) safe-release で Functions → ルール（Actions「Deploy Firestore rules」）→
   Hosting の順に反映。(3) staging に分割形式の目次＋部品を手で作る小さなツール（`tools/`・firebase-admin・staging 限定）を書いて
   「読める・欠けたら案内が出て盤面が出ない」を実機で確かめる。(4) 段階 B へ。
+
+## 0-2. 2026-10-28 の実装内容（段階 B）と次の仕事
+
+- 入れたもの（すべてテスト付き・仕様との差分は `docs/spec-save-restore.md` §9-17）:
+  - フラグと古い画面の拒否 `functions/src/snapshotStorageFormat.ts`: `isWeeklySplitSnapshotStorageEnabledForClassroom`（基本スコープ `staging-environment`
+    ＝登録済みの検証用教室＋staging プロジェクト／教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`（今は空）／会社既定）・`resolveSnapshotWriteFormat`（一方通行）・
+    `isClientNewEnoughForSnapshotParts`（v1.5.651 以上・`CLIENT_TOO_OLD` マーカー）。クライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` は台帳用（scope はテストで突合）。
+  - 書き手の純関数 `functions/src/snapshotPartsWriter.ts`: `buildSnapshotParts`（分割・SHA-256・gzip level 9・全体ハッシュ）・`planSnapshotPartsCommit`
+    （確定済みの再送 → A1 → 空データ → 再利用/新規 → 上限 400 件・8MiB・1 文書 1MiB → 新しい目次）・`verifySnapshotPartsReadback`・
+    `mergeLectureSubmissionIntoPayload` / `buildQrMergedCorePart`（K-9）・`resolveSnapshotPartsCapacityNotices`（85% / 50%）。
+  - `functions/src/index.ts`: `saveClassroomSnapshotAsParts`（1 トランザクション → 読み戻し → 失敗なら目次を直前へ戻す → verified → ログ類 → 通知）、
+    `saveClassroomSnapshotFromCallable` は書く形式の選択と `CLIENT_TOO_OLD` の拒否をして分岐（旧形式の書き手は無改変）、`lectureSubmissionApi` は分割形式なら core 部品だけ差し替え、
+    `pruneSnapshotParts`（`cleanupOldSaveAttempts` に同乗・60 秒・`SNAPSHOT_PART_GC_DRY_RUN=1`）。通知の種類 `client-too-old`・`split-capacity-notice`。段階 A の暫定ガードは撤去。
+  - クライアント: 開発者の読み込みで組み立てられない教室だけ一覧から外して案内（M-2・`loadFailedClassrooms`）。室長は従来どおり。
+  - 確認リスト sp-2（保存・再読み込み）・sp-3（QR 提出）。台帳 `developmentStatusLedger.ts` の行を更新。INV-14 マトリクスに書き手の行 6 件。
+- 入れていないもの: 段階 C（`partsSave` の受け付け・クライアントの台帳・差分送信・`PARTS_BASE_MISMATCH` / `PARTS_FORMAT_UNSUPPORTED` の再送）、
+  `parts-invalid` 通知、トリガの二重組み立ての共有（L-5・§9-17）。
+- 次の仕事: (1) safe-release で Functions（Actions「Deploy Cloud Functions」）→ Hosting の順に反映（ルールは無変更）。(2) 開発用教室で sp-2 / sp-3 を確認し、
+  `saveAttempts` の `storageFormat` / `writtenPartCount` / `reusedPartCount` / `writeCountInTx` を読む（2 回目の保存は変わった部品だけ）。Firestore コンソールで
+  `classroomSnapshots/v8OZ7zH8vONNHjjYVcR1` が目次（`storageFormat: 'weekly-parts'`）になり `snapshotParts` に約 50 文書あることを確かめる。
+  15 分毎バックアップの要約に `missingClassroomIds` が無いこと。(3) 翌朝の `cleanupOldSaveAttempts` ログの `snapshot parts gc` 行（marked が旧版の数）。
+  (4) staging に最新 main を反映 → オーナー PC で `node tools/copy-prod-classroom-to-staging.mjs --workspace main --classroom 5w5OMueETerSKrSf14HC --promote-staging-member`
+  → staging で開いて保存（移行）→ §9-13 の staging 手順（普段の編集・テンプレ保存・丸ごと振替・QR 提出・STALE・復元・JSON 読込・通信断）と時間の記録。
+  (5) `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST` に日大前校を足して反映（室長へ切り替え日のハードリロードを案内）→ 残りの教室（`WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE` と
+  クライアントの scope を `all-classrooms` へ）。★冬期講習前に (5) まで。
 
 ## 1. 読む順（着手前に必ず）
 

@@ -23,6 +23,17 @@ export function buildSnapshotPartsLoadFailedMessage(classroomName: string): stri
   return name ? `教室「${name}」の${SNAPSHOT_PARTS_LOAD_FAILED_MESSAGE}` : SNAPSHOT_PARTS_LOAD_FAILED_MESSAGE
 }
 
+/**
+ * 開発者の読み込みで、組み立てられなかった教室を一覧から外したときの案内(regression-reviewer M-2・2026-10-28)。
+ * 室長は 1 教室なので読み込み全体を失敗にする(従来どおり)が、開発者は 1 教室の失敗で全教室が開けなくなるため、その教室だけ外す。
+ * 外した教室は表示も保存もしない(INV-14)。
+ */
+export function buildSnapshotPartsLoadFailedClassroomsNotice(entries: ReadonlyArray<{ name: string }>): string {
+  if (entries.length === 0) return ''
+  const names = entries.map((entry) => `「${entry.name.trim() || '名称未設定の教室'}」`).join('・')
+  return `教室 ${names} のデータを読み込めなかったため、この画面では開けません(一覧から外しています)。画面を再読み込みしても直らなければ、開発者へ連絡してください。`
+}
+
 /** 部品ハッシュ(SHA-256・16 進)をブラウザの crypto.subtle で計算する。無い環境(非 https など)は例外(照合を省いて読まない)。 */
 export async function hashSnapshotPartInputInBrowser(input: string): Promise<string> {
   const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle

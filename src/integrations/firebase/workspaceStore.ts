@@ -1,5 +1,5 @@
 import { collection, doc, getDoc, getDocs, query, where, type DocumentReference, type Firestore } from 'firebase/firestore'
-import { WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type AppSnapshotPayload, type ClassroomSettings, type PersistedBoardState, type WorkspaceClassroom, type WorkspaceSnapshot, type WorkspaceUser, type WorkspaceUserRole } from '../../types/appState'
+import { WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type AppSnapshotPayload, type ClassroomSettings, type PersistedBoardState, type WorkspaceClassroom, type WorkspaceClassroomLoadFailure, type WorkspaceSnapshot, type WorkspaceUser, type WorkspaceUserRole } from '../../types/appState'
 import type { SlotCell } from '../../components/schedule-board/types'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
@@ -712,7 +712,11 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     settingsDocSnapshots.docs.map((entry) => [entry.id, entry.data() as FirebaseClassroomSettingsDoc]),
   )
 
-  const classrooms = await Promise.all(classroomDocSnapshots.docs.map(async (entry) => {
+  // ★組み立てられない教室(INV-14): 空の教室にせず、表示も保存もしない(§9-5-3)。
+  //   室長(1 教室)は読み込み全体を失敗にする(従来どおり)。開発者は 1 教室の失敗で全教室が開けなくなるので(regression-reviewer M-2)、
+  //   その教室だけ一覧から外して loadFailedClassrooms に残し、App が案内を出す(外した教室は開けない＝保存もされない)。
+  const loadFailedClassrooms: WorkspaceClassroomLoadFailure[] = []
+  const loadedClassrooms = await Promise.all(classroomDocSnapshots.docs.map(async (entry) => {
     const data = entry.data() as FirebaseClassroomDoc
     const snapshot = snapshotByClassroomId.get(entry.id)
     const settingsDoc = settingsByClassroomId.get(entry.id)
@@ -720,10 +724,13 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     try {
       payload = await readFirebaseSnapshotPayload(snapshot, doc(getSnapshotsCollection(firestore), entry.id))
     } catch (error) {
-      // ★組み立てられない教室(INV-14): 空の教室にせず、読み込み全体を失敗にして盤面を出さない(= その教室の保存も止まる)。
       //   開発者向けの原因(部品キー・理由)は console に残し、画面には平易な文言だけを出す(§9-5-3)。
       if (isSnapshotPartsAssemblyError(error)) {
         console.error(`[workspaceStore] 教室データを組み立てられません classroomId=${entry.id} reason=${error.reason} parts=${error.partKeys.join(',')} ${error.details.join(' / ')}`)
+        if (membership.role === 'developer') {
+          loadFailedClassrooms.push({ id: entry.id, name: data.name?.trim() || '', message: buildSnapshotPartsLoadFailedMessage(data.name ?? '') })
+          return null
+        }
         throw new Error(buildSnapshotPartsLoadFailedMessage(data.name ?? ''))
       }
       throw error
@@ -733,6 +740,7 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     }
     return toWorkspaceClassroom(entry.id, data, payload, params.createEmptyClassroomPayload)
   }))
+  const classrooms = loadedClassrooms.filter((classroom): classroom is WorkspaceClassroom => classroom !== null)
 
   const actingClassroomId = currentUser.role === 'manager'
     ? currentUser.assignedClassroomId
@@ -754,5 +762,6 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     actingClassroomId,
     users,
     classrooms,
+    ...(loadFailedClassrooms.length > 0 ? { loadFailedClassrooms } : {}),
   } satisfies WorkspaceSnapshot
 }

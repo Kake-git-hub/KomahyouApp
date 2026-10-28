@@ -25,6 +25,7 @@ import { buildManagerSelfRestoreConfirmation, isRestoreSourceForClassroom, listM
 import { canApplyUndoSnapshotToClassroom } from './utils/classroomScopedUndo'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
+import { buildSnapshotPartsLoadFailedClassroomsNotice } from './integrations/firebase/snapshotPartsClientRead'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import { resolveWorkspaceBackupImportTarget } from './utils/workspaceBackupImport'
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, markLectureSubmissionsNotified, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
@@ -98,6 +99,12 @@ function ScreenLoadingFallback() {
 }
 
 // A1: サーバーが版数衝突(別端末が先に更新)を表す HttpsError メッセージに付ける安定マーカー。
+// 開発者の読み込みで組み立てられず一覧から外した教室(INV-14・regression-reviewer M-2)を知らせる。室長は読み込み全体が失敗する(従来どおり)。
+function notifyLoadFailedClassrooms(snapshot: { loadFailedClassrooms?: ReadonlyArray<{ name: string }> } | null | undefined) {
+  const notice = buildSnapshotPartsLoadFailedClassroomsNotice(snapshot?.loadFailedClassrooms ?? [])
+  if (notice) window.alert(notice)
+}
+
 // functions/src/optimisticVersion.ts の STALE_SNAPSHOT_ERROR_MARKER と一致させること。
 const STALE_SNAPSHOT_ERROR_MARKER = 'STALE_SNAPSHOT'
 
@@ -2891,6 +2898,7 @@ function AuthenticatedApp() {
     }
 
     applyWorkspaceSnapshot(mergedSnapshot, successMessage)
+    notifyLoadFailedClassrooms(remoteSnapshot)
     // A1: ワークスペースを読み直したら最新の版数をレジストリに取り込んだので、版数衝突の停止を解除する。
     remoteStaleConflictRef.current = false
     setHasRemoteStaleConflict(false)
@@ -5073,6 +5081,7 @@ function AuthenticatedApp() {
           applyWorkspaceSnapshot(resolvedSnapshot, '教室データを読み込みました。')
           setRemoteAuthMessage('')
           setHasHydratedSnapshot(true)
+          notifyLoadFailedClassrooms(remoteSnapshot)
         })
         .catch((error) => {
           if (disposed) return

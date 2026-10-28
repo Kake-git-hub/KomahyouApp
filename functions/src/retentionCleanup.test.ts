@@ -13,6 +13,7 @@ import {
   RETENTION_CLEANUP_MAX_DELETES_PER_SWEEP,
   RETENTION_CLEANUP_PAGE_LIMIT,
   RETENTION_CLEANUP_TIME_BUDGET_MS,
+  SNAPSHOT_PART_GC_TIME_BUDGET_MS,
   runBudgetedDeletionSweep,
   shouldContinueBudgetedSweep,
 } from './retentionCleanup'
@@ -78,7 +79,9 @@ describe('Transaction too big 回帰防止', () => {
     expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS).toBeGreaterThan(0)
     expect(CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS).toBeGreaterThan(0)
     // 3 つの予算の合計が関数の timeoutSeconds(540・2026-10-22 に 300 から延長)に収まる。index.ts の値も同じ定数を使う。
-    expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS + CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS + RETENTION_CLEANUP_TIME_BUDGET_MS)
+    // 2026-10-28: 旧版の部品の掃除(分割保存 §9-9・60 秒)も独立予算で同乗。4 つの合計が timeoutSeconds に収まる。
+    expect(SNAPSHOT_PART_GC_TIME_BUDGET_MS).toBeGreaterThan(0)
+    expect(INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS + CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS + SNAPSHOT_PART_GC_TIME_BUDGET_MS + RETENTION_CLEANUP_TIME_BUDGET_MS)
       .toBeLessThan(RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS * 1000)
     expect(RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS).toBeLessThanOrEqual(540)
     expect(readIndexSource()).toContain('timeoutSeconds: RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS')

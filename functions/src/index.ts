@@ -61,8 +61,10 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildOperationTraceDoc, normalizeSaveOperationTrace } from './operationTraces'
 import { buildSaveFailureAlertMail, resolveSaveFailureAlertThrottle, SAVE_FAILURE_ALERT_COLLECTION, SAVE_FAILURE_ALERT_SMTP_TIMEOUTS, SAVE_FAILURE_ALERT_TIMEOUT_MS, shouldSendSaveFailureAlert, withTimeout, type SaveFailureAlertKind } from './saveFailureAlert'
 import { classifySnapshotWriteFailure, estimateFirestoreDocumentBytes, FIRESTORE_DOCUMENT_MAX_BYTES, isSnapshotNearCapacity, resolveSnapshotCapacityRatio, SNAPSHOT_GZIP_LEVEL, SNAPSHOT_TOO_LARGE_ERROR_MARKER } from './snapshotCapacity'
-import { assembleSnapshotPartsManifest, describeSnapshotAssemblyFailure, isSnapshotPartsAssemblyError, isSnapshotPartsManifest, SnapshotPartsAssemblyError } from './snapshotPartsReader'
-import { SNAPSHOT_PARTS_SUBCOLLECTION } from './generated/classroomSnapshotParts'
+import { assembleSnapshotPartsManifest, decodeSnapshotPartDoc, describeSnapshotAssemblyFailure, hashSnapshotPartInput, isSnapshotPartsAssemblyError, isSnapshotPartsManifest, SnapshotPartsAssemblyError } from './snapshotPartsReader'
+import { buildSnapshotPartHashInput, listSnapshotPartReferences, resolveSnapshotPartGcActions, SNAPSHOT_PARTS_HASH_SCHEME, SNAPSHOT_PARTS_STORAGE_FORMAT, SNAPSHOT_PARTS_SUBCOLLECTION, validateSnapshotPartsManifest } from './generated/classroomSnapshotParts'
+import { buildQrMergedCorePart, buildQrMergeWriterId, buildSnapshotParts, mergeLectureSubmissionIntoPayload, planSnapshotPartsCommit, resolveReferencedSnapshotPartDocIds, resolveSnapshotPartsCapacityNotices, shouldRollbackManifestAfterReadbackFailure, SNAPSHOT_MANIFEST_SELECT_FIELDS, verifySnapshotPartsReadback, type LectureSubmissionMergeInput } from './snapshotPartsWriter'
+import { buildClientTooOldMessage, isClientNewEnoughForSnapshotParts, isWeeklySplitSnapshotStorageEnabledForClassroom, resolveSnapshotWriteFormat, SNAPSHOT_PARTS_MIN_CLIENT_APP_VERSION } from './snapshotStorageFormat'
 import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
@@ -101,6 +103,7 @@ import {
   RETENTION_CLEANUP_PAGE_LIMIT,
   RETENTION_CLEANUP_TIME_BUDGET_MS,
   runBudgetedDeletionSweep,
+  SNAPSHOT_PART_GC_TIME_BUDGET_MS,
   type RetentionTargetKey,
 } from './retentionCleanup'
 
@@ -1184,7 +1187,8 @@ function buildSaveAttemptPayload(params: {
   savedAt: string
   saveId: string
   payloadHash: string
-  status: 'started' | 'verification-failed' | 'verified' | 'too-large' | 'write-failed'
+  // stale / empty-management-data は分割形式の書き手だけが使う終端(トランザクション内で判定するため started が残らないように・regression-reviewer 低-1)。
+  status: 'started' | 'verification-failed' | 'verified' | 'too-large' | 'write-failed' | 'stale' | 'empty-management-data'
   verified: boolean
   writeMode: string
   dataByteLength: number
@@ -1201,8 +1205,11 @@ function buildSaveAttemptPayload(params: {
   snapshotVersion?: number
   appVersion?: string
   userAgent?: string
+  /** 分割形式(§9-10)の記録。storageFormat / hashScheme / compositeHash / sendMode / 件数・サイズ。旧形式では無し。 */
+  partsSave?: Record<string, unknown>
 }) {
   return {
+    ...(params.partsSave ?? {}),
     ...(params.appVersion ? { appVersion: params.appVersion } : {}),
     ...(params.userAgent ? { userAgent: params.userAgent } : {}),
     classroomId: params.classroomId,
@@ -2019,25 +2026,36 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   }
   const previousSnapshot = await snapshotRef.get()
   const previousSnapshotData = previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null
-  // 段階 A(読める版・docs/spec-save-restore.md §9-7-1): この版のサーバーは分割形式を**読む**だけで、まだ分割して書けない。
-  // 分割形式の教室へ旧形式(1 文書)で上書きすると一方通行(§9-7-1)に反し、部品が宙に浮くので断る。段階 B でここが分割の書き手に置き換わる。
-  if (isSnapshotPartsManifest(previousSnapshotData)) {
-    const detail = `parts-format-write-unsupported: 分割形式の教室への保存はこの版(段階 A)では未対応 version=${previousSnapshotData.version ?? ''}`
+  // 段階 B(docs/spec-save-restore.md §9-7-1・2026-10-28): 書く形式は resolveSnapshotWriteFormat が 1 か所で決める。
+  // 分割形式の教室は**一方通行**(フラグ OFF でも旧形式へ戻さない)。旧形式の教室はフラグ ON なら この保存で分割形式へ移る。
+  const writeFormat = resolveSnapshotWriteFormat({
+    previousIsPartsManifest: isSnapshotPartsManifest(previousSnapshotData),
+    flagEnabled: isWeeklySplitSnapshotStorageEnabledForClassroom({ workspaceKey, classroomId, projectId: SNAPSHOT_STORAGE_PROJECT_ID }),
+  })
+  // 古い画面(段階 A より前の版・版を送らない)は分割形式を読めず空の教室に見えるので、分割形式で書く保存は拒否する(§9-7-3・AC-18)。
+  if (writeFormat === 'weekly-parts' && !isClientNewEnoughForSnapshotParts(incomingClient.appVersion)) {
+    const detail = `client-too-old: 端末の版=${incomingClient.appVersion || '(無し)'} / 必要=${SNAPSHOT_PARTS_MIN_CLIENT_APP_VERSION} 以上 / 教室の形式=${isSnapshotPartsManifest(previousSnapshotData) ? 'weekly-parts' : 'legacy(移行前)'}`
     logger.error(`[saveClassroomSnapshot] ${detail} classroom=${classroomId} saveId=${saveId}`)
-    // K-5: 拒否の痕跡を saveAttempts とメールに残す(段階 B 移行期に「古い Functions が残っていた」事故の鑑識用・regression-reviewer L-2)。
     try {
       await saveAttemptRef.set(buildSaveAttemptPayload({
         classroomId, savedAt, saveId, payloadHash, status: 'write-failed', verified: false, writeMode: 'cloud-function-rejected',
         dataByteLength: Buffer.byteLength(JSON.stringify(sanitizedPayload), 'utf8'), snapshotEncoding: 'none', updatedBy: memberRef.id,
         createdAt: new Date().toISOString(), failedAt: new Date().toISOString(), errorMessage: detail,
-        snapshotVersion: previousSnapshotData.version, appVersion: incomingClient.appVersion, userAgent: incomingClient.userAgent,
+        snapshotVersion: previousSnapshotData?.version, appVersion: incomingClient.appVersion, userAgent: incomingClient.userAgent,
       }), { merge: true })
     } catch (recordError) {
       logger.error(`[saveClassroomSnapshot] Failed to record rejected saveAttempt classroom=${classroomId} saveId=${saveId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`)
     }
-    await notifySaveFailureByMail({ kind: 'write-failed', workspaceKey, classroomId, saveId, savedAt, updatedBy: memberRef.id, client: incomingClient, detail })
-    throw new HttpsError('failed-precondition', 'この教室は新しい保存形式のため、この版では保存できません。開発者へご連絡ください。', { reason: 'parts-format-write-unsupported' })
+    await notifySaveFailureByMail({ kind: 'client-too-old', workspaceKey, classroomId, saveId, savedAt, updatedBy: memberRef.id, client: incomingClient, detail })
+    throw new HttpsError('failed-precondition', buildClientTooOldMessage(), { reason: 'client-too-old' })
   }
+  if (writeFormat === 'weekly-parts') {
+    return saveClassroomSnapshotAsParts({
+      workspaceKey, classroomId, savedAt, saveId, sanitizedPayload, payloadHash, incomingBaseVersion, incomingClient,
+      incomingOperationEvents, incomingLessonLedger, incomingOperationTrace, updatedBy: memberRef.id, snapshotRef, saveAttemptRef, previousSnapshotData,
+    })
+  }
+  // 以下は旧形式(1 文書)の書き手(フラグ OFF の教室)。分割形式の書き手は saveClassroomSnapshotAsParts。
   try {
     await assertNoSnapshotDataLoss({
       snapshotRef,
@@ -2288,6 +2306,268 @@ export const saveClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds:
 export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   return saveClassroomSnapshotFromCallable(request, { developmentOnly: true })
 })
+
+// 機能フラグの staging 判定に使う(weeklySplitSnapshotStorage)。gen2 では GCLOUD_PROJECT が入らないことがあるため候補を順に見る(PARENT_PORTAL_PROJECT_ID と同じ)。
+const SNAPSHOT_STORAGE_PROJECT_ID = process.env.GCLOUD_PROJECT
+  ?? process.env.GOOGLE_CLOUD_PROJECT
+  ?? process.env.GCP_PROJECT
+  ?? 'komahyouapp-prod'
+
+/**
+ * 週単位の分割保存の【書き手】(段階 B・docs/spec-save-restore.md §9-4-4〜§9-4-7・INV-14「保存する側の約束」)。
+ * 従来の形(教室データ全体 payload)を受け、サーバーで部品に分けて書く。判定は純関数(snapshotPartsWriter.ts)。
+ *  1. 部品を作る(分割・SHA-256・gzip level 9・全体ハッシュ)。saveAttempts に started を記録。
+ *  2. **1 トランザクション**: 目次を transaction.get → 確定済みの再送(目次の saveId が同じ)なら何も書かない → A1 版数照合 →
+ *     空データ上書き拒否(目次の managementCount)→ 同じハッシュの部品は再利用 → 上限判定(400 件・8MiB・1 文書 1MiB)→
+ *     新しい部品を書き、目次を set(版数 +1)。トランザクションの中は判定と書き込みだけ(メール・記録は外・再実行されうるため)。
+ *  3. 読み戻し検証: 目次(saveId・version・compositeHash)と**この保存で書いた部品すべて**を読み直して照合。不一致なら
+ *     **目次を直前の内容へ戻し**(目次の saveId がこの saveId のときだけ)、verification-failed を記録して internal(AC-15)。
+ *  4. verified を記録 → 操作ログ・授業台帳・操作痕跡(K-6)→ 容量通知(最後・K-5)。
+ * ★旧形式の教室の最初の保存はここで分割形式へ移る(全部品を書く)。直前ロールバック(Storage)には移行前の教室データ全体が
+ *   トリガ mirrorLatestClassroomRollback で残る(AC-17)。
+ */
+async function saveClassroomSnapshotAsParts(params: {
+  workspaceKey: string
+  classroomId: string
+  savedAt: string
+  saveId: string
+  sanitizedPayload: Record<string, unknown>
+  payloadHash: string
+  incomingBaseVersion: number | undefined
+  incomingClient: { appVersion: string; userAgent: string }
+  incomingOperationEvents: NormalizedOperationEvent[]
+  incomingLessonLedger: NormalizedLessonLedger | null
+  incomingOperationTrace: ReturnType<typeof normalizeSaveOperationTrace>
+  updatedBy: string
+  snapshotRef: FirebaseFirestore.DocumentReference
+  saveAttemptRef: FirebaseFirestore.DocumentReference
+  previousSnapshotData: FirebaseClassroomSnapshotDoc | null
+}) {
+  const { workspaceKey, classroomId, savedAt, saveId, sanitizedPayload, payloadHash, incomingClient, updatedBy, snapshotRef, saveAttemptRef } = params
+  // 空データ上書き拒否(K-4)。旧形式の前回文書はここで 1 回だけ解凍して数える(トランザクションの中では分割形式の目次の managementCount で再判定)。
+  try {
+    await assertNoSnapshotDataLoss({ snapshotRef, previousSnapshot: params.previousSnapshotData, nextPayload: sanitizedPayload })
+  } catch (error) {
+    if (error instanceof HttpsError && error.code === 'failed-precondition') {
+      await notifySaveFailureByMail({ kind: 'data-loss-guard', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient, detail: error.message })
+    }
+    throw error
+  }
+  const partsCollection = snapshotRef.collection(SNAPSHOT_PARTS_SUBCOLLECTION)
+  const built = buildSnapshotParts(sanitizedPayload)
+  const managementCount = countClassroomManagementData(sanitizedPayload)
+  const dataByteLength = Buffer.byteLength(JSON.stringify(sanitizedPayload), 'utf8')
+  const saveAttemptCreatedAt = new Date().toISOString()
+  const baseParts: Record<string, unknown> = {
+    storageFormat: SNAPSHOT_PARTS_STORAGE_FORMAT,
+    hashScheme: SNAPSHOT_PARTS_HASH_SCHEME,
+    compositeHash: built.compositeHash,
+    // 段階 B は従来の形(payload 全体)しか受けないので常に legacy(段階 C で delta / full が入る・§9-10)。
+    sendMode: 'legacy',
+    sentPartCount: built.parts.length,
+    requestBytes: dataByteLength,
+  }
+  const saveAttemptBase = {
+    classroomId,
+    savedAt,
+    saveId,
+    payloadHash,
+    writeMode: 'cloud-function-parts',
+    dataByteLength,
+    snapshotEncoding: SNAPSHOT_PARTS_STORAGE_FORMAT,
+    updatedBy,
+    createdAt: saveAttemptCreatedAt,
+    appVersion: incomingClient.appVersion,
+    userAgent: incomingClient.userAgent,
+  }
+  const recordSaveAttemptFailure = async (status: 'too-large' | 'write-failed' | 'verification-failed' | 'stale' | 'empty-management-data', errorMessage: string, extra: Record<string, unknown> = {}) => {
+    try {
+      await saveAttemptRef.set(buildSaveAttemptPayload({
+        ...saveAttemptBase,
+        status,
+        verified: false,
+        failedAt: new Date().toISOString(),
+        errorMessage,
+        partsSave: { ...baseParts, ...extra },
+      }), { merge: true })
+    } catch (recordError) {
+      logger.error(`[saveClassroomSnapshot] Failed to record saveAttempt status=${status} classroom=${classroomId} saveId=${saveId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`)
+    }
+  }
+  const buildTooLargeError = async (detail: string, documentByteLength: number): Promise<HttpsError> => {
+    await recordSaveAttemptFailure('too-large', detail, { documentByteLength, capacityRatio: resolveSnapshotCapacityRatio(documentByteLength) })
+    await notifySaveFailureByMail({ kind: 'snapshot-too-large', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient, detail })
+    return new HttpsError(
+      'resource-exhausted',
+      `${SNAPSHOT_TOO_LARGE_ERROR_MARKER}:教室のデータが保存できる大きさの上限を超えたため、保存できませんでした。`,
+      { reason: 'snapshot-too-large', documentByteLength, maxBytes: FIRESTORE_DOCUMENT_MAX_BYTES },
+    )
+  }
+
+  await saveAttemptRef.set(buildSaveAttemptPayload({ ...saveAttemptBase, status: 'started', verified: false, partsSave: baseParts }))
+
+  let txResult: { plan: ReturnType<typeof planSnapshotPartsCommit>; previousDoc: Record<string, unknown> | null }
+  try {
+    txResult = await firestore.runTransaction(async (transaction) => {
+      const current = await transaction.get(snapshotRef)
+      const currentDoc = current.exists ? (current.data() as Record<string, unknown>) : null
+      const plan = planSnapshotPartsCommit({
+        currentDoc,
+        classroomId,
+        snapshotPath: snapshotRef.path,
+        saveId,
+        savedAt,
+        updatedBy,
+        incomingBaseVersion: params.incomingBaseVersion,
+        built,
+        managementCount,
+        dataByteLength,
+        createdAt: new Date().toISOString(),
+      })
+      if (plan.outcome !== 'commit') return { plan, previousDoc: currentDoc }
+      // ★判定と書き込みだけ(メール・saveAttempts はトランザクションの外)。部品は不変なので同じ ID へは同じ内容しか書かれない(set)。
+      for (const write of plan.partWrites) transaction.set(partsCollection.doc(write.docId), write.doc)
+      transaction.set(snapshotRef, plan.manifest)
+      return { plan, previousDoc: currentDoc }
+    })
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error)
+    const estimatedMax = built.parts.reduce((max, part) => Math.max(max, part.storedBytes), 0)
+    if (classifySnapshotWriteFailure(error, estimatedMax) === 'too-large' || /too big|too large/i.test(errorText)) {
+      throw await buildTooLargeError(`Firestore: ${errorText}`, estimatedMax)
+    }
+    await recordSaveAttemptFailure('write-failed', errorText)
+    await notifySaveFailureByMail({ kind: 'write-failed', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient, detail: errorText })
+    throw error
+  }
+
+  const { plan, previousDoc } = txResult
+  if (plan.outcome === 'stale') {
+    await recordSaveAttemptFailure('stale', `stale: サーバー版数=${plan.previousVersion} / 送信版数=${plan.incomingBaseVersion}`)
+    await notifySaveFailureByMail({
+      kind: 'stale-version', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient,
+      detail: `サーバー版数=${plan.previousVersion} / 送信版数=${plan.incomingBaseVersion}`,
+    })
+    throw new HttpsError(
+      'failed-precondition',
+      `${STALE_SNAPSHOT_ERROR_MARKER}:別の端末でこの教室のデータが更新されています(サーバー版数=${plan.previousVersion}/送信版数=${plan.incomingBaseVersion})。最新を読み込むため、画面を再読み込みしてください。`,
+    )
+  }
+  if (plan.outcome === 'empty-management-data') {
+    logger.warn('[saveClassroomSnapshot] 空の管理データでの上書きを中止しました(分割形式)', { previousManagementCount: plan.previousManagementCount })
+    await recordSaveAttemptFailure('empty-management-data', `empty-management-data: 前回の管理データ件数=${plan.previousManagementCount} / 今回=0`)
+    await notifySaveFailureByMail({
+      kind: 'data-loss-guard', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient,
+      detail: `前回の管理データ件数=${plan.previousManagementCount} / 今回=0(分割形式の目次で判定)`,
+    })
+    throw new HttpsError('failed-precondition', '中身が空のため、保存を中止しました。教室データを確認してください。', {
+      reason: 'empty-management-data',
+      previousManagementCount: plan.previousManagementCount,
+    })
+  }
+  if (plan.outcome === 'too-large') {
+    throw await buildTooLargeError(`${plan.detail}・教室データ(非圧縮)=${dataByteLength}`, plan.maxDocumentBytes)
+  }
+
+  // 読み戻し検証(§9-4-4 7): 目次と、この保存で書いた部品すべて。確定済みの再送(already-committed)は目次が指す部品を全部読み直す。
+  const committedManifest = plan.manifest
+  const writtenParts = plan.outcome === 'commit'
+    ? plan.partWrites.map((write) => ({ partKey: write.partKey, docId: write.docId, hash: write.doc.hash }))
+    : listSnapshotPartReferences(plan.manifest).map((ref) => ({ partKey: ref.partKey, docId: ref.docId, hash: ref.hash }))
+  const readbackSnapshot = await snapshotRef.get()
+  const readbackPartDocs = writtenParts.length > 0
+    ? (await firestore.getAll(...writtenParts.map((part) => partsCollection.doc(part.docId)))).map((doc) => (doc.exists ? doc.data() ?? null : null))
+    : []
+  const readback = verifySnapshotPartsReadback({
+    manifestDoc: readbackSnapshot.exists ? readbackSnapshot.data() : null,
+    expected: { saveId, version: committedManifest.version ?? 0, compositeHash: committedManifest.compositeHash },
+    writtenParts,
+    partDocs: readbackPartDocs,
+  })
+  const planStats = plan.outcome === 'commit'
+    ? {
+      writtenPartCount: plan.writtenPartKeys.length,
+      reusedPartCount: plan.reusedPartKeys.length,
+      writeCountInTx: plan.writeCount,
+      maxPartDocumentBytes: plan.maxDocumentBytes,
+      maxPartDocumentKey: plan.maxDocumentPartKey,
+      corePartBytes: plan.corePartBytes,
+      boardPartBytes: plan.boardPartBytes,
+      manifestBytes: plan.manifestBytes,
+      documentByteLength: plan.maxDocumentBytes,
+      capacityRatio: resolveSnapshotCapacityRatio(plan.maxDocumentBytes),
+    }
+    : { writtenPartCount: 0, reusedPartCount: built.parts.length, writeCountInTx: 0, replayOfCommittedManifest: true }
+  if (!readback.ok) {
+    // ★目次を直前の内容へ戻す(INV-14「保存する側の約束」・AC-15)。戻すのは「今の目次がこの保存が書いたものそのまま」(saveId と
+    // compositeHash が一致)のときだけ(純関数 shouldRollbackManifestAfterReadbackFailure)。他の保存が先に進んでいれば(saveId が違う)、
+    // QR マージが割り込んでいれば(compositeHash が違う)触らない(regression-reviewer 中-2)。
+    // 確定済みの再送の読み戻し失敗は、この saveId で書いた目次を戻すと**確定済みの保存を取り消す**ことになるので戻さない(記録と通知だけ)。
+    // 戻した後の部品は孤児として残り、掃除(§9-9)が 3 日後に消す(新しい教室で目次を削除した場合も同じ・regression-reviewer 低-4)。
+    if (plan.outcome === 'commit') {
+      try {
+        await firestore.runTransaction(async (transaction) => {
+          const latest = await transaction.get(snapshotRef)
+          const latestDoc = latest.exists ? latest.data() : null
+          if (!shouldRollbackManifestAfterReadbackFailure({ latestDoc, saveId, compositeHash: committedManifest.compositeHash })) return
+          if (previousDoc) transaction.set(snapshotRef, previousDoc)
+          else transaction.delete(snapshotRef)
+        })
+      } catch (rollbackError) {
+        logger.error(`[saveClassroomSnapshot] 読み戻し失敗後の目次の巻き戻しに失敗 classroom=${classroomId} saveId=${saveId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`)
+      }
+    }
+    await recordSaveAttemptFailure('verification-failed', `Firebase保存後の読み戻し検証に失敗しました。 ${readback.detail}`, { ...planStats, readbackHash: '', manifestRollbackAttempted: plan.outcome === 'commit' })
+    await notifySaveFailureByMail({
+      kind: 'readback-failed', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient,
+      detail: `compositeHash=${committedManifest.compositeHash} ${readback.detail}${plan.outcome === 'commit' ? '(目次を直前の内容へ戻した)' : '(確定済みの再送のため目次は戻していない)'}`,
+    })
+    throw new HttpsError('internal', '保存後の確認に失敗しました。もう一度保存してください。', { reason: 'readback-verification-failed' })
+  }
+
+  const nextVersion = readback.manifest.version ?? 0
+  await saveAttemptRef.set(buildSaveAttemptPayload({
+    ...saveAttemptBase,
+    status: 'verified',
+    verified: true,
+    readbackHash: readback.manifest.compositeHash,
+    verifiedAt: new Date().toISOString(),
+    snapshotVersion: nextVersion,
+    partsSave: { ...baseParts, ...planStats, ...(readback.crossedByQrMerge ? { readbackCrossedByQrMerge: true } : {}) },
+  }), { merge: true })
+
+  // 操作ログ・授業台帳・操作痕跡は「保存が確定してから」(K-6)。失敗しても保存は成功のまま(各関数が握る)。
+  await persistOperationEvents({ snapshotRef, events: params.incomingOperationEvents, classroomId, saveId, savedAt, updatedBy, client: incomingClient })
+  await persistLessonLedger({ snapshotRef, ledger: params.incomingLessonLedger, classroomId, saveId, savedAt, updatedBy })
+  await persistOperationTrace({ snapshotRef, entries: params.incomingOperationTrace, classroomId, saveId, savedAt, snapshotVersion: nextVersion, updatedBy, client: incomingClient })
+
+  // 容量の通知は最後(K-5 / L-3)。85% は既存の capacity-warning(書いた文書の最大)、50% は第 2 段着手の合図(§9-3-7)。
+  if (plan.outcome === 'commit') {
+    const notices = resolveSnapshotPartsCapacityNotices(plan)
+    if (notices.capacityWarning) {
+      await notifySaveFailureByMail({ kind: 'capacity-warning', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient, detail: notices.detail })
+    }
+    if (notices.splitCapacityNotice) {
+      await notifySaveFailureByMail({ kind: 'split-capacity-notice', workspaceKey, classroomId, saveId, savedAt, updatedBy, client: incomingClient, detail: notices.detail })
+    }
+  }
+
+  return {
+    classroomId,
+    savedAt,
+    saveId,
+    payloadHash,
+    verified: true,
+    idempotentReplay: plan.outcome !== 'commit',
+    writeMode: 'cloud-function-parts',
+    dataByteLength,
+    version: nextVersion,
+    storageFormat: SNAPSHOT_PARTS_STORAGE_FORMAT,
+    compositeHash: readback.manifest.compositeHash,
+    partHashes: built.partHashes,
+    writtenPartKeys: writtenParts.map((part) => part.partKey),
+  }
+}
 
 // 講習履歴(生徒1人の出席・休み・振替・配置の一覧)を返す。テーマ5/H-2。
 // 台帳 lessonLedgerDays はクライアントから読めない(firestore.rules に match なし)ので、
@@ -3141,6 +3421,94 @@ async function pruneClassroomSaveHistory(nowMs: number) {
   })
 }
 
+/**
+ * 旧版の部品の掃除(docs/spec-save-restore.md §9-9・§8-1 #17・AC-25)。cleanupOldSaveAttempts の巡回に**独立した時間予算**で同乗する。
+ * 規則は純関数 resolveSnapshotPartGcActions(参照なし＋印なし → 印を付ける / 印から 3 日 → 目次を読み直して再確認してから削除 /
+ * 参照あり＋印あり → 印を消す)。
+ *  - 目次(classroomSnapshots/{id})が**無い**教室(削除済み)は何もしない。旧形式の文書の教室は「参照なし」として扱う
+ *    (読み戻し失敗で旧形式へ戻った移行の部品を 3 日後に消す)。壊れた目次(検査に落ちる)の教室は触らない(安全側)。
+ *  - 部品は gcMarkedAt だけ select で読む(中身は読まない)。目次も必要な項目だけ select(旧形式の compressedData を読まない)。
+ *  - 空実行は SNAPSHOT_PART_GC_DRY_RUN=1(判定だけログに出す)。
+ */
+const SNAPSHOT_PART_GC_DRY_RUN = (process.env.SNAPSHOT_PART_GC_DRY_RUN ?? '').trim() === '1'
+
+async function pruneSnapshotParts(startedAtMs: number) {
+  const result = { classrooms: 0, marked: 0, unmarked: 0, removed: 0, skippedInvalidManifest: 0, stoppedByBudget: false, dryRun: SNAPSHOT_PART_GC_DRY_RUN }
+  const nowIso = new Date().toISOString()
+  const isOverBudget = () => Date.now() - startedAtMs >= SNAPSHOT_PART_GC_TIME_BUDGET_MS
+  const workspacesSnapshot = await firestore.collection('workspaces').get()
+  for (const workspaceDoc of workspacesSnapshot.docs) {
+    const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').select(...SNAPSHOT_MANIFEST_SELECT_FIELDS).get()
+    for (const snapshotDoc of snapshotsSnapshot.docs) {
+      if (isOverBudget()) {
+        result.stoppedByBudget = true
+        return result
+      }
+      try {
+        const referenced = resolveReferencedSnapshotPartDocIds(snapshotDoc.data())
+        if (!referenced) {
+          result.skippedInvalidManifest += 1
+          continue
+        }
+        const partsCollection = snapshotDoc.ref.collection(SNAPSHOT_PARTS_SUBCOLLECTION)
+        const partsSnapshot = await partsCollection.select('gcMarkedAt').get()
+        if (partsSnapshot.empty) continue
+        result.classrooms += 1
+        const actions = resolveSnapshotPartGcActions({
+          referencedDocIds: referenced,
+          parts: partsSnapshot.docs.map((doc) => ({ docId: doc.id, gcMarkedAt: (doc.get('gcMarkedAt') as string | null | undefined) ?? null })),
+          nowIso,
+        })
+        logger.info(`[SnapshotPartsGc] workspace=${workspaceDoc.id} classroom=${snapshotDoc.id} parts=${partsSnapshot.size} referenced=${referenced.size} mark=${actions.mark.length} unmark=${actions.unmark.length} remove=${actions.remove.length}${SNAPSHOT_PART_GC_DRY_RUN ? ' (DRY RUN)' : ''}`)
+        if (SNAPSHOT_PART_GC_DRY_RUN) {
+          result.marked += actions.mark.length
+          result.unmarked += actions.unmark.length
+          result.removed += actions.remove.length
+          continue
+        }
+        for (const docId of actions.mark) {
+          if (isOverBudget()) {
+            result.stoppedByBudget = true
+            return result
+          }
+          await partsCollection.doc(docId).update({ gcMarkedAt: nowIso })
+          result.marked += 1
+        }
+        for (const docId of actions.unmark) {
+          if (isOverBudget()) {
+            result.stoppedByBudget = true
+            return result
+          }
+          await partsCollection.doc(docId).update({ gcMarkedAt: FieldValue.delete() })
+          result.unmarked += 1
+        }
+        if (actions.remove.length > 0) {
+          // 削除の直前に目次を読み直し、まだ参照されていないことを確かめる(目次の巻き戻しで再び参照された部品を消さない)。
+          const latestManifest = await snapshotDoc.ref.get()
+          const latestReferenced = latestManifest.exists ? resolveReferencedSnapshotPartDocIds(latestManifest.data()) : null
+          if (!latestReferenced) continue
+          for (const docId of actions.remove) {
+            if (isOverBudget()) {
+              result.stoppedByBudget = true
+              return result
+            }
+            if (latestReferenced.has(docId)) {
+              await partsCollection.doc(docId).update({ gcMarkedAt: FieldValue.delete() })
+              result.unmarked += 1
+              continue
+            }
+            await partsCollection.doc(docId).delete()
+            result.removed += 1
+          }
+        }
+      } catch (error) {
+        logger.error(`[SnapshotPartsGc] Failed for workspace=${workspaceDoc.id} classroom=${snapshotDoc.id}`, error)
+      }
+    }
+  }
+  return result
+}
+
 async function runSaveAttemptCleanup() {
   const startedAtMs = Date.now()
   const cutoffIsoByTarget: Record<RetentionTargetKey, string> = {
@@ -3167,10 +3535,17 @@ async function runSaveAttemptCleanup() {
   } catch (error) {
     logger.error('[SaveAttemptCleanup] Failed to prune classroom save history', error)
   }
+  // 旧版の部品の掃除(分割保存 §9-9)。独立した予算(60 秒)で、Firestore 巡回より先に走らせる。
+  let snapshotPartsPrune = { classrooms: 0, marked: 0, unmarked: 0, removed: 0, skippedInvalidManifest: 0, stoppedByBudget: false, dryRun: SNAPSHOT_PART_GC_DRY_RUN }
+  try {
+    snapshotPartsPrune = await pruneSnapshotParts(Date.now())
+  } catch (error) {
+    logger.error('[SaveAttemptCleanup] Failed to prune snapshot parts', error)
+  }
 
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   const firestoreSweepStartedAtMs = Date.now()
-  let stoppedByBudget = incidentPrune.stoppedByBudget || saveHistoryPrune.stoppedByBudget
+  let stoppedByBudget = incidentPrune.stoppedByBudget || saveHistoryPrune.stoppedByBudget || snapshotPartsPrune.stoppedByBudget
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
@@ -3204,7 +3579,7 @@ async function runSaveAttemptCleanup() {
     }
   }
 
-  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.operationTraces} operationTraces (< ${cutoffIsoByTarget.operationTraces}, retentionDays=${OPERATION_TRACE_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''}), ${saveHistoryPrune.deleted} classroom save-history files (retentionDays=${CLASSROOM_SAVE_HISTORY_RETENTION_DAYS})`
+  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.operationTraces} operationTraces (< ${cutoffIsoByTarget.operationTraces}, retentionDays=${OPERATION_TRACE_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''}), ${saveHistoryPrune.deleted} classroom save-history files (retentionDays=${CLASSROOM_SAVE_HISTORY_RETENTION_DAYS}), snapshot parts gc: ${snapshotPartsPrune.classrooms} classrooms / marked ${snapshotPartsPrune.marked} / unmarked ${snapshotPartsPrune.unmarked} / removed ${snapshotPartsPrune.removed} / skipped(invalid manifest) ${snapshotPartsPrune.skippedInvalidManifest}${snapshotPartsPrune.dryRun ? ' (DRY RUN)' : ''}`
   if (stoppedByBudget) {
     // ★予算で打ち切った = まだ滞留している。3ヶ月気づかなかった障害の再発を早く見つけるため error で出す。
     logger.error(`${summary} — 予算上限で打ち切りました(滞留が残っています)。翌日以降の実行で続きを消します。`)
@@ -3227,6 +3602,7 @@ async function runSaveAttemptCleanup() {
     deletedIncidentBackups: incidentPrune.deleted,
     incidentBackupDryRun: INCIDENT_BACKUP_PRUNE_DRY_RUN,
     deletedClassroomSaveHistoryFiles: saveHistoryPrune.deleted,
+    snapshotPartsPrune,
     stoppedByBudget,
   }
 }
@@ -3757,47 +4133,51 @@ export const lectureSubmissionApi = onRequest({
         .collection('workspaces').doc(data.workspaceKey)
         .collection('classroomSnapshots').doc(data.classroomId)
 
+      const mergeInput: LectureSubmissionMergeInput = {
+        sessionId: data.sessionId, personType: data.personType, personId: data.personId, token, now,
+        unavailableSlots, subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly,
+      }
       await firestore.runTransaction(async (transaction) => {
         const snapshotDoc = await transaction.get(snapshotRef)
         if (!snapshotDoc.exists) return
 
         const snapshotData = snapshotDoc.data() as FirebaseClassroomSnapshotDoc
-        // 段階 A(読める版): 分割形式の目次は旧形式(1 文書)で上書きできない(部品が宙に浮く・一方通行 §9-7-1)。マージせずログに残す。
-        // 提出は lectureSubmissions に残り、室長側は購読で反映する(現行の失敗時と同じ・INV-07)。段階 B で core 部品の差し替えに置き換わる。
         if (isSnapshotPartsManifest(snapshotData)) {
-          logger.error(`[submitLectureSubmission] 分割形式の教室へのスナップショット取り込みはこの版では未対応 workspace=${data.workspaceKey} classroom=${data.classroomId}`)
+          // 分割形式(段階 B・docs/spec-save-restore.md §9-6): 目次だけ transaction.get し、core 部品は不変なのでトランザクション外で読む。
+          // 提出を反映した**新しい core 部品**を書き、目次の core だけ差し替える。★版数・savedAt・saveId は据え置き(K-9)・
+          // lastWriter='qr-submission'。core が読めない・合わないときはマージしない(空で計算しない・INV-14)。
+          const validation = validateSnapshotPartsManifest(snapshotData)
+          if (!validation.ok) throw new SnapshotPartsAssemblyError('invalid-manifest', [], validation.errors)
+          const manifest = validation.manifest
+          const coreSnapshot = await snapshotRef.collection(SNAPSHOT_PARTS_SUBCOLLECTION).doc(manifest.parts.core.docId).get()
+          if (!coreSnapshot.exists) throw new SnapshotPartsAssemblyError('missing-part', ['core'])
+          let core: unknown
+          try {
+            core = decodeSnapshotPartDoc(coreSnapshot.data())
+          } catch (decodeError) {
+            throw new SnapshotPartsAssemblyError('decode-failed', ['core'], [decodeError instanceof Error ? decodeError.message : String(decodeError)])
+          }
+          if (hashSnapshotPartInput(buildSnapshotPartHashInput(core)) !== manifest.parts.core.hash) throw new SnapshotPartsAssemblyError('hash-mismatch', ['core'])
+          if (!core || typeof core !== 'object' || Array.isArray(core)) throw new SnapshotPartsAssemblyError('invalid-part-content', ['core'])
+          const mergedCore = mergeLectureSubmissionIntoPayload(core as Record<string, unknown>, mergeInput)
+          if (!mergedCore) return
+          const next = buildQrMergedCorePart({
+            manifest, classroomId: data.classroomId, mergedCore, managementCount: countClassroomManagementData(mergedCore), now,
+            writerId: buildQrMergeWriterId(Date.now(), randomBytes(3).toString('hex')),
+          })
+          if (!next) return
+          // 部品は不変: 新しい ID で create(万一 ID が衝突したら確定時に失敗し、マージは中止・提出は lectureSubmissions に残る)。
+          transaction.create(snapshotRef.collection(SNAPSHOT_PARTS_SUBCOLLECTION).doc(next.docId), next.doc)
+          transaction.set(snapshotRef, next.manifest)
           return
         }
         const payload = readLegacyStoredSnapshotPayload(snapshotData)
-        if (!payload?.specialSessions || !Array.isArray(payload.specialSessions)) return
-
-        const sessions = payload.specialSessions as Array<Record<string, unknown>>
-        const sessionIndex = sessions.findIndex((s) => s.id === data.sessionId)
-        if (sessionIndex < 0) return
-
-        const session = sessions[sessionIndex]
-        const inputKey = data.personType === 'teacher' ? 'teacherInputs' : 'studentInputs'
-        const inputs = (session[inputKey] ?? {}) as Record<string, Record<string, unknown>>
-        const existingInput = inputs[data.personId] ?? {}
-
-        inputs[data.personId] = {
-          ...existingInput,
-          unavailableSlots,
-          // 新規提出でスナップショット側の「出席可能に変更」(reopenedSlots)もリセット(doc 側と対称)。
-          reopenedSlots: [],
-          ...(data.personType === 'student' ? { subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
-          countSubmitted: true,
-          submissionToken: token,
-          // 講習集計結果の提出日時/方法。QRからの提出なので method='qr'、時刻は提出時刻(now)。
-          submittedAt: now,
-          submissionMethod: 'qr',
-          updatedAt: now,
-        }
-        session[inputKey] = inputs
-        sessions[sessionIndex] = session
+        if (!payload) return
+        const merged = mergeLectureSubmissionIntoPayload(payload, mergeInput)
+        if (!merged) return
 
         transaction.set(snapshotRef, createStoredSnapshotDoc({
-          payload: { ...payload, specialSessions: sessions },
+          payload: merged,
           savedAt: typeof snapshotData?.savedAt === 'string' && snapshotData.savedAt ? snapshotData.savedAt : now,
           updatedBy: typeof snapshotData?.updatedBy === 'string' ? snapshotData.updatedBy : '',
           updatedAt: now,
@@ -3813,6 +4193,10 @@ export const lectureSubmissionApi = onRequest({
       // (提出は lectureSubmissions に残り、管理者側は購読で反映する)。ただし黙って捨てない: 容量超過(1MiB)でも
       // ここは失敗するので、原因をログに残す(2026-10-27 日大前校・regression-reviewer L-5)。
       logger.error(`[submitLectureSubmission] Snapshot merge failed workspace=${data.workspaceKey} classroom=${data.classroomId}: ${error instanceof Error ? error.message : String(error)}`)
+      // 分割形式の core が欠ける・合わない(INV-14)は開発者へ知らせる(マージはしていない・提出は残っている)。
+      if (isSnapshotPartsAssemblyError(error)) {
+        await notifySnapshotAssemblyFailure({ workspaceKey: data.workspaceKey, classroomId: data.classroomId, reader: 'lecture-submission-merge', error })
+      }
     }
 
     res.json({ success: true, submittedAt: now })

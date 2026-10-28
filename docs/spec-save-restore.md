@@ -241,7 +241,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 | 14 | **保存ごとの教室版履歴**（Storage `classroom-save-history/{ws}/{classroomId}/v{版数 8 桁}-{保存時刻}.json.gz`・2026-10-22 オーナー採用「即時対応のための案 1」）。`classroomSnapshots` の書き込みトリガで**新しい版**を 1 保存 1 本・gzip で追記。復元 UI は読まない（調査専用・`tools/snapshot-diff.mjs` で 2 本を比べる）。#9 の 1 世代上書きは据え置き | **90 日**（`CLASSROOM_SAVE_HISTORY_RETENTION_DAYS`）。作成時刻が読めないものは削除しない | `writeClassroomSaveHistory` / `pruneClassroomSaveHistory`（`cleanupOldSaveAttempts` が同じ巡回・独立予算 60 秒） |
 | 15 | **保存に相乗りした操作痕跡**（`classroomSnapshots/{id}/operationTraces/{saveId}`・前回保存以降の盤面の全確定・undo/redo など・2026-10-22 案 2・`docs/spec-developer-report.md` §D-3） | **90 日**（`OPERATION_TRACE_RETENTION_DAYS` で変更可・**最低 7 日**） | `persistOperationTrace` / 同上（`cleanupOldSaveAttempts` の対応表） |
 | 16 | **Firestore の過去時点読み取り（PITR）**（**2026-10-22 オーナーが有効化済み**・コード変更なし・案 4）。有効にすると `classroomSnapshots` を含む全文書を**過去 7 日・1 分刻み**の任意時点で Admin SDK から読める。#14 ができるまでのつなぎ／保険 | **7 日**（Firestore の固定仕様） | `gcloud firestore databases update --database='(default)' --enable-pitr`（手順 `docs/runbooks/monitoring.md` §7） |
-| 17 | **教室データの部品の旧版**（`classroomSnapshots/{id}/snapshotParts` のうち、目次から参照されなくなった版・§9 週単位の分割保存・**掃除は段階 B で有効化／2026-10-27 時点は判定の純関数 `resolveSnapshotPartGcActions` だけ実装済み・巡回への同乗は未実装**）。目次が参照している部品は #1〜#4 の保持そのもの（無期限・現在値） | **参照が外れてから 3 日**（掃除の印から `SNAPSHOT_PART_GC_GRACE_DAYS`・最低 1 日・2026-10-27 オーナー確定＝§9-15 Q3）。目次が無い教室（削除済み）の部品は消さない | `resolveSnapshotPartGcActions`（`src/utils/classroomSnapshotParts.ts`）／`cleanupOldSaveAttempts` の同じ巡回・独立予算（§9-9） |
+| 17 | **教室データの部品の旧版**（`classroomSnapshots/{id}/snapshotParts` のうち、目次から参照されなくなった版・§9 週単位の分割保存・**段階 B（v1.5.654・2026-10-28）で `cleanupOldSaveAttempts` の巡回に同乗**＝`pruneSnapshotParts`・独立予算 60 秒・`SNAPSHOT_PART_GC_DRY_RUN=1` で空実行）。目次が参照している部品は #1〜#4 の保持そのもの（無期限・現在値） | **参照が外れてから 3 日**（掃除の印から `SNAPSHOT_PART_GC_GRACE_DAYS`・最低 1 日・2026-10-27 オーナー確定＝§9-15 Q3）。目次が無い教室（削除済み）の部品は消さない。旧形式の文書の教室は「参照なし」（読み戻し失敗で旧形式へ戻った移行の部品を 3 日後に消す）。壊れた目次の教室は触らない | `resolveSnapshotPartGcActions`（`src/utils/classroomSnapshotParts.ts`）／`pruneSnapshotParts`（`functions/src/index.ts`・§9-9） |
 
 補足：Hosting のリリース履歴（ロールバック A の戻し先）は `npm run hosting:retention:enforce`（既定 5 世代）で
 制御する**手動運用**。デプロイ CI は自動実行しない。
@@ -364,7 +364,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
   本節に明記してから実装する。
 
 
-## 9. 週単位の分割保存（教室データの恒久対策）— 2026-10-27 オーナー確定（方式・§9-15 の 6 論点とも）・段階 0〜A（読める版）実装済み・B 以降未実装
+## 9. 週単位の分割保存（教室データの恒久対策）— 2026-10-27 オーナー確定（方式・§9-15 の 6 論点とも）・段階 0〜B 実装済み（B＝サーバーが分割して書く・2026-10-28 v1.5.654・切り替えは開発用教室から）・C 以降未実装
 
 > **方式（目次＋部品・変わった部品だけ保存）はオーナー採用済み**（2026-10-27「その順で進めて」）。
 > 本章はそれを実装できる粒度へ補完したもの。**§9-15 の 6 論点は 2026-10-27 にオーナー確定**（すべて推奨案）。
@@ -640,7 +640,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 | 段階 | 出すもの | 書く形式 | 次へ進む条件 |
 |------|---------|---------|------------|
 | A | **読める版**: サーバーの組み立て関数（全呼び出し箇所）・クライアントの分割形式の読み取り（fail-closed）・`snapshotParts` のルール | 旧形式のまま | Functions → ルール → Hosting の順に反映済み。staging で「分割形式の目次を手で作って読める」こと。**各教室の直近の保存がすべて段階 A 以降の版から来ている**こと（`saveAttempts.appVersion` で確認） |
-| B | **サーバーが分割して書く**: 保存（従来の形の全量を受けてサーバーで分割）・トランザクション・読み戻しと目次の巻き戻し・QR マージ・トリガ・バックアップの失敗処理・掃除・旧版の拒否（§9-7-3）。サーバー側の機能フラグ（例 `weeklySplitSnapshotStorage`・教室単位） | フラグ ON の教室は最初の保存から分割形式 | ★**これで 1MiB の上限問題は解消する**（送信は 8MB のまま）。冬期講習前に日大前校まで反映する |
+| B | **サーバーが分割して書く**: 保存（従来の形の全量を受けてサーバーで分割）・トランザクション・読み戻しと目次の巻き戻し・QR マージ・トリガ・バックアップの失敗処理・掃除・旧版の拒否（§9-7-3）。サーバー側の機能フラグ（`weeklySplitSnapshotStorage`・`functions/src/snapshotStorageFormat.ts`・基本スコープ＋教室指定＋会社既定）。**2026-10-28 実装（v1.5.654・§9-17）** | フラグ ON の教室は最初の保存から分割形式 | ★**これで 1MiB の上限問題は解消する**（送信は 8MB のまま）。冬期講習前に日大前校まで反映する。切り替えの進み: 開発用教室（v1.5.654）→ staging（本番サイズ）→ 日大前校（`WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`）→ 全教室 |
 | C | **差分送信**: クライアントの台帳・変化判定・gzip 送信・全量への切り替え | 同上 | 速度の目標（§9-12）を staging の本番サイズで満たす |
 | D | 監視の見直し・第 2 段（部品の先書き・`core` の分割）・過去週のアーカイブ（未決・§9-16） | — | 50% 通知・読み込み時間を見て判断 |
 
@@ -660,6 +660,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 - 段階 A より前の版は分割形式を**読めず、空の教室として表示してしまう**（現行の読めない形式＝空）。起動時の `useAppVersionMonitor` が最新へ自動リロードするので、
   起きるのは「段階 B の切り替えをまたいで開きっぱなしのタブが、教室を読み直したとき」だけ。
 - 対策（オーナー確定 2026-10-27・§9-15 Q2＝A）: 分割形式の教室への保存で、`client.appVersion` が段階 A の版より古い（または送られていない）ものは `CLIENT_TOO_OLD` で拒否する。
+  実装（2026-10-28）では**分割形式へ移る保存（旧形式の教室のフラグ ON 後の最初の保存）にも適用**する（安全側・§9-17）。
   旧版の画面は通常の失敗処理（JSON 自動退避＋案内）になる。空の教室を読んだ古いタブが基本データを 1 件でも入れて保存すると
   空データ上書き拒否（0 件だけを止める）をすり抜けて教室を上書きしてしまうため、その道を塞ぐ。
 - 切り替え前に、§9-7-1 の条件（直近の保存がすべて段階 A 以降の版）を確認し、室長へは「切り替え日に一度ハードリロード」を案内する（`safe-release`）。
@@ -701,6 +702,7 @@ match /classroomSnapshots/{classroomId} {
 - 部品は書き換えない・新しい保存は新しい ID しか参照しない・巻き戻しは直前の目次（数秒前まで参照していた部品）にしか戻らない、の 3 点で、
   参照中の部品を消す競合は起きない。
 - 空実行は環境変数 `SNAPSHOT_PART_GC_DRY_RUN=1`。
+- 実装（2026-10-28・`pruneSnapshotParts`）の補足: 旧形式の文書（目次でない）の教室は「参照中の部品なし」として扱う（読み戻し失敗で旧形式へ戻った移行の部品が残るため）。壊れた目次（検査に落ちる）の教室は触らない。目次は必要な項目だけ `select` で読む（旧形式の `compressedData` を読まない）。削除の直前に目次を読み直す（規則 4）。
 - 保存の監査記録（`saveAttempts`）の 30 日・PITR の 7 日（§8-1 #16）は変えない（PITR は削除済みの部品も過去時点で読めるので、掃除の 3 日と両立する）。
 
 ### 9-10. 監視・記録
@@ -799,6 +801,31 @@ match /classroomSnapshots/{classroomId} {
 | Q4 | 本番の切り替え順 | A: 開発用教室 → staging（本番サイズ）→ 日大前校 → 残り／B: 小さい教室で 1 週間様子を見てから日大前校 | **決定: A**（§9-13） |
 | Q5 | 新しい保証（INV）の追加 | A: 追加する／B: 追加せず本章の受け入れ条件で守る | **決定: A**＝`spec-invariants.md` **INV-14** として新設（保証文はオーナー承認済み・台帳だけに書く） |
 | Q6 | 出し方 | A: 「サーバーで分割して書く（上限問題の解消）」を先に出し、「変わった部品だけ送る（速さ）」を後に出す／B: 一緒に出す | **決定: A**（§9-7-1） |
+
+### 9-17. 段階 B の実装メモ（2026-10-28・v1.5.654・仕様との差分と補足）
+
+実装の置き場所: フラグと古い画面の拒否＝`functions/src/snapshotStorageFormat.ts`、保存の判定・読み戻し検証・QR マージ・容量通知の純関数＝`functions/src/snapshotPartsWriter.ts`、
+Firestore の配線＝`functions/src/index.ts`（`saveClassroomSnapshotAsParts`・`lectureSubmissionApi`・`pruneSnapshotParts`）。テストは `snapshotStorageFormat.test.ts`・`snapshotPartsWriter.test.ts`・
+INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード（`parts-format-write-unsupported`・QR 取り込みの拒否）は撤去した。
+
+| 項目 | 仕様（§9-3〜§9-10） | 実装 | 理由 |
+|------|------|------|------|
+| `saveAttempts.payloadHash` | 分割形式では全体ハッシュを入れる | **教室データ全体のハッシュのまま**。全体ハッシュは `compositeHash`、`hashScheme: 'parts-v1'` を併記 | `payloadHash` は同じ saveId の再送が同じ内容かを見る鍵（K-4 の冪等リプレイ）。送った内容のハッシュのままの方が形式に依らず比べられる |
+| `CLIENT_TOO_OLD` の適用範囲 | 分割形式の教室への保存 | **分割形式で書く保存すべて**（旧形式からの移行の保存を含む） | 古い画面が移行の保存を通すと、その画面は自分が書いた教室を読み直せず、次の保存で空データ上書き拒否をすり抜けて教室を壊しうる |
+| 旧形式からの移行（§9-4-4 6-1・6-5） | 本体から仮想の目次を作り、同じ部品は「再利用」として旧本体から書く | 仮想の目次は作らず**全部品を書く** | どのみち全部品が新しい文書になる。本体の解凍は空データ上書き拒否（0 件のときだけ）以外では行わない |
+| 確定済みの再送（§9-4-6 (b)） | 読み戻し検証だけして返す | 目次が指す**全部品**を読み直して検証する。失敗しても目次は戻さない（確定済みの保存を取り消さない）。記録と通知だけ | どの部品をその saveId で書いたかは目次から分からないため全部読む（再送は稀） |
+| 読み戻し失敗の巻き戻し | 目次を直前の内容へ戻す | 直前の文書（旧形式ならその文書・無ければ削除）を**目次の saveId がこの saveId のときだけ**トランザクションで戻す | 他の保存が先に進んでいれば触らない |
+| 空データ上書き拒否 | トランザクション内で `managementCount` | 事前に従来の `assertNoSnapshotDataLoss`（旧形式は 1 回解凍）＋トランザクション内で目次の `managementCount` を再判定 | 旧形式の前回文書をトランザクション内で解凍しない |
+| QR マージ（§9-6） | core を組み立てて反映 | 目次だけ `transaction.get`・core 部品は不変なのでトランザクション外で読み、ハッシュ照合 → 新しい core 部品（`core~-~v{版}~qr…`）＋目次の core 差し替え。core が欠ける・合わない → マージせず `snapshot-assembly-failed` 通知 | §9-5-4 の「部品はトランザクション外で読んでよい」 |
+| `saveAttempts` の項目（§9-10） | 左記 | `storageFormat`・`hashScheme`・`compositeHash`・`sendMode`（段階 B は常に `legacy`）・`sentPartCount`・`requestBytes`・`writtenPartCount`・`reusedPartCount`・`writeCountInTx`・`maxPartDocumentBytes`・`maxPartDocumentKey`・`corePartBytes`・`boardPartBytes`・`manifestBytes`・`documentByteLength`（＝最大文書）・`capacityRatio`。`writeMode: 'cloud-function-parts'`・`snapshotEncoding: 'weekly-parts'` | — |
+| 通知 | `client-too-old`・`parts-invalid`・`split-capacity-notice` | `client-too-old`・`split-capacity-notice`（1 日 1 通・`{classroomId}__split`）を追加。`parts-invalid` は段階 C（`partsSave` の受け付け）で | 段階 B は従来の形しか受けない |
+| フラグ（§9-7-1） | サーバー側・教室単位 | サーバー述語 `isWeeklySplitSnapshotStorageEnabledForClassroom` ＝ 基本スコープ `staging-environment`（登録済みの検証用教室 ＋ staging プロジェクト）or 教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST` → 会社既定（`companyFeatureDefaults`）。クライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` は台帳の整合用（クライアントは見ない・scope はサーバーと突合） | 保護者ポータルと同じ 2 段解決・教室指定は日大前校を先に出す段のため |
+| 部品文書 ID の書き手（§9-3-5） | 保存＝saveId、QR＝`qr{ミリ秒}{乱数4桁}` の先頭 12 文字 | 保存＝**saveId の SHA-256 の先頭 12 文字**（`buildSaveWriterId`）、QR＝`q`＋ミリ秒の 36 進 8 文字＋乱数 3 文字（12 文字ちょうど・`buildQrMergeWriterId`）。QR の部品は `create` | saveId は時刻で始まり先頭 12 文字が同じ時間帯で一致する。同じ秒の QR 2 件も同じ ID になり「部品は不変」が崩れる（regression-reviewer 中-1） |
+| 読み戻しと QR マージの交差 | — | 目次の `lastWriter === 'qr-submission'` で compositeHash だけ違うときは、core 以外の書いた部品が参照されていれば成功（`crossedByQrMerge`）。目次の巻き戻しは **saveId と compositeHash が一致するときだけ**（`shouldRollbackManifestAfterReadbackFailure`） | QR マージは saveId を据え置くので saveId だけでは見分けられず、巻き戻すと確定済みの保存と QR の反映を両方消す（regression-reviewer 中-2） |
+| STALE・空データの記録 | — | 分割形式では `started` をトランザクション前に書くため、STALE・空データは終端 `saveAttempts.status = 'stale'` / `'empty-management-data'` を記録する（旧形式は照合の後に `started` を書くので記録なし） | `started` が並ぶのは 1MiB 事故の目印なので誤らせない（低-1） |
+| 巻き戻し後の孤児・直前ロールバック | — | 巻き戻しで参照が外れた部品（新しい教室で目次を削除した場合も）は掃除が 3 日後に消す。巻き戻しの書き込みでもトリガが走り、直前ロールバック（Storage）の before は捨てた目次になる（組み立てられなければ書かない） | 手動復旧ではその直前ロールバックが「捨てた保存」の可能性があることに注意（低-3・低-4） |
+| 開発者の読み込み（M-2） | — | 開発者は組み立てられない教室だけ一覧から外し（`loadFailedClassrooms`）案内を出す。室長は従来どおり読み込み全体を失敗。外した教室は開発者画面の全教室処理（JSON 書き出し・クラウドバックアップ）にも入らない（案内で分かる） | 1 教室の失敗で全教室が開けなくならないように |
+| トリガの二重組み立て（L-5） | — | 未対応（保存 1 回につき before/after で別の目次を 1 回ずつ組み立てる。同じ目次が 2 回組み立てられるのは連続する 2 回の保存にまたがるため、1 回の呼び出しでは共有できない） | 8MB の解凍 2 回で 0.3 秒程度。段階 D の監視で見る |
 
 ### 9-16. 後回しにしたこと（記録のみ・本章の範囲外）
 

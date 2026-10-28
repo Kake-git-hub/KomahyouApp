@@ -16,6 +16,7 @@ import {
   type SnapshotPartsManifest,
 } from '../../utils/classroomSnapshotParts'
 import {
+  buildSnapshotPartsLoadFailedClassroomsNotice,
   buildSnapshotPartsLoadFailedMessage,
   decodeSnapshotPartDocInBrowser,
   hashSnapshotPartInputInBrowser,
@@ -159,7 +160,7 @@ describe('workspaceStore の配線(ソース走査): 分割形式は旧 3 形式
     expect(source).toContain("return collection(snapshotRef, SNAPSHOT_PARTS_SUBCOLLECTION)")
   })
 
-  it('loadFirebaseWorkspaceSnapshot は組み立て失敗を catch して教室名つきの文言で投げ直す(createEmptyClassroomPayload に落とさない)', () => {
+  it('loadFirebaseWorkspaceSnapshot は組み立て失敗を catch し、室長は教室名つきの文言で投げ直す(createEmptyClassroomPayload に落とさない)。開発者はその教室だけ一覧から外して loadFailedClassrooms に残す(M-2)', () => {
     const body = source.slice(source.indexOf('export async function loadFirebaseWorkspaceSnapshot('))
     expect(body).toContain('if (isSnapshotPartsAssemblyError(error)) {')
     expect(body).toContain("throw new Error(buildSnapshotPartsLoadFailedMessage(data.name ?? ''))")
@@ -167,5 +168,28 @@ describe('workspaceStore の配線(ソース走査): 分割形式は旧 3 形式
     const tryBlock = body.slice(body.indexOf('payload = await readFirebaseSnapshotPayload('), body.indexOf('return toWorkspaceClassroom('))
     expect(tryBlock).not.toContain('payload = null')
     expect(tryBlock).toContain('throw error')
+    // 開発者だけ: その教室を null で返して一覧から外す(空の教室として開かない・保存されない)。
+    expect(tryBlock).toContain("if (membership.role === 'developer') {")
+    expect(tryBlock).toContain('loadFailedClassrooms.push({ id: entry.id, name:')
+    expect(body).toContain('const classrooms = loadedClassrooms.filter((classroom): classroom is WorkspaceClassroom => classroom !== null)')
+    expect(body).toContain('...(loadFailedClassrooms.length > 0 ? { loadFailedClassrooms } : {}),')
+  })
+})
+
+describe('開発者向けの案内(外した教室)', () => {
+  it('外した教室が無ければ空文字。あれば教室名を並べ、内輪語なしで再読み込みと開発者連絡を案内する', () => {
+    expect(buildSnapshotPartsLoadFailedClassroomsNotice([])).toBe('')
+    const notice = buildSnapshotPartsLoadFailedClassroomsNotice([{ name: '日大前校' }, { name: '  ' }])
+    expect(notice).toContain('「日大前校」・「名称未設定の教室」')
+    expect(notice).toContain('一覧から外しています')
+    expect(notice).toContain('再読み込み')
+    expect(notice).not.toMatch(/部品|目次|ハッシュ|manifest/)
+  })
+
+  it('App.tsx は読み込み(初回・読み直し)の後に notifyLoadFailedClassrooms で案内を出す', () => {
+    const appTsx = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+    expect(appTsx).toContain("import { buildSnapshotPartsLoadFailedClassroomsNotice } from './integrations/firebase/snapshotPartsClientRead'")
+    expect(appTsx.split('notifyLoadFailedClassrooms(remoteSnapshot)').length - 1).toBe(2)
+    expect(appTsx).toContain('const notice = buildSnapshotPartsLoadFailedClassroomsNotice(snapshot?.loadFailedClassrooms ?? [])')
   })
 })

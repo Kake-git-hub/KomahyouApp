@@ -166,6 +166,17 @@ export type WorkspaceClassroom = {
 
 export const WORKSPACE_SNAPSHOT_SCHEMA_VERSION = 1
 
+/**
+ * 読み込めなかった教室(週単位の分割保存で部品が欠ける・合わない＝INV-14・docs/spec-save-restore.md §9-5-3)。
+ * 開発者の読み込みでは、その教室を一覧から外して(表示も保存もしない)残りの教室を開けるようにし、ここに残して案内する。
+ * 室長(1 教室)は読み込み全体を失敗にする(従来どおり)。
+ */
+export type WorkspaceClassroomLoadFailure = {
+  id: string
+  name: string
+  message: string
+}
+
 export type WorkspaceSnapshot = {
   schemaVersion: number
   savedAt: string
@@ -177,4 +188,6 @@ export type WorkspaceSnapshot = {
   actingClassroomId: string | null
   classrooms: WorkspaceClassroom[]
   users: WorkspaceUser[]
+  /** サーバー読み込みで組み立てられず一覧から外した教室(開発者だけ・任意)。 */
+  loadFailedClassrooms?: WorkspaceClassroomLoadFailure[]
 }

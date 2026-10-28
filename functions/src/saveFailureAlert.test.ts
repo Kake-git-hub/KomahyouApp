@@ -111,7 +111,7 @@ describe('buildSaveFailureAlertMail', () => {
   })
 
   it('種類の一覧と判定', () => {
-    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed'])
+    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice'])
     expect(isSaveFailureAlertKind('stale-version')).toBe(true)
     expect(isSaveFailureAlertKind('other')).toBe(false)
   })
@@ -128,9 +128,19 @@ describe('index.ts の配線(ソース走査)', () => {
     expect(save).toContain("kind: 'snapshot-too-large'")
     expect(save).toContain("kind: 'write-failed'")
     expect(save).toContain("kind: 'capacity-warning'")
-    // 7 件目 = 段階 A の暫定ガード(分割形式の教室への保存を断る・parts-format-write-unsupported)の write-failed 通知(2026-10-27・K-5)。
-    expect(save).toContain('parts-format-write-unsupported: 分割形式の教室への保存はこの版(段階 A)では未対応')
+    // 7 件目 = 古い画面からの分割形式の保存の拒否(client-too-old・段階 B 2026-10-28・§9-7-3)。段階 A の暫定ガード
+    // (parts-format-write-unsupported)は段階 B で分割形式の書き手 saveClassroomSnapshotAsParts に置き換わった。
+    expect(save).toContain("kind: 'client-too-old'")
+    expect(save).not.toContain('parts-format-write-unsupported')
     expect(save.split('await notifySaveFailureByMail(').length - 1).toBe(7)
+    // 分割形式の書き手も同じ失敗点でメールを送る(空データ・版数衝突・容量超過・書き込み失敗・読み戻し失敗・容量注意・第 2 段の合図)。
+    const parts = indexTs.slice(indexTs.indexOf('async function saveClassroomSnapshotAsParts('), indexTs.indexOf('// 講習履歴(生徒1人の出席・休み・振替・配置の一覧)を返す。'))
+    for (const kind of ['data-loss-guard', 'stale-version', 'snapshot-too-large', 'write-failed', 'readback-failed', 'capacity-warning', 'split-capacity-notice']) {
+      expect(parts, kind).toContain(`kind: '${kind}'`)
+    }
+    // data-loss-guard は 2 か所(旧形式の前回文書を解凍して数える事前ガード＋トランザクション内の目次 managementCount の再判定)。
+    expect(parts.split("kind: 'data-loss-guard'").length - 1).toBe(2)
+    expect(parts.split('await notifySaveFailureByMail(').length - 1).toBe(8)
   })
 
   it('メールの失敗は保存の応答に影響させない(関数内で握る・throw しない)。待ち時間は 5 秒で打ち切り、SMTP にも上限を付ける(M-1)', () => {
