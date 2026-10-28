@@ -820,7 +820,11 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
 | `saveAttempts` の項目（§9-10） | 左記 | `storageFormat`・`hashScheme`・`compositeHash`・`sendMode`（段階 B は常に `legacy`）・`sentPartCount`・`requestBytes`・`writtenPartCount`・`reusedPartCount`・`writeCountInTx`・`maxPartDocumentBytes`・`maxPartDocumentKey`・`corePartBytes`・`boardPartBytes`・`manifestBytes`・`documentByteLength`（＝最大文書）・`capacityRatio`。`writeMode: 'cloud-function-parts'`・`snapshotEncoding: 'weekly-parts'` | — |
 | 通知 | `client-too-old`・`parts-invalid`・`split-capacity-notice` | `client-too-old`・`split-capacity-notice`（1 日 1 通・`{classroomId}__split`）を追加。`parts-invalid` は段階 C（`partsSave` の受け付け）で | 段階 B は従来の形しか受けない |
 | フラグ（§9-7-1） | サーバー側・教室単位 | サーバー述語 `isWeeklySplitSnapshotStorageEnabledForClassroom` ＝ 基本スコープ `staging-environment`（登録済みの検証用教室 ＋ staging プロジェクト）or 教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST` → 会社既定（`companyFeatureDefaults`）。クライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` は台帳の整合用（クライアントは見ない・scope はサーバーと突合） | 保護者ポータルと同じ 2 段解決・教室指定は日大前校を先に出す段のため |
-| 開発者の読み込み（M-2） | — | 開発者は組み立てられない教室だけ一覧から外し（`loadFailedClassrooms`）案内を出す。室長は従来どおり読み込み全体を失敗 | 1 教室の失敗で全教室が開けなくならないように |
+| 部品文書 ID の書き手（§9-3-5） | 保存＝saveId、QR＝`qr{ミリ秒}{乱数4桁}` の先頭 12 文字 | 保存＝**saveId の SHA-256 の先頭 12 文字**（`buildSaveWriterId`）、QR＝`q`＋ミリ秒の 36 進 8 文字＋乱数 3 文字（12 文字ちょうど・`buildQrMergeWriterId`）。QR の部品は `create` | saveId は時刻で始まり先頭 12 文字が同じ時間帯で一致する。同じ秒の QR 2 件も同じ ID になり「部品は不変」が崩れる（regression-reviewer 中-1） |
+| 読み戻しと QR マージの交差 | — | 目次の `lastWriter === 'qr-submission'` で compositeHash だけ違うときは、core 以外の書いた部品が参照されていれば成功（`crossedByQrMerge`）。目次の巻き戻しは **saveId と compositeHash が一致するときだけ**（`shouldRollbackManifestAfterReadbackFailure`） | QR マージは saveId を据え置くので saveId だけでは見分けられず、巻き戻すと確定済みの保存と QR の反映を両方消す（regression-reviewer 中-2） |
+| STALE・空データの記録 | — | 分割形式では `started` をトランザクション前に書くため、STALE・空データは終端 `saveAttempts.status = 'stale'` / `'empty-management-data'` を記録する（旧形式は照合の後に `started` を書くので記録なし） | `started` が並ぶのは 1MiB 事故の目印なので誤らせない（低-1） |
+| 巻き戻し後の孤児・直前ロールバック | — | 巻き戻しで参照が外れた部品（新しい教室で目次を削除した場合も）は掃除が 3 日後に消す。巻き戻しの書き込みでもトリガが走り、直前ロールバック（Storage）の before は捨てた目次になる（組み立てられなければ書かない） | 手動復旧ではその直前ロールバックが「捨てた保存」の可能性があることに注意（低-3・低-4） |
+| 開発者の読み込み（M-2） | — | 開発者は組み立てられない教室だけ一覧から外し（`loadFailedClassrooms`）案内を出す。室長は従来どおり読み込み全体を失敗。外した教室は開発者画面の全教室処理（JSON 書き出し・クラウドバックアップ）にも入らない（案内で分かる） | 1 教室の失敗で全教室が開けなくならないように |
 | トリガの二重組み立て（L-5） | — | 未対応（保存 1 回につき before/after で別の目次を 1 回ずつ組み立てる。同じ目次が 2 回組み立てられるのは連続する 2 回の保存にまたがるため、1 回の呼び出しでは共有できない） | 8MB の解凍 2 回で 0.3 秒程度。段階 D の監視で見る |
 
 ### 9-16. 後回しにしたこと（記録のみ・本章の範囲外）

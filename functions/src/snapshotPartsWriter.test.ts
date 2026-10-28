@@ -16,17 +16,22 @@ import { assembleSnapshotPartsManifest, decodeSnapshotPartDoc, hashSnapshotPartI
 import {
   buildQrMergedCorePart,
   buildQrMergeWriterId,
+  buildSaveWriterId,
   buildSnapshotParts,
   mergeLectureSubmissionIntoPayload,
   planSnapshotPartsCommit,
+  resolveReferencedSnapshotPartDocIds,
   resolveSnapshotPartsCapacityNotices,
   sha256Hex,
+  shouldRollbackManifestAfterReadbackFailure,
+  SNAPSHOT_MANIFEST_SELECT_FIELDS,
   SNAPSHOT_PART_SPLIT_NOTICE_BYTES,
   SNAPSHOT_PARTS_TX_MAX_WRITES,
   SNAPSHOT_PARTS_TX_NOTICE_WRITES,
   verifySnapshotPartsReadback,
   type SnapshotPartsCommitPlan,
 } from './snapshotPartsWriter'
+import { buildSnapshotPartDocId, validateSnapshotPartsManifest } from './generated/classroomSnapshotParts'
 
 const SNAPSHOT_PATH = 'workspaces/main/classroomSnapshots/c1'
 
@@ -121,7 +126,7 @@ describe('planSnapshotPartsCommit(トランザクションの中の判定)', () 
     expect(plan.manifest).toMatchObject({ storageFormat: 'weekly-parts', storageFormatVersion: 1, version: 8, saveId: 'save-0001', lastWriter: 'save', managementCount: 2, hasBoardState: true })
     expect(plan.manifest).not.toHaveProperty('compressedData')
     expect(plan.manifest).not.toHaveProperty('data')
-    expect(plan.partWrites[0].docId).toBe('core~-~v8~save-0001')
+    expect(plan.partWrites[0].docId).toBe(`core~-~v8~${buildSaveWriterId('save-0001')}`)
     expect(plan.partWrites[0].doc).toMatchObject({ classroomId: 'c1', kind: 'core', key: '-', encoding: 'gzip-base64', createdBy: 'save-0001', createdForVersion: 8 })
     expect(plan.manifest.weeks.map((week) => week.key)).toEqual(['2026-05-11', '2026-05-18', '2026-05-25'])
   })
@@ -139,7 +144,7 @@ describe('planSnapshotPartsCommit(トランザクションの中の判定)', () 
     expect(second.reusedPartKeys).toEqual(['core', 'board', 'week:2026-05-11', 'week:2026-05-25'])
     expect(second.writeCount).toBe(2)
     expect(second.manifest.parts.core.docId).toBe(manifest.parts.core.docId)
-    expect(second.manifest.weeks[1].docId).toBe('week~2026-05-18~v2~save-0002')
+    expect(second.manifest.weeks[1].docId).toBe(`week~2026-05-18~v2~${buildSaveWriterId('save-0002')}`)
     expect(second.manifest.weeks[0].docId).toBe(manifest.weeks[0].docId)
     expect(second.manifest.compositeHash).not.toBe(manifest.compositeHash)
     // 再利用した部品と新しい部品で組み立てると編集後の教室データになる。
@@ -225,13 +230,42 @@ describe('planSnapshotPartsCommit(トランザクションの中の判定)', () 
   })
 })
 
+describe('部品の文書 ID は書き手ごとに一意(regression-reviewer 中-1・「部品は不変」の前提)', () => {
+  it('保存: 実際の形の saveId(時刻_教室_uuid)は先頭 12 文字が同じでも、書き手 ID(saveId の SHA-256 先頭 12 文字)が違うので docId が違う', () => {
+    const saveA = '2026-10-28T01:23:45.000Z_c1_0f8e7d6c-1111-4aaa-9bbb-000000000001'
+    const saveB = '2026-10-28T09:59:59.000Z_c1_0f8e7d6c-2222-4aaa-9bbb-000000000002'
+    expect(saveA.slice(0, 12)).toBe(saveB.slice(0, 12))
+    const docA = buildSnapshotPartDocId({ kind: 'core', key: '-', version: 5, writerId: buildSaveWriterId(saveA) })
+    const docB = buildSnapshotPartDocId({ kind: 'core', key: '-', version: 5, writerId: buildSaveWriterId(saveB) })
+    expect(docA).not.toBe(docB)
+    expect(buildSaveWriterId(saveA)).toHaveLength(12)
+    expect(docA.endsWith(`~${buildSaveWriterId(saveA)}`)).toBe(true)
+    // 同じ saveId なら同じ ID(同じ内容の再送は同じ文書へ)。
+    expect(buildSaveWriterId(saveA)).toBe(buildSaveWriterId(saveA))
+  })
+
+  it('QR: 同じ秒(同じミリ秒)の提出 2 件でも乱数が 12 文字に収まるので docId が違う', () => {
+    const nowMs = 1_761_614_400_123
+    const a = buildQrMergeWriterId(nowMs, 'abc')
+    const b = buildQrMergeWriterId(nowMs, 'xyz')
+    expect(a).toHaveLength(12)
+    expect(a).not.toBe(b)
+    const docA = buildSnapshotPartDocId({ kind: 'core', key: '-', version: 7, writerId: a })
+    const docB = buildSnapshotPartDocId({ kind: 'core', key: '-', version: 7, writerId: b })
+    expect(docA).not.toBe(docB)
+    expect(docA.endsWith(`~${a}`)).toBe(true)
+    // 乱数が短い・記号入りでも 12 文字に整える。
+    expect(buildQrMergeWriterId(nowMs, '-')).toHaveLength(12)
+  })
+})
+
 describe('verifySnapshotPartsReadback(読み戻し検証・AC-15)', () => {
   it('目次と書いた部品が一致すれば ok。目次の saveId / version / compositeHash の食い違い・部品の欠け・中身の改変は失敗', () => {
     const store = new Map<string, Record<string, unknown>>()
     const plan = planSnapshotPartsCommit(commitInput({ incomingBaseVersion: 0 }))
     if (plan.outcome !== 'commit') throw new Error('commit ではない')
     const manifest = applyPlan(store, plan)
-    expect(readbackOf(store, manifest, plan)).toEqual({ ok: true, manifest })
+    expect(readbackOf(store, manifest, plan)).toEqual({ ok: true, manifest, crossedByQrMerge: false })
 
     expect(readbackOf(store, { ...manifest, saveId: 'other' }, plan)).toMatchObject({ ok: false, detail: expect.stringContaining('saveId') })
     expect(readbackOf(store, { ...manifest, version: 9 }, plan)).toMatchObject({ ok: false, detail: expect.stringContaining('version') })
@@ -251,6 +285,36 @@ describe('verifySnapshotPartsReadback(読み戻し検証・AC-15)', () => {
     const corruptedResult = readbackOf(corrupted, manifest, plan)
     expect(corruptedResult.ok).toBe(false)
     expect((corruptedResult as { detail: string }).detail).toContain('ハッシュ不一致')
+  })
+
+  it('読み戻しの直前に QR マージが割り込んだ(saveId・version 据え置き・core と compositeHash が変わった)ときは、core 以外の書いた部品が参照されていれば成功(regression-reviewer 中-2)', () => {
+    const store = new Map<string, Record<string, unknown>>()
+    const plan = planSnapshotPartsCommit(commitInput({ incomingBaseVersion: 0 }))
+    if (plan.outcome !== 'commit') throw new Error('commit ではない')
+    const manifest = applyPlan(store, plan)
+    const core = decodeSnapshotPartDoc(store.get(manifest.parts.core.docId)) as Record<string, unknown>
+    const merged = mergeLectureSubmissionIntoPayload(core, { sessionId: 'ss1', personType: 'student', personId: 's1', token: 't', now: '2026-10-28T01:00:00.000Z', unavailableSlots: [], subjectSlots: {}, subjectDurations: {}, groupClassParticipation: {}, optionChecks: {}, regularOnly: false })!
+    const qr = buildQrMergedCorePart({ manifest, classroomId: 'c1', mergedCore: merged, managementCount: 2, now: '2026-10-28T01:00:00.000Z', writerId: buildQrMergeWriterId(1, 'abc') })!
+    store.set(qr.docId, qr.doc as unknown as Record<string, unknown>)
+    const result = readbackOf(store, qr.manifest, plan)
+    expect(result).toMatchObject({ ok: true, crossedByQrMerge: true })
+    // QR 以外の書き手(lastWriter='save')で compositeHash が違えば従来どおり失敗。
+    expect(readbackOf(store, { ...qr.manifest, lastWriter: 'save' }, plan)).toMatchObject({ ok: false, detail: expect.stringContaining('compositeHash') })
+    // QR マージ後でも、core 以外の部品が差し替わっていれば失敗。
+    const tampered = { ...qr.manifest, weeks: qr.manifest.weeks.map((week, index) => (index === 0 ? { ...week, docId: 'week~2026-05-11~v1~other000000' } : week)) }
+    tampered.compositeHash = sha256Hex(buildSnapshotCompositeHashInputFromManifest(tampered))
+    expect(readbackOf(store, tampered, plan)).toMatchObject({ ok: false, detail: expect.stringContaining('別の文書') })
+  })
+
+  it('巻き戻しの判定: 今の目次がこの保存のもの(saveId と compositeHash が一致)のときだけ戻す。QR マージが割り込んだ・別の保存が進んだ・旧形式なら戻さない', () => {
+    const plan = planSnapshotPartsCommit(commitInput({ incomingBaseVersion: 0 }))
+    if (plan.outcome !== 'commit') throw new Error('commit ではない')
+    const manifest = plan.manifest
+    expect(shouldRollbackManifestAfterReadbackFailure({ latestDoc: manifest, saveId: 'save-0001', compositeHash: manifest.compositeHash })).toBe(true)
+    expect(shouldRollbackManifestAfterReadbackFailure({ latestDoc: { ...manifest, compositeHash: 'changed-by-qr', lastWriter: 'qr-submission' }, saveId: 'save-0001', compositeHash: manifest.compositeHash })).toBe(false)
+    expect(shouldRollbackManifestAfterReadbackFailure({ latestDoc: { ...manifest, saveId: 'save-0002' }, saveId: 'save-0001', compositeHash: manifest.compositeHash })).toBe(false)
+    expect(shouldRollbackManifestAfterReadbackFailure({ latestDoc: { schemaVersion: 1, version: 1 }, saveId: 'save-0001', compositeHash: manifest.compositeHash })).toBe(false)
+    expect(shouldRollbackManifestAfterReadbackFailure({ latestDoc: null, saveId: 'save-0001', compositeHash: manifest.compositeHash })).toBe(false)
   })
 
   it('書いていない部品(再利用)は読み直さない(writtenParts が空なら目次だけで判定)', () => {
@@ -289,8 +353,10 @@ describe('QR 提出のマージ(§9-6・K-9・INV-07)', () => {
     const merged = mergeLectureSubmissionIntoPayload(payload, submission)
     expect(merged).not.toBeNull()
     const input = ((merged!.specialSessions as Array<Record<string, unknown>>)[0].studentInputs as Record<string, Record<string, unknown>>).s1
-    expect(input).toMatchObject({
-      unavailableSlots: ['2026-11-01#1'], reopenedSlots: [], subjectSlots: { 数学: 2 }, regularOnly: false, regularBreakSlots: ['x'],
+    // 切り出し前の lectureSubmissionApi が書いていたキーと値そのもの(余計なキー・欠けたキーを検出するため toEqual)。
+    expect(input).toEqual({
+      regularBreakSlots: ['x'],
+      unavailableSlots: ['2026-11-01#1'], reopenedSlots: [], subjectSlots: { 数学: 2 }, subjectDurations: {}, groupClassParticipation: {}, optionChecks: {}, regularOnly: false,
       countSubmitted: true, submissionToken: 'tok-1234567890abcdef', submittedAt: submission.now, submissionMethod: 'qr', updatedAt: submission.now,
     })
     // 元のオブジェクトは変えない(トランザクションの再実行で二重反映しない)。
@@ -311,10 +377,10 @@ describe('QR 提出のマージ(§9-6・K-9・INV-07)', () => {
     const core = decodeSnapshotPartDoc(store.get(manifest.parts.core.docId)) as Record<string, unknown>
     const mergedCore = mergeLectureSubmissionIntoPayload(core, submission)!
     const writerId = buildQrMergeWriterId(1_700_000_000_000, 'ab12')
-    expect(writerId).toBe('qr1700000000000ab12')
+    expect(writerId).toBe(`q${(1_700_000_000_000).toString(36)}ab1`)
     const next = buildQrMergedCorePart({ manifest, classroomId: 'c1', mergedCore, managementCount: 2, now: submission.now, writerId })
     expect(next).not.toBeNull()
-    expect(next!.docId).toBe('core~-~v1~qr1700000000')
+    expect(next!.docId).toBe(`core~-~v1~${writerId}`)
     expect(next!.doc).toMatchObject({ kind: 'core', key: '-', encoding: 'gzip-base64', createdBy: writerId, createdForVersion: 1, classroomId: 'c1' })
     expect(next!.manifest.version).toBe(manifest.version)
     expect(next!.manifest.savedAt).toBe(manifest.savedAt)
@@ -342,6 +408,26 @@ describe('QR 提出のマージ(§9-6・K-9・INV-07)', () => {
     const manifest = applyPlan(store, plan)
     const core = decodeSnapshotPartDoc(store.get(manifest.parts.core.docId)) as Record<string, unknown>
     expect(buildQrMergedCorePart({ manifest, classroomId: 'c1', mergedCore: core, managementCount: 2, now: submission.now, writerId: 'qr1' })).toBeNull()
+  })
+})
+
+describe('掃除の参照集合(§9-9・AC-25)', () => {
+  it('旧形式の文書は空集合(参照なし)・文書なしも空集合・壊れた目次は null(触らない)・目次は参照中の docId 全部', () => {
+    expect(resolveReferencedSnapshotPartDocIds({ schemaVersion: 1, dataEncoding: 'gzip-base64', compressedData: 'x', version: 3 })).toEqual(new Set())
+    expect(resolveReferencedSnapshotPartDocIds(null)).toEqual(new Set())
+    expect(resolveReferencedSnapshotPartDocIds({ storageFormat: 'weekly-parts', storageFormatVersion: 1, parts: {}, weeks: [], hasBoardState: true, ui: {}, compositeHash: 'x' })).toBeNull()
+    const plan = planSnapshotPartsCommit(commitInput({ incomingBaseVersion: 0 }))
+    if (plan.outcome !== 'commit') throw new Error('commit ではない')
+    expect(resolveReferencedSnapshotPartDocIds(plan.manifest)).toEqual(new Set(listSnapshotPartReferences(plan.manifest).map((ref) => ref.docId)))
+  })
+
+  it('select の項目だけに絞った目次でも検査を通り、同じ参照集合になる(項目が漏れると掃除が永久に全教室をスキップする)', () => {
+    const plan = planSnapshotPartsCommit(commitInput({ incomingBaseVersion: 0 }))
+    if (plan.outcome !== 'commit') throw new Error('commit ではない')
+    const selected: Record<string, unknown> = {}
+    for (const field of SNAPSHOT_MANIFEST_SELECT_FIELDS) selected[field] = (plan.manifest as unknown as Record<string, unknown>)[field]
+    expect(validateSnapshotPartsManifest(selected).ok).toBe(true)
+    expect(resolveReferencedSnapshotPartDocIds(selected)).toEqual(resolveReferencedSnapshotPartDocIds(plan.manifest))
   })
 })
 

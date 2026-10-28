@@ -14,7 +14,6 @@
 //  - 旧形式の教室の最初の保存(移行)は**全部品を書く**(旧本体からの「再利用」はしない・§9-4-4 6-5 の簡約)。一方通行(§9-7-1)。
 //  - トランザクションの上限(書き込み 400 件・8MiB・1 文書 1MiB)を超えたら**分けて書かずに拒否**(§9-4-5)。
 //  - 判定だけ。Firestore・メール・saveAttempts はここで触らない(トランザクションは再実行されうる)。
-import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import {
   buildSnapshotCompositeHashInput,
@@ -55,8 +54,17 @@ export const SNAPSHOT_PARTS_TX_NOTICE_BYTES = 5 * 1024 * 1024
 /** core / board の保存サイズが 512KiB 以上で「部品の追加分割(第 2 段)着手の合図」を知らせる。 */
 export const SNAPSHOT_PART_SPLIT_NOTICE_BYTES = 512 * 1024
 
+/** SHA-256(16 進)。実装は読み手の hashSnapshotPartInput 1 つ(regression-reviewer 低-5: 二重実装にしない)。 */
 export function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex')
+  return hashSnapshotPartInput(input)
+}
+
+/**
+ * 保存の書き手 ID(部品文書 ID の末尾 12 文字に入る)。saveId は `${savedAt}_${classroomId}_${uuid}` で先頭 12 文字が時刻(同じ時間帯で全保存が同じ)に
+ * なるため、saveId の SHA-256 の先頭 12 文字を使う(regression-reviewer 中-1: 文書 ID が一意でないと「部品は不変」が崩れる)。
+ */
+export function buildSaveWriterId(saveId: string): string {
+  return sha256Hex(saveId).slice(0, 12)
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +238,7 @@ export function planSnapshotPartsCommit(input: SnapshotPartsCommitInput): Snapsh
       reusedPartKeys.push(part.partKey)
       continue
     }
-    const docId = buildSnapshotPartDocId({ kind: part.kind, key: part.key, version: nextVersion, writerId: input.saveId })
+    const docId = buildSnapshotPartDocId({ kind: part.kind, key: part.key, version: nextVersion, writerId: buildSaveWriterId(input.saveId) })
     const doc: SnapshotPartDoc = {
       classroomId: input.classroomId,
       kind: part.kind,
@@ -337,17 +345,22 @@ export type SnapshotPartsReadbackInput = {
   partDocs: ReadonlyArray<unknown | null>
 }
 
-export function verifySnapshotPartsReadback(input: SnapshotPartsReadbackInput): { ok: true; manifest: SnapshotPartsManifest } | { ok: false; detail: string } {
+export function verifySnapshotPartsReadback(input: SnapshotPartsReadbackInput): { ok: true; manifest: SnapshotPartsManifest; crossedByQrMerge: boolean } | { ok: false; detail: string } {
   const validation = validateSnapshotPartsManifest(input.manifestDoc)
   if (!validation.ok) return { ok: false, detail: `目次が読めない: ${validation.errors.join(' / ')}` }
   const manifest = validation.manifest
   if (manifest.saveId !== input.expected.saveId) return { ok: false, detail: `目次の saveId が違う(${String(manifest.saveId)} ≠ ${input.expected.saveId})` }
   if (manifest.version !== input.expected.version) return { ok: false, detail: `目次の version が違う(${String(manifest.version)} ≠ ${input.expected.version})` }
-  if (manifest.compositeHash !== input.expected.compositeHash) return { ok: false, detail: '目次の compositeHash が違う' }
+  // QR 提出のマージ(§9-6・K-9)は saveId・version を据え置いたまま core だけ差し替え、compositeHash を変える。保存の読み戻しの直前に
+  // 割り込むと compositeHash が合わないが、保存は確定している(regression-reviewer 中-2)。この場合は core 以外の書いた部品が今も参照されて
+  // いることで成功と扱う(core は QR が新しい版にしたので読み直さない)。
+  const crossedByQrMerge = manifest.lastWriter === 'qr-submission' && manifest.compositeHash !== input.expected.compositeHash
+  if (!crossedByQrMerge && manifest.compositeHash !== input.expected.compositeHash) return { ok: false, detail: '目次の compositeHash が違う' }
   if (sha256Hex(buildSnapshotCompositeHashInputFromManifest(manifest)) !== manifest.compositeHash) return { ok: false, detail: '目次の部品一覧から作った全体ハッシュが compositeHash と合わない' }
   const referenced = new Map(listSnapshotPartReferences(manifest).map((ref) => [ref.partKey, ref]))
   const failures: string[] = []
   input.writtenParts.forEach((written, index) => {
+    if (crossedByQrMerge && written.partKey === SNAPSHOT_PART_KEY_CORE) return
     const ref = referenced.get(written.partKey)
     if (!ref || ref.docId !== written.docId || ref.hash !== written.hash) {
       failures.push(`${written.partKey}: 目次が別の文書を指している`)
@@ -367,7 +380,34 @@ export function verifySnapshotPartsReadback(input: SnapshotPartsReadbackInput): 
     }
   })
   if (failures.length > 0) return { ok: false, detail: failures.join(' / ') }
-  return { ok: true, manifest }
+  return { ok: true, manifest, crossedByQrMerge }
+}
+
+/**
+ * 読み戻し失敗のあと目次を直前の内容へ戻してよいか(純関数・AC-15・regression-reviewer 中-2)。
+ * 戻すのは「今の目次がこの保存が書いたものそのまま」(saveId と compositeHash が一致)のときだけ。QR マージが割り込んで compositeHash が
+ * 変わっていれば戻さない(戻すと確定済みの保存と QR の反映を両方消す)。別の保存が進んでいれば saveId が違うので戻さない。
+ */
+export function shouldRollbackManifestAfterReadbackFailure(params: { latestDoc: unknown; saveId: string; compositeHash: string }): boolean {
+  if (!isSnapshotPartsManifest(params.latestDoc)) return false
+  return params.latestDoc.saveId === params.saveId && params.latestDoc.compositeHash === params.compositeHash
+}
+
+// ---------------------------------------------------------------------------
+// 掃除の参照集合(§9-9・pruneSnapshotParts が使う)
+// ---------------------------------------------------------------------------
+
+/** 掃除が目次から読む項目(select)。validateSnapshotPartsManifest が要求する項目をすべて含む(テストで固定)。 */
+export const SNAPSHOT_MANIFEST_SELECT_FIELDS = ['storageFormat', 'storageFormatVersion', 'hasBoardState', 'ui', 'parts', 'weeks', 'compositeHash', 'version', 'saveId', 'lastWriter'] as const
+
+/**
+ * 目次が参照している部品の文書 ID の集合。旧形式の文書(目次でない)は空集合(参照なし＝旧形式が正)、壊れた目次(検査に落ちる)は null(触らない)。
+ */
+export function resolveReferencedSnapshotPartDocIds(manifestDoc: unknown): ReadonlySet<string> | null {
+  if (!isSnapshotPartsManifest(manifestDoc)) return new Set<string>()
+  const validation = validateSnapshotPartsManifest(manifestDoc)
+  if (!validation.ok) return null
+  return new Set(listSnapshotPartReferences(validation.manifest).map((ref) => ref.docId))
 }
 
 // ---------------------------------------------------------------------------
@@ -429,9 +469,13 @@ export function mergeLectureSubmissionIntoPayload(payload: Record<string, unknow
   return { ...payload, specialSessions: sessions }
 }
 
-/** QR マージの書き手 ID(部品文書 ID の末尾に入る)。 */
-export function buildQrMergeWriterId(nowMs: number, random4: string): string {
-  return `qr${nowMs}${random4.replace(/[^A-Za-z0-9]/g, '').slice(0, 4)}`
+/**
+ * QR マージの書き手 ID(部品文書 ID の末尾 12 文字に入る)。`q` + ミリ秒の 36 進(8 文字・2059 年まで) + 乱数 3 文字 = 12 文字で、
+ * 同じ秒の提出 2 件でも別の ID になる(regression-reviewer 中-1)。
+ */
+export function buildQrMergeWriterId(nowMs: number, random: string): string {
+  const stamp = Math.max(0, Math.floor(nowMs)).toString(36).padStart(8, '0').slice(-8)
+  return `q${stamp}${random.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).padEnd(3, '0')}`
 }
 
 /**
