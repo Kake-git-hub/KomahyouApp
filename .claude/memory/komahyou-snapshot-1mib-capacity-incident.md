@@ -28,7 +28,7 @@ v1.5.647 操作痕跡の要約 400→2000 字(机を 14 台動かした 19:12 �
 **進捗(2026-10-28・段階 B 本番反映 v1.5.654・開発用教室は分割形式へ移行済み)**: 段階 A(v1.5.651)は本番反映済み・sp-1 オーナー確認 OK。段階 B＝サーバーが分割して書く(2026-10-28 00:10 UTC 反映・開発用教室は版 822 で移行＝48 部品・最大文書 60KB＝5.8%／版 823・824 は変わった部品だけ／QR マージは版 823 のまま core 部品を書いた・sp-2/sp-3 OK):
 フラグ述語 `functions/src/snapshotStorageFormat.ts`(基本スコープ staging-environment＝検証用教室＋staging／教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`〔日大前校はここに足す〕／会社既定・一方通行・`CLIENT_TOO_OLD`＝v1.5.651 未満の画面を拒否)、
 書き手の純関数 `functions/src/snapshotPartsWriter.ts`(`planSnapshotPartsCommit`・`verifySnapshotPartsReadback`・QR マージ・容量通知)、`index.ts` の `saveClassroomSnapshotAsParts`(1 トランザクション→読み戻し→失敗は目次を直前へ戻す)・
-`pruneSnapshotParts`(掃除・`SNAPSHOT_PART_GC_DRY_RUN=1`)。仕様との差分は spec §9-17。**2026-10-28 オーナー指示「staging は確認しなくていいので、問題なければ本番環境へ全教室展開して」で v1.5.656 から全教室 ON**(staging・日大前校だけの段は省略・展開時 日大前 95.0%/緑が丘 75.5%/テスト教室 98.8%)。各教室は次の保存で移行。段階 C(差分送信)は未着手。
+`pruneSnapshotParts`(掃除・`SNAPSHOT_PART_GC_DRY_RUN=1`)。仕様との差分は spec §9-17。**2026-10-28 オーナー指示「staging は確認しなくていいので、問題なければ本番環境へ全教室展開して」で v1.5.656 から全教室 ON**(staging・日大前校だけの段は省略・展開時 日大前 95.0%/緑が丘 75.5%/テスト教室 98.8%)。**日大前校は 05:02 UTC の保存で移行済み**(版 11790・49 書き込み・1.1 秒・7.0%・以後 23 回 verified・バックアップ/ロールバック/版履歴も正常)。緑が丘・テスト教室は次の保存で移行。段階 C(差分送信)は未着手。
 **(2026-10-27 夜の記録)**: 段階 0(共有純関数 `src/utils/classroomSnapshotParts.ts`・sync-shared 複製)と
 段階 A(読める版)を実装。サーバーは**唯一の読み手** `readClassroomSnapshotPayload`(旧形式 `readLegacyStoredSnapshotPayload`／目次は
 `snapshotPartsReader.ts` が getAll で組み立て・欠けたら例外)に 9 箇所を集約。クライアントは `readFirebaseSnapshotPayload` 先頭で目次判定
