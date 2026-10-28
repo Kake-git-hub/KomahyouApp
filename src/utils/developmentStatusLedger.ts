@@ -216,13 +216,22 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
 
   // ── 未着手(計画あり) ────────────────────────────────────────────────────────
   {
+    id: 'auto-backup-per-classroom',
+    title: '15 分毎の自動バックアップの教室別化(全教室 1 本の JSON をやめ、教室ごとに gzip で書く＋時点ごとの目次)',
+    stage: 'planned',
+    summary: 'オーナー指示(2026-10-28「自動バックアップの教室別化はすぐに次セッションで着手できるようにして」)。今は会社ごとに全教室を 1 本の JSON(31.7MB・4 教室・7 週で 25% 増)にまとめて Storage に非圧縮で書き、要約を Firestore に・gzip を Drive に置く。最初に詰まるのは生成(540 秒/2GiB)ではなく読む側: 室長の自教室復元と開発者の全体復元の callable(512MiB)が 1 本を丸ごと読むため、日大前校サイズで 1 社 8〜10 教室あたりから室長の自教室復元が壊れる見込み。計画書に 現状の事実(生成・保持・Drive・復元の入口 4 系統・1 本の形に依存する箇所)・設計案 A〜D(推奨 A=教室ごと 1 本 gzip＋index)・変えないもの BK-1〜BK-9・論点 Q1〜Q9・段階 0〜3・AC-B1〜B21・教室数 4/5/10/20/30 の試算・確認リスト案 ab-1〜ab-4 を用意済み。',
+    nextAction: '次セッション: (1) docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md §4 の論点 Q1〜Q9 をオーナーに選択式で確認(推奨は各 1 番目)。(2) 確定内容を docs/spec-save-restore.md §10 へ書く(骨子は計画書 §8)。(3) 段階 0(共有純関数 workspaceBackupLayout)→ 段階 1(両形式を読める版・復元の入口 4 系統とツール)→ 段階 2(書く側の切り替え・設定で戻せる)→ 段階 3(実測と片付け: runbook rollback C の古い記述・company-onboarding 手順 4・Issue #77 の扱い)。各段で dev-fix → regression-reviewer(INV-08・INV-14 マトリクスの「行: 自動バックアップ」を弱めずに追従)→ safe-release。期限は 2 社目の受け入れ前に段階 2 まで(main だけなら急がない)。',
+    references: ['docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md', 'docs/spec-save-restore.md §8 / §9-5-3', 'functions/src/index.ts (runWorkspaceServerAutoBackup / buildWorkspaceServerBackupSnapshot / pruneWorkspaceServerAutoBackups / downloadServerAutoBackup / downloadClassroomFromServerAutoBackup)', 'functions/src/workspaceBackupSchedule.ts', 'src/utils/workspaceBackupImport.ts', 'Issue #77'],
+    updatedOn: '2026-10-28',
+  },
+  {
     id: 'backup-per-workspace',
     title: '15 分毎バックアップ関数の会社(workspace)ごとの分割実行(別会社 10 教室の追加に備える恒久対策)',
-    stage: 'planned',
+    stage: 'on-hold',
     summary: '全 workspace を 1 回の実行で直列に回すため、教室数に比例して時間とメモリが伸びる(spec-multi-tenant §7-16「15 教室前後で枠切れ」の見込み)。2026-10-22 に 300 秒/1GiB → 540 秒/2GiB へ増強して当面の枠を確保した。恒久対策は workspace ごとの別実行(1 社 1 タスク)か教室ごとの gzip 書き出しにし、復元 UI の一覧の読み方を揃える。',
-    nextAction: 'Claude: 2 社目の受け入れ(second-company-onboarding)の前に Issue #77 の案で設計 → 実装 → staging で 2 社ぶんの実行時間とメモリを実測。',
-    references: ['Issue #77', 'docs/spec-multi-tenant.md §7-16', 'docs/plan-2026-09-15-multi-company-architecture.md §6-13', 'functions/src/index.ts createWorkspaceServerQuarterHourlyBackups'],
-    updatedOn: '2026-10-22',
+    nextAction: '2026-10-28: 教室別化(auto-backup-per-classroom・計画書 §3-5)に吸収し、分割実行は条件つきで後回し(計画書 Q7・推奨=教室別化を先に)。再開条件: 教室別化の後も 1 社の例外が他社の回を止める構造(ループに会社ごとの try/catch が無い)が残っていれば、2 社目の受け入れ前に分離だけ先に入れる。オーナーが Q7 で (2) 同時に行う を選べば再開。',
+    references: ['Issue #77', 'docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md §3-5 / Q7', 'docs/spec-multi-tenant.md §7-16', 'docs/plan-2026-09-15-multi-company-architecture.md §6-13', 'functions/src/index.ts createWorkspaceServerQuarterHourlyBackups'],
+    updatedOn: '2026-10-28',
   },
   {
     id: 'second-company-onboarding',
