@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.659 (2026-10-28)
+
+- docs: **15 分毎の自動バックアップの教室別化の着手計画書** docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md を新設(オーナー指示 2026-10-28「自動バックアップの教室別化はすぐに次セッションで着手できるようにして」・spec-curator)。本番の実測(main は 4 教室・1 本 31.7MB・gzip 3.0MB・15min に 170 本 5.38GB・生成 1 教室 1.5〜2 秒)、最初に詰まるのは生成(540 秒/2GiB)でなく復元用 callable(512MiB)が 1 本を丸ごと読む側(日大前校サイズで 1 社 8〜10 教室から室長の自教室復元が壊れる見込み)、現状の仕組みの事実(生成・保持・Drive・incident・復元の入口 4 系統・1 本の形に依存する箇所の grep)、設計案 A〜D(推奨 A=教室ごと 1 本 gzip＋時点ごとの index・要約に教室一覧は載せない=INV-08・目次は最後に公開=INV-14)、変えないもの BK-1〜BK-9、論点 Q1〜Q9(推奨つき・オーナー確定待ち)、段階 0〜3、AC-B1〜B21、教室数 4/5/10/20/30 の試算、確認リスト案 ab-1〜ab-4、確定後に spec §10 へ書く骨子。台帳に auto-backup-per-classroom(未着手・計画あり)を追加し、backup-per-workspace(Issue #77)は教室別化に吸収して保留へ。(docs/・src/utils/developmentStatusLedger.ts・.claude/memory)
+
 ## v1.5.658 (2026-10-28)
 
 - docs: 週単位の分割保存の進行中テーマを「段階 B まで全教室に展開済み・段階 C/D は保留」に書き換え(オーナー確定 2026-10-28「その方針で台帳を書き換えて」)。段階 C(端末も変わった部品だけ送る差分送信)は速さだけの改善で正しさ・容量・教室数に関係しないため、室長から保存の遅さや回線の弱い場所での失敗の不満が出たら着手。段階 D(過去週のアーカイブ・第 2 段)は来年の講習期に保存時間・起動時間を実測してから判断。spec §9-7-1 の段階表・引き継ぎ・memory も同じ方針に。(src/utils/developmentStatusLedger.ts・docs/spec-save-restore.md・docs/plan-2026-10-27-weekly-split-snapshot-handoff.md)
