@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.656 (2026-10-28)
+
+- feat: **週単位の分割保存を全教室へ展開**(オーナー指示 2026-10-28「staging は確認しなくていいので、問題なければ本番環境へ全教室展開して」。spec §9-15 Q4 の staging・日大前校だけの段は省略)。サーバー述語の基本スコープ `WEEKLY_SPLIT_SNAPSHOT_BASE_SCOPE` とクライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` を `all-classrooms` へ(教室指定は空のまま・会社既定 'off' で新しく移る教室を止められる・既に分割形式の教室は一方通行)。各教室は**次の保存**で分割形式へ移る(全部品を書く・約 50 文書・1 トランザクション)。展開前の本番: 日大前校 95.0%(直近の保存は v1.5.654 の画面)・緑が丘校 75.5%(直近は前夜の v1.5.649 の画面=開いたままなら次の保存は CLIENT_TOO_OLD で再読み込み案内)・テスト教室 98.8%。開発用教室の確認リストでは検証できない(本番教室の切り替え)ため項目は足さず、最初の保存後に saveAttempts・15 分毎バックアップ・掃除ログで Claude が確認する。台帳・spec §9-7-1/§9-15/§9-17・runbook rollback・引き継ぎ・memory を更新。(functions/src/snapshotStorageFormat.ts・src/utils/featureRollout.ts・developmentStatusLedger.ts)
+
 ## v1.5.655 (2026-10-28)
 
 - docs: 分割保存 段階 B(v1.5.654)の本番反映後の確認結果を反映。開発用教室は 03:26 UTC の保存で分割形式へ移行(版 822・48 部品 49 書き込み・最大文書 60KB＝使用率 5.8%・移行前 93%)、続く保存は変わった部品だけ(版 823 は board＋週 1・版 824 は core だけ・再利用 46〜47)、QR 提出は版 823 のまま core 部品(core~-~v823~q…)を書いた(K-9)。関数ログにエラー無し・組み立て失敗の通知無し。確認リスト sp-2 / sp-3 はオーナー OK(受付 20261028-032942134-2f5ab955)で外した(第86版・版は据え置き)。台帳 classroom-snapshot-capacity の次の一手を staging(本番サイズ)→ 日大前校 へ更新。(src/utils/verificationChecklist.ts・developmentStatusLedger.ts・.claude/memory)

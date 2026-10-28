@@ -640,7 +640,7 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 | 段階 | 出すもの | 書く形式 | 次へ進む条件 |
 |------|---------|---------|------------|
 | A | **読める版**: サーバーの組み立て関数（全呼び出し箇所）・クライアントの分割形式の読み取り（fail-closed）・`snapshotParts` のルール | 旧形式のまま | Functions → ルール → Hosting の順に反映済み。staging で「分割形式の目次を手で作って読める」こと。**各教室の直近の保存がすべて段階 A 以降の版から来ている**こと（`saveAttempts.appVersion` で確認） |
-| B | **サーバーが分割して書く**: 保存（従来の形の全量を受けてサーバーで分割）・トランザクション・読み戻しと目次の巻き戻し・QR マージ・トリガ・バックアップの失敗処理・掃除・旧版の拒否（§9-7-3）。サーバー側の機能フラグ（`weeklySplitSnapshotStorage`・`functions/src/snapshotStorageFormat.ts`・基本スコープ＋教室指定＋会社既定）。**2026-10-28 実装（v1.5.654・§9-17）** | フラグ ON の教室は最初の保存から分割形式 | ★**これで 1MiB の上限問題は解消する**（送信は 8MB のまま）。冬期講習前に日大前校まで反映する。切り替えの進み: 開発用教室（v1.5.654）→ staging（本番サイズ）→ 日大前校（`WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`）→ 全教室 |
+| B | **サーバーが分割して書く**: 保存（従来の形の全量を受けてサーバーで分割）・トランザクション・読み戻しと目次の巻き戻し・QR マージ・トリガ・バックアップの失敗処理・掃除・旧版の拒否（§9-7-3）。サーバー側の機能フラグ（`weeklySplitSnapshotStorage`・`functions/src/snapshotStorageFormat.ts`・基本スコープ＋教室指定＋会社既定）。**2026-10-28 実装（v1.5.654・§9-17）** | フラグ ON の教室は最初の保存から分割形式 | ★**これで 1MiB の上限問題は解消する**（送信は 8MB のまま）。冬期講習前に日大前校まで反映する。切り替えの進み: 開発用教室（v1.5.654・移行と QR 取り込みを確認）→ **全教室（v1.5.656・オーナー指示 2026-10-28「staging は確認しなくていいので、問題なければ本番環境へ全教室展開して」＝§9-15 Q4 の staging・日大前校の段を省略）** |
 | C | **差分送信**: クライアントの台帳・変化判定・gzip 送信・全量への切り替え | 同上 | 速度の目標（§9-12）を staging の本番サイズで満たす |
 | D | 監視の見直し・第 2 段（部品の先書き・`core` の分割）・過去週のアーカイブ（未決・§9-16） | — | 50% 通知・読み込み時間を見て判断 |
 
@@ -798,7 +798,7 @@ match /classroomSnapshots/{classroomId} {
 | Q1 | 部品の分け方 | A: 合意どおり「週以外を 1 文書」／B: 「管理データ」と「盤面の週以外」に分け、画面の状態（選んでいるコマなど）は目次に置く | **決定: B**（§9-3-2。A だとほぼ毎回の保存で管理データ全体〔約 85〜120KB〕を送り直す） |
 | Q2 | 切り替え後に古い版の画面から来た保存 | A: 拒否して再読み込みを促す（内容は JSON に自動退避）／B: 受け付ける | **決定: A**（§9-7-3・AC-18） |
 | Q3 | 使われなくなった旧版の部品を残す期間 | 24 時間／3 日／7 日 | **決定: 3 日**（§9-9・§8-1 #17） |
-| Q4 | 本番の切り替え順 | A: 開発用教室 → staging（本番サイズ）→ 日大前校 → 残り／B: 小さい教室で 1 週間様子を見てから日大前校 | **決定: A**（§9-13） |
+| Q4 | 本番の切り替え順 | A: 開発用教室 → staging（本番サイズ）→ 日大前校 → 残り／B: 小さい教室で 1 週間様子を見てから日大前校 | **決定: A**（§9-13）→ **2026-10-28 オーナー指示で変更: 開発用教室の確認（sp-2 / sp-3 OK）の後、staging と日大前校だけの段を省いて全教室へ**（v1.5.656） |
 | Q5 | 新しい保証（INV）の追加 | A: 追加する／B: 追加せず本章の受け入れ条件で守る | **決定: A**＝`spec-invariants.md` **INV-14** として新設（保証文はオーナー承認済み・台帳だけに書く） |
 | Q6 | 出し方 | A: 「サーバーで分割して書く（上限問題の解消）」を先に出し、「変わった部品だけ送る（速さ）」を後に出す／B: 一緒に出す | **決定: A**（§9-7-1） |
 
@@ -819,7 +819,7 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
 | QR マージ（§9-6） | core を組み立てて反映 | 目次だけ `transaction.get`・core 部品は不変なのでトランザクション外で読み、ハッシュ照合 → 新しい core 部品（`core~-~v{版}~qr…`）＋目次の core 差し替え。core が欠ける・合わない → マージせず `snapshot-assembly-failed` 通知 | §9-5-4 の「部品はトランザクション外で読んでよい」 |
 | `saveAttempts` の項目（§9-10） | 左記 | `storageFormat`・`hashScheme`・`compositeHash`・`sendMode`（段階 B は常に `legacy`）・`sentPartCount`・`requestBytes`・`writtenPartCount`・`reusedPartCount`・`writeCountInTx`・`maxPartDocumentBytes`・`maxPartDocumentKey`・`corePartBytes`・`boardPartBytes`・`manifestBytes`・`documentByteLength`（＝最大文書）・`capacityRatio`。`writeMode: 'cloud-function-parts'`・`snapshotEncoding: 'weekly-parts'` | — |
 | 通知 | `client-too-old`・`parts-invalid`・`split-capacity-notice` | `client-too-old`・`split-capacity-notice`（1 日 1 通・`{classroomId}__split`）を追加。`parts-invalid` は段階 C（`partsSave` の受け付け）で | 段階 B は従来の形しか受けない |
-| フラグ（§9-7-1） | サーバー側・教室単位 | サーバー述語 `isWeeklySplitSnapshotStorageEnabledForClassroom` ＝ 基本スコープ `staging-environment`（登録済みの検証用教室 ＋ staging プロジェクト）or 教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST` → 会社既定（`companyFeatureDefaults`）。クライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` は台帳の整合用（クライアントは見ない・scope はサーバーと突合） | 保護者ポータルと同じ 2 段解決・教室指定は日大前校を先に出す段のため |
+| フラグ（§9-7-1） | サーバー側・教室単位 | サーバー述語 `isWeeklySplitSnapshotStorageEnabledForClassroom` ＝ 基本スコープ（v1.5.654: `staging-environment`＝登録済みの検証用教室 ＋ staging プロジェクト／**v1.5.656 から `all-classrooms`**）or 教室指定 `WEEKLY_SPLIT_SNAPSHOT_CLASSROOM_ALLOWLIST`（空のまま）→ 会社既定（`companyFeatureDefaults`・'off' で新しく移る教室を止められる）。クライアントの `featureRolloutRegistry.weeklySplitSnapshotStorage` は台帳の整合用（クライアントは見ない・scope はサーバーと突合） | 保護者ポータルと同じ 2 段解決・教室指定は日大前校を先に出す段のため |
 | 部品文書 ID の書き手（§9-3-5） | 保存＝saveId、QR＝`qr{ミリ秒}{乱数4桁}` の先頭 12 文字 | 保存＝**saveId の SHA-256 の先頭 12 文字**（`buildSaveWriterId`）、QR＝`q`＋ミリ秒の 36 進 8 文字＋乱数 3 文字（12 文字ちょうど・`buildQrMergeWriterId`）。QR の部品は `create` | saveId は時刻で始まり先頭 12 文字が同じ時間帯で一致する。同じ秒の QR 2 件も同じ ID になり「部品は不変」が崩れる（regression-reviewer 中-1） |
 | 読み戻しと QR マージの交差 | — | 目次の `lastWriter === 'qr-submission'` で compositeHash だけ違うときは、core 以外の書いた部品が参照されていれば成功（`crossedByQrMerge`）。目次の巻き戻しは **saveId と compositeHash が一致するときだけ**（`shouldRollbackManifestAfterReadbackFailure`） | QR マージは saveId を据え置くので saveId だけでは見分けられず、巻き戻すと確定済みの保存と QR の反映を両方消す（regression-reviewer 中-2） |
 | STALE・空データの記録 | — | 分割形式では `started` をトランザクション前に書くため、STALE・空データは終端 `saveAttempts.status = 'stale'` / `'empty-management-data'` を記録する（旧形式は照合の後に `started` を書くので記録なし） | `started` が並ぶのは 1MiB 事故の目印なので誤らせない（低-1） |
