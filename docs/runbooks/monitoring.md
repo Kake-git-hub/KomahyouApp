@@ -84,7 +84,11 @@ GitHub 側の通知設定は不要（Issue はあくまで課題管理の記録�
   node tools/snapshot-diff.mjs <前>.json.gz <後>.json.gz                                              # 生徒・コマ(机)単位の差分
   ```
   `operationTraces` は Firestore REST の GET で `saveId` を指定して読む。**出力・ファイルは生徒名を含むので、スクラッチ領域に置きリポジトリ・Issue へ貼らない。**
-- 自動バックアップ関数は別会社 10 教室の追加に備えて 540 秒／2GiB へ増強済み（2026-10-22）。恒久対策（会社ごとの分割実行）は進行中テーマ台帳の `backup-per-workspace`。
+- 自動バックアップ関数は別会社 10 教室の追加に備えて 540 秒／2GiB へ増強済み（2026-10-22）。恒久対策は**教室別化**（`docs/spec-save-restore.md` §10・2026-10-29 v1.5.662 でコード実装・
+  書く側の切り替えは設定 `WORKSPACE_AUTO_BACKUP_LAYOUT`・進行中テーマ台帳の `auto-backup-per-classroom`）。会社ごとの分割実行（`backup-per-workspace`・Issue #77）は条件つきで後回し。
+- 自動バックアップが会社単位で失敗すると監視メール `auto-backup-failed`（件名【バックアップ失敗】・会社ごとに 1 時間 1 通）が来る。関数ログ `[AutoBackup]` の原因文と
+  設定（`WORKSPACE_AUTO_BACKUP_LAYOUT`）を見る。教室別形式の取り残し（要約の無い時点フォルダ）の掃除は `cleanupOldSaveAttempts` のログ `backup orphan folders`
+  （既定は空実行＝件数だけ。`WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0` で削除）。
 
 ### 7. Firestore の過去時点読み取り（PITR）を有効にする（オーナー作業 ~5 分・2026-10-22 案 4・任意）
 - **2026-10-22 オーナーが有効化済み**（Firebase コンソールの「災害復旧」から）。以降は「有効になっていること」の確認手順として読む。

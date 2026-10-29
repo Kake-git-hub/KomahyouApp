@@ -218,3 +218,15 @@ export function shouldKeepClassroomSaveHistory(params: { createdAtMs: number; no
     retentionDays: params.retentionDays ?? CLASSROOM_SAVE_HISTORY_RETENTION_DAYS,
   })
 }
+
+// ---------------------------------------------------------------------------
+// 自動バックアップの教室別化(docs/spec-save-restore.md §10-6・2026-10-29)
+//
+// 教室別形式では Drive のファイル数が教室数倍になる(20 教室で約 1 万本)。Drive の一覧と掃除は毎回でなく
+// **1 日 1 回・日次アンカーの JST 3:00 の回**だけ行う(保持の判定そのものは Storage と同じ shouldKeepGoogleDriveBackupByName)。
+// 旧形式(全体 1 本)の回は従来どおり毎回掃除する(挙動を変えない・BK-8)。
+// ---------------------------------------------------------------------------
+export function isGoogleDriveDailyPruneRunAt(date: Date): boolean {
+  const jst = new Date(date.getTime() + JST_OFFSET_IN_MS)
+  return jst.getUTCHours() === WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST && jst.getUTCMinutes() === 0
+}

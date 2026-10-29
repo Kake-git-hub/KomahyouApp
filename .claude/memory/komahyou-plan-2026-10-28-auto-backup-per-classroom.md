@@ -1,6 +1,6 @@
 ---
 name: komahyou-plan-2026-10-28-auto-backup-per-classroom
-description: 15 分毎の自動バックアップを教室別(gzip＋時点ごとの目次)に分ける計画(2026-10-28)・次セッションの着手手順は計画書が正本・論点 Q1〜Q9 はオーナー確定待ち
+description: 15 分毎の自動バックアップの教室別化(gzip＋時点ごとの目次)・2026-10-28 オーナー確定・2026-10-29 v1.5.662 で段階 0〜2 のコード実装済み・書く側の切り替えは設定 WORKSPACE_AUTO_BACKUP_LAYOUT(staging→本番・未)・仕様は spec-save-restore §10
 metadata:
   node_type: memory
   type: project
@@ -16,3 +16,19 @@ metadata:
 
 **Why**: 1MiB 上限は分割保存で解消したが、教室数が増えたとき最初に詰まるのは全教室 1 本のバックアップとその読み手。
 **How to apply**: 次セッションは Q1〜Q9 を聞き直さず、確定内容で spec-save-restore §10 を書く(骨子は計画書 §8)→ 段階 0〜3。INV-14 マトリクス「行: 自動バックアップ」の文字列検査を弱めずに追従。[[komahyou-backup-3tier-and-scheduler-role]] [[komahyou-firebase-cost-scaling]] [[komahyou-manager-self-restore]] [[komahyou-snapshot-1mib-capacity-incident]]
+
+**2026-10-29 実装済み(v1.5.662・段階 0〜2 を 1 つの変更で)**: 仕様正本 `docs/spec-save-restore.md` §10(10-1〜10-12)。
+- 共有純関数 `src/utils/workspaceBackupLayout.ts`(sync-shared で functions へ複製・パリティテスト): パス(`15min/{key}/{classroomId}.json.gz`＋`index.json`)・文字種 `^[A-Za-z0-9_-]+$`・
+  教室ファイル=1 教室だけの WorkspaceSnapshot＋`backupFile`(3 点照合)・目次(`classrooms[]` は教室の項目＋file/bytes/sha256/sourceSavedAt・`missingClassrooms[{id,reason}]`)・
+  要約の layout 判定(無い=legacy・知らない=unknown で fail-closed)・全体の組み立て直し(AC-B1: 旧形式と stableStringify 一致)・取り残し判定(1 日)。
+- 書くループ `functions/src/workspaceBackupWriter.ts`(I/O 注入・教室ごとに逐次・目次は最後・assembly/write の exclude|throw・書き込み 1 回やり直し・ミラー失敗は集める)。
+- 設定 `functions/src/workspaceBackupLayoutConfig.ts`: `WORKSPACE_AUTO_BACKUP_LAYOUT`(legacy|per-classroom-v1・既定 legacy)＋`_OVERRIDES`(main=…,demo=…)。知らない値は legacy＋警告。
+- index.ts: `runWorkspaceServerAutoBackup` が会社ごとに try/catch(失敗はメール `auto-backup-failed`・会社ごと 1 時間 1 通)→ layout で `runPerClassroomWorkspaceBackupForWorkspace` / `runLegacyWorkspaceBackupForWorkspace`。
+  教室別は要約を目次の後に書き(`layout`・`classroomCount`・教室名は載せない)、Drive は教室ごと＋目次の `.json.gz`(目次も gzip=7 日ルールに巻き込まれないため)・掃除は JST 3:00 の回だけ。
+  読み手: `downloadClassroomFromServerAutoBackup` は文字種検査を会員確認より前→layout で分岐→教室ファイルだけ読んで 3 点照合。`downloadServerAutoBackup` は教室別の時点で failed-precondition(再読み込みの案内)・`purpose: 'local-sync'` で控えを書かない。
+  新 callable `prepareServerAutoBackupRestore`(開発者・控え→目次を返す)。控え `writeWorkspaceIncidentBackup` は**常に**教室別フォルダ(assembly/write とも throw・M-1 維持)。
+  間引きは教室別なら `deleteFiles({prefix})` → 要約。取り残しの掃除 `pruneOrphanedWorkspaceBackupFolders`(cleanup に独立予算 30 秒・**既定は空実行** `WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN` 未設定=1・0 で削除)。
+- クライアント: `adminFunctions.ts` の `downloadFirebaseServerAutoBackupJson(summary, {purpose})` が layout で読み分け(教室別=prepare→教室ごと→`assembleWorkspaceBackupFromIndex`)。App.tsx の全体復元(restore)とローカル同期(local-sync)はこれ 1 本。教室選択モーダルは不変。
+- テスト: 共有 40 件・ループ 10 件・設定 4 件・配線(functions `workspaceBackup.wiring`・クライアント `serverAutoBackupRestore.wiring`)・INV-14 マトリクス「行: 自動バックアップ」を旧形式/教室別の 2 行へ(台帳 spec-invariants 改定・保証文不変)・snapshot-diff に教室ファイル fixture。
+- **残り(台帳 auto-backup-per-classroom の次の一手)**: 確認リスト ab-1/ab-2(読み手が今までどおり)→ staging で `WORKSPACE_AUTO_BACKUP_LAYOUT=per-classroom-v1`(deploy-staging.yml の functions env)→ 本番 `PROD_FUNCTIONS_ENV` に同じ行→ ab-3/ab-4 を足す→ 翌朝の掃除ログで空実行の件数→ `…DRY_RUN=0`→ 段階 3(10〜20 教室の実測・backupRetentionEstimate・Issue #77)。
+- ⚠️ 切り替え後は Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。戻すなら先に設定を legacy へ。

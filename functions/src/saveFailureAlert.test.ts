@@ -110,8 +110,18 @@ describe('buildSaveFailureAlertMail', () => {
     expect(mail.text).toContain('snapshotParts')
   })
 
+  it('auto-backup-failed(15 分ごとの自動バックアップの会社単位の失敗・§10-4)のメールは件名が【バックアップ失敗】で、教室の行は「会社全体」・原因文とヒントが載る', () => {
+    const mail = buildSaveFailureAlertMail({ ...base, kind: 'auto-backup-failed', classroomId: 'auto-backup', saveId: '', updatedBy: 'system', detail: 'quarterHourly 2026-10-29T15-00: storage down' })
+    expect(mail.subject).toContain('【バックアップ失敗】')
+    expect(mail.subject).toContain('会社全体')
+    expect(mail.text).toContain('教室: 会社全体')
+    expect(mail.text).toContain('quarterHourly 2026-10-29T15-00: storage down')
+    expect(mail.text).toContain('WORKSPACE_AUTO_BACKUP_LAYOUT')
+    expect(mail.text).not.toContain('【保存失敗】')
+  })
+
   it('種類の一覧と判定', () => {
-    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice'])
+    expect([...SAVE_FAILURE_ALERT_KINDS]).toEqual(['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice', 'auto-backup-failed'])
     expect(isSaveFailureAlertKind('stale-version')).toBe(true)
     expect(isSaveFailureAlertKind('other')).toBe(false)
   })

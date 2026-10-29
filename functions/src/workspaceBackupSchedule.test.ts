@@ -3,6 +3,7 @@ import {
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
   HOUR_IN_MS,
+  isGoogleDriveDailyPruneRunAt,
   isWorkspaceAutoBackupSkippedAt,
   resolveBackupKindFromSummary,
   shouldKeepWorkspaceAutoBackup,
@@ -363,5 +364,25 @@ describe('保存ごとの教室版履歴(2026-10-22 案 1)', () => {
     expect(shouldKeepClassroomSaveHistory({ createdAtMs: Number.NaN, nowMs })).toBe(true)
     expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs + dayMs, nowMs })).toBe(true)
     expect(shouldKeepClassroomSaveHistory({ createdAtMs: nowMs - 100 * dayMs, nowMs, retentionDays: 400 })).toBe(true)
+  })
+})
+
+describe('isGoogleDriveDailyPruneRunAt (教室別形式の Drive の掃除は 1 日 1 回・JST 3:00 の回だけ・§10-6)', () => {
+  it('日次アンカーの JST 3:00 だけ true', () => {
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:00:00Z'))).toBe(true) // JST 03:00
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:00:59Z'))).toBe(true) // 実行開始が数秒ずれても同じ分
+  })
+
+  it('3:15・2:45・昼間・UTC の 3:00(JST 12:00)は false', () => {
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:15:00Z'))).toBe(false)
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T17:45:00Z'))).toBe(false)
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T03:00:00Z'))).toBe(false)
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T12:00:00Z'))).toBe(false)
+  })
+
+  it('日次アンカー(静音帯でも必ず取る 3:00)と同じ回なので、スキップ判定とは両立する', () => {
+    const anchor = new Date('2026-07-09T18:00:00Z')
+    expect(isWorkspaceAutoBackupSkippedAt(anchor)).toBe(false)
+    expect(isGoogleDriveDailyPruneRunAt(anchor)).toBe(true)
   })
 })
