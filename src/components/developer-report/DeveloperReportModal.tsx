@@ -8,6 +8,10 @@
 // **自動で開くモーダルは出さない**(バッジだけ)。未読の回答があるときだけ、開いた直後に履歴タブを見せる。
 // 既読(「確認しました」)はサーバー記録(App 側の callable)。履歴の並び・状態・件数は utils/reportAnswers.ts の純関数。
 // 日程表タブ側の埋め込みモーダルには履歴は無い(盤面の「質問・要望」から読む)。
+//
+// 2026-10-29(オーナー指示「AI 回答を見ながら画面操作する可能性があるので別タブで」): 盤面の「質問・要望」は別タブで開く
+// (presentation="window"・App が createPortal で別タブへ描く・developerReportWindow.ts)。別タブでは覆い(暗い背景)を付けず
+// ページとして出す。中身・文言・送信は同じ。ポップアップを止められたときだけ従来どおりモーダル(windowBlocked で一言出す)。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -64,9 +68,16 @@ export type DeveloperReportModalProps = {
   /** 「確認しました」を出してよいか(開発者が本番教室を開いているときは false: 室長の未読を消さない)。 */
   canMarkAnswersRead?: boolean
   onMarkAnswersRead?: (reportIds: string[]) => void
+  /** 出し方。window = 別タブのページ(覆いなし・2026-10-29)。既定は盤面のモーダル。 */
+  presentation?: DeveloperReportModalPresentation
+  /** 別タブを開けずモーダルで開いた(ポップアップを止められた)。送信フォームの上に一言出す。 */
+  windowBlocked?: boolean
 }
 
-export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead, onCaptureScreen, shrinkImage = shrinkChecklistImageToDataUrl }: DeveloperReportModalProps) {
+export type DeveloperReportModalPresentation = 'modal' | 'window'
+
+export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead, onCaptureScreen, shrinkImage = shrinkChecklistImageToDataUrl, presentation = 'modal', windowBlocked = false }: DeveloperReportModalProps) {
+  const isWindow = presentation === 'window'
   const [note, setNote] = useState('')
   const [category, setCategory] = useState<DeveloperReportCategory>(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY)
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -142,10 +153,18 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
     onMarkAnswersRead(reportIds)
   }
 
-  return (
-    <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget && !sending) onClose() }}>
-      <div className="auto-assign-modal developer-report-modal" role="dialog" aria-modal="true" aria-labelledby="developer-report-title" data-testid="developer-report-modal">
+  const content = (
+      <div
+        className={`auto-assign-modal developer-report-modal${isWindow ? ' is-window' : ''}`}
+        role={isWindow ? 'main' : 'dialog'}
+        aria-modal={isWindow ? undefined : true}
+        aria-labelledby="developer-report-title"
+        data-testid="developer-report-modal"
+        data-presentation={presentation}
+      >
         <div className="auto-assign-modal-title developer-report-title" id="developer-report-title">{DEVELOPER_REPORT_UI_TEXT.title}</div>
+        {isWindow ? <p className="developer-report-hint developer-report-window-hint" data-testid="developer-report-window-hint">{DEVELOPER_REPORT_UI_TEXT.windowHint}</p> : null}
+        {!isWindow && windowBlocked ? <p className="developer-report-hint developer-report-window-blocked" role="note" data-testid="developer-report-window-blocked">{DEVELOPER_REPORT_UI_TEXT.windowBlockedNotice}</p> : null}
         {historyEnabled ? (
           <div className="developer-report-tabs" role="tablist" data-testid="developer-report-tabs">
             <button type="button" role="tab" aria-selected={tab === 'send'} className={`developer-report-tab${tab === 'send' ? ' is-active' : ''}`} onClick={() => setTab('send')} disabled={sending} data-testid="developer-report-tab-send">
@@ -323,6 +342,14 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
           </>
         )}
       </div>
+  )
+
+  // 別タブ: 覆い(暗い背景)は付けずページとして出す。覆いの外を押して閉じる動きも無い(閉じるはボタンかタブを閉じる)。
+  if (isWindow) return <div className="developer-report-window-page" data-testid="developer-report-window-page">{content}</div>
+
+  return (
+    <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget && !sending) onClose() }}>
+      {content}
     </div>
   )
 }

@@ -125,3 +125,34 @@ describe('DeveloperReportModal の描画(添付画像・2026-10-22 オーナー�
     expect(html).toContain('スクリーンショットを撮って「画像を選ぶ」から付けられます')
   })
 })
+
+describe('DeveloperReportModal の描画(別タブ・2026-10-29 オーナー指示「AI 回答を見ながら画面操作する可能性があるので別タブで」)', () => {
+  it('既定(盤面のモーダル)は覆いつきのダイアログで、別タブ向けの一言は出さない', () => {
+    const html = renderToString(createElement(DeveloperReportModal, baseProps))
+    expect(html).toContain('class="auto-assign-modal-overlay"')
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('aria-modal="true"')
+    expect(html).toContain('data-presentation="modal"')
+    expect(html).not.toContain('data-testid="developer-report-window-hint"')
+    expect(html).not.toContain('data-testid="developer-report-window-blocked"')
+  })
+
+  it('別タブ(presentation="window")は覆いを付けずページとして描き、元の画面に戻って操作できる一言を出す', () => {
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, presentation: 'window' as const }))
+    expect(html).not.toContain('auto-assign-modal-overlay')
+    expect(html).toContain('data-testid="developer-report-window-page"')
+    expect(html).toContain('developer-report-modal is-window')
+    expect(html).toContain('role="main"')
+    expect(html).not.toContain('aria-modal')
+    expect(html).toContain('このタブを開いたまま、元の画面のタブに戻って操作できます。')
+    // 中身(種類・内容・送信)は盤面のモーダルと同じ。
+    expect(html).toContain('data-testid="developer-report-note"')
+    expect(html).toContain('data-testid="developer-report-submit"')
+  })
+
+  it('別タブを開けずモーダルで開いたときだけ、ポップアップの許可を確かめる一言を出す', () => {
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, windowBlocked: true }))
+    expect(html).toContain('data-testid="developer-report-window-blocked"')
+    expect(html).toContain('ブラウザのポップアップの許可を確認してください')
+  })
+})

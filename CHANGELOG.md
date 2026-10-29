@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.661 (2026-10-29)
+
+- feat: **コマ表の「質問・要望」を別タブで開く**(オーナー指示 2026-10-29「AI 回答を見ながら画面操作する可能性があるので」・オーナー選択「押したら別タブ」「最初から全教室」)。押すと名前付きの空タブ(題名「質問・要望（教室名）」)を開き、同じモーダルの中身を createPortal でそのタブへ描く(確認リストの別タブと同じ方式・`detachedWindow.ts` に共通化)。入力・送信・履歴は元のタブが持つので、送る教室データは送った時点の盤面(未保存込み)・「画面を撮る」は盤面を写す・基本データ等へ画面を移っても別タブは消えない(全画面を `renderScreen` 経由にし、確認リストの直後の同じ位置に置く)。もう一度押すとタブを増やさずそのタブへ移る。閉じる/× で閉じ、元のタブの再読み込みで別タブも閉じ、**教室切替・ログアウトで閉じる(書きかけを切り替え先へ持ち越さない・INV-08)**。送信中に閉じたら結果は出さない(openId)。ポップアップを止められたときだけ従来の盤面モーダル＋「別のタブで開けなかった」一言。日程表タブの「質問・要望」は従来どおり。開閉は `useDeveloperReportWindow.ts` に切り出し jsdom で固定(壊すと落ちることを 4 通り確認)。確認リスト rp-4(開発用教室・版は据え置き)。(src/components/developer-report/{detachedWindow,developerReportWindow,useDeveloperReportWindow}.ts・DeveloperReportModal.tsx・verificationChecklistWindow.ts・src/App.tsx・src/App.css・src/utils/developerReport.ts・docs/spec-developer-report.md §B)
+
 ## v1.5.660 (2026-10-28)
 
 - docs: 自動バックアップの教室別化の論点 Q1〜Q9 を**すべて推奨案でオーナー確定**(2026-10-28「全部推奨案で確定して台帳に書いて」): 全体 1 本は残さない・Storage も gzip・日次も教室別・Drive は教室ごと(25 教室超で保持を再判断)・復元画面は変えない・間引きは時点単位・Issue #77 の分割実行は後回し・控えは教室別で残しローカル同期では書かない・期限は 2 社目受け入れ前に段階 2 まで。計画書 §4 を確定表に、台帳 auto-backup-per-classroom の次の一手を「§10 を書いて段階 0 から」に更新。(docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md・src/utils/developmentStatusLedger.ts・.claude/memory)
