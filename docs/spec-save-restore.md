@@ -931,18 +931,22 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
 |------|------|------|
 | 0 | 共有純関数 `src/utils/workspaceBackupLayout.ts`（パス・文字種検査・教室ファイルと目次の組み立てと検査・要約の layout 判定・全体の組み立て直し・取り残しの判定）＋ sync-shared ＋ パリティテスト | **2026-10-29 実装（v1.5.662）** |
 | 1 | 両方を読める版: callable 3 本（`downloadClassroomFromServerAutoBackup`・`downloadServerAutoBackup`・新 `prepareServerAutoBackupRestore`）・控えを教室別に・間引きを両形式に・クライアントの全体復元とローカル同期を「目次 → 教室ごと → 組み立て」に | **同上** |
-| 2 | 書く側: 教室ごとの逐次書き込み・会社ごとの try/catch・Drive 教室ごと＋掃除 1 日 1 回・取り残しの掃除（空実行）・設定 `WORKSPACE_AUTO_BACKUP_LAYOUT` | **コードは同上。切り替えは未**（既定 `legacy`） |
+| 2 | 書く側: 教室ごとの逐次書き込み・会社ごとの try/catch・Drive 教室ごと＋掃除 1 日 1 回・取り残しの掃除（空実行）・設定 `WORKSPACE_AUTO_BACKUP_LAYOUT` | コードは v1.5.662。**切り替え: 2026-10-30 v1.5.663 でコードの既定 `WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT` を `per-classroom-v1` にして本番 main を切り替え**（オーナー選択 A「Claude がコードで切り替え・staging 省略」。切り替え前に main の教室 ID 4 件の文字種を読み取りで照合済み） |
 | 3 | 実測と片付け: staging に日大前校サイズの教室を 10〜20 用意して生成と callable のメモリの山と時間を実測（目安 512MiB 以内【暫定】）・必要なら関数のメモリ設定を見直し・`backupRetentionEstimate.ts` の見積り・Issue #77 | 未（切り替え後） |
 
-- **設定（runtime env・functions/.env.<projectId>・本番は GitHub secret `PROD_FUNCTIONS_ENV`・staging は `deploy-staging.yml` が書く）**:
-  - `WORKSPACE_AUTO_BACKUP_LAYOUT` … 全会社の既定。`legacy`（既定・未設定）または `per-classroom-v1`。
+- **設定**: 既定は**コードの定数** `WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT`（`functions/src/workspaceBackupLayoutConfig.ts`・v1.5.663 から `per-classroom-v1`）。runtime env は上書き用
+  （functions/.env.<projectId>・本番は GitHub secret `PROD_FUNCTIONS_ENV`・staging は `deploy-staging.yml` が書く）:
+  - `WORKSPACE_AUTO_BACKUP_LAYOUT` … 全会社の既定を上書き。`legacy` または `per-classroom-v1`。未設定・空＝コードの既定。
   - `WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES` … 会社ごとの指定（`main=per-classroom-v1,demo=legacy`）。
-  - 知らない値は旧形式として扱い、警告を関数ログに出す（打ち間違いでバックアップが止まらない）。会社キーに Storage のパスへ使えない文字があれば旧形式で書く。
-- **切り替えの順番**: staging（`deploy-staging.yml` の functions env に `WORKSPACE_AUTO_BACKUP_LAYOUT=per-classroom-v1` を足して functions を出す → `node tools/copy-prod-classroom-to-staging.mjs`（オーナーの PC）で日大前校サイズの教室を写す → 15 分ごとの生成・間引き・Drive・4 入口を確かめる）→ 本番の main（`PROD_FUNCTIONS_ENV` に同じ行を足して「Deploy Cloud Functions」）→ 翌朝の掃除ログ（取り残しの空実行の件数）と Storage の一覧を読み取りで確かめる → 空実行を `0` に。
-- **元に戻せる**: 設定を `legacy` に戻せば次の回から旧形式で書く。両方の形式が混ざっても要約の `layout` で読み分けるので壊れない（§9 の分割保存と違って一方通行にする理由は無い）。
+  - 知らない値はコードの既定として扱い、警告を関数ログに出す（打ち間違いでバックアップが止まらない）。会社キーに Storage のパスへ使えない文字があれば旧形式で書く。
+- **切り替えの順番（2026-10-30 オーナー選択 A）**: staging は省略し、Claude が定数を `per-classroom-v1` にして main へ（Functions が自動で出る）→ 次の 15 分ごとの回（静音帯明け JST 9:00）を
+  読み取り専用トークンで確かめる（Storage `15min/{key}/` に教室数ぶんの `.json.gz`＋`index.json`・要約の `layout`/`classroomCount`/`missingClassroomIds`・Drive の状態）→ オーナーは開発用教室で
+  確認リスト ab-1〜ab-4 → 翌朝以降に取り残し（要約の無い時点フォルダ）を Storage の一覧で数え、問題なければ `WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0`（こちらは secret）。
+  当初の案（staging で先に確かめる）は「オーナー作業を減らしたい」との判断で省いた。分割保存の段階 B（v1.5.656）と同じ扱い。
+- **元に戻せる**: 定数を `legacy` に戻して main へ（または secret の `WORKSPACE_AUTO_BACKUP_LAYOUT=legacy`）。次の回から旧形式で書く。両方の形式が混ざっても要約の `layout` で読み分けるので壊れない（§9 の分割保存と違って一方通行にする理由は無い）。
 - **反映の順番**: 段階 0〜2 は 1 つの変更なので Hosting と Functions が同時に出る。クライアントは要約の `layout` が `per-classroom-v1` のときだけ新しい経路を使うので、
   **Hosting が先に出ても旧 Functions のまま動く**（旧形式の要約しか無い）。Functions が先に出ても旧画面は旧形式の読み手のまま動く。新しいスケジュール関数は作らない（既存の関数の中身を変えるだけ）。
-- **ロールバック**: 切り替え後に Functions を本章より前の版へ戻すと、教室別形式の時点は旧 Functions が読めない（`downloadClassroomFromServerAutoBackup` が全体 1 本として `index.json` を読んで not-found）。
+- **ロールバック**: 切り替え後（v1.5.663 以降）に Functions を本章より前の版へ戻すと、教室別形式の時点は旧 Functions が読めない（`downloadClassroomFromServerAutoBackup` が全体 1 本として `index.json` を読んで not-found）。
   戻すときは先に設定を `legacy` に戻し、教室別形式の時点が間引かれる（最長 400 日・日次）まではその時点の復元に本章以降の版が要る。`docs/runbooks/rollback.md` B に明記。
 
 ### 10-8. 触れる INV（保証文は `spec-invariants.md` が正本）
