@@ -271,6 +271,26 @@ describe('extractClassroomSnapshot', () => {
     expect(() => extractClassroomSnapshot(doc, { classroomId: 'room9' })).toThrow(/教室 room9 がありません/)
   })
 
+  it('教室別形式の教室ファイル(1 教室だけの WorkspaceSnapshot＋backupFile・gzip)は変更なしで読める(docs/spec-save-restore.md §10・AC-B3)', () => {
+    const payload = makePayload()
+    const classroomFile = {
+      ...makeWorkspaceBackup([{ id: 'room1', name: '教室1', data: payload }]),
+      users: [],
+      actingClassroomId: 'room1',
+      backupFile: { layout: 'per-classroom-v1', workspaceKey: 'main', backupDateKey: '2026-10-29T15-00', classroomId: 'room1', savedAt: '2026-10-29T06:00:04.000Z', sourceSavedAt: '2026-10-29T05:58:00.000Z' },
+    }
+    // Storage / Drive に置かれる形(gzip)をそのまま渡す。
+    const doc = decodeJsonBuffer(gzipSync(Buffer.from(JSON.stringify(classroomFile), 'utf8')))
+    expect(detectSnapshotFileKind(doc)).toBe('workspace-backup')
+    const result = extractClassroomSnapshot(doc)
+    expect(result.classroomId).toBe('room1')
+    expect(result.classroomName).toBe('教室1')
+    expect(result.payload).toEqual(payload)
+    // --classroom を付けても一致検査は通る。別の教室 ID なら中止(取り違え防止)。
+    expect(extractClassroomSnapshot(doc, { classroomId: 'room1' }).classroomId).toBe('room1')
+    expect(() => extractClassroomSnapshot(doc, { classroomId: 'room2' })).toThrow(/教室 room2 がありません/)
+  })
+
   it('ワークスペースバックアップ: snapshot キーに保存文書の形で入っていても読む', () => {
     const payload = makePayload()
     const result = extractClassroomSnapshot(makeWorkspaceBackup([{ id: 'room1', name: '教室1', snapshot: makeCompressedStoredDoc(payload) }]))

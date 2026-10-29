@@ -47,7 +47,7 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback:
 }
 export const SAVE_FAILURE_ALERT_COLLECTION = 'saveFailureAlerts'
 
-export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice'] as const
+export const SAVE_FAILURE_ALERT_KINDS = ['stale-version', 'readback-failed', 'data-loss-guard', 'snapshot-too-large', 'write-failed', 'capacity-warning', 'snapshot-assembly-failed', 'client-too-old', 'split-capacity-notice', 'auto-backup-failed'] as const
 export type SaveFailureAlertKind = (typeof SAVE_FAILURE_ALERT_KINDS)[number]
 
 export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, string>> = {
@@ -60,6 +60,7 @@ export const SAVE_FAILURE_ALERT_LABELS: Readonly<Record<SaveFailureAlertKind, st
   'snapshot-assembly-failed': '分割形式の教室データを組み立てられない(部品が欠ける・合わない・INV-14)',
   'client-too-old': '古い版の画面からの保存を拒否(分割形式を読めない版・§9-7-3)',
   'split-capacity-notice': '分割保存の部品か 1 回の書き込みが上限の 50% を超えた(保存は成功・第 2 段の着手の合図)',
+  'auto-backup-failed': '15 分ごとの自動バックアップがこの会社で失敗(その回の時点が作られていないか、作られたあとの間引き・Drive の記録で止まった・ほかの会社は続行)',
 }
 
 /** 何を見れば原因に近づけるか(種類ごと)。メール本文に載せる。 */
@@ -73,6 +74,7 @@ export const SAVE_FAILURE_ALERT_HINTS: Readonly<Record<SaveFailureAlertKind, str
   'snapshot-assembly-failed': '★その教室は読み手(自動バックアップ・直前ロールバック・版履歴・保護者ページ・在籍数台帳)が空で扱わず止めている(docs/spec-save-restore.md §9-5-3)。detail の読み手名と理由(missing-part / hash-mismatch / decode-failed / invalid-manifest と部品キー)を見て、目次 classroomSnapshots/{id} が指す snapshotParts/{docId} の有無を Firestore で確かめる。部品が掃除で消えた疑いなら PITR(7 日)で戻す。',
   'client-too-old': 'その端末は段階 A(v1.5.651)より古い画面で分割形式の教室を開いている(空の教室に見えている可能性)。室長に一度ハードリロード(Ctrl+Shift+R)してもらう。未保存の内容は端末の失敗時バックアップ JSON と「開発者へ送る」の控えにある。detail に端末の版。',
   'split-capacity-notice': 'まだ保存はできている。detail の数値(core/board の部品サイズ・書き込み件数/合計)を見て、第 2 段(部品の先書き・specialSessions の講習ごとの分割・docs/spec-save-restore.md §9-3-7 / §9-4-5)を起票する。この通知は教室ごとに 1 日 1 通。',
+  'auto-backup-failed': '★まず要約 workspaceAutoBackupSummaries にその回の時点があるかを見る(無ければ書く前に失敗・あれば要約を書いたあとの間引きや Drive の記録で失敗)。detail の原因文と関数ログ [AutoBackup] を見る。Storage の書き込み・Firestore の読み取り・設定(WORKSPACE_AUTO_BACKUP_LAYOUT)を疑う。続けて起きるなら復元できる時点が増えないので早めに直す(docs/spec-save-restore.md §10-4)。この通知は会社ごとに 1 時間に 1 通。',
 }
 
 /** 教室ごとの間引き: 前回送信から 1 時間未満なら送らない。送信記録が無ければ送る。 */
@@ -115,15 +117,19 @@ export type SaveFailureAlertMailInput = {
 }
 
 export function buildSaveFailureAlertMail(input: SaveFailureAlertMailInput): { subject: string; text: string } {
-  const classroom = input.classroomName?.trim() || input.classroomId
+  // 自動バックアップの失敗(会社単位・2026-10-29 §10-4)は教室ではなく会社全体の通知。教室の行は「会社全体」と出す。
+  const isAutoBackupFailure = input.kind === 'auto-backup-failed'
+  const classroom = isAutoBackupFailure ? '会社全体' : (input.classroomName?.trim() || input.classroomId)
   const label = SAVE_FAILURE_ALERT_LABELS[input.kind]
   const isCapacityWarning = input.kind === 'capacity-warning' || input.kind === 'split-capacity-notice'
-  const subject = `${isCapacityWarning ? '【容量注意】' : '【保存失敗】'}[コマ表アプリ 監視] ${input.workspaceKey} / ${classroom} / ${label.split('(')[0]}`
+  const subject = `${isAutoBackupFailure ? '【バックアップ失敗】' : isCapacityWarning ? '【容量注意】' : '【保存失敗】'}[コマ表アプリ 監視] ${input.workspaceKey} / ${classroom} / ${label.split('(')[0]}`
   const attemptPath = `workspaces/${input.workspaceKey}/classroomSnapshots/${input.classroomId}/saveAttempts/${input.saveId}`
   const lines = [
-    isCapacityWarning
-      ? '教室データが保存の上限に近づいたため、アプリ(Cloud Function saveClassroomSnapshot)が自動で送った監視メールです。保存は成功しています(利用者の画面には何も出ていません)。'
-      : '保存に失敗したため、アプリ(Cloud Function saveClassroomSnapshot)が自動で送った監視メールです。利用者には画面で失敗の文言が出ています。',
+    isAutoBackupFailure
+      ? '15 分ごとの自動バックアップ(Cloud Function createWorkspaceServerQuarterHourlyBackups / triggerWorkspaceServerAutoBackup)がこの会社で失敗したため、アプリが自動で送った監視メールです。利用者の画面には何も出ていません。'
+      : isCapacityWarning
+        ? '教室データが保存の上限に近づいたため、アプリ(Cloud Function saveClassroomSnapshot)が自動で送った監視メールです。保存は成功しています(利用者の画面には何も出ていません)。'
+        : '保存に失敗したため、アプリ(Cloud Function saveClassroomSnapshot)が自動で送った監視メールです。利用者には画面で失敗の文言が出ています。',
     isCapacityWarning
       ? 'この通知は教室ごとに 1 日 1 通に絞っています。'
       : '同じ教室の失敗は 1 時間に 1 通に絞っています(発生回数は下の値で分かる)。',
@@ -142,10 +148,15 @@ export function buildSaveFailureAlertMail(input: SaveFailureAlertMailInput): { s
     SAVE_FAILURE_ALERT_HINTS[input.kind],
     '',
     '■ 置き場所(読み取り専用トークンで読む・CLAUDE.md 本番データ保護ルール)',
-    input.kind === 'data-loss-guard' ? '(保存前に止めたので saveAttempts には残らない)' : `saveAttempts: ${attemptPath}`,
-    `操作痕跡(前回保存以降・保存に相乗り): workspaces/${input.workspaceKey}/classroomSnapshots/${input.classroomId}/operationTraces/`,
-    `版履歴(保存ごと・gzip): gs://<bucket>/classroom-save-history/${input.workspaceKey}/${input.classroomId}/  → tools/snapshot-diff.mjs で前後を比べる`,
-    `関数ログ: Actions「Read Cloud Functions logs」(saveClassroomSnapshot・${toJstLabel(input.occurredAt)} 前後)`,
+    // 自動バックアップの失敗は教室の保存ではないので、saveAttempts・操作痕跡・版履歴のパスは出さない(調査を誤誘導しない・regression-reviewer 低-4)。
+    isAutoBackupFailure ? `要約(一覧の正本): workspaces/${input.workspaceKey}/workspaceAutoBackupSummaries/  → その回の時点が無いか、Google Drive の状態だけ failed かを見る` : null,
+    isAutoBackupFailure ? `Storage: gs://<bucket>/workspace-auto-backups/${input.workspaceKey}/15min/  → 要約の無い時点フォルダは取り残しの掃除(cleanupOldSaveAttempts・既定は空実行)が消す` : null,
+    isAutoBackupFailure ? null : input.kind === 'data-loss-guard' ? '(保存前に止めたので saveAttempts には残らない)' : `saveAttempts: ${attemptPath}`,
+    isAutoBackupFailure ? null : `操作痕跡(前回保存以降・保存に相乗り): workspaces/${input.workspaceKey}/classroomSnapshots/${input.classroomId}/operationTraces/`,
+    isAutoBackupFailure ? null : `版履歴(保存ごと・gzip): gs://<bucket>/classroom-save-history/${input.workspaceKey}/${input.classroomId}/  → tools/snapshot-diff.mjs で前後を比べる`,
+    isAutoBackupFailure
+      ? `関数ログ: Actions「Read Cloud Functions logs」(createWorkspaceServerQuarterHourlyBackups / triggerWorkspaceServerAutoBackup の [AutoBackup]・${toJstLabel(input.occurredAt)} 前後)`
+      : `関数ログ: Actions「Read Cloud Functions logs」(saveClassroomSnapshot・${toJstLabel(input.occurredAt)} 前後)`,
     `Firestore コンソール: https://console.firebase.google.com/project/${input.projectId}/firestore`,
   ]
   // 区切りの空行は残し、条件で出さない行(null)だけを落とす(L-11)。

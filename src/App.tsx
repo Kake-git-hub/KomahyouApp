@@ -21,7 +21,7 @@ const DeveloperAdminScreen = lazy(() => import('./components/developer-admin/Dev
 const BillingAutomationScreen = lazy(() => import('./components/billing/BillingAutomationScreen').then((m) => ({ default: m.BillingAutomationScreen })))
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, listRecentFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackupJson, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, listRecentFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { buildManagerSelfRestoreConfirmation, isRestoreSourceForClassroom, listManagerSelfRestoreCandidates, replaceClassroomData, resolveManagerSelfRestoreCutoffIso, resolveManagerSelfRestoreGuard, type ManagerSelfRestoreConfirmation, type ManagerSelfRestoreSummary } from './components/backup-restore/managerSelfRestore'
 import { canApplyUndoSnapshotToClassroom } from './utils/classroomScopedUndo'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
@@ -621,7 +621,7 @@ export function shouldInjectEditingStateIntoClassroom(
   return loadedEditingClassroomId === actingClassroomId
 }
 
-function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
+export function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
   const currentClassroomById = new Map(currentSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
   const restoringClassroomById = new Map(restoringSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
 
@@ -645,8 +645,10 @@ function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnap
   const mergedManagers: WorkspaceUser[] = mergedClassrooms.flatMap((classroom) => {
     const restoringClassroom = restoringClassroomById.get(classroom.id)
     const useRestoringClassroom = restoringClassroom && restoreByClassroomId.get(classroom.id)
+    // 復元する教室の室長は復元元の users から採る。復元元に無ければ(教室別形式の教室ファイル=1 教室だけの WorkspaceSnapshot は users が空・
+    // docs/spec-save-restore.md §10-3)今の users から補う(室長をメモリ上で落とさない・regression-reviewer 低-7)。
     const sourceUser = useRestoringClassroom
-      ? restoringUserById.get(classroom.managerUserId)
+      ? restoringUserById.get(classroom.managerUserId) ?? currentUserById.get(classroom.managerUserId)
       : currentUserById.get(classroom.managerUserId) ?? restoringUserById.get(classroom.managerUserId)
     return sourceUser ? [sourceUser] : []
   })
@@ -3472,7 +3474,9 @@ function AuthenticatedApp() {
     const newlySyncedKeys: string[] = []
     for (const summary of unsyncedSummaries) {
       try {
-        const snapshotJson = await downloadFirebaseServerAutoBackup(summary.backupDateKey)
+        // 形式は要約の layout で読み分ける(旧形式=全体 1 本・教室別形式=目次→教室ごと→組み立て・§10-5)。手元のファイルの形は変えない(1 時点 1 ファイル)。
+        // ローカル同期の経路では復元前の控え(incident)を書かない(purpose: 'local-sync'・Q8・AC-B17)。
+        const snapshotJson = await downloadFirebaseServerAutoBackupJson(summary, { purpose: 'local-sync' })
         const fileName = formatPreciseBackupFileName(summary.savedAt, '開発者バックアップ_自動保存')
         await writeTextFileToDeveloperCloudDirectory(targetHandle, fileName, snapshotJson)
         newlySyncedKeys.push(summary.backupDateKey)
@@ -5499,7 +5503,12 @@ function AuthenticatedApp() {
     setServerAutoBackupLoading(true)
     setPersistenceMessage('サーバーバックアップをダウンロードしています…')
     try {
-      const snapshotJson = await downloadFirebaseServerAutoBackup(backupDateKey)
+      // 形式は要約の layout で読み分ける(旧形式=全体 1 本・教室別形式=目次→教室ごと→組み立て・§10-5)。復元なのでサーバーが復元前の控えを書く。
+      // 組み立てた全体は旧形式と同じ WorkspaceSnapshot なので、教室選択モーダル(openDeveloperRestoreModal)は変えない(AC-B15)。
+      const snapshotJson = await downloadFirebaseServerAutoBackupJson(summary ?? { backupDateKey }, {
+        purpose: 'restore',
+        onProgress: (done, total) => setPersistenceMessage(`サーバーバックアップをダウンロードしています…(教室 ${done}/${total})`),
+      })
       const snapshot = parseWorkspaceSnapshot(snapshotJson)
       openDeveloperRestoreModal(
         snapshot,

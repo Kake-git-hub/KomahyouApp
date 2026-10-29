@@ -243,25 +243,69 @@ describe('INV-14 行（読み手）: どの読み手も唯一の読み手を通�
     expect(merge).toContain("reader: 'lecture-submission-merge', error })")
   })
 
-  it('行: 自動バックアップ — 組み立てられない教室を空で書かずに除き、missingClassroomIds に残して開発者へ知らせる（他の教室は書く）', () => {
-    const builder = slice(indexTs, 'async function buildWorkspaceServerBackupSnapshot(', '    missingClassroomIds,\n    snapshot: {')
+  it('行: 自動バックアップ（旧形式＝全体 1 本）— 組み立てられない教室を空で書かずに除き、missingClassroomIds に残して開発者へ知らせる（他の教室は書く）', () => {
+    // 2026-10-29 教室別化（docs/spec-save-restore.md §10）: 旧形式の書き手は runLegacyWorkspaceBackupForWorkspace に移り、全体 JSON の形は共有純関数
+    // buildWorkspaceBackupSnapshot（教室ファイル・目次からの組み立て直しと同じ 1 か所）になった。守る内容（空で書かない・除いて知らせる・逐次）は変えない。
+    const builder = slice(indexTs, 'async function buildWorkspaceServerBackupSnapshot(', '    snapshot: buildWorkspaceBackupSnapshot(')
     expect(builder).toContain('await readClassroomSnapshotPayload(')
     expect(builder).toContain("if (options.onAssemblyFailure === 'throw') throw error")
     expect(builder).toContain('missingClassroomIds.push(entry.id)')
     expect(builder).toContain('await notifySnapshotAssemblyFailure(')
     expect(builder).not.toContain('createEmptyAppSnapshotPayload()')
-    const autoBackup = slice(indexTs, 'async function runWorkspaceServerAutoBackup(', 'await pruneWorkspaceServerAutoBackups(')
-    expect(autoBackup).toContain("buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })")
-    expect(autoBackup).toContain('missingClassroomIds,')
-    // 全教室を並列に解凍しない(512MiB・L-6): 教室の組み立ては for…of で逐次(最初の 3 コレクション読みの Promise.all は対象外)。
-    expect(builder).toContain('for (const entry of classroomSnapshots.docs) {')
-    expect(builder).not.toContain('Promise.all(classroomSnapshots.docs')
+    // 全教室を並列に解凍しない(512MiB・L-6): 教室の組み立ては for…of で逐次(最初の 3 コレクション読みの Promise.all は loadWorkspaceBackupSources 側)。
+    expect(builder).toContain('for (const entry of sources.classrooms) {')
+    expect(builder).not.toContain('Promise.all(')
+    const legacy = slice(indexTs, 'async function runLegacyWorkspaceBackupForWorkspace(', 'await pruneWorkspaceServerAutoBackups(')
+    expect(legacy).toContain("buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })")
+    expect(legacy).toContain('missingClassroomIds,')
+    // 全体 JSON の missingClassroomIds は 1 件以上のときだけ付く(共有純関数で固定・workspaceBackupLayout.test.ts)。
+    const shared = readFileSync(fileURLToPath(new URL('./workspaceBackupLayout.ts', import.meta.url)), 'utf8')
+    expect(shared).toContain('...(missingClassroomIds.length > 0 ? { missingClassroomIds } : {}),')
+  })
+
+  it('行: 自動バックアップ（教室別形式・§10-4）— 組み立てられない・書けない教室はファイルを書かずに目次の missingClassrooms に残して知らせ、目次は全教室ファイルの後・要約は目次の後に書く（書き終わっていない時点を一覧に出さない）', () => {
+    // 教室ごとの組み立ては唯一の読み手 readClassroomSnapshotPayload。失敗は notifySnapshotAssemblyFailure で知らせる(reader: auto-backup / incident-backup)。
+    const io = slice(indexTs, 'function buildPerClassroomBackupIo(', 'async function buildWorkspaceServerBackupSnapshot(')
+    expect(io).toContain('const payload = await readClassroomSnapshotPayload(classroom.snapshotRef, classroom.snapshotDoc)')
+    expect(io).toContain('await notifySnapshotAssemblyFailure({ workspaceKey, classroomId, reader: params.reader, error })')
+    expect(io).not.toContain('createEmptyAppSnapshotPayload()')
+    // 15 分毎の書き手: 失敗した教室は除く(exclude)。要約(一覧に出る印)は writePerClassroomWorkspaceBackup(＝全教室ファイル → 目次)の後。
+    const perClassroom = slice(indexTs, 'async function runPerClassroomWorkspaceBackupForWorkspace(', 'await pruneWorkspaceServerAutoBackups(')
+    expect(perClassroom).toContain("failurePolicy: { assembly: 'exclude', write: 'exclude' },")
+    expect(perClassroom).toContain("io: buildPerClassroomBackupIo({ workspaceKey, reader: 'auto-backup', mirror }),")
+    expect(perClassroom).toContain('const missingClassroomIds = listWorkspaceBackupMissingClassroomIds(written.index)')
+    const writeIndex = perClassroom.indexOf('await writePerClassroomWorkspaceBackup({')
+    const writeSummary = perClassroom.indexOf('summaryRef.set({')
+    expect(writeIndex).toBeGreaterThan(-1)
+    expect(writeSummary).toBeGreaterThan(writeIndex)
+    expect(perClassroom).toContain('layout: WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM,')
+    expect(perClassroom).toContain('missingClassroomIds,')
+    // ループ本体(functions/src/workspaceBackupWriter.ts・workspaceBackupWriter.test.ts で I/O 注入して直接固定): 教室ごとに逐次、目次はループの後。
+    const writer = readFileSync(fileURLToPath(new URL('../../functions/src/workspaceBackupWriter.ts', import.meta.url)), 'utf8')
+    const loop = writer.indexOf('for (const classroom of params.classrooms) {')
+    const indexWrite = writer.indexOf('await io.writeIndex({ path: indexPath, json: indexJson, index })')
+    expect(loop).toBeGreaterThan(-1)
+    expect(indexWrite).toBeGreaterThan(loop)
+    expect(writer).not.toContain('Promise.all(')
+    expect(writer).toContain("missingClassrooms.push({ id: classroomId, reason: 'assembly-failed' })")
+    expect(writer).toContain("missingClassrooms.push({ id: classroomId, reason: 'write-failed' })")
+    // 復元前の安全な控え: 教室別で書くが、組み立て失敗は握らず(M-1)復元用ダウンロードを止める。
     const incident = slice(indexTs, 'async function writeWorkspaceIncidentBackup(', 'async function writeLatestClassroomRollback(')
-    expect(incident).toContain("{ onAssemblyFailure: 'throw', reader: 'incident-backup' }")
-    // 復元前の安全な控え: 組み立て失敗は握らず(M-1)、復元用ダウンロードは failed-precondition で止める。
-    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error)) throw error')
-    const download = slice(indexTs, 'await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)', 'const [content] = await file.download()')
-    expect(download).toContain("reason: 'incident-backup-assembly-failed'")
+    expect(incident).toContain("failurePolicy: { assembly: 'throw', write: 'throw' },")
+    expect(incident).toContain("io: buildPerClassroomBackupIo({ workspaceKey, reader: 'incident-backup', mirror: null }),")
+    // 組み立て失敗(INV-14)と教室ファイルを作れない文字種違反(BK-7)はどちらも投げ直す(欠けた一式を控えにしない)。
+    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error) || isWorkspaceBackupLayoutError(error)) throw error')
+    for (const [startMarker, endMarker] of [
+      ['export const downloadServerAutoBackup = onCall(', 'const [content] = await file.download()'],
+      ['export const prepareServerAutoBackupRestore = onCall(', 'return { layout, index }'],
+    ]) {
+      const download = slice(indexTs, startMarker, endMarker)
+      expect(download).toContain('await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)')
+      expect(download).toContain("reason: 'incident-backup-assembly-failed'")
+    }
+    // 読み手は知らない形式の要約(将来の版)で進まない(空や一部の JSON を返さない)。
+    expect(indexTs).toContain('function throwUnknownBackupLayout(): never {')
+    expect(slice(indexTs, 'export const downloadClassroomFromServerAutoBackup = onCall(', 'export const mirrorLatestClassroomRollback = onDocumentWritten(')).toContain("if (layout !== 'legacy') throwUnknownBackupLayout()")
   })
 
   it('行: 直前ロールバック — before/after を唯一の読み手で組み立て、失敗は知らせて投げ直す（空の「直前の状態」を書かない）', () => {

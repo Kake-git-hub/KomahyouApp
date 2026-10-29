@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldRecordSubmissionNotified, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildWorkspaceSnapshotMergeFromSelection, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldRecordSubmissionNotified, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
 import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
@@ -1003,5 +1003,45 @@ describe('buildTeacherAutoAssignItems (QR一括提出で講師全員を配置・
   it('講師が居なければ空配列(リクエストを発行しない)', () => {
     expect(buildTeacherAutoAssignItems([entry('student', 's1', 'stu1')])).toEqual([])
     expect(buildTeacherAutoAssignItems([])).toEqual([])
+  })
+})
+
+describe('buildWorkspaceSnapshotMergeFromSelection(開発者の教室選択モーダルの合成)', () => {
+  const user = (id: string, role: 'developer' | 'manager', assignedClassroomId: string | null) => ({ id, name: id, email: `${id}@example.com`, role, assignedClassroomId })
+  const payload = (studentName: string): AppSnapshotPayload => ({
+    screen: 'board',
+    classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 14 },
+    managers: [],
+    teachers: [],
+    students: [{ ...(initialStudents[0] as StudentRow), id: 's1', name: studentName }],
+    regularLessons: [],
+    groupLessons: [],
+    specialSessions: [],
+    autoAssignRules: [],
+    pairConstraints: [],
+    boardState: null,
+  } as unknown as AppSnapshotPayload)
+  const classroom = (id: string, managerUserId: string, studentName: string): WorkspaceClassroom => ({
+    id, name: `教室${id}`, contractStatus: 'active', contractStartDate: '', contractEndDate: '', managerUserId, data: payload(studentName),
+  })
+  const base = () => ({
+    schemaVersion: 1, savedAt: '2026-10-29T00:00:00.000Z', developerCloudBackupEnabled: false, developerCloudBackupFolderName: '', developerCloudSyncedAutoBackupKeys: [],
+    currentUserId: 'dev', actingClassroomId: 'c1',
+  })
+
+  it('復元元に室長が無い(教室別形式の教室ファイル=users が空・docs/spec-save-restore.md §10-3)ときは今の室長を残す(メモリ上で室長を落とさない・低-7)', () => {
+    const current = { ...base(), users: [user('dev', 'developer', null), user('m1', 'manager', 'c1'), user('m2', 'manager', 'c2')], classrooms: [classroom('c1', 'm1', '今'), classroom('c2', 'm2', '今')] }
+    const restoring = { ...base(), users: [], actingClassroomId: 'c1', classrooms: [classroom('c1', 'm1', '復元')] }
+    const result = buildWorkspaceSnapshotMergeFromSelection(current as never, restoring as never, new Map([['c1', true], ['c2', false]]))
+    expect(result.restoredCount).toBe(1)
+    expect(result.snapshot.users.map((entry) => entry.id)).toEqual(['dev', 'm1', 'm2'])
+    expect(result.snapshot.classrooms.map((entry) => (entry.data as { students: Array<{ name: string }> }).students[0].name)).toEqual(['復元', '今'])
+  })
+
+  it('復元元に室長があればそちらを採る(従来どおり)', () => {
+    const current = { ...base(), users: [user('dev', 'developer', null), user('m1', 'manager', 'c1')], classrooms: [classroom('c1', 'm1', '今')] }
+    const restoring = { ...base(), users: [{ ...user('m1', 'manager', 'c1'), name: '復元時の室長名' }], classrooms: [classroom('c1', 'm1', '復元')] }
+    const result = buildWorkspaceSnapshotMergeFromSelection(current as never, restoring as never, new Map([['c1', true]]))
+    expect(result.snapshot.users.find((entry) => entry.id === 'm1')?.name).toBe('復元時の室長名')
   })
 })

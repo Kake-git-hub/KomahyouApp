@@ -129,7 +129,9 @@ node tools/provision-workspace.mjs \
 2. **個人情報の受け渡し**: メール本文・通常添付で送らせない。**パスワード付き zip(パスワードは電話か別メール)** か、会社の共有ドライブの
    **期限付きリンク**。受け取ったファイルはスクラッチ領域に置き、リポジトリ・Issue・ログへ出さない(CLAUDE.md)。取込後は削除。
 3. 各教室で 基本データ → 「取込」で雛形を読み込む → 通常授業テンプレ反映 → 保存。
-4. 毎時バックアップが workspace 単位で出ることを読み取りで確認: Storage `workspace-auto-backups/<会社キー>/hourly/`。
+4. 15 分ごとの自動バックアップが workspace 単位で出ることを読み取りで確認: Storage `workspace-auto-backups/<会社キー>/15min/`（旧形式は `{時点}.json` 1 本、
+   教室別形式〔`docs/spec-save-restore.md` §10・設定 `WORKSPACE_AUTO_BACKUP_LAYOUT`〕は `{時点}/` の下に教室ごとの `.json.gz` と `index.json`）と
+   Firestore `workspaces/<会社キー>/workspaceAutoBackupSummaries/`（要約の `layout`・`missingClassroomIds` が空）。
 
 ---
 

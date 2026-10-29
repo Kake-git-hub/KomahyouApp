@@ -54,6 +54,11 @@ export const CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS = 60_000
 export const CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT = 1000
 /** 旧版の部品(snapshotParts)の掃除に使ってよい時間(docs/spec-save-restore.md §9-9)。incident / 版履歴 / Firestore 巡回と独立。 */
 export const SNAPSHOT_PART_GC_TIME_BUDGET_MS = 60_000
+/**
+ * 自動バックアップの教室別形式で、要約の無い時点フォルダ(書き終わる前に止まった取り残し)の掃除に使ってよい時間
+ * (docs/spec-save-restore.md §10-6・2026-10-29)。ほかの予算と独立。90 + 60 + 60 + 30 + 180 = 420 秒 < 540。
+ */
+export const WORKSPACE_BACKUP_ORPHAN_PRUNE_TIME_BUDGET_MS = 30_000
 // 定期掃除関数(cleanupOldSaveAttempts)の timeoutSeconds。3 つの時間予算の合計がこれを超えないことをテストで固定する。
 export const RETENTION_CLEANUP_FUNCTION_TIMEOUT_SECONDS = 540
 

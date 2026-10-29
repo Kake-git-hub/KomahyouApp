@@ -52,6 +52,10 @@
    戻すと自動バックアップ・直前ロールバック・版履歴・QR 提出のマージ・保護者ページがその教室を読めない（旧版は目次を「中身なし」と見る）。
    段階 B（v1.5.654・サーバーが分割して書く）より前の版（v1.5.651〜653）へ戻した場合は、分割形式の教室への保存と QR 取り込みが断られる
    （段階 A の暫定ガード）だけでデータは壊れない。戻している間は室長が保存できないので短時間に限る。
+6. ⚠️ **自動バックアップの教室別形式の時点がある間の下限（2026-10-29・`docs/spec-save-restore.md` §10-7）**: 書く側を
+   `WORKSPACE_AUTO_BACKUP_LAYOUT=per-classroom-v1` に切り替えたあとは、Functions を **v1.5.662 より前へ戻さない**（旧版は教室別形式の時点を読めず、
+   室長の自教室復元・Feature B・開発者の全体復元がその時点で not-found になる）。戻す必要があるときは先に設定を `legacy` に戻し（次の回から旧形式で書く）、
+   教室別形式の時点の復元には v1.5.662 以降が要ることを覚えておく（日次は 400 日残る）。
 
 ---
 
@@ -61,8 +65,14 @@
 > 復元系の操作は**「今アプリで開いている教室（actingClassroomId）」に書き込む**。必ず対象教室を開いてから行う。
 
 ### バックアップの所在
-- 自動バックアップ: **毎時（直近3日）** と **日次（14日）**。
-- Storage パス例: `workspace-auto-backups/main/hourly/{classroomKey}.json`。
+- 自動バックアップ: **15 分ごと**に生成し、保持は経過時間で間引く（0〜24 時間は全部・24〜72 時間は毎時 0 分・72 時間〜400 日は JST 3:00 の日次）。
+  正本は `docs/spec-save-restore.md` §8-2。一覧は Firestore `workspaces/{ws}/workspaceAutoBackupSummaries/{YYYY-MM-DDTHH-MM}`。
+- Storage パス（会社 `main` の例・2 形式が混在しうる）:
+  - 旧形式（全教室 1 本・非圧縮）: `workspace-auto-backups/main/15min/{YYYY-MM-DDTHH-MM}.json`
+  - 教室別形式（2026-10-29 §10・要約に `layout: 'per-classroom-v1'`）: `workspace-auto-backups/main/15min/{YYYY-MM-DDTHH-MM}/{classroomId}.json.gz` ＋ `index.json`（目次）。
+    教室ファイル 1 本は「1 教室だけ入った WorkspaceSnapshot」なので、教室画面の「バックアップを読み込む」にそのまま渡せる（gzip のままでよい）。
+- Google Drive のミラー（`.json.gz`）も同じ 2 形式（教室別形式は `komahyouapp_main_quarterHourly_{key}_{classroomId}.json.gz`）。
+- 復元前の控え: `workspace-incident-backups/main/{reason}-{時刻}/`（2026-10-29 から教室ごとの gzip＋目次・90 日）。
 
 ### 復元手順（アプリ内 / 開発者）
 1. **影響範囲を特定**：どの教室の・いつの時点へ戻すか。汚染なら「汚染前の毎時バックアップ」。

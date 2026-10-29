@@ -140,6 +140,23 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
 
+  it('第88版(2026-10-29・v1.5.653 据え置き): 自動バックアップの教室別化(docs/spec-save-restore.md §10)の ab-1(開発者の全体復元)・ab-2(自教室復元)を足した(開発用教室だけ・切り替え前の読み手の確認)', () => {
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    const restore = byId.get('ab-1')!
+    expect(restore.area).toBe('バックアップ')
+    expect(restore.introducedIn).toBe('v1.5.662')
+    expect(restore.steps.join('\n')).toContain('教室を選ぶ画面で開発用教室だけにチェック')
+    expect(restore.check?.join('\n')).toContain('ほかの教室は変わっていない')
+    const self = byId.get('ab-2')!
+    expect(self.area).toBe('バックアップ')
+    expect(self.introducedIn).toBe('v1.5.662')
+    expect(self.steps.join('\n')).toContain('「この時点を読み込む」')
+    expect(self.check?.join('\n')).toContain('「復元しても戻らないもの」')
+    // 切り替え後の確認(ab-3・ab-4)は切り替えるときに足す(まだ無い)。
+    expect(byId.has('ab-3')).toBe(false)
+    expect(byId.has('ab-4')).toBe(false)
+  })
+
   it('第83版(2026-10-27・v1.5.644 据え置き): 編集で振替にした通常授業を消しても戻らない確認 ed-2 は開発用教室だけ', () => {
     const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'ed-2')!
     expect(item).toBeDefined()
@@ -212,7 +229,8 @@ describe('確認リストの項目定義', () => {
     expect(ids.filter((id) => id.startsWith('qa-'))).toEqual([])
     expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
-    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'hd-1' && id !== 'rp-4')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
+    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'hd-1' && id !== 'rp-4' && id !== 'ab-1' && id !== 'ab-2')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
@@ -236,7 +254,8 @@ describe('確認リストの項目定義', () => {
     // 第85版(2026-10-28): 分割保存の段階 A の sp-1 をオーナー確認 OK で外し、段階 B の sp-2・sp-3 を同じ場所に足した(版は据え置き)。
     // 第86版(2026-10-28): sp-2・sp-3 も OK(受付 20261028-032942134-2f5ab955)で外した(版は据え置き)。
     // 第87版(2026-10-29): 質問・要望を別タブで開く確認 rp-4 を先頭に足した(開発用教室だけ・版は据え置き)。
-    expect(ids).toEqual(['rp-4', 'ed-2', 'ed-1', 'hd-1', 'sc-2', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第88版(2026-10-29・v1.5.653 据え置き): 自動バックアップの教室別化の確認 ab-1(開発者の全体復元)・ab-2(自教室復元)を足した(開発用教室だけ)。
+    expect(ids).toEqual(['ab-1', 'ab-2', 'rp-4', 'ed-2', 'ed-1', 'hd-1', 'sc-2', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)

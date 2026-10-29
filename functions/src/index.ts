@@ -91,10 +91,12 @@ import {
   CLASSROOM_SAVE_HISTORY_PREFIX,
   CLASSROOM_SAVE_HISTORY_RETENTION_DAYS,
   shouldKeepClassroomSaveHistory,
+  isGoogleDriveDailyPruneRunAt,
   type WorkspaceAutoBackupKind,
 } from './workspaceBackupSchedule'
 import {
   buildRetentionTargets,
+  chunkItems,
   CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT,
   CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS,
   INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS,
@@ -104,8 +106,36 @@ import {
   RETENTION_CLEANUP_TIME_BUDGET_MS,
   runBudgetedDeletionSweep,
   SNAPSHOT_PART_GC_TIME_BUDGET_MS,
+  WORKSPACE_BACKUP_ORPHAN_PRUNE_TIME_BUDGET_MS,
   type RetentionTargetKey,
 } from './retentionCleanup'
+// 自動バックアップの教室別化(docs/spec-save-restore.md §10)。パス・教室ファイル・目次・3 点照合・全体の組み立て直しは
+// src/utils/workspaceBackupLayout.ts が権威で、functions へは prebuild(sync-shared)で複製した generated/ を使う(手書きコピー禁止)。
+import {
+  assertSafeWorkspaceBackupClassroomId,
+  assertSafeWorkspaceBackupDateKey,
+  assertSafeWorkspaceBackupWorkspaceKey,
+  buildGoogleDriveClassroomBackupFileName,
+  buildGoogleDriveIndexBackupFileName,
+  buildWorkspaceBackupClassroomStoragePath,
+  buildWorkspaceBackupIndexStoragePath,
+  buildWorkspaceBackupSnapshot,
+  buildWorkspaceBackupTimePointPrefix,
+  isOrphanedWorkspaceBackupFolder,
+  isSafeWorkspaceBackupPathSegment,
+  isWorkspaceBackupLayoutError,
+  listWorkspaceBackupMissingClassroomIds,
+  resolveWorkspaceBackupSummaryLayout,
+  validateWorkspaceBackupClassroomFile,
+  validateWorkspaceBackupIndex,
+  WORKSPACE_BACKUP_INDEX_FILE_NAME,
+  WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM,
+  WORKSPACE_BACKUP_QUARTER_HOURLY_FOLDER,
+  WORKSPACE_BACKUP_STORAGE_PREFIX,
+  type WorkspaceBackupLayout,
+} from './generated/workspaceBackupLayout'
+import { parseWorkspaceAutoBackupLayoutConfig, readBackupDownloadPurpose, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
+import { writePerClassroomWorkspaceBackup, type PerClassroomBackupWriteIo } from './workspaceBackupWriter'
 
 initializeApp()
 
@@ -126,6 +156,8 @@ const WORKSPACE_LATEST_ROLLBACK_PREFIX = 'workspace-latest-rollbacks'
 const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const GOOGLE_DRIVE_API_SCOPE = 'https://www.googleapis.com/auth/drive'
+/** Drive の間引きで同時に投げる DELETE の本数(教室別形式では 1 日 1 回に約 55 回 × 教室数が溜まるため・§10-6)。 */
+const GOOGLE_DRIVE_DELETE_CONCURRENCY = 10
 const GOOGLE_DRIVE_API_BASE_URL = 'https://www.googleapis.com/drive/v3'
 const GOOGLE_DRIVE_UPLOAD_API_BASE_URL = 'https://www.googleapis.com/upload/drive/v3'
 const GOOGLE_DRIVE_BACKUP_FOLDER_ID = (process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID ?? '').trim()
@@ -259,6 +291,13 @@ type WorkspaceAutoBackupSummaryDoc = {
   createdAt: string
   /** 分割形式で組み立てられず除いた教室(INV-14・§9-5-3)。無い＝旧版が書いた記録。 */
   missingClassroomIds?: string[]
+  /**
+   * 時点の形式(§10-3)。'per-classroom-v1' = 教室ごとの gzip＋目次(storagePath は index.json)。無い＝旧形式(全体 1 本)。
+   * ★教室の一覧や教室名は要約に載せない(要約は会社のメンバー全員が読めるため・AC-B7)。一覧は Storage の目次からサーバーだけが読む。
+   */
+  layout?: WorkspaceBackupLayout
+  /** 教室別形式で書いた教室ファイルの数(欠けた教室は含まない)。 */
+  classroomCount?: number
   googleDriveBackupStatus?: GoogleDriveBackupStatus
   googleDriveBackupFileId?: string
   googleDriveBackupFileName?: string
@@ -738,28 +777,18 @@ function buildGoogleDriveMultipartBody(metadata: Record<string, unknown>, conten
   return { boundary, body }
 }
 
-async function upsertWorkspaceGoogleDriveBackup(params: {
-  workspaceKey: string
-  backupDateKey: string
-  backupKind: WorkspaceAutoBackupKind
-  snapshotJson: string
-  savedAt: string
-  sourceSavedAt: string
-}) {
-  if (!isGoogleDriveBackupConfigured()) return null
-
+/**
+ * Drive の設定フォルダへ gzip ファイルを 1 本作るか更新する(同じ名前を探して PATCH / POST)。旧形式の全体 1 本(upsertWorkspaceGoogleDriveBackup)と
+ * 教室別形式の教室ファイル・目次(§10-6)が共通で使う。appProperties には必ず workspaceKey を入れる(間引きの一覧がこれで絞る・§8-2)。
+ */
+async function upsertGoogleDriveGzipFile(params: { fileName: string; body: Buffer; appProperties: Record<string, string> }) {
   const folderId = requireGoogleDriveBackupFolderId()
-  const fileName = buildGoogleDriveBackupFileName(params.workspaceKey, params.backupDateKey, params.backupKind)
-  const existingFile = await findGoogleDriveBackupFile(fileName)
+  const existingFile = await findGoogleDriveBackupFile(params.fileName)
   const metadata: Record<string, unknown> = {
-    name: fileName,
+    name: params.fileName,
     mimeType: 'application/gzip',
     appProperties: {
-      workspaceKey: params.workspaceKey,
-      backupDateKey: params.backupDateKey,
-      backupKind: params.backupKind,
-      savedAt: params.savedAt,
-      sourceSavedAt: params.sourceSavedAt,
+      ...params.appProperties,
       managedBy: 'komahyouapp-functions',
     },
   }
@@ -767,7 +796,7 @@ async function upsertWorkspaceGoogleDriveBackup(params: {
     metadata.parents = [folderId]
   }
 
-  const { boundary, body } = buildGoogleDriveMultipartBody(metadata, compressBackupJson(params.snapshotJson), 'application/gzip')
+  const { boundary, body } = buildGoogleDriveMultipartBody(metadata, params.body, 'application/gzip')
   const response = await googleDriveApiFetch({
     path: existingFile?.id ? `/files/${existingFile.id}` : '/files',
     method: existingFile?.id ? 'PATCH' : 'POST',
@@ -785,8 +814,31 @@ async function upsertWorkspaceGoogleDriveBackup(params: {
 
   return {
     fileId: payload.id ?? existingFile?.id ?? '',
-    fileName: payload.name ?? fileName,
+    fileName: payload.name ?? params.fileName,
   }
+}
+
+async function upsertWorkspaceGoogleDriveBackup(params: {
+  workspaceKey: string
+  backupDateKey: string
+  backupKind: WorkspaceAutoBackupKind
+  snapshotJson: string
+  savedAt: string
+  sourceSavedAt: string
+}) {
+  if (!isGoogleDriveBackupConfigured()) return null
+
+  return upsertGoogleDriveGzipFile({
+    fileName: buildGoogleDriveBackupFileName(params.workspaceKey, params.backupDateKey, params.backupKind),
+    body: compressBackupJson(params.snapshotJson),
+    appProperties: {
+      workspaceKey: params.workspaceKey,
+      backupDateKey: params.backupDateKey,
+      backupKind: params.backupKind,
+      savedAt: params.savedAt,
+      sourceSavedAt: params.sourceSavedAt,
+    },
+  })
 }
 
 async function listWorkspaceGoogleDriveBackupFiles(workspaceKey: string) {
@@ -836,49 +888,64 @@ async function pruneWorkspaceGoogleDriveBackups(workspaceKey: string, referenceD
   const files = await listWorkspaceGoogleDriveBackupFiles(workspaceKey)
   const staleFiles = files.filter((file) => !shouldKeepGoogleDriveBackupFile(file, nowMs))
 
-  await Promise.all(staleFiles.map(async (file) => {
-    if (!file.id) return
-    await googleDriveApiFetch({
-      path: `/files/${file.id}`,
-      method: 'DELETE',
-      query: {
-        supportsAllDrives: 'true',
-      },
-    }).catch((error) => {
-      logger.warn(`[AutoBackup] Failed to delete stale Google Drive backup: workspace=${workspaceKey}, fileId=${file.id}, message=${error instanceof Error ? error.message : String(error)}`)
-    })
-  }))
+  // 教室別形式(§10-6)では掃除が 1 日 1 回にまとまり、1 回の削除が「約 55 回 × 教室数」(20 教室で約 1,100 件)になる。Drive の rate limit で
+  // 落ちないよう同時実行を抑える(regression-reviewer 中-3)。落ちた分は翌日の回がもう一度拾う。
+  for (const chunk of chunkItems(staleFiles, GOOGLE_DRIVE_DELETE_CONCURRENCY)) {
+    await Promise.all(chunk.map(async (file) => {
+      if (!file.id) return
+      await googleDriveApiFetch({
+        path: `/files/${file.id}`,
+        method: 'DELETE',
+        query: {
+          supportsAllDrives: 'true',
+        },
+      }).catch((error) => {
+        logger.warn(`[AutoBackup] Failed to delete stale Google Drive backup: workspace=${workspaceKey}, fileId=${file.id}, message=${error instanceof Error ? error.message : String(error)}`)
+      })
+    }))
+  }
 }
 
 function buildClassroomLatestRollbackStoragePath(workspaceKey: string, classroomId: string) {
   return `${WORKSPACE_LATEST_ROLLBACK_PREFIX}/${workspaceKey}/classrooms/${classroomId}/latest.json`
 }
 
-function buildWorkspaceIncidentBackupStoragePath(workspaceKey: string, reason: string, savedAt: string) {
+/**
+ * 復元前の安全な控え(incident backup)のフォルダ名 `{reason}-{時刻}`(§8-1a・§10-4)。2026-10-29 から控えも教室ごとの gzip＋目次で
+ * このフォルダの下に書く(BK-7: 全教室ぶんを残す・形式は教室別)。旧来の 1 本 `{reason}-{時刻}.json` は読み手(JSON 読込)がそのまま読める。
+ * 90 日の掃除(pruneWorkspaceIncidentBackups)はファイルの作成時刻で 1 本ずつ判定するのでフォルダでもそのまま効く。
+ */
+function buildWorkspaceIncidentBackupFolderName(reason: string, savedAt: string) {
   const safeReason = reason.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'incident'
   const safeTimestamp = savedAt.replace(/[:.]/g, '-')
-  return `${WORKSPACE_INCIDENT_BACKUP_PREFIX}/${workspaceKey}/${safeReason}-${safeTimestamp}.json`
+  return `${safeReason}-${safeTimestamp}`
 }
 
 async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string) {
   const savedAt = new Date().toISOString()
   try {
-    const { snapshot } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'throw', reader: 'incident-backup' })
-    const storagePath = buildWorkspaceIncidentBackupStoragePath(workspaceKey, reason, savedAt)
-    const bucket = storage.bucket(STORAGE_BUCKET)
-    await bucket.file(storagePath).save(serializeWorkspaceBackupJson(snapshot), {
-      resumable: false,
-      contentType: 'application/json; charset=utf-8',
-      metadata: {
-        cacheControl: 'private, max-age=0, no-transform',
-      },
+    const sources = await loadWorkspaceBackupSources(workspaceKey, savedAt)
+    const folderName = buildWorkspaceIncidentBackupFolderName(reason, savedAt)
+    // 教室ごとに順番に書く(1 教室ぶんのメモリ・AC-B18)。組み立てられない教室が 1 つでもあれば投げる(欠けた一式を控えにしない・M-1)。
+    // Storage の書き込みは 1 回やり直してもだめなら投げる(下の catch で握る＝控え無しでも復元は進む・従来どおり)。
+    const result = await writePerClassroomWorkspaceBackup({
+      workspaceKey,
+      backupDateKey: folderName,
+      savedAt,
+      sourceSavedAt: sources.latestSourceSavedAt,
+      folderPrefix: `${WORKSPACE_INCIDENT_BACKUP_PREFIX}/${workspaceKey}/${folderName}/`,
+      users: sources.users,
+      classrooms: sources.classrooms,
+      failurePolicy: { assembly: 'throw', write: 'throw' },
+      io: buildPerClassroomBackupIo({ workspaceKey, reader: 'incident-backup', mirror: null }),
     })
-    logger.info(`[IncidentBackup] Saved pre-restore safety snapshot to ${storagePath}`)
-    return { storagePath, savedAt }
+    logger.info(`[IncidentBackup] Saved pre-restore safety snapshot to ${result.indexPath} (classrooms=${result.writtenClassroomIds.length}, bytes=${result.totalBytes}, gzip=${result.compressedBytes})`)
+    return { storagePath: result.indexPath, savedAt }
   } catch (error) {
     // ★組み立てられない教室があるときは握らない(INV-14・regression-reviewer M-1): 欠けた一式を「復元前の安全な控え」にせず、
-    //   呼び出し側(復元用ダウンロード)を止める。Storage の書き込み失敗は従来どおり握る(控え無しでも復元は進む)。
-    if (isSnapshotPartsAssemblyError(error)) throw error
+    //   呼び出し側(復元用ダウンロード)を止める。教室 ID の文字種違反(教室ファイルを作れない)も同じ扱い(BK-7: 全教室ぶんが揃わない控えで復元を進めない)。
+    //   Storage の書き込み失敗は従来どおり握る(控え無しでも復元は進む)。
+    if (isSnapshotPartsAssemblyError(error) || isWorkspaceBackupLayoutError(error)) throw error
     logger.error(`[IncidentBackup] Failed to save safety snapshot for workspace=${workspaceKey} reason=${reason}`, error)
     return null
   }
@@ -1393,7 +1460,22 @@ function getLatestSavedAt(classrooms: FirebaseClassroomDoc[], snapshots: Firebas
  *  - onAssemblyFailure='exclude'(15 分毎の自動バックアップ): その教室を**空で書かず**に除き、missingClassroomIds に残して開発者へ知らせる(§9-5-3・AC-21)。
  *  - onAssemblyFailure='throw'(復元前の安全スナップショット・開発者の書き出し): 例外(欠けた一式を「安全な控え」にしない)。
  */
-async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt: string, options: { onAssemblyFailure: 'exclude' | 'throw'; reader: SnapshotAssemblyReader }) {
+/** バックアップの元になる会社(workspace)の読み取り結果(members・classrooms・classroomSnapshots の全件)。教室の並びは classrooms の文書 ID 順。 */
+type WorkspaceBackupSourceClassroom = {
+  id: string
+  classroomDoc: FirebaseClassroomDoc
+  snapshotDoc: FirebaseClassroomSnapshotDoc | undefined
+  snapshotRef: FirebaseFirestore.DocumentReference
+}
+
+type WorkspaceBackupSources = {
+  users: WorkspaceUser[]
+  classrooms: WorkspaceBackupSourceClassroom[]
+  latestSourceSavedAt: string
+}
+
+/** 旧形式(全体 1 本)・教室別形式・復元前の控えが共通で使う読み取り(教室データの組み立てはここでは行わない)。 */
+async function loadWorkspaceBackupSources(workspaceKey: string, savedAt: string): Promise<WorkspaceBackupSources> {
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
   const [memberSnapshots, classroomSnapshots, snapshotSnapshots] = await Promise.all([
     workspaceRef.collection('members').get(),
@@ -1405,16 +1487,101 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
   const snapshotByClassroomId = new Map(
     snapshotSnapshots.docs.map((entry) => [entry.id, entry.data() as FirebaseClassroomSnapshotDoc]),
   )
+  const classrooms = classroomSnapshots.docs.map((entry) => ({
+    id: entry.id,
+    classroomDoc: entry.data() as FirebaseClassroomDoc,
+    snapshotDoc: snapshotByClassroomId.get(entry.id),
+    snapshotRef: workspaceRef.collection('classroomSnapshots').doc(entry.id),
+  }))
+  const latestSourceSavedAt = getLatestSavedAt(
+    classrooms.map((entry) => entry.classroomDoc),
+    snapshotSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomSnapshotDoc),
+    savedAt,
+  )
+  return { users, classrooms, latestSourceSavedAt }
+}
+
+/** 教室 1 つの元データの保存時刻(目次の sourceSavedAt・教室ファイルの backupFile.sourceSavedAt)。読めなければ ''。 */
+function resolveClassroomSourceSavedAt(classroom: WorkspaceBackupSourceClassroom): string {
+  if (typeof classroom.snapshotDoc?.savedAt === 'string') return classroom.snapshotDoc.savedAt
+  if (typeof classroom.classroomDoc.updatedAt === 'string') return classroom.classroomDoc.updatedAt
+  return ''
+}
+
+/**
+ * 教室ごとに順番に書くループ(workspaceBackupWriter.ts)へ差し込む I/O(§10-4)。
+ *  - 組み立ては唯一の読み手 readClassroomSnapshotPayload(INV-14: 組み立てられなければ例外・空にしない)。
+ *  - Storage へは gzip(教室ファイル)と平文(目次)。mirror があれば Drive へ教室ごとの .json.gz と目次の .json.gz(appProperties に教室 ID と layout)。
+ */
+function buildPerClassroomBackupIo(params: {
+  workspaceKey: string
+  reader: SnapshotAssemblyReader
+  mirror: { backupKind: WorkspaceAutoBackupKind; backupDateKey: string; savedAt: string; sourceSavedAt: string; onIndexMirrored?: (file: { fileId: string; fileName: string }) => void } | null
+}): PerClassroomBackupWriteIo<WorkspaceBackupSourceClassroom> {
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  const { workspaceKey, mirror } = params
+  const driveProperties = mirror
+    ? { workspaceKey, backupDateKey: mirror.backupDateKey, backupKind: mirror.backupKind, layout: WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM, savedAt: mirror.savedAt }
+    : null
+  return {
+    assembleClassroom: async (classroom) => {
+      const payload = await readClassroomSnapshotPayload(classroom.snapshotRef, classroom.snapshotDoc)
+      return { entry: toWorkspaceClassroom(classroom.id, classroom.classroomDoc, payload ?? null), sourceSavedAt: resolveClassroomSourceSavedAt(classroom) }
+    },
+    hash: (json) => createHash('sha256').update(json, 'utf8').digest('hex'),
+    compress: (json) => compressBackupJson(json),
+    writeClassroomFile: async ({ path, body }) => {
+      await bucket.file(path).save(body, {
+        resumable: false,
+        contentType: 'application/gzip',
+        metadata: { cacheControl: 'private, max-age=0, no-transform' },
+      })
+    },
+    mirrorClassroomFile: driveProperties && mirror
+      ? async ({ classroomId, body, sourceSavedAt }) => {
+          await upsertGoogleDriveGzipFile({
+            fileName: buildGoogleDriveClassroomBackupFileName(workspaceKey, mirror.backupKind, mirror.backupDateKey, classroomId),
+            body,
+            appProperties: { ...driveProperties, classroomId, sourceSavedAt },
+          })
+        }
+      : undefined,
+    writeIndex: async ({ path, json }) => {
+      await bucket.file(path).save(json, {
+        resumable: false,
+        contentType: 'application/json; charset=utf-8',
+        metadata: { cacheControl: 'private, max-age=0, no-transform' },
+      })
+    },
+    mirrorIndex: driveProperties && mirror
+      ? async ({ json }) => {
+          const file = await upsertGoogleDriveGzipFile({
+            fileName: buildGoogleDriveIndexBackupFileName(workspaceKey, mirror.backupKind, mirror.backupDateKey),
+            body: compressBackupJson(json),
+            appProperties: { ...driveProperties, sourceSavedAt: mirror.sourceSavedAt },
+          })
+          mirror.onIndexMirrored?.(file)
+        }
+      : undefined,
+    onAssemblyFailure: async ({ classroomId, error }) => {
+      await notifySnapshotAssemblyFailure({ workspaceKey, classroomId, reader: params.reader, error })
+    },
+    onWriteFailure: async ({ classroomId, attempt, error }) => {
+      logger.warn(`[AutoBackup] 教室ファイルの書き込みに失敗(${attempt} 回目) workspace=${workspaceKey} classroom=${classroomId}: ${error instanceof Error ? error.message : String(error)}`)
+    },
+  }
+}
+
+async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt: string, options: { onAssemblyFailure: 'exclude' | 'throw'; reader: SnapshotAssemblyReader }) {
+  const sources = await loadWorkspaceBackupSources(workspaceKey, savedAt)
 
   const missingClassroomIds: string[] = []
   const classrooms: WorkspaceClassroom[] = []
   // 教室ごとに逐次組み立てる(分割形式は 1 教室 約 50 文書・非圧縮 8MB。全教室を並列に解凍すると 512MiB で逼迫する・regression-reviewer L-6)。
-  for (const entry of classroomSnapshots.docs) {
-    const classroomData = entry.data() as FirebaseClassroomDoc
-    const snapshotData = snapshotByClassroomId.get(entry.id)
+  for (const entry of sources.classrooms) {
     try {
-      const payload = await readClassroomSnapshotPayload(workspaceRef.collection('classroomSnapshots').doc(entry.id), snapshotData)
-      classrooms.push(toWorkspaceClassroom(entry.id, classroomData, payload ?? null))
+      const payload = await readClassroomSnapshotPayload(entry.snapshotRef, entry.snapshotDoc)
+      classrooms.push(toWorkspaceClassroom(entry.id, entry.classroomDoc, payload ?? null))
     } catch (error) {
       await notifySnapshotAssemblyFailure({ workspaceKey, classroomId: entry.id, reader: options.reader, error })
       if (options.onAssemblyFailure === 'throw') throw error
@@ -1422,29 +1589,13 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
     }
   }
 
-  const latestSourceSavedAt = getLatestSavedAt(
-    classroomSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomDoc),
-    snapshotSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomSnapshotDoc),
-    savedAt,
-  )
-
   return {
-    latestSourceSavedAt,
+    latestSourceSavedAt: sources.latestSourceSavedAt,
     missingClassroomIds,
-    snapshot: {
-      schemaVersion: 1,
-      savedAt,
-      developerPassword: 'developer',
-      developerCloudBackupEnabled: false,
-      developerCloudBackupFolderName: '',
-      developerCloudSyncedAutoBackupKeys: [],
-      currentUserId: '',
-      actingClassroomId: classrooms[0]?.id ?? null,
-      users,
-      classrooms,
-      // 組み立てられず除いた教室(INV-14)。JSON 読込側(src/utils/workspaceBackupImport.ts)が「開いている教室が無い」を別教室で埋めないために読む。
-      ...(missingClassroomIds.length > 0 ? { missingClassroomIds } : {}),
-    } satisfies WorkspaceSnapshot,
+    // 全体 JSON の形は共有純関数 buildWorkspaceBackupSnapshot(教室ファイル・目次からの組み立て直しと同じ 1 か所・AC-B1)。
+    // actingClassroomId は先頭の教室、missingClassroomIds は 1 件以上のときだけ付く(INV-14)。JSON 読込側
+    // (src/utils/workspaceBackupImport.ts)が「開いている教室が無い」を別教室で埋めないために missingClassroomIds を読む。
+    snapshot: buildWorkspaceBackupSnapshot({ savedAt, users: sources.users, classrooms, missingClassroomIds }) satisfies WorkspaceSnapshot,
   }
 }
 
@@ -1462,8 +1613,20 @@ async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDa
     const shouldKeep = shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs })
     if (shouldKeep) return
 
-    if (typeof summary.storagePath === 'string' && summary.storagePath.trim()) {
-      await bucket.file(summary.storagePath).delete().catch(() => undefined)
+    // 消す順番はファイル → 要約(要約を先に消すとファイルが取り残される・AC-B12)。
+    // 同じ時点キーに旧形式の 1 本と教室別形式のフォルダが混ざりうる(切り替えの前後に同じ 15 分枠で手動実行した・設定を戻した・regression-reviewer 中-2)ので、
+    // 要約の layout に関係なく、旧形式の 1 本(storagePath と旧形式の既定パス)と時点フォルダ `15min/{key}/` の両方を消す(無ければ何も起きない)。
+    const legacyPaths = new Set<string>()
+    if (typeof summary.storagePath === 'string' && summary.storagePath.trim() && !summary.storagePath.endsWith(`/${WORKSPACE_BACKUP_INDEX_FILE_NAME}`)) legacyPaths.add(summary.storagePath)
+    if (isSafeWorkspaceBackupPathSegment(summaryDoc.id)) legacyPaths.add(buildWorkspaceAutoBackupStoragePath(workspaceKey, summaryDoc.id, 'quarterHourly'))
+    for (const legacyPath of legacyPaths) {
+      await bucket.file(legacyPath).delete().catch(() => undefined)
+    }
+    if (isSafeWorkspaceBackupPathSegment(summaryDoc.id)) {
+      const timePointPrefix = buildWorkspaceBackupTimePointPrefix(workspaceKey, summaryDoc.id)
+      await bucket.deleteFiles({ prefix: timePointPrefix }).catch((error) => {
+        logger.warn(`[AutoBackup] Failed to delete stale per-classroom backup folder: ${timePointPrefix}: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
     batch.delete(summaryDoc.ref)
     deleteCount += 1
@@ -3043,12 +3206,102 @@ export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
   }
 })
 
+/** 知らない形式(将来の版)の要約は、どの読み手も進まない(空や一部の JSON を返さない・fail-closed)。 */
+function throwUnknownBackupLayout(): never {
+  throw new HttpsError('failed-precondition', 'このバックアップの形式はこの版では読めません。画面を再読み込みしてから、もう一度お試しください。', { reason: 'unknown-layout' })
+}
+
+/** 旧形式(全体 1 本)の読み手は、要約が旧形式のときだけ進む。教室別形式の時点を古い画面から開いたら再読み込みを促す(AC-B11)。 */
+function assertLegacyBackupLayout(summary: WorkspaceAutoBackupSummaryDoc) {
+  const layout = resolveWorkspaceBackupSummaryLayout(summary)
+  if (layout === 'legacy') return
+  if (layout === WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) {
+    throw new HttpsError('failed-precondition', 'この時点は新しい形式のバックアップです。画面を再読み込みしてから、もう一度お試しください。', { reason: 'per-classroom-layout' })
+  }
+  throwUnknownBackupLayout()
+}
+
+/** 教室 ID・時点キー・会社キーの文字種検査(パスを組み立てる前・Storage を読む前・AC-B5・INV-08)。違反は invalid-argument。 */
+function assertSafeBackupPathArguments(params: { workspaceKey: string; backupDateKey: string; classroomId?: string }) {
+  try {
+    assertSafeWorkspaceBackupWorkspaceKey(params.workspaceKey)
+    assertSafeWorkspaceBackupDateKey(params.backupDateKey)
+    if (params.classroomId !== undefined) assertSafeWorkspaceBackupClassroomId(params.classroomId)
+  } catch (error) {
+    if (isWorkspaceBackupLayoutError(error)) throw new HttpsError('invalid-argument', '指定の形式が不正です。', { reason: error.reason })
+    throw error
+  }
+}
+
+/** 教室別形式の時点の目次(index.json)を Storage から読んで検査する(会社・時点の照合つき・§10-5)。 */
+async function readWorkspaceBackupIndex(workspaceKey: string, backupDateKey: string) {
+  const indexPath = buildWorkspaceBackupIndexStoragePath(workspaceKey, backupDateKey)
+  const file = storage.bucket(STORAGE_BUCKET).file(indexPath)
+  const [exists] = await file.exists()
+  if (!exists) {
+    // 室長の自教室復元の画面にも出る文言なので Storage のパスは出さない(ログだけ・regression-reviewer 低-5)。
+    logger.warn(`readWorkspaceBackupIndex: index not found at ${indexPath}`)
+    throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
+  }
+  const [content] = await file.download()
+  try {
+    return validateWorkspaceBackupIndex(JSON.parse(content.toString('utf8')), { workspaceKey, backupDateKey })
+  } catch (error) {
+    logger.error(`readWorkspaceBackupIndex: invalid index at ${indexPath}`, error)
+    throw new HttpsError('failed-precondition', 'このバックアップの目次を読めませんでした。開発者へご連絡ください。', { reason: 'invalid-backup-index', detail: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/**
+ * 教室別形式の時点から 1 教室を返す(室長の自教室復元・Feature B・開発者の全体復元の教室ごとの取得・§10-5)。
+ *  - 目次でその教室が無い(組み立てられなかった・書けなかった)→ 旧形式と同じ not-found。
+ *  - ★その教室のファイル**だけ**を読む(ほかの教室のファイルは開かない・AC-B4)。読んだあと backupFile と中身の教室 ID を要求と照合する(AC-B6)。
+ * 応答の形は旧形式と同じ(classroomId・classroomName・savedAt・dataGzipBase64)。
+ */
+async function downloadClassroomFromPerClassroomBackup(params: { workspaceKey: string; backupDateKey: string; classroomId: string }) {
+  const { workspaceKey, backupDateKey, classroomId } = params
+  const index = await readWorkspaceBackupIndex(workspaceKey, backupDateKey)
+  const indexEntry = index.classrooms.find((entry) => entry.id === classroomId)
+  if (!indexEntry) {
+    throw new HttpsError('not-found', 'バックアップ内に該当教室のデータが見つかりません。')
+  }
+  const classroomPath = buildWorkspaceBackupClassroomStoragePath(workspaceKey, backupDateKey, classroomId)
+  const file = storage.bucket(STORAGE_BUCKET).file(classroomPath)
+  const [exists] = await file.exists()
+  if (!exists) {
+    logger.warn(`downloadClassroomFromPerClassroomBackup: classroom file not found at ${classroomPath}`)
+    throw new HttpsError('not-found', 'バックアップ内に該当教室のデータが見つかりません。')
+  }
+  const [content] = await file.download()
+  let classroomFile: ReturnType<typeof validateWorkspaceBackupClassroomFile>
+  try {
+    const json = gunzipSync(content).toString('utf8')
+    // 目次の sha256 と照合する(同じ 15 分枠で 2 回書かれて目次とファイルがずれた・途中で壊れた、を見分ける・regression-reviewer 低-3)。
+    const sha256 = createHash('sha256').update(json, 'utf8').digest('hex')
+    if (sha256 !== indexEntry.sha256) throw new Error(`sha256 が目次と一致しない(index=${indexEntry.sha256.slice(0, 12)}… file=${sha256.slice(0, 12)}…)`)
+    classroomFile = validateWorkspaceBackupClassroomFile(JSON.parse(json), { workspaceKey, backupDateKey, classroomId })
+  } catch (error) {
+    logger.error(`downloadClassroomFromPerClassroomBackup: invalid classroom file at ${classroomPath}`, error)
+    throw new HttpsError('failed-precondition', 'バックアップの教室ファイルを読めませんでした(別の教室のファイルか、壊れています)。開発者へご連絡ください。', { reason: 'invalid-classroom-file', detail: error instanceof Error ? error.message : String(error) })
+  }
+  const classroom = classroomFile.classrooms[0]
+  // 1教室分でも数MBになりうるため、callable の応答上限(約10MB)対策で gzip+base64 で返す(旧形式と同じ)。
+  const dataGzipBase64 = gzipSync(Buffer.from(JSON.stringify(classroom.data), 'utf8')).toString('base64')
+  return {
+    classroomId: classroom.id,
+    classroomName: classroom.name,
+    savedAt: classroomFile.savedAt,
+    dataGzipBase64,
+  }
+}
+
 export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
+  const purpose = readBackupDownloadPurpose(rawData.purpose)
 
-  logger.info(`downloadServerAutoBackup: workspaceKey=${workspaceKey}, backupDateKey=${backupDateKey}`)
+  logger.info(`downloadServerAutoBackup: workspaceKey=${workspaceKey}, backupDateKey=${backupDateKey}, purpose=${purpose}`)
 
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
@@ -3057,6 +3310,8 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
     throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${backupDateKey})`)
   }
   const summary = summarySnapshot.data() as WorkspaceAutoBackupSummaryDoc
+  // 旧形式(全体 1 本)の読み手。教室別形式の時点は prepareServerAutoBackupRestore ＋ 教室ごとの取得で読む(§10-5)。
+  assertLegacyBackupLayout(summary)
   const storagePath = typeof summary.storagePath === 'string' && summary.storagePath.trim()
     ? summary.storagePath
     : buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, summary.backupKind === 'hourly' ? 'hourly' : 'daily')
@@ -3068,11 +3323,14 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
     throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${storagePath})`)
   }
 
-  try {
-    await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
-  } catch (error) {
-    // 分割形式の教室を組み立てられず安全な控えを作れない → 復元を進めない(INV-14・M-1)。原因は builder が通知済み。
-    throw new HttpsError('failed-precondition', '復元前の安全な控えを作れないため、復元を進められません。開発者へご連絡ください。', { reason: 'incident-backup-assembly-failed', detail: describeSnapshotAssemblyFailure(error) })
+  // 復元前の安全な控えは復元のときだけ(ローカル同期フォルダの経路では書かない・Q8・AC-B17)。
+  if (purpose === 'restore') {
+    try {
+      await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
+    } catch (error) {
+      // 分割形式の教室を組み立てられず安全な控えを作れない → 復元を進めない(INV-14・M-1)。原因は builder が通知済み。
+      throw new HttpsError('failed-precondition', '復元前の安全な控えを作れないため、復元を進められません。開発者へご連絡ください。', { reason: 'incident-backup-assembly-failed', detail: describeSnapshotAssemblyFailure(error) })
+    }
   }
 
   const [content] = await file.download()
@@ -3081,6 +3339,47 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
   const compressed = gzipSync(content)
   logger.info(`downloadServerAutoBackup: downloaded ${content.length} bytes, compressed to ${compressed.length} bytes from ${storagePath}`)
   return { snapshotGzipBase64: compressed.toString('base64') }
+})
+
+/**
+ * 教室別形式の時点(§10-5)の開発者の全体復元・ローカル同期の準備。復元('restore')なら復元前の控え(全教室ぶん・教室別)を先に書き、
+ * 時点の目次(教室の並びと項目・users・欠けた教室)を返す。クライアントは教室ごとに downloadClassroomFromServerAutoBackup を呼んで
+ * 全体(WorkspaceSnapshot)を組み立て、今までと同じ教室選択モーダルへ渡す(全体を 1 本で返さない = メモリを教室数に比例させない・AC-B18)。
+ * 旧形式の時点は従来の downloadServerAutoBackup(こちらは failed-precondition で知らせる)。
+ */
+export const prepareServerAutoBackupRestore = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
+  const purpose = readBackupDownloadPurpose(rawData.purpose)
+  assertSafeBackupPathArguments({ workspaceKey, backupDateKey })
+
+  logger.info(`prepareServerAutoBackupRestore: workspaceKey=${workspaceKey}, backupDateKey=${backupDateKey}, purpose=${purpose}`)
+
+  await requireDeveloperMember(request.auth?.uid, workspaceKey)
+
+  const summarySnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('workspaceAutoBackupSummaries').doc(backupDateKey).get()
+  if (!summarySnapshot.exists) {
+    throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${backupDateKey})`)
+  }
+  const layout = resolveWorkspaceBackupSummaryLayout(summarySnapshot.data())
+  if (layout === 'legacy') {
+    throw new HttpsError('failed-precondition', 'この時点は従来の形式のバックアップです。', { reason: 'legacy-layout' })
+  }
+  if (layout !== WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) throwUnknownBackupLayout()
+
+  const index = await readWorkspaceBackupIndex(workspaceKey, backupDateKey)
+
+  // 復元前の安全な控えは復元のときだけ(ローカル同期フォルダの経路では書かない・Q8・AC-B17)。
+  if (purpose === 'restore') {
+    try {
+      await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
+    } catch (error) {
+      throw new HttpsError('failed-precondition', '復元前の安全な控えを作れないため、復元を進められません。開発者へご連絡ください。', { reason: 'incident-backup-assembly-failed', detail: describeSnapshotAssemblyFailure(error) })
+    }
+  }
+
+  return { layout, index }
 })
 
 // 検証用(サンドボックス)教室の判定は ./developmentClassroomIdentity(登録台帳の複製を読む薄いラッパ)。
@@ -3140,6 +3439,8 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
   const classroomId = readString(rawData.classroomId, 'classroomId')
+  // 文字種検査はパスを組み立てる前・Storage を読む前(`/`・`..`・許可外の文字は invalid-argument・AC-B5・INV-08)。
+  assertSafeBackupPathArguments({ workspaceKey, backupDateKey, classroomId })
 
   if (!request.auth?.uid) {
     throw new HttpsError('unauthenticated', 'ログインしてください。')
@@ -3167,6 +3468,12 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
   }
   const summary = summarySnapshot.data() as WorkspaceAutoBackupSummaryDoc
+  // 形式は要約の layout で読み分ける(§10-5)。教室別形式はその教室のファイルだけを読む。知らない形式は進まない。
+  const layout = resolveWorkspaceBackupSummaryLayout(summary)
+  if (layout === WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) {
+    return downloadClassroomFromPerClassroomBackup({ workspaceKey, backupDateKey, classroomId })
+  }
+  if (layout !== 'legacy') throwUnknownBackupLayout()
   const storagePath = typeof summary.storagePath === 'string' && summary.storagePath.trim()
     ? summary.storagePath
     : buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, summary.backupKind === 'hourly' ? 'hourly' : 'daily')
@@ -3509,6 +3816,78 @@ async function pruneSnapshotParts(startedAtMs: number) {
   return result
 }
 
+// 教室別形式の自動バックアップの取り残し(要約の無い時点フォルダ `15min/{key}/`・書き終わる前に時間切れ・メモリ不足・例外で止まった回・§10-6)の掃除を
+// 「消さずに件数だけ数える」空実行にするか。★既定は空実行(1)。実物の件数をログで確かめてから 0 にして削除を有効にする
+// (incident backup の間引きと同じ手順・safe-release の事前実測)。
+const WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN = (process.env.WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN ?? '1').trim() !== '0'
+
+type WorkspaceBackupOrphanPruneResult = { workspaces: number; folders: number; orphans: number; deletedFiles: number; failed: number; stoppedByBudget: boolean; dryRun: boolean }
+
+/**
+ * 要約(workspaceAutoBackupSummaries)の無い時点フォルダのうち、作成から 1 日以上たったものを消す(§10-6・AC-B10)。
+ * 判定は純関数 isOrphanedWorkspaceBackupFolder(要約がある・作成時刻が読めない・未来・1 日より新しいものは消さない)。
+ * 旧形式の 1 本(`15min/{key}.json`)はフォルダでないので対象外。独立した時間予算(30 秒)で、Firestore 巡回より先に走らせる。
+ */
+async function pruneOrphanedWorkspaceBackupFolders(startedAtMs: number): Promise<WorkspaceBackupOrphanPruneResult> {
+  const result: WorkspaceBackupOrphanPruneResult = { workspaces: 0, folders: 0, orphans: 0, deletedFiles: 0, failed: 0, stoppedByBudget: false, dryRun: WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN }
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  const nowMs = Date.now()
+  const isOverBudget = () => Date.now() - startedAtMs >= WORKSPACE_BACKUP_ORPHAN_PRUNE_TIME_BUDGET_MS
+  const workspacesSnapshot = await firestore.collection('workspaces').select().get()
+  for (const workspaceDoc of workspacesSnapshot.docs) {
+    const workspaceKey = workspaceDoc.id
+    if (!isSafeWorkspaceBackupPathSegment(workspaceKey)) continue
+    result.workspaces += 1
+    const summaryIds = new Set((await workspaceDoc.ref.collection('workspaceAutoBackupSummaries').select().get()).docs.map((doc) => doc.id))
+    const folderRoot = `${WORKSPACE_BACKUP_STORAGE_PREFIX}/${workspaceKey}/${WORKSPACE_BACKUP_QUARTER_HOURLY_FOLDER}/`
+    let pageToken: string | undefined
+    do {
+      if (isOverBudget()) {
+        result.stoppedByBudget = true
+        return result
+      }
+      // delimiter 付きの一覧で「フォルダ」(prefixes)だけを取る。直下のファイル(旧形式の 1 本)は見ない。
+      const [, nextQuery, apiResponse] = await bucket.getFiles({
+        prefix: folderRoot,
+        delimiter: '/',
+        autoPaginate: false,
+        maxResults: 1000,
+        pageToken,
+      }) as unknown as [unknown[], { pageToken?: string } | null, { prefixes?: string[] } | undefined]
+      for (const folderPrefix of apiResponse?.prefixes ?? []) {
+        if (isOverBudget()) {
+          result.stoppedByBudget = true
+          return result
+        }
+        const backupDateKey = folderPrefix.slice(folderRoot.length).replace(/\/$/, '')
+        if (!backupDateKey || backupDateKey.includes('/')) continue
+        result.folders += 1
+        if (summaryIds.has(backupDateKey)) continue
+        const [files] = await bucket.getFiles({ prefix: folderPrefix }) as unknown as [IncidentBackupFile[]]
+        const newestFileCreatedAtMs = files.reduce((max, file) => Math.max(max, Date.parse(file.metadata?.timeCreated ?? '') || 0), 0)
+        if (!isOrphanedWorkspaceBackupFolder({ hasSummary: false, newestFileCreatedAtMs, nowMs })) continue
+        result.orphans += 1
+        if (WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN) {
+          logger.info(`[BackupOrphanPrune][dry-run] would delete ${folderPrefix} (files=${files.length}, newest=${newestFileCreatedAtMs > 0 ? new Date(newestFileCreatedAtMs).toISOString() : 'unknown'})`)
+          continue
+        }
+        for (const file of files) {
+          try {
+            await file.delete()
+            result.deletedFiles += 1
+          } catch (error) {
+            result.failed += 1
+            logger.warn(`[BackupOrphanPrune] Failed to delete ${file.name}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        logger.info(`[BackupOrphanPrune] deleted ${folderPrefix} (files=${files.length})`)
+      }
+      pageToken = nextQuery?.pageToken
+    } while (pageToken)
+  }
+  return result
+}
+
 async function runSaveAttemptCleanup() {
   const startedAtMs = Date.now()
   const cutoffIsoByTarget: Record<RetentionTargetKey, string> = {
@@ -3542,10 +3921,17 @@ async function runSaveAttemptCleanup() {
   } catch (error) {
     logger.error('[SaveAttemptCleanup] Failed to prune snapshot parts', error)
   }
+  // 教室別形式の自動バックアップの取り残し(要約の無い時点フォルダ・§10-6)。独立した予算(30 秒)・既定は空実行(件数だけ数える)。
+  let orphanPrune: WorkspaceBackupOrphanPruneResult = { workspaces: 0, folders: 0, orphans: 0, deletedFiles: 0, failed: 0, stoppedByBudget: false, dryRun: WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN }
+  try {
+    orphanPrune = await pruneOrphanedWorkspaceBackupFolders(Date.now())
+  } catch (error) {
+    logger.error('[SaveAttemptCleanup] Failed to prune orphaned workspace backup folders', error)
+  }
 
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   const firestoreSweepStartedAtMs = Date.now()
-  let stoppedByBudget = incidentPrune.stoppedByBudget || saveHistoryPrune.stoppedByBudget || snapshotPartsPrune.stoppedByBudget
+  let stoppedByBudget = incidentPrune.stoppedByBudget || saveHistoryPrune.stoppedByBudget || snapshotPartsPrune.stoppedByBudget || orphanPrune.stoppedByBudget
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
@@ -3579,7 +3965,7 @@ async function runSaveAttemptCleanup() {
     }
   }
 
-  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.operationTraces} operationTraces (< ${cutoffIsoByTarget.operationTraces}, retentionDays=${OPERATION_TRACE_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''}), ${saveHistoryPrune.deleted} classroom save-history files (retentionDays=${CLASSROOM_SAVE_HISTORY_RETENTION_DAYS}), snapshot parts gc: ${snapshotPartsPrune.classrooms} classrooms / marked ${snapshotPartsPrune.marked} / unmarked ${snapshotPartsPrune.unmarked} / removed ${snapshotPartsPrune.removed} / skipped(invalid manifest) ${snapshotPartsPrune.skippedInvalidManifest}${snapshotPartsPrune.dryRun ? ' (DRY RUN)' : ''}`
+  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.operationTraces} operationTraces (< ${cutoffIsoByTarget.operationTraces}, retentionDays=${OPERATION_TRACE_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''}), ${saveHistoryPrune.deleted} classroom save-history files (retentionDays=${CLASSROOM_SAVE_HISTORY_RETENTION_DAYS}), snapshot parts gc: ${snapshotPartsPrune.classrooms} classrooms / marked ${snapshotPartsPrune.marked} / unmarked ${snapshotPartsPrune.unmarked} / removed ${snapshotPartsPrune.removed} / skipped(invalid manifest) ${snapshotPartsPrune.skippedInvalidManifest}${snapshotPartsPrune.dryRun ? ' (DRY RUN)' : ''}, backup orphan folders: ${orphanPrune.orphans} orphan / ${orphanPrune.folders} folders / deleted ${orphanPrune.deletedFiles} files / failed ${orphanPrune.failed}${orphanPrune.dryRun ? ' (DRY RUN)' : ''}`
   if (stoppedByBudget) {
     // ★予算で打ち切った = まだ滞留している。3ヶ月気づかなかった障害の再発を早く見つけるため error で出す。
     logger.error(`${summary} — 予算上限で打ち切りました(滞留が残っています)。翌日以降の実行で続きを消します。`)
@@ -3603,6 +3989,7 @@ async function runSaveAttemptCleanup() {
     incidentBackupDryRun: INCIDENT_BACKUP_PRUNE_DRY_RUN,
     deletedClassroomSaveHistoryFiles: saveHistoryPrune.deleted,
     snapshotPartsPrune,
+    workspaceBackupOrphanPrune: orphanPrune,
     stoppedByBudget,
   }
 }
@@ -3792,129 +4179,310 @@ export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', time
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
   const result = await runWorkspaceServerAutoBackup('quarterHourly')
+  // 会社ごとの try/catch(§10-4)で例外が応答に乗らなくなった分、手動実行は従来どおり失敗を画面に出す(AC-B20・regression-reviewer 中-1)。
+  if (result.failures.length > 0) {
+    throw new HttpsError('internal', `サーバーバックアップの実行に失敗しました: ${result.failures.map((failure) => `${failure.workspaceKey}: ${failure.message}`).join(' / ')}`, { reason: 'auto-backup-failed', failures: result.failures })
+  }
   return result
 })
+
+type WorkspaceAutoBackupRunResult = {
+  workspaceKey: string
+  backupDateKey: string
+  storagePath: string
+  backupKind: WorkspaceAutoBackupKind
+  layout: WorkspaceBackupLayout
+  googleDriveBackup: GoogleDriveBackupDiagnostic
+}
+
+type WorkspaceAutoBackupRunParams = {
+  workspaceDoc: FirebaseFirestore.QueryDocumentSnapshot
+  backupKind: WorkspaceAutoBackupKind
+  backupDateKey: string
+  savedAt: string
+  now: Date
+}
 
 async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind) {
   const now = new Date()
   const savedAt = now.toISOString()
   const backupDateKey = toQuarterHourlyDateKeyJst(now)
-  logger.info(`[AutoBackup] Starting ${backupKind} backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}`)
+  // 書く形式は runtime env(WORKSPACE_AUTO_BACKUP_LAYOUT / _OVERRIDES・§10-7)。読むのは設定に関係なく両形式。
+  const layoutConfig = parseWorkspaceAutoBackupLayoutConfig(process.env)
+  for (const warning of layoutConfig.warnings) logger.warn(`[AutoBackup] ${warning}`)
+  logger.info(`[AutoBackup] Starting ${backupKind} backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}, defaultLayout=${layoutConfig.defaultLayout}`)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   logger.info(`[AutoBackup] Found ${workspacesSnapshot.docs.length} workspace(s)`)
-  const bucket = storage.bucket(STORAGE_BUCKET)
-  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string; backupKind: WorkspaceAutoBackupKind; googleDriveBackup: GoogleDriveBackupDiagnostic }> = []
+  const results: WorkspaceAutoBackupRunResult[] = []
+  const failures: Array<{ workspaceKey: string; message: string }> = []
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id
-    logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind})`)
-    const { snapshot, latestSourceSavedAt, missingClassroomIds } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })
-    if (missingClassroomIds.length > 0) {
-      logger.error(`[AutoBackup] 組み立てられない教室を除いて書く(INV-14) workspace=${workspaceKey} missingClassroomIds=${missingClassroomIds.join(',')}`)
-    }
-    const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
-    const snapshotJson = serializeWorkspaceBackupJson(snapshot)
-
-    await bucket.file(storagePath).save(snapshotJson, {
-      resumable: false,
-      contentType: 'application/json; charset=utf-8',
-      metadata: {
-        cacheControl: 'private, max-age=0, no-transform',
-      },
-    })
-    logger.info(`[AutoBackup] Saved to Storage: ${storagePath}`)
-
-    const summaryRef = workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey)
-
-    await Promise.all([
-      summaryRef.set({
-        backupDateKey,
-        backupKind,
-        displayLabel: buildWorkspaceAutoBackupDisplayLabel(backupDateKey, backupKind),
-        savedAt,
-        sourceSavedAt: latestSourceSavedAt,
-        storagePath,
-        createdAt: savedAt,
-        // 組み立てられずに除いた教室(§9-5-3)。空配列でも残し、15 分毎のバックアップが整合監視を兼ねるようにする。
-        missingClassroomIds,
-      } satisfies WorkspaceAutoBackupSummaryDoc, { merge: true }),
-      workspaceDoc.ref.set({
-        serverAutoBackupLastSavedAt: savedAt,
-        serverAutoBackupLastBackupDateKey: backupDateKey,
-        serverAutoBackupLastBackupKind: backupKind,
-        serverAutoBackupLastStoragePath: storagePath,
-      }, { merge: true }),
-    ])
-    logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`)
-
-    await pruneWorkspaceServerAutoBackups(workspaceKey, now)
-    let googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
-      workspaceKey,
-      backupDateKey,
-      backupKind,
-      status: 'disabled',
-    })
-    if (isGoogleDriveBackupConfigured()) {
-      try {
-        const googleDriveResult = await upsertWorkspaceGoogleDriveBackup({
-          workspaceKey,
-          backupDateKey,
-          backupKind,
-          snapshotJson,
-          savedAt,
-          sourceSavedAt: latestSourceSavedAt,
-        })
-        await pruneWorkspaceGoogleDriveBackups(workspaceKey, now)
-        googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
-          workspaceKey,
-          backupDateKey,
-          backupKind,
-          status: 'synced',
-          fileId: googleDriveResult?.fileId ?? '',
-          fileName: googleDriveResult?.fileName ?? '',
-        })
-        await workspaceDoc.ref.set({
-          googleDriveBackupLastSyncedAt: savedAt,
-          googleDriveBackupLastBackupDateKey: backupDateKey,
-          googleDriveBackupLastBackupKind: backupKind,
-          googleDriveBackupLastFileId: googleDriveResult?.fileId ?? '',
-          googleDriveBackupLastFileName: googleDriveResult?.fileName ?? '',
-          googleDriveBackupLastError: '',
-        }, { merge: true })
-        await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true })
-        logger.info(`[AutoBackup] Synced Google Drive backup: workspace=${workspaceKey}, fileName=${googleDriveResult?.fileName ?? ''}`)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
-          workspaceKey,
-          backupDateKey,
-          backupKind,
-          status: 'failed',
-          error,
-        })
-        logger.error(`[AutoBackup] Google Drive sync failed: workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`, error)
-        await Promise.all([
-          workspaceDoc.ref.set({
-            googleDriveBackupLastError: message,
-            googleDriveBackupLastErrorHint: googleDriveBackup.errorHint ?? '',
-            googleDriveBackupLastErrorAt: savedAt,
-            googleDriveBackupLastBackupDateKey: backupDateKey,
-            googleDriveBackupLastBackupKind: backupKind,
-            googleDriveBackupLastAuthSource: googleDriveBackup.authSource,
-            googleDriveBackupLastServiceAccountEmail: googleDriveBackup.serviceAccountEmail,
-            googleDriveBackupLastFolderIdMasked: googleDriveBackup.folderIdMasked,
-          }, { merge: true }),
-          summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }),
-        ]).catch(() => undefined)
+    // ★会社ごとに例外を閉じ込める(1 社の失敗をほかの社のその回のバックアップへ広げない・AC-B19・§10-4)。
+    //   失敗は関数ログと開発者メール(auto-backup-failed・会社ごとに 1 時間 1 通)で知らせ、手動実行の応答にも failures で返す。
+    try {
+      let layout = resolveWorkspaceAutoBackupLayout(workspaceKey, layoutConfig)
+      if (layout === WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM && !isSafeWorkspaceBackupPathSegment(workspaceKey)) {
+        logger.error(`[AutoBackup] workspace=${workspaceKey} の会社キーに Storage のパスへ使えない文字があるため、旧形式で書きます`)
+        layout = 'legacy'
       }
-    } else {
-      await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }).catch(() => undefined)
+      logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind}, layout=${layout})`)
+      const params: WorkspaceAutoBackupRunParams = { workspaceDoc, backupKind, backupDateKey, savedAt, now }
+      results.push(layout === WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM
+        ? await runPerClassroomWorkspaceBackupForWorkspace(params)
+        : await runLegacyWorkspaceBackupForWorkspace(params))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.error(`[AutoBackup] workspace=${workspaceKey} の ${backupKind} バックアップ(${backupDateKey})に失敗しました。ほかの会社は続行します`, error)
+      failures.push({ workspaceKey, message })
+      await notifySaveFailureByMail({
+        kind: 'auto-backup-failed',
+        workspaceKey,
+        classroomId: 'auto-backup',
+        saveId: '',
+        savedAt,
+        updatedBy: 'system',
+        client: { appVersion: '', userAgent: '' },
+        detail: `${backupKind} ${backupDateKey}: ${message}`,
+      })
     }
-    results.push({ workspaceKey, backupDateKey, storagePath, backupKind, googleDriveBackup })
   }
 
-  logger.info(`[AutoBackup] Completed ${backupKind}: ${results.length} workspace(s) backed up`)
-  return { backupDateKey, backupKind, workspaceCount: results.length, results, googleDriveBackups: results.map((result) => result.googleDriveBackup) }
+  logger.info(`[AutoBackup] Completed ${backupKind}: ${results.length} workspace(s) backed up${failures.length > 0 ? `, ${failures.length} failed (${failures.map((failure) => failure.workspaceKey).join(',')})` : ''}`)
+  return { backupDateKey, backupKind, workspaceCount: results.length, results, failures, googleDriveBackups: results.map((result) => result.googleDriveBackup) }
+}
+
+/**
+ * 教室別形式(§10-4・`WORKSPACE_AUTO_BACKUP_LAYOUT=per-classroom-v1`)。教室ごとに「組み立て → gzip → Storage → Drive」を順番に行い
+ * (1 教室ぶんのメモリ・AC-B18)、すべての教室の後に目次、その後に要約(ここで初めて一覧に出る・AC-B10)、最後に間引き。
+ * 組み立てられない教室は空で書かずに除く(INV-14・AC-B8)。書き込みに 2 回失敗した教室も除く(write-failed・AC-B9)。
+ * Drive の一覧と掃除は 1 日 1 回(JST 3:00 の回)だけ(ファイル数が教室数倍になるため・§10-6)。
+ */
+async function runPerClassroomWorkspaceBackupForWorkspace(params: WorkspaceAutoBackupRunParams): Promise<WorkspaceAutoBackupRunResult> {
+  const { workspaceDoc, backupKind, backupDateKey, savedAt, now } = params
+  const workspaceKey = workspaceDoc.id
+  const sources = await loadWorkspaceBackupSources(workspaceKey, savedAt)
+  // 目次の Drive ファイル(同期済みの印として要約・workspace 文書に残す)。クロージャから書くので入れ物にする。
+  const driveIndexHolder: { file: { fileId: string; fileName: string } | null } = { file: null }
+  const mirror = isGoogleDriveBackupConfigured()
+    ? {
+        backupKind,
+        backupDateKey,
+        savedAt,
+        sourceSavedAt: sources.latestSourceSavedAt,
+        onIndexMirrored: (file: { fileId: string; fileName: string }) => {
+          driveIndexHolder.file = file
+        },
+      }
+    : null
+  const written = await writePerClassroomWorkspaceBackup({
+    workspaceKey,
+    backupDateKey,
+    savedAt,
+    sourceSavedAt: sources.latestSourceSavedAt,
+    folderPrefix: buildWorkspaceBackupTimePointPrefix(workspaceKey, backupDateKey),
+    users: sources.users,
+    classrooms: sources.classrooms,
+    failurePolicy: { assembly: 'exclude', write: 'exclude' },
+    io: buildPerClassroomBackupIo({ workspaceKey, reader: 'auto-backup', mirror }),
+  })
+  const missingClassroomIds = listWorkspaceBackupMissingClassroomIds(written.index)
+  if (missingClassroomIds.length > 0) {
+    logger.error(`[AutoBackup] 組み立てられない・書けない教室を除いて書く(INV-14) workspace=${workspaceKey} missing=${written.missingClassrooms.map((entry) => `${entry.id}:${entry.reason}`).join(',')}`)
+  }
+  logger.info(`[AutoBackup] Saved per-classroom backup to Storage: ${written.indexPath} (classrooms=${written.writtenClassroomIds.length}, bytes=${written.totalBytes}, gzip=${written.compressedBytes})`)
+
+  // 要約(一覧の正本)。★教室の一覧や教室名は載せない(要約は会社のメンバー全員が読めるため・AC-B7)。
+  const summaryRef = workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey)
+  await Promise.all([
+    summaryRef.set({
+      backupDateKey,
+      backupKind,
+      displayLabel: buildWorkspaceAutoBackupDisplayLabel(backupDateKey, backupKind),
+      savedAt,
+      sourceSavedAt: sources.latestSourceSavedAt,
+      storagePath: written.indexPath,
+      createdAt: savedAt,
+      // 組み立てられず・書けずに除いた教室(§9-5-3・§10-4)。空配列でも残し、15 分毎のバックアップが整合監視を兼ねるようにする。
+      missingClassroomIds,
+      layout: WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM,
+      classroomCount: written.writtenClassroomIds.length,
+    } satisfies WorkspaceAutoBackupSummaryDoc, { merge: true }),
+    workspaceDoc.ref.set({
+      serverAutoBackupLastSavedAt: savedAt,
+      serverAutoBackupLastBackupDateKey: backupDateKey,
+      serverAutoBackupLastBackupKind: backupKind,
+      serverAutoBackupLastStoragePath: written.indexPath,
+    }, { merge: true }),
+  ])
+  logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}, layout=${WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM}`)
+
+  await pruneWorkspaceServerAutoBackups(workspaceKey, now)
+
+  let googleDriveBackup = await buildGoogleDriveBackupDiagnostic({ workspaceKey, backupDateKey, backupKind, status: 'disabled' })
+  if (mirror) {
+    const mirroredIndex = driveIndexHolder.file
+    if (written.mirrorFailures.length === 0) {
+      googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+        workspaceKey,
+        backupDateKey,
+        backupKind,
+        status: 'synced',
+        fileId: mirroredIndex?.fileId ?? '',
+        fileName: mirroredIndex?.fileName ?? '',
+      })
+      await workspaceDoc.ref.set({
+        googleDriveBackupLastSyncedAt: savedAt,
+        googleDriveBackupLastBackupDateKey: backupDateKey,
+        googleDriveBackupLastBackupKind: backupKind,
+        googleDriveBackupLastFileId: mirroredIndex?.fileId ?? '',
+        googleDriveBackupLastFileName: mirroredIndex?.fileName ?? '',
+        googleDriveBackupLastError: '',
+      }, { merge: true })
+      await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true })
+      logger.info(`[AutoBackup] Synced Google Drive backup (per classroom): workspace=${workspaceKey}, files=${written.writtenClassroomIds.length + 1}, index=${mirroredIndex?.fileName ?? ''}`)
+    } else {
+      const message = written.mirrorFailures.map((failure) => `${failure.target}: ${failure.message}`).join(' / ')
+      googleDriveBackup = await buildGoogleDriveBackupDiagnostic({ workspaceKey, backupDateKey, backupKind, status: 'failed', error: new Error(message) })
+      logger.error(`[AutoBackup] Google Drive sync failed for ${written.mirrorFailures.length} file(s): workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}: ${message}`)
+      await Promise.all([
+        workspaceDoc.ref.set({
+          googleDriveBackupLastError: message,
+          googleDriveBackupLastErrorHint: googleDriveBackup.errorHint ?? '',
+          googleDriveBackupLastErrorAt: savedAt,
+          googleDriveBackupLastBackupDateKey: backupDateKey,
+          googleDriveBackupLastBackupKind: backupKind,
+          googleDriveBackupLastAuthSource: googleDriveBackup.authSource,
+          googleDriveBackupLastServiceAccountEmail: googleDriveBackup.serviceAccountEmail,
+          googleDriveBackupLastFolderIdMasked: googleDriveBackup.folderIdMasked,
+        }, { merge: true }),
+        summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }),
+      ]).catch(() => undefined)
+    }
+    if (isGoogleDriveDailyPruneRunAt(now)) {
+      try {
+        await pruneWorkspaceGoogleDriveBackups(workspaceKey, now)
+      } catch (error) {
+        logger.warn(`[AutoBackup] Google Drive prune failed: workspace=${workspaceKey}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  } else {
+    await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }).catch(() => undefined)
+  }
+  return { workspaceKey, backupDateKey, storagePath: written.indexPath, backupKind, layout: WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM, googleDriveBackup }
+}
+
+/** 旧形式(会社ごとに全教室を 1 本の JSON・非圧縮)。2026-10-29 の教室別化より前の挙動をそのまま残す(BK-4・設定を戻せば次の回からこれで書く)。 */
+async function runLegacyWorkspaceBackupForWorkspace(params: WorkspaceAutoBackupRunParams): Promise<WorkspaceAutoBackupRunResult> {
+  const { workspaceDoc, backupKind, backupDateKey, savedAt, now } = params
+  const workspaceKey = workspaceDoc.id
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  const { snapshot, latestSourceSavedAt, missingClassroomIds } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt, { onAssemblyFailure: 'exclude', reader: 'auto-backup' })
+  if (missingClassroomIds.length > 0) {
+    logger.error(`[AutoBackup] 組み立てられない教室を除いて書く(INV-14) workspace=${workspaceKey} missingClassroomIds=${missingClassroomIds.join(',')}`)
+  }
+  const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
+  const snapshotJson = serializeWorkspaceBackupJson(snapshot)
+
+  await bucket.file(storagePath).save(snapshotJson, {
+    resumable: false,
+    contentType: 'application/json; charset=utf-8',
+    metadata: {
+      cacheControl: 'private, max-age=0, no-transform',
+    },
+  })
+  logger.info(`[AutoBackup] Saved to Storage: ${storagePath}`)
+
+  const summaryRef = workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey)
+
+  await Promise.all([
+    summaryRef.set({
+      backupDateKey,
+      backupKind,
+      displayLabel: buildWorkspaceAutoBackupDisplayLabel(backupDateKey, backupKind),
+      savedAt,
+      sourceSavedAt: latestSourceSavedAt,
+      storagePath,
+      createdAt: savedAt,
+      // 組み立てられずに除いた教室(§9-5-3)。空配列でも残し、15 分毎のバックアップが整合監視を兼ねるようにする。
+      missingClassroomIds,
+      // 同じ時点キーに教室別形式の要約が先に書かれていても(切り替えを戻した直後など)、この回の形式を明示して読み手を旧形式へ向ける(merge で layout が残らないように・中-2)。
+      layout: 'legacy',
+      classroomCount: snapshot.classrooms.length,
+    } satisfies WorkspaceAutoBackupSummaryDoc, { merge: true }),
+    workspaceDoc.ref.set({
+      serverAutoBackupLastSavedAt: savedAt,
+      serverAutoBackupLastBackupDateKey: backupDateKey,
+      serverAutoBackupLastBackupKind: backupKind,
+      serverAutoBackupLastStoragePath: storagePath,
+    }, { merge: true }),
+  ])
+  logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`)
+
+  await pruneWorkspaceServerAutoBackups(workspaceKey, now)
+  let googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+    workspaceKey,
+    backupDateKey,
+    backupKind,
+    status: 'disabled',
+  })
+  if (isGoogleDriveBackupConfigured()) {
+    try {
+      const googleDriveResult = await upsertWorkspaceGoogleDriveBackup({
+        workspaceKey,
+        backupDateKey,
+        backupKind,
+        snapshotJson,
+        savedAt,
+        sourceSavedAt: latestSourceSavedAt,
+      })
+      await pruneWorkspaceGoogleDriveBackups(workspaceKey, now)
+      googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+        workspaceKey,
+        backupDateKey,
+        backupKind,
+        status: 'synced',
+        fileId: googleDriveResult?.fileId ?? '',
+        fileName: googleDriveResult?.fileName ?? '',
+      })
+      await workspaceDoc.ref.set({
+        googleDriveBackupLastSyncedAt: savedAt,
+        googleDriveBackupLastBackupDateKey: backupDateKey,
+        googleDriveBackupLastBackupKind: backupKind,
+        googleDriveBackupLastFileId: googleDriveResult?.fileId ?? '',
+        googleDriveBackupLastFileName: googleDriveResult?.fileName ?? '',
+        googleDriveBackupLastError: '',
+      }, { merge: true })
+      await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true })
+      logger.info(`[AutoBackup] Synced Google Drive backup: workspace=${workspaceKey}, fileName=${googleDriveResult?.fileName ?? ''}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+        workspaceKey,
+        backupDateKey,
+        backupKind,
+        status: 'failed',
+        error,
+      })
+      logger.error(`[AutoBackup] Google Drive sync failed: workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`, error)
+      await Promise.all([
+        workspaceDoc.ref.set({
+          googleDriveBackupLastError: message,
+          googleDriveBackupLastErrorHint: googleDriveBackup.errorHint ?? '',
+          googleDriveBackupLastErrorAt: savedAt,
+          googleDriveBackupLastBackupDateKey: backupDateKey,
+          googleDriveBackupLastBackupKind: backupKind,
+          googleDriveBackupLastAuthSource: googleDriveBackup.authSource,
+          googleDriveBackupLastServiceAccountEmail: googleDriveBackup.serviceAccountEmail,
+          googleDriveBackupLastFolderIdMasked: googleDriveBackup.folderIdMasked,
+        }, { merge: true }),
+        summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }),
+      ]).catch(() => undefined)
+    }
+  } else {
+    await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }).catch(() => undefined)
+  }
+  return { workspaceKey, backupDateKey, storagePath, backupKind, layout: 'legacy', googleDriveBackup }
 }
 
 // ---------------------------------------------------------------------------
