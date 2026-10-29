@@ -116,18 +116,28 @@ export async function writePerClassroomWorkspaceBackup<TClassroom extends { id: 
       continue
     }
     // (2) 教室ファイル(1 教室だけの WorkspaceSnapshot＋backupFile)→ JSON → ハッシュ → gzip。
-    const file = buildWorkspaceBackupClassroomFile({
-      workspaceKey: params.workspaceKey,
-      backupDateKey: params.backupDateKey,
-      savedAt: params.savedAt,
-      sourceSavedAt: assembled.sourceSavedAt,
-      classroom: assembled.entry,
-    })
-    const json = serializeWorkspaceBackupValue(file)
+    //     教室 ID に Storage のパスへ使えない文字があるときは「組み立てられない教室」と同じ扱い(その教室だけ除く・会社全体の時点は作る)。
+    let json: string
+    let path: string
+    try {
+      const file = buildWorkspaceBackupClassroomFile({
+        workspaceKey: params.workspaceKey,
+        backupDateKey: params.backupDateKey,
+        savedAt: params.savedAt,
+        sourceSavedAt: assembled.sourceSavedAt,
+        classroom: assembled.entry,
+      })
+      json = serializeWorkspaceBackupValue(file)
+      path = buildWorkspaceBackupClassroomFilePath(params.folderPrefix, classroomId)
+    } catch (error) {
+      await io.onAssemblyFailure({ classroomId, error })
+      if (params.failurePolicy.assembly === 'throw') throw error
+      missingClassrooms.push({ id: classroomId, reason: 'assembly-failed' })
+      continue
+    }
     const bytes = measureWorkspaceBackupJsonBytes(json)
     const sha256 = io.hash(json)
     const body = io.compress(json)
-    const path = buildWorkspaceBackupClassroomFilePath(params.folderPrefix, classroomId)
     // (3) Storage へ書く(1 回やり直し)。
     let written = false
     let lastError: unknown = null

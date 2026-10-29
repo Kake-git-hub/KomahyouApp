@@ -293,7 +293,8 @@ describe('INV-14 行（読み手）: どの読み手も唯一の読み手を通�
     const incident = slice(indexTs, 'async function writeWorkspaceIncidentBackup(', 'async function writeLatestClassroomRollback(')
     expect(incident).toContain("failurePolicy: { assembly: 'throw', write: 'throw' },")
     expect(incident).toContain("io: buildPerClassroomBackupIo({ workspaceKey, reader: 'incident-backup', mirror: null }),")
-    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error)) throw error')
+    // 組み立て失敗(INV-14)と教室ファイルを作れない文字種違反(BK-7)はどちらも投げ直す(欠けた一式を控えにしない)。
+    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error) || isWorkspaceBackupLayoutError(error)) throw error')
     for (const [startMarker, endMarker] of [
       ['export const downloadServerAutoBackup = onCall(', 'const [content] = await file.download()'],
       ['export const prepareServerAutoBackupRestore = onCall(', 'return { layout, index }'],

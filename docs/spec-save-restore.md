@@ -886,19 +886,22 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
    - 教室ごとに「唯一の読み手 `readClassroomSnapshotPayload` で組み立て → 教室ファイル JSON → SHA-256 → gzip → Storage → Drive（設定時）→ メモリを解放」を**順番に**行う
      （1 教室ぶんのメモリ・AC-B18。全教室を並列にしない）。
    - **組み立てに失敗**（INV-14）: ファイルを書かず `missingClassrooms`（`assembly-failed`）に入れ、`snapshot-assembly-failed` で通知（今と同じ）。
+     教室 ID に Storage のパスへ使えない文字がある（教室ファイルを作れない）ときも同じ扱い（その教室だけ除く・会社全体の時点は作る）。
    - **書き込みに失敗**: 1 回やり直し、だめなら `write-failed` として同じ扱い。その時点はほかの教室ぶんで公開する（AC-B9）。
    - **Drive の失敗**: 止めずに集め、要約の `googleDriveBackupStatus: 'failed'` と workspace 文書の `googleDriveBackupLastError` に残す（旧形式と同じ見え方）。
    - すべての教室が終わったら `index.json` → 要約（**ここで初めて一覧に出る**）→ 間引き（§10-6）。
    - 途中で止まった（時間切れ・メモリ不足・例外）: 要約が書かれないので一覧に出ない。残ったファイルは取り残しの掃除で消す（§10-6・AC-B10）。
 3. 旧形式なら今までどおり（`runLegacyWorkspaceBackupForWorkspace`・全体 1 本・毎回 Drive の掃除）。全体 JSON の形は共有純関数 `buildWorkspaceBackupSnapshot`（教室ファイル・組み立て直しと同じ 1 か所・AC-B1）。
+   旧形式の要約にも `layout: 'legacy'`・`classroomCount` を書く（同じ時点キーに教室別形式の要約が先にあっても読み手をこの回の形式へ向ける）。
 4. 手動実行（`triggerWorkspaceServerAutoBackup`・開発者のみ・静音帯でも実行）は同じ経路（設定も同じ）。応答に `layout`・`failures` が増える以外は変わらない（AC-B20）。
+   会社ごとの try/catch で例外が応答に乗らなくなった分、手動実行は `failures` が 1 件でもあれば従来どおり `internal` を投げて画面に失敗を出す。
 5. 関数の設定は据え置き（生成 540 秒/2GiB・callable 512MiB）。段階 3 の実測のあとで下げてよい（任意）。
 
 ### 10-5. 読む側（4 入口と同期・ツール。形式は要約の `layout` で読み分ける・旧形式の処理は今のまま）
 
 | 入口 | 旧形式 | 教室別形式 |
 |------|--------|-----------|
-| 室長の自教室復元（§4-1）・Feature B（§7）＝`downloadClassroomFromServerAutoBackup` | 今のまま（全体を読んで `find`） | 教室 ID の文字種検査（会員の確認より前・AC-B5）→ 権限（今のまま）→ 目次でその教室が無ければ not-found（今と同じ文言）→ **その教室のファイルだけ**を読む（AC-B4）→ `backupFile`（会社・時点・教室 ID）と中身の教室 ID を要求と照合してから返す（AC-B6）。応答の形は変えない |
+| 室長の自教室復元（§4-1）・Feature B（§7）＝`downloadClassroomFromServerAutoBackup` | 今のまま（全体を読んで `find`） | 教室 ID の文字種検査（会員の確認より前・AC-B5）→ 権限（今のまま）→ 目次でその教室が無ければ not-found（今と同じ文言・Storage のパスは出さない）→ **その教室のファイルだけ**を読む（AC-B4）→ 目次の `sha256` と照合 → `backupFile`（会社・時点・教室 ID）と中身の教室 ID を要求と照合してから返す（AC-B6）。応答の形は変えない |
 | 開発者の全体復元（§4）＝`restoreServerAutoBackup` | 今のまま（`downloadServerAutoBackup`） | 新しい callable `prepareServerAutoBackupRestore`（開発者のみ）が復元前の控え（教室別・全教室ぶん）を書き、目次を返す → クライアントは教室ごとに `downloadClassroomFromServerAutoBackup` を呼び、共有純関数 `assembleWorkspaceBackupFromIndex` で `WorkspaceSnapshot` を組み立て（応答の教室 ID が目次と違えば中止）→ **今と同じ教室選択モーダル**へ渡す（AC-B15）。クライアントの入口は 1 つ `downloadFirebaseServerAutoBackupJson(summary, { purpose })` |
 | 開発者のローカル同期フォルダ | `downloadServerAutoBackup` に `purpose: 'local-sync'` を渡し、**控えを書かない**（Q8・AC-B17） | 同じ組み立てで 1 時点 1 ファイルを書く（手元のファイルの形は変えない）。`purpose: 'local-sync'` で控えを書かない |
 | JSON 読込（§5）・`tools/snapshot-diff.mjs` | 今のまま | 教室ファイルは 1 教室だけの `WorkspaceSnapshot` なので変更なしで読める（AC-B3・テストで固定） |
@@ -908,12 +911,16 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
 ### 10-6. 保持と間引き（§8-2 を時点単位で適用）
 
 - 保持の判定は今と同じ `shouldKeepWorkspaceAutoBackup`（時点の `savedAt` だけで決める・BK-1）。
-- **間引きの単位は時点**（Q6）: 残さない時点は **教室ファイルと目次（`15min/{key}/` の下を全部）→ 要約**の順で消す（要約を先に消すとファイルが取り残される・AC-B12）。旧形式の時点は 1 本を消す（今のまま）。
+- **間引きの単位は時点**（Q6）: 残さない時点は **教室ファイルと目次（`15min/{key}/` の下を全部）→ 要約**の順で消す（要約を先に消すとファイルが取り残される・AC-B12）。
+  同じ時点キーに旧形式の 1 本と教室別形式のフォルダが混ざりうる（切り替えの前後に同じ 15 分枠で手動実行した・設定を戻した）ので、要約の `layout` に関係なく
+  旧形式の 1 本（`storagePath` と旧形式の既定パス）と時点フォルダの**両方**を消す（無ければ何も起きない）。
 - **取り残しの掃除**: 要約の無い `15min/{key}/` フォルダのうち、いちばん新しいファイルの作成から **1 日以上**たったものを消す（要約がある・作成時刻が読めない・未来のものは消さない）。
   `cleanupOldSaveAttempts` の巡回に**独立した時間予算（30 秒）**で相乗りし、Firestore 巡回より先に走らせる。**既定は空実行**（`WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN` 未設定＝1・件数だけログ）。
   実物の件数をログで確かめてから `0` にして削除を有効にする。
 - **Drive**（Q4）: 保持は Storage と同じ規則（`appProperties.savedAt` で判定・`.json.gz` は 400 日）。ファイル数が教室数倍になる（20 教室で約 1 万本）ので、
-  教室別形式の回では **Drive の一覧と掃除を 1 日 1 回（JST 3:00 の回）**だけ行う（`isGoogleDriveDailyPruneRunAt`）。旧形式の回は毎回（今のまま）。
+  教室別形式の回では **Drive の一覧と掃除を 1 日 1 回（JST 3:00 の回＝時点キーが `T03-00` の回。実行開始が 3:01 にずれても同じ回）**だけ行う（`isGoogleDriveDailyPruneRunAt`）。
+  1 回の削除が約 55 回 × 教室数（20 教室で約 1,100 件）になるので DELETE は同時 10 件に抑える（落ちた分は翌日の回がもう一度拾う）。旧形式の回は毎回（今のまま）。
+  掃除が 1 日 1 回なので Drive には最大でもう 1 日分の 15 分ファイル（1 社 約 73 × 教室数 × 0.75MB・20 教室で約 1.1GB）が余分に残る。
   30 教室で約 12GB（15GB の 80%）になるので、**25 教室を超えたら Drive の日次保持を短くするか再判断**（§10-12）。
 - 復元前の控え（incident・90 日）は今の掃除（ファイルの作成時刻で 1 本ずつ）がフォルダでもそのまま効く。
 - §8-1 #7・#8・#10 の行と §8-2 の容量の行は本節に合わせて更新した（2026-10-29）。
@@ -983,6 +990,9 @@ INV-14 マトリクスの「行（書き手）」。段階 A の暫定ガード�
 - Drive の日次保持の見直し: 25 教室を超えたら再判断。
 - `backupRetentionEstimate.ts`・開発者画面の容量見積り（「1 時点の大きさ × 保持本数」のまま。教室別＋gzip では約 1/10 になる）: 段階 3 で直す。
 - 目次と教室ファイルから全体を組み立て直す CLI（`tools/`）: Drive からの復旧は教室ファイル 1 本を教室画面の JSON 読込で読めるので当面不要。必要になったら共有純関数 `assembleWorkspaceBackupFromClassroomFiles` を使う。
+  復元前の控えも教室別なので、全教室を一度に戻すには教室ごとに N 回の読み込みが要る（開発者の JSON 読込に教室ファイルを渡したときは、教室選択モーダルの合成が今の室長を残す）。
+- 書き終わる前に失敗した回の Drive ファイル（教室ごとのミラーは目次・要約より先に送るため）: Storage 側は取り残しの掃除が消すが、Drive 側は保持の規則で消えるまで残る（3:00 の回なら 400 日）。
+  数は少なく容量も小さいので放置。気になれば Drive の掃除に「要約の無い時点の削除」を足す。
 - 生成関数のメモリ（2GiB）を下げる: 段階 3 の実測のあと（費用は CPU 時間が主で効果は小さい）。
 
 ---

@@ -368,9 +368,20 @@ describe('保存ごとの教室版履歴(2026-10-22 案 1)', () => {
 })
 
 describe('isGoogleDriveDailyPruneRunAt (教室別形式の Drive の掃除は 1 日 1 回・JST 3:00 の回だけ・§10-6)', () => {
-  it('日次アンカーの JST 3:00 だけ true', () => {
+  it('日次アンカーの JST 3:00 の回(時点キーが T03-00)だけ true。実行開始が 3:01 や 3:14 にずれても同じ回', () => {
     expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:00:00Z'))).toBe(true) // JST 03:00
-    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:00:59Z'))).toBe(true) // 実行開始が数秒ずれても同じ分
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:00:59Z'))).toBe(true)
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:01:30Z'))).toBe(true) // JST 03:01(起動の遅れ)
+    expect(isGoogleDriveDailyPruneRunAt(new Date('2026-07-09T18:14:59Z'))).toBe(true) // JST 03:14 = まだ T03-00 の回
+  })
+
+  it('旧形式の 1 本のパスと教室別形式の時点フォルダは同じ階層(15min/{key})にある(権威の分散をパリティで固定・低-8)', async () => {
+    const shared = await import('./generated/workspaceBackupLayout')
+    const legacy = buildWorkspaceAutoBackupStoragePath('main', '2026-10-29T15-00', 'quarterHourly')
+    expect(legacy).toBe('workspace-auto-backups/main/15min/2026-10-29T15-00.json')
+    expect(shared.buildWorkspaceBackupTimePointPrefix('main', '2026-10-29T15-00')).toBe(`${legacy.slice(0, -'.json'.length)}/`)
+    expect(shared.parseWorkspaceBackupTimePointPath(`${legacy.slice(0, -'.json'.length)}/index.json`)?.backupDateKey).toBe('2026-10-29T15-00')
+    expect(shared.parseWorkspaceBackupTimePointPath(legacy)).toBeNull()
   })
 
   it('3:15・2:45・昼間・UTC の 3:00(JST 12:00)は false', () => {

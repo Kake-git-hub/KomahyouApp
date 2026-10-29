@@ -621,7 +621,7 @@ export function shouldInjectEditingStateIntoClassroom(
   return loadedEditingClassroomId === actingClassroomId
 }
 
-function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
+export function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
   const currentClassroomById = new Map(currentSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
   const restoringClassroomById = new Map(restoringSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
 
@@ -645,8 +645,10 @@ function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnap
   const mergedManagers: WorkspaceUser[] = mergedClassrooms.flatMap((classroom) => {
     const restoringClassroom = restoringClassroomById.get(classroom.id)
     const useRestoringClassroom = restoringClassroom && restoreByClassroomId.get(classroom.id)
+    // 復元する教室の室長は復元元の users から採る。復元元に無ければ(教室別形式の教室ファイル=1 教室だけの WorkspaceSnapshot は users が空・
+    // docs/spec-save-restore.md §10-3)今の users から補う(室長をメモリ上で落とさない・regression-reviewer 低-7)。
     const sourceUser = useRestoringClassroom
-      ? restoringUserById.get(classroom.managerUserId)
+      ? restoringUserById.get(classroom.managerUserId) ?? currentUserById.get(classroom.managerUserId)
       : currentUserById.get(classroom.managerUserId) ?? restoringUserById.get(classroom.managerUserId)
     return sourceUser ? [sourceUser] : []
   })

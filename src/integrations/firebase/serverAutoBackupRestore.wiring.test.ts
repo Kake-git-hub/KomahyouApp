@@ -49,6 +49,11 @@ describe('開発者の全体復元とローカル同期の配線(App.tsx)', () =
     expect(APP_TSX).not.toMatch(/\bdownloadFirebaseServerAutoBackup\b[^J]/u)
     expect(APP_TSX).toContain('downloadFirebaseServerAutoBackupJson')
   })
+
+  it('教室選択モーダルの合成は、復元元に室長が無ければ(教室別の教室ファイル=users が空)今の室長を残す(buildWorkspaceSnapshotMergeFromSelection・App.test.ts で直接も固定)', () => {
+    const body = sliceBetween(APP_TSX, 'export function buildWorkspaceSnapshotMergeFromSelection(', 'const nextCurrentUserId')
+    expect(body).toContain('? restoringUserById.get(classroom.managerUserId) ?? currentUserById.get(classroom.managerUserId)')
+  })
 })
 
 describe('layout で読み分ける入口(adminFunctions.ts downloadFirebaseServerAutoBackupJson)', () => {
@@ -56,16 +61,16 @@ describe('layout で読み分ける入口(adminFunctions.ts downloadFirebaseServ
 
   it('旧形式(layout 無し / legacy)は従来の全体ダウンロードへ purpose を渡す。知らない形式は進まない(再読み込みの案内)', () => {
     expect(body).toContain("const layout = summary.layout ?? 'legacy'")
-    expect(body).toContain("if (layout === 'legacy') return downloadFirebaseServerAutoBackup(summary.backupDateKey, { purpose: options.purpose })")
+    expect(body).toContain("if (layout === 'legacy') return deps.downloadLegacy(summary.backupDateKey, { purpose: options.purpose })")
     expect(body).toContain('if (layout !== WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) {')
     expect(body).toContain('画面を再読み込みしてから')
   })
 
   it('教室別形式は 目次(prepare・purpose を渡す)→ 教室ごとに既存 callable で取得 → 応答の教室 ID 照合 → 共有純関数で組み立て → JSON 文字列', () => {
     const order = [
-      'prepareFirebaseServerAutoBackupRestore(summary.backupDateKey, options.purpose)',
+      'deps.prepare(summary.backupDateKey, options.purpose)',
       'for (const [position, classroom] of prepared.index.classrooms.entries())',
-      'downloadClassroomFromFirebaseServerAutoBackup(summary.backupDateKey, classroom.id)',
+      'deps.downloadClassroom(summary.backupDateKey, classroom.id)',
       'if (source.classroomId !== classroom.id) {',
       'serializeWorkspaceBackupValue(assembleWorkspaceBackupFromIndex(prepared.index, classroomData))',
     ].map((needle) => body.indexOf(needle))
@@ -75,10 +80,11 @@ describe('layout で読み分ける入口(adminFunctions.ts downloadFirebaseServ
     expect(body).not.toContain('Promise.all(')
   })
 
-  it('目次は共有純関数で検査してから使う(会社・時点の照合つき・INV-08)。旧形式の API は purpose を送る', () => {
+  it('目次は共有純関数で検査してから使う(会社・時点の照合つき・INV-08)。旧形式の API は purpose を送る。prepare はサーバーの 300 秒より長く待つ', () => {
     const prepare = sliceBetween(ADMIN_FUNCTIONS_TS, 'export async function prepareFirebaseServerAutoBackupRestore(', '\n}\n')
     expect(prepare).toContain('validateWorkspaceBackupIndex(result.data.index, { workspaceKey: config.workspaceKey, backupDateKey })')
     expect(prepare).toContain("'prepareServerAutoBackupRestore'")
+    expect(prepare).toContain('{ timeout: 330_000 }')
     const legacy = sliceBetween(ADMIN_FUNCTIONS_TS, 'export async function downloadFirebaseServerAutoBackup(', '\n}\n')
     expect(legacy).toContain("purpose: options.purpose ?? 'restore'")
   })

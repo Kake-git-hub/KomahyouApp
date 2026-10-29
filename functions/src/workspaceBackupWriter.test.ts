@@ -194,10 +194,19 @@ describe('writePerClassroomWorkspaceBackup(教室ごとに順番に・目次は�
     expect(harness.events).toEqual(['index', 'mirror:index'])
   })
 
-  it('教室 ID に許可外の文字があれば、その教室を書く前に投げる(パスを組み立てない・BK-6)', async () => {
+  it('教室 ID に許可外の文字があれば、その教室は書かずに「組み立てられない教室」として除き(知らせる)、ほかの教室と目次は書く(パスを組み立てない・BK-6)', async () => {
     const harness = buildHarness()
-    await expect(writePerClassroomWorkspaceBackup({ ...BASE, classrooms: [{ id: '../x', name: 'x', students: [] }], failurePolicy: EXCLUDE, io: harness.io })).rejects.toThrowError(expect.objectContaining({ reason: 'invalid-classroom-id' }))
-    expect(harness.events).toEqual(['assemble:../x'])
+    const result = await writePerClassroomWorkspaceBackup({ ...BASE, classrooms: [{ id: '../x', name: 'x', students: [] }, { id: 'c1', name: '教室1', students: ['s1'] }], failurePolicy: EXCLUDE, io: harness.io })
+    expect(harness.events).toEqual(['assemble:../x', 'notify-assembly:../x', 'assemble:c1', 'write:c1', 'mirror:c1', 'index', 'mirror:index'])
+    expect(result.missingClassrooms).toEqual([{ id: '../x', reason: 'assembly-failed' }])
+    expect(result.writtenClassroomIds).toEqual(['c1'])
+    expect([...harness.storage.keys()].some((key) => key.includes('..'))).toBe(false)
+  })
+
+  it('教室 ID に許可外の文字があり、失敗を投げる方針(復元前の控え)なら投げて目次を書かない', async () => {
+    const harness = buildHarness()
+    await expect(writePerClassroomWorkspaceBackup({ ...BASE, classrooms: [{ id: '../x', name: 'x', students: [] }], failurePolicy: THROW, io: harness.io })).rejects.toThrowError(expect.objectContaining({ reason: 'invalid-classroom-id' }))
+    expect(harness.events).toEqual(['assemble:../x', 'notify-assembly:../x'])
     expect(harness.storage.size).toBe(0)
   })
 })

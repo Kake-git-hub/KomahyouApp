@@ -118,6 +118,13 @@ describe('buildSaveFailureAlertMail', () => {
     expect(mail.text).toContain('quarterHourly 2026-10-29T15-00: storage down')
     expect(mail.text).toContain('WORKSPACE_AUTO_BACKUP_LAYOUT')
     expect(mail.text).not.toContain('【保存失敗】')
+    // 教室の保存ではないので、調査を誤誘導する saveAttempts・操作痕跡・版履歴・saveClassroomSnapshot のパスは出さない(低-4)。
+    expect(mail.text).not.toContain('saveAttempts')
+    expect(mail.text).not.toContain('operationTraces')
+    expect(mail.text).not.toContain('classroom-save-history')
+    expect(mail.text).not.toContain('saveClassroomSnapshot')
+    expect(mail.text).toContain('workspaceAutoBackupSummaries')
+    expect(mail.text).toContain('[AutoBackup]')
   })
 
   it('種類の一覧と判定', () => {

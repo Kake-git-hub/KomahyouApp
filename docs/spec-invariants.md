@@ -1089,6 +1089,9 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   2026-09-18 追加（保証文は不変・担保テストの列挙のみ）：`classroomScopedUndo.test.ts`（Undo は取得元の教室にしか戻さない・
   `openClassroom` でも破棄＝`8316830` の塞ぎ残し）・`managerSelfRestore.test.ts` / `managerSelfRestore.wiring.test.ts`
   （室長の自教室復元＝担当・開いている・復元対象の 3 者一致／応答の教室ID照合／差し替えは自教室スロットのみ・他教室は参照不変）。
+  2026-10-29 追加（自動バックアップの教室別化・`spec-save-restore.md` §10・保証文は不変）：`workspaceBackupLayout.test.ts`（教室ファイルの 3 点照合＝要求・パス・中身／
+  教室 ID の文字種検査／目次に無い教室を全体に混ぜない）・`functions/src/workspaceBackup.wiring.test.ts`（文字種検査が会員確認より前／教室別形式はその教室のファイルだけを読む／
+  要約に教室名・教室一覧を載せない）・`src/integrations/firebase/serverAutoBackupRestore.wiring.test.ts`＋`serverAutoBackupDownload.test.ts`（応答の教室 ID が目次と違えば組み立てない）。
 - **担保状況：○（二層）**（コードテスト＋運用ルールの二層で守る。2026-06-06 / 06-13 の運用起点はコード非対象で、
   CLAUDE.md 本番データ保護ルールが担保）。
 

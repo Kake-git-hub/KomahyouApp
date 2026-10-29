@@ -226,7 +226,8 @@ export function shouldKeepClassroomSaveHistory(params: { createdAtMs: number; no
 // **1 日 1 回・日次アンカーの JST 3:00 の回**だけ行う(保持の判定そのものは Storage と同じ shouldKeepGoogleDriveBackupByName)。
 // 旧形式(全体 1 本)の回は従来どおり毎回掃除する(挙動を変えない・BK-8)。
 // ---------------------------------------------------------------------------
+// 判定は「その回の時点キー(15 分に切り捨て)が JST 3:00 の回か」で行う(実行開始が 3:01 にずれた日も同じ回として扱う・regression-reviewer 低-2)。
 export function isGoogleDriveDailyPruneRunAt(date: Date): boolean {
-  const jst = new Date(date.getTime() + JST_OFFSET_IN_MS)
-  return jst.getUTCHours() === WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST && jst.getUTCMinutes() === 0
+  const key = toQuarterHourlyDateKeyJst(date)
+  return key.endsWith(`T${String(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST).padStart(2, '0')}-00`)
 }

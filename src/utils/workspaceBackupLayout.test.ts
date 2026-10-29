@@ -120,6 +120,39 @@ describe('パスと文字種検査(BK-6・AC-B5)', () => {
   })
 })
 
+describe('旧形式の全体 JSON の形(buildWorkspaceBackupSnapshot・ゴールデン)', () => {
+  it('項目と順番は 2026-10-29 より前の index.ts のリテラルと同じ(developerPassword 等の定数・actingClassroomId は先頭の教室・missingClassroomIds は 1 件以上のときだけ)', () => {
+    const c1 = classroom('c1', '教室1', ['s1'])
+    expect(JSON.stringify(buildWorkspaceBackupSnapshot({ savedAt: SAVED_AT, users: USERS, classrooms: [c1] })))
+      .toBe(JSON.stringify({
+        schemaVersion: 1,
+        savedAt: SAVED_AT,
+        developerPassword: 'developer',
+        developerCloudBackupEnabled: false,
+        developerCloudBackupFolderName: '',
+        developerCloudSyncedAutoBackupKeys: [],
+        currentUserId: '',
+        actingClassroomId: 'c1',
+        users: USERS,
+        classrooms: [c1],
+      }))
+    expect(JSON.stringify(buildWorkspaceBackupSnapshot({ savedAt: SAVED_AT, users: [], classrooms: [], missingClassroomIds: ['c9'] })))
+      .toBe(JSON.stringify({
+        schemaVersion: 1,
+        savedAt: SAVED_AT,
+        developerPassword: 'developer',
+        developerCloudBackupEnabled: false,
+        developerCloudBackupFolderName: '',
+        developerCloudSyncedAutoBackupKeys: [],
+        currentUserId: '',
+        actingClassroomId: null,
+        users: [],
+        classrooms: [],
+        missingClassroomIds: ['c9'],
+      }))
+  })
+})
+
 describe('教室ファイル(1 教室だけの WorkspaceSnapshot＋backupFile・AC-B3・AC-B6)', () => {
   it('users は空・classrooms は 1 件・actingClassroomId はその教室・backupFile に 3 点と時刻', () => {
     const file = buildWorkspaceBackupClassroomFile({ workspaceKey: WS, backupDateKey: KEY, savedAt: SAVED_AT, sourceSavedAt: 'src', classroom: classroom('c1', '教室1', ['s1']) })

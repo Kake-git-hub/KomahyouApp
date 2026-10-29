@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseWorkspaceAutoBackupLayoutConfig, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
+import { parseWorkspaceAutoBackupLayoutConfig, readBackupDownloadPurpose, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
 
 describe('自動バックアップの書く形式の設定(WORKSPACE_AUTO_BACKUP_LAYOUT・§10-7)', () => {
   it('未設定・空・legacy は旧形式(既定)。per-classroom-v1 で教室別形式', () => {
@@ -32,5 +32,16 @@ describe('自動バックアップの書く形式の設定(WORKSPACE_AUTO_BACKUP
     const config = parseWorkspaceAutoBackupLayoutConfig({ WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES: 'main,=per-classroom-v1,demo=v9,ok=per-classroom-v1' })
     expect([...config.overrides.entries()]).toEqual([['ok', 'per-classroom-v1']])
     expect(config.warnings).toHaveLength(3)
+  })
+})
+
+describe('復元用ダウンロードの目的(readBackupDownloadPurpose・§10-5 Q8)', () => {
+  it("'local-sync' だけが控えを書かない目的。未指定(古い画面)・'restore'・知らない値は 'restore'(控えを書く・BK-7)", () => {
+    expect(readBackupDownloadPurpose('local-sync')).toBe('local-sync')
+    expect(readBackupDownloadPurpose('restore')).toBe('restore')
+    expect(readBackupDownloadPurpose(undefined)).toBe('restore')
+    expect(readBackupDownloadPurpose(null)).toBe('restore')
+    expect(readBackupDownloadPurpose('x')).toBe('restore')
+    expect(readBackupDownloadPurpose(1)).toBe('restore')
   })
 })

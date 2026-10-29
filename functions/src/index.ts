@@ -96,6 +96,7 @@ import {
 } from './workspaceBackupSchedule'
 import {
   buildRetentionTargets,
+  chunkItems,
   CLASSROOM_SAVE_HISTORY_PRUNE_PAGE_LIMIT,
   CLASSROOM_SAVE_HISTORY_PRUNE_TIME_BUDGET_MS,
   INCIDENT_BACKUP_PRUNE_TIME_BUDGET_MS,
@@ -125,15 +126,15 @@ import {
   isWorkspaceBackupLayoutError,
   listWorkspaceBackupMissingClassroomIds,
   resolveWorkspaceBackupSummaryLayout,
-  resolveWorkspaceBackupTimePointPrefixForSummary,
   validateWorkspaceBackupClassroomFile,
   validateWorkspaceBackupIndex,
+  WORKSPACE_BACKUP_INDEX_FILE_NAME,
   WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM,
   WORKSPACE_BACKUP_QUARTER_HOURLY_FOLDER,
   WORKSPACE_BACKUP_STORAGE_PREFIX,
   type WorkspaceBackupLayout,
 } from './generated/workspaceBackupLayout'
-import { parseWorkspaceAutoBackupLayoutConfig, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
+import { parseWorkspaceAutoBackupLayoutConfig, readBackupDownloadPurpose, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
 import { writePerClassroomWorkspaceBackup, type PerClassroomBackupWriteIo } from './workspaceBackupWriter'
 
 initializeApp()
@@ -155,6 +156,8 @@ const WORKSPACE_LATEST_ROLLBACK_PREFIX = 'workspace-latest-rollbacks'
 const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const GOOGLE_DRIVE_API_SCOPE = 'https://www.googleapis.com/auth/drive'
+/** Drive の間引きで同時に投げる DELETE の本数(教室別形式では 1 日 1 回に約 55 回 × 教室数が溜まるため・§10-6)。 */
+const GOOGLE_DRIVE_DELETE_CONCURRENCY = 10
 const GOOGLE_DRIVE_API_BASE_URL = 'https://www.googleapis.com/drive/v3'
 const GOOGLE_DRIVE_UPLOAD_API_BASE_URL = 'https://www.googleapis.com/upload/drive/v3'
 const GOOGLE_DRIVE_BACKUP_FOLDER_ID = (process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID ?? '').trim()
@@ -885,18 +888,22 @@ async function pruneWorkspaceGoogleDriveBackups(workspaceKey: string, referenceD
   const files = await listWorkspaceGoogleDriveBackupFiles(workspaceKey)
   const staleFiles = files.filter((file) => !shouldKeepGoogleDriveBackupFile(file, nowMs))
 
-  await Promise.all(staleFiles.map(async (file) => {
-    if (!file.id) return
-    await googleDriveApiFetch({
-      path: `/files/${file.id}`,
-      method: 'DELETE',
-      query: {
-        supportsAllDrives: 'true',
-      },
-    }).catch((error) => {
-      logger.warn(`[AutoBackup] Failed to delete stale Google Drive backup: workspace=${workspaceKey}, fileId=${file.id}, message=${error instanceof Error ? error.message : String(error)}`)
-    })
-  }))
+  // 教室別形式(§10-6)では掃除が 1 日 1 回にまとまり、1 回の削除が「約 55 回 × 教室数」(20 教室で約 1,100 件)になる。Drive の rate limit で
+  // 落ちないよう同時実行を抑える(regression-reviewer 中-3)。落ちた分は翌日の回がもう一度拾う。
+  for (const chunk of chunkItems(staleFiles, GOOGLE_DRIVE_DELETE_CONCURRENCY)) {
+    await Promise.all(chunk.map(async (file) => {
+      if (!file.id) return
+      await googleDriveApiFetch({
+        path: `/files/${file.id}`,
+        method: 'DELETE',
+        query: {
+          supportsAllDrives: 'true',
+        },
+      }).catch((error) => {
+        logger.warn(`[AutoBackup] Failed to delete stale Google Drive backup: workspace=${workspaceKey}, fileId=${file.id}, message=${error instanceof Error ? error.message : String(error)}`)
+      })
+    }))
+  }
 }
 
 function buildClassroomLatestRollbackStoragePath(workspaceKey: string, classroomId: string) {
@@ -936,8 +943,9 @@ async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string
     return { storagePath: result.indexPath, savedAt }
   } catch (error) {
     // ★組み立てられない教室があるときは握らない(INV-14・regression-reviewer M-1): 欠けた一式を「復元前の安全な控え」にせず、
-    //   呼び出し側(復元用ダウンロード)を止める。Storage の書き込み失敗は従来どおり握る(控え無しでも復元は進む)。
-    if (isSnapshotPartsAssemblyError(error)) throw error
+    //   呼び出し側(復元用ダウンロード)を止める。教室 ID の文字種違反(教室ファイルを作れない)も同じ扱い(BK-7: 全教室ぶんが揃わない控えで復元を進めない)。
+    //   Storage の書き込み失敗は従来どおり握る(控え無しでも復元は進む)。
+    if (isSnapshotPartsAssemblyError(error) || isWorkspaceBackupLayoutError(error)) throw error
     logger.error(`[IncidentBackup] Failed to save safety snapshot for workspace=${workspaceKey} reason=${reason}`, error)
     return null
   }
@@ -1587,7 +1595,7 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
     // 全体 JSON の形は共有純関数 buildWorkspaceBackupSnapshot(教室ファイル・目次からの組み立て直しと同じ 1 か所・AC-B1)。
     // actingClassroomId は先頭の教室、missingClassroomIds は 1 件以上のときだけ付く(INV-14)。JSON 読込側
     // (src/utils/workspaceBackupImport.ts)が「開いている教室が無い」を別教室で埋めないために missingClassroomIds を読む。
-    snapshot: buildWorkspaceBackupSnapshot({ savedAt, users: sources.users, classrooms, missingClassroomIds }) as WorkspaceSnapshot,
+    snapshot: buildWorkspaceBackupSnapshot({ savedAt, users: sources.users, classrooms, missingClassroomIds }) satisfies WorkspaceSnapshot,
   }
 }
 
@@ -1606,16 +1614,19 @@ async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDa
     if (shouldKeep) return
 
     // 消す順番はファイル → 要約(要約を先に消すとファイルが取り残される・AC-B12)。
-    // 教室別形式(§10-6)は時点フォルダ `15min/{key}/` の下(教室ファイル＋目次)を丸ごと消す。旧形式は 1 本を消す(従来どおり)。
-    const timePointPrefix = isSafeWorkspaceBackupPathSegment(summaryDoc.id)
-      ? resolveWorkspaceBackupTimePointPrefixForSummary(summary, workspaceKey, summaryDoc.id)
-      : null
-    if (timePointPrefix) {
+    // 同じ時点キーに旧形式の 1 本と教室別形式のフォルダが混ざりうる(切り替えの前後に同じ 15 分枠で手動実行した・設定を戻した・regression-reviewer 中-2)ので、
+    // 要約の layout に関係なく、旧形式の 1 本(storagePath と旧形式の既定パス)と時点フォルダ `15min/{key}/` の両方を消す(無ければ何も起きない)。
+    const legacyPaths = new Set<string>()
+    if (typeof summary.storagePath === 'string' && summary.storagePath.trim() && !summary.storagePath.endsWith(`/${WORKSPACE_BACKUP_INDEX_FILE_NAME}`)) legacyPaths.add(summary.storagePath)
+    if (isSafeWorkspaceBackupPathSegment(summaryDoc.id)) legacyPaths.add(buildWorkspaceAutoBackupStoragePath(workspaceKey, summaryDoc.id, 'quarterHourly'))
+    for (const legacyPath of legacyPaths) {
+      await bucket.file(legacyPath).delete().catch(() => undefined)
+    }
+    if (isSafeWorkspaceBackupPathSegment(summaryDoc.id)) {
+      const timePointPrefix = buildWorkspaceBackupTimePointPrefix(workspaceKey, summaryDoc.id)
       await bucket.deleteFiles({ prefix: timePointPrefix }).catch((error) => {
         logger.warn(`[AutoBackup] Failed to delete stale per-classroom backup folder: ${timePointPrefix}: ${error instanceof Error ? error.message : String(error)}`)
       })
-    } else if (typeof summary.storagePath === 'string' && summary.storagePath.trim()) {
-      await bucket.file(summary.storagePath).delete().catch(() => undefined)
     }
     batch.delete(summaryDoc.ref)
     deleteCount += 1
@@ -3195,11 +3206,6 @@ export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
   }
 })
 
-/** 復元用ダウンロードの目的(§10-5・Q8)。'local-sync'(開発者のローカル同期フォルダ)では復元前の控え(incident)を書かない。既定は 'restore'。 */
-function readBackupDownloadPurpose(value: unknown): 'restore' | 'local-sync' {
-  return value === 'local-sync' ? 'local-sync' : 'restore'
-}
-
 /** 知らない形式(将来の版)の要約は、どの読み手も進まない(空や一部の JSON を返さない・fail-closed)。 */
 function throwUnknownBackupLayout(): never {
   throw new HttpsError('failed-precondition', 'このバックアップの形式はこの版では読めません。画面を再読み込みしてから、もう一度お試しください。', { reason: 'unknown-layout' })
@@ -3233,8 +3239,9 @@ async function readWorkspaceBackupIndex(workspaceKey: string, backupDateKey: str
   const file = storage.bucket(STORAGE_BUCKET).file(indexPath)
   const [exists] = await file.exists()
   if (!exists) {
+    // 室長の自教室復元の画面にも出る文言なので Storage のパスは出さない(ログだけ・regression-reviewer 低-5)。
     logger.warn(`readWorkspaceBackupIndex: index not found at ${indexPath}`)
-    throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${indexPath})`)
+    throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
   }
   const [content] = await file.download()
   try {
@@ -3254,7 +3261,8 @@ async function readWorkspaceBackupIndex(workspaceKey: string, backupDateKey: str
 async function downloadClassroomFromPerClassroomBackup(params: { workspaceKey: string; backupDateKey: string; classroomId: string }) {
   const { workspaceKey, backupDateKey, classroomId } = params
   const index = await readWorkspaceBackupIndex(workspaceKey, backupDateKey)
-  if (!index.classrooms.some((entry) => entry.id === classroomId)) {
+  const indexEntry = index.classrooms.find((entry) => entry.id === classroomId)
+  if (!indexEntry) {
     throw new HttpsError('not-found', 'バックアップ内に該当教室のデータが見つかりません。')
   }
   const classroomPath = buildWorkspaceBackupClassroomStoragePath(workspaceKey, backupDateKey, classroomId)
@@ -3267,7 +3275,11 @@ async function downloadClassroomFromPerClassroomBackup(params: { workspaceKey: s
   const [content] = await file.download()
   let classroomFile: ReturnType<typeof validateWorkspaceBackupClassroomFile>
   try {
-    classroomFile = validateWorkspaceBackupClassroomFile(JSON.parse(gunzipSync(content).toString('utf8')), { workspaceKey, backupDateKey, classroomId })
+    const json = gunzipSync(content).toString('utf8')
+    // 目次の sha256 と照合する(同じ 15 分枠で 2 回書かれて目次とファイルがずれた・途中で壊れた、を見分ける・regression-reviewer 低-3)。
+    const sha256 = createHash('sha256').update(json, 'utf8').digest('hex')
+    if (sha256 !== indexEntry.sha256) throw new Error(`sha256 が目次と一致しない(index=${indexEntry.sha256.slice(0, 12)}… file=${sha256.slice(0, 12)}…)`)
+    classroomFile = validateWorkspaceBackupClassroomFile(JSON.parse(json), { workspaceKey, backupDateKey, classroomId })
   } catch (error) {
     logger.error(`downloadClassroomFromPerClassroomBackup: invalid classroom file at ${classroomPath}`, error)
     throw new HttpsError('failed-precondition', 'バックアップの教室ファイルを読めませんでした(別の教室のファイルか、壊れています)。開発者へご連絡ください。', { reason: 'invalid-classroom-file', detail: error instanceof Error ? error.message : String(error) })
@@ -4167,6 +4179,10 @@ export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', time
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
   const result = await runWorkspaceServerAutoBackup('quarterHourly')
+  // 会社ごとの try/catch(§10-4)で例外が応答に乗らなくなった分、手動実行は従来どおり失敗を画面に出す(AC-B20・regression-reviewer 中-1)。
+  if (result.failures.length > 0) {
+    throw new HttpsError('internal', `サーバーバックアップの実行に失敗しました: ${result.failures.map((failure) => `${failure.workspaceKey}: ${failure.message}`).join(' / ')}`, { reason: 'auto-backup-failed', failures: result.failures })
+  }
   return result
 })
 
@@ -4390,6 +4406,9 @@ async function runLegacyWorkspaceBackupForWorkspace(params: WorkspaceAutoBackupR
       createdAt: savedAt,
       // 組み立てられずに除いた教室(§9-5-3)。空配列でも残し、15 分毎のバックアップが整合監視を兼ねるようにする。
       missingClassroomIds,
+      // 同じ時点キーに教室別形式の要約が先に書かれていても(切り替えを戻した直後など)、この回の形式を明示して読み手を旧形式へ向ける(merge で layout が残らないように・中-2)。
+      layout: 'legacy',
+      classroomCount: snapshot.classrooms.length,
     } satisfies WorkspaceAutoBackupSummaryDoc, { merge: true }),
     workspaceDoc.ref.set({
       serverAutoBackupLastSavedAt: savedAt,

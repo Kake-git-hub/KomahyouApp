@@ -254,16 +254,21 @@ export function buildGoogleDriveIndexBackupFileName(workspaceKey: string, backup
 // 全体 JSON の形(旧形式と教室ファイルの共通の土台)
 // ---------------------------------------------------------------------------
 
+/** users / classrooms の型を呼び出し側の型(サーバーの WorkspaceUser 等)のまま保つための形(satisfies で照合できるように)。 */
+export type WorkspaceBackupSnapshotOf<TUser extends WorkspaceBackupUser, TClassroom extends WorkspaceBackupClassroomEntry> =
+  Omit<WorkspaceBackupSnapshot, 'users' | 'classrooms'> & { users: TUser[]; classrooms: TClassroom[] }
+
 /**
  * 旧形式の全体 JSON(WorkspaceSnapshot)の形を作る。サーバーの buildWorkspaceServerBackupSnapshot も教室ファイルの組み立ても
  * ここを通る(1 か所)。actingClassroomId は先頭の教室・missingClassroomIds は 1 件以上のときだけ付く(旧形式と同じ)。
+ * ★項目と順番は 2026-10-29 より前の index.ts のリテラルと同じ(ゴールデンテストで固定)。変えると旧形式の JSON が変わる。
  */
-export function buildWorkspaceBackupSnapshot(params: {
+export function buildWorkspaceBackupSnapshot<TUser extends WorkspaceBackupUser, TClassroom extends WorkspaceBackupClassroomEntry>(params: {
   savedAt: string
-  users: readonly WorkspaceBackupUser[]
-  classrooms: readonly WorkspaceBackupClassroomEntry[]
+  users: readonly TUser[]
+  classrooms: readonly TClassroom[]
   missingClassroomIds?: readonly string[]
-}): WorkspaceBackupSnapshot {
+}): WorkspaceBackupSnapshotOf<TUser, TClassroom> {
   const missingClassroomIds = [...(params.missingClassroomIds ?? [])]
   return {
     schemaVersion: WORKSPACE_BACKUP_SCHEMA_VERSION,

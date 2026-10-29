@@ -63,3 +63,10 @@ export function parseWorkspaceAutoBackupLayoutConfig(env: Record<string, string 
 export function resolveWorkspaceAutoBackupLayout(workspaceKey: string, config: WorkspaceAutoBackupLayoutConfig): WorkspaceBackupLayout {
   return config.overrides.get(workspaceKey) ?? config.defaultLayout
 }
+
+/** 復元用ダウンロードの目的(§10-5・Q8)。'local-sync'(開発者のローカル同期フォルダ)では復元前の控えを書かない。それ以外・未指定(古い画面)は 'restore'(控えを書く・BK-7)。 */
+export type ServerAutoBackupDownloadPurpose = 'restore' | 'local-sync'
+
+export function readBackupDownloadPurpose(value: unknown): ServerAutoBackupDownloadPurpose {
+  return value === 'local-sync' ? 'local-sync' : 'restore'
+}

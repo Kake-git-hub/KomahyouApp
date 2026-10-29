@@ -41,7 +41,7 @@ describe('読む側(§10-5・INV-08)', () => {
       'const index = await readWorkspaceBackupIndex(workspaceKey, backupDateKey)',
       "throw new HttpsError('not-found', 'バックアップ内に該当教室のデータが見つかりません。')",
       'buildWorkspaceBackupClassroomStoragePath(workspaceKey, backupDateKey, classroomId)',
-      'validateWorkspaceBackupClassroomFile(JSON.parse(gunzipSync(content).toString(\'utf8\')), { workspaceKey, backupDateKey, classroomId })',
+      'validateWorkspaceBackupClassroomFile(JSON.parse(json), { workspaceKey, backupDateKey, classroomId })',
       'dataGzipBase64,',
     ].map((needle) => perClassroom.indexOf(needle))
     order.forEach((index) => expect(index).toBeGreaterThan(-1))
@@ -49,9 +49,15 @@ describe('読む側(§10-5・INV-08)', () => {
     // ほかの教室のファイルは開かない(全体の組み立て直しをここでしない)。
     expect(perClassroom).not.toContain('assembleWorkspaceBackupFromClassroomFiles(')
     expect(perClassroom).not.toContain('for (const')
+    // 目次の sha256 と照合してから 3 点照合(低-3)。
+    expect(perClassroom).toContain('if (sha256 !== indexEntry.sha256) throw new Error(')
+    expect(perClassroom.indexOf('if (sha256 !== indexEntry.sha256)')).toBeLessThan(perClassroom.indexOf('validateWorkspaceBackupClassroomFile('))
     // 目次は会社・時点の照合つきで検査する。
     const readIndex = slice('async function readWorkspaceBackupIndex(', 'async function downloadClassroomFromPerClassroomBackup(')
     expect(readIndex).toContain('validateWorkspaceBackupIndex(JSON.parse(content.toString(\'utf8\')), { workspaceKey, backupDateKey })')
+    // 室長の画面にも出る not-found の文言に Storage のパスを出さない(低-5)。
+    expect(readIndex).toContain("throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')")
+    expect(readIndex).not.toContain('見つかりません。(${indexPath})')
   })
 
   it('旧形式の全体ダウンロード: 教室別形式・知らない形式の時点では進まず再読み込みを促す(AC-B11)。復元前の控えは purpose restore のときだけ(AC-B17)', () => {
@@ -68,8 +74,11 @@ describe('読む側(§10-5・INV-08)', () => {
     expect(assertLegacy).toContain('throwUnknownBackupLayout()')
   })
 
-  it('全体復元の準備(prepareServerAutoBackupRestore): 開発者だけ・文字種検査 → 要約の layout → 目次 → 復元なら控え(全教室ぶん)を書いてから目次を返す', () => {
+  it('全体復元の準備(prepareServerAutoBackupRestore): 開発者だけ・文字種検査 → 要約の layout → 目次 → 復元なら控え(全教室ぶん)を書いてから目次を返す。旧形式・知らない形式では進まない', () => {
     const prepare = slice('export const prepareServerAutoBackupRestore = onCall(', '// 検証用(サンドボックス)教室の判定は')
+    expect(prepare).toContain('if (layout !== WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) throwUnknownBackupLayout()')
+    // purpose の既定は restore(古い画面が purpose を送らなくても控えを書く・BK-7・判定は readBackupDownloadPurpose のテスト)。
+    expect(prepare).toContain('const purpose = readBackupDownloadPurpose(rawData.purpose)')
     const order = [
       'assertSafeBackupPathArguments({ workspaceKey, backupDateKey })',
       'await requireDeveloperMember(request.auth?.uid, workspaceKey)',
@@ -99,8 +108,8 @@ describe('書く側(§10-4・§10-7)', () => {
     expect(run).toContain(': await runLegacyWorkspaceBackupForWorkspace(params))')
   })
 
-  it('会社ごとに try/catch で囲み、1 社の失敗をほかの社へ広げない(AC-B19)。失敗は関数ログと開発者メール(auto-backup-failed)・応答の failures', () => {
-    const loop = run.slice(run.indexOf('for (const workspaceDoc of workspacesSnapshot.docs) {'))
+  it('会社ごとに try/catch で囲み、1 社の失敗をほかの社へ広げない(AC-B19)。失敗は関数ログと開発者メール(auto-backup-failed)・応答の failures。手動実行はその failures を従来どおり例外にする(AC-B20・中-1)', () => {
+    const loop = run.slice(run.indexOf('for (const workspaceDoc of workspacesSnapshot.docs) {'), run.indexOf('logger.info(`[AutoBackup] Completed'))
     expect(loop).toContain('try {')
     expect(loop).toContain('} catch (error) {')
     expect(loop).toContain('failures.push({ workspaceKey, message })')
@@ -108,6 +117,9 @@ describe('書く側(§10-4・§10-7)', () => {
     expect(loop).toContain('await notifySaveFailureByMail({')
     expect(loop).not.toContain('throw')
     expect(run).toContain('return { backupDateKey, backupKind, workspaceCount: results.length, results, failures, googleDriveBackups:')
+    const trigger = slice('export const triggerWorkspaceServerAutoBackup = onCall(', 'type WorkspaceAutoBackupRunResult = {')
+    expect(trigger).toContain('if (result.failures.length > 0) {')
+    expect(trigger).toContain("throw new HttpsError('internal', `サーバーバックアップの実行に失敗しました:")
   })
 
   it('教室別形式: 要約は目次の後(一覧に出るのは最後)・間引きは要約の後・Drive の掃除は 1 日 1 回(JST 3:00 の回)だけ。旧形式の Drive の掃除は毎回のまま', () => {
@@ -123,14 +135,18 @@ describe('書く側(§10-4・§10-7)', () => {
     order.forEach((index) => expect(index).toBeGreaterThan(-1))
     expect([...order].sort((left, right) => left - right)).toEqual(order)
     expect(perClassroom).toContain('folderPrefix: buildWorkspaceBackupTimePointPrefix(workspaceKey, backupDateKey),')
-    expect(perClassroom).toContain('classroomCount: written.writtenClassroomIds.length,')
-    // 要約に教室の一覧や教室名を載せない(AC-B7)。
-    expect(perClassroom).not.toContain('classrooms: written.index.classrooms')
-    expect(perClassroom).not.toContain('classroomNames')
-    const legacy = slice('async function runLegacyWorkspaceBackupForWorkspace(', '// ---------------------------------------------------------------------------\n// Lecture submission API')
+    // 要約の項目は許可リストどおり(教室の一覧や教室名を載せない・AC-B7)。
+    const summaryBlock = perClassroom.slice(perClassroom.indexOf('summaryRef.set({'), perClassroom.indexOf('} satisfies WorkspaceAutoBackupSummaryDoc'))
+    const summaryKeys = [...summaryBlock.matchAll(/^\s{6}([A-Za-z]+)[,:]/gmu)].map((match) => match[1])
+    expect(summaryKeys).toEqual(['backupDateKey', 'backupKind', 'displayLabel', 'savedAt', 'sourceSavedAt', 'storagePath', 'createdAt', 'missingClassroomIds', 'layout', 'classroomCount'])
+    expect(summaryBlock).toContain('layout: WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM,')
+    expect(summaryBlock).toContain('classroomCount: written.writtenClassroomIds.length,')
+    const legacy = slice('async function runLegacyWorkspaceBackupForWorkspace(', "return { workspaceKey, backupDateKey, storagePath, backupKind, layout: 'legacy', googleDriveBackup }")
     expect(legacy).toContain('await pruneWorkspaceGoogleDriveBackups(workspaceKey, now)')
     expect(legacy).not.toContain('isGoogleDriveDailyPruneRunAt(')
-    expect(legacy).toContain("layout: 'legacy'")
+    // 旧形式の要約も形式を明示する(同じ時点キーに教室別の要約が残っていても読み手を旧形式へ向ける・中-2)。
+    expect(legacy).toContain("layout: 'legacy',")
+    expect(legacy).toContain('classroomCount: snapshot.classrooms.length,')
   })
 
   it('Drive の教室ファイル・目次は appProperties に workspaceKey・layout・教室 ID を持つ .json.gz(間引きは Storage と同じ規則・AC-B14)', () => {
@@ -144,17 +160,23 @@ describe('書く側(§10-4・§10-7)', () => {
     expect(indexTs).toContain("return `komahyouapp_${safeWorkspaceKey}_${backupKind}_${backupDateKey}${GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX}`")
   })
 
-  it('間引き: 教室別形式は時点フォルダを丸ごと(ファイル → 要約の順)、旧形式は 1 本(AC-B12)', () => {
+  it('間引き: 要約の layout に関係なく、旧形式の 1 本(storagePath と旧形式の既定パス)と時点フォルダの両方を消してから要約を消す(混在しても取り残さない・AC-B12・中-2)', () => {
     const prune = slice('async function pruneWorkspaceServerAutoBackups(', 'function validateEmailAddress(')
-    const folder = prune.indexOf('resolveWorkspaceBackupTimePointPrefixForSummary(summary, workspaceKey, summaryDoc.id)')
+    const legacyDelete = prune.indexOf('await bucket.file(legacyPath).delete()')
     const deleteFiles = prune.indexOf('await bucket.deleteFiles({ prefix: timePointPrefix })')
-    const legacyDelete = prune.indexOf('await bucket.file(summary.storagePath).delete()')
     const summaryDelete = prune.indexOf('batch.delete(summaryDoc.ref)')
-    expect(folder).toBeGreaterThan(-1)
-    expect(deleteFiles).toBeGreaterThan(folder)
-    expect(legacyDelete).toBeGreaterThan(deleteFiles)
-    expect(summaryDelete).toBeGreaterThan(legacyDelete)
+    expect(legacyDelete).toBeGreaterThan(-1)
+    expect(deleteFiles).toBeGreaterThan(legacyDelete)
+    expect(summaryDelete).toBeGreaterThan(deleteFiles)
+    expect(prune).toContain("legacyPaths.add(buildWorkspaceAutoBackupStoragePath(workspaceKey, summaryDoc.id, 'quarterHourly'))")
+    expect(prune).toContain('const timePointPrefix = buildWorkspaceBackupTimePointPrefix(workspaceKey, summaryDoc.id)')
+    // 教室別の要約の storagePath(index.json)を「旧形式の 1 本」として消さない(フォルダごと消すので同じ結果だが、意図の印)。
+    expect(prune).toContain('!summary.storagePath.endsWith(`/${WORKSPACE_BACKUP_INDEX_FILE_NAME}`)')
     expect(prune).toContain('shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs })')
+    // Drive の間引きは同時実行を抑える(中-3)。
+    const drive = slice('async function pruneWorkspaceGoogleDriveBackups(', 'function buildClassroomLatestRollbackStoragePath(')
+    expect(drive).toContain('for (const chunk of chunkItems(staleFiles, GOOGLE_DRIVE_DELETE_CONCURRENCY)) {')
+    expect(indexTs).toContain('const GOOGLE_DRIVE_DELETE_CONCURRENCY = 10')
   })
 
   it('取り残しの掃除: 要約の無い時点フォルダだけ・判定は純関数・既定は空実行(件数だけ)・独立した予算で Firestore 巡回より先(AC-B10)', () => {
@@ -173,10 +195,11 @@ describe('書く側(§10-4・§10-7)', () => {
     expect(cleanup).toContain('|| orphanPrune.stoppedByBudget')
   })
 
-  it('復元前の控え: フォルダ `{reason}-{時刻}/` に教室ごとの gzip＋目次。旧来の 1 本のパスは作らない', () => {
+  it('復元前の控え: フォルダ `{reason}-{時刻}/` に教室ごとの gzip＋目次。旧来の 1 本のパスは作らない。組み立て失敗と教室 ID の文字種違反は投げる(BK-7・M-1)', () => {
     const incident = slice('async function writeWorkspaceIncidentBackup(', 'async function writeLatestClassroomRollback(')
     expect(incident).toContain('folderPrefix: `${WORKSPACE_INCIDENT_BACKUP_PREFIX}/${workspaceKey}/${folderName}/`')
     expect(incident).toContain('backupDateKey: folderName,')
+    expect(incident).toContain('if (isSnapshotPartsAssemblyError(error) || isWorkspaceBackupLayoutError(error)) throw error')
     expect(indexTs).not.toContain('function buildWorkspaceIncidentBackupStoragePath(')
   })
 })

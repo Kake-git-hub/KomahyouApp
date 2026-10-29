@@ -617,7 +617,8 @@ export async function prepareFirebaseServerAutoBackupRestore(backupDateKey: stri
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; purpose: ServerAutoBackupDownloadPurpose }, { layout?: unknown; index?: unknown }>(functions, 'prepareServerAutoBackupRestore', { timeout: 300_000 })
+  // サーバーの timeoutSeconds(300)より長く待つ(同じ値だとサーバーの失敗応答より先にクライアントが諦める・regression-reviewer 低-9)。
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; purpose: ServerAutoBackupDownloadPurpose }, { layout?: unknown; index?: unknown }>(functions, 'prepareServerAutoBackupRestore', { timeout: 330_000 })
   const result = await callable({ workspaceKey: config.workspaceKey, backupDateKey, purpose })
   if (result.data.layout !== WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) {
     throw new Error('サーバーバックアップの応答が不正です。')
@@ -632,20 +633,28 @@ export async function prepareFirebaseServerAutoBackupRestore(backupDateKey: stri
  *    全体を組み立て直す(AC-B1: 旧形式で書いた JSON と同じ中身)。教室選択モーダルも JSON 読込も今までどおりこの文字列を受ける。
  *  - 知らない形式 … 進まない(再読み込みを促す)。
  */
+export type ServerAutoBackupDownloadDeps = {
+  downloadLegacy: typeof downloadFirebaseServerAutoBackup
+  prepare: typeof prepareFirebaseServerAutoBackupRestore
+  downloadClassroom: typeof downloadClassroomFromFirebaseServerAutoBackup
+}
+
 export async function downloadFirebaseServerAutoBackupJson(
   summary: { backupDateKey: string; layout?: WorkspaceBackupSummaryLayout },
   options: { purpose: ServerAutoBackupDownloadPurpose; onProgress?: (done: number, total: number) => void },
+  // callable はテストから差し替える(組み立ての順番・照合・中止をユニットで直接動かすため)。
+  deps: ServerAutoBackupDownloadDeps = { downloadLegacy: downloadFirebaseServerAutoBackup, prepare: prepareFirebaseServerAutoBackupRestore, downloadClassroom: downloadClassroomFromFirebaseServerAutoBackup },
 ): Promise<string> {
   const layout = summary.layout ?? 'legacy'
-  if (layout === 'legacy') return downloadFirebaseServerAutoBackup(summary.backupDateKey, { purpose: options.purpose })
+  if (layout === 'legacy') return deps.downloadLegacy(summary.backupDateKey, { purpose: options.purpose })
   if (layout !== WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) {
     throw new Error('このバックアップの形式はこの版では読めません。画面を再読み込みしてから、もう一度お試しください。')
   }
-  const prepared = await prepareFirebaseServerAutoBackupRestore(summary.backupDateKey, options.purpose)
+  const prepared = await deps.prepare(summary.backupDateKey, options.purpose)
   const total = prepared.index.classrooms.length
   const classroomData: Array<{ classroomId: string; data: Record<string, unknown> }> = []
   for (const [position, classroom] of prepared.index.classrooms.entries()) {
-    const source = await downloadClassroomFromFirebaseServerAutoBackup(summary.backupDateKey, classroom.id)
+    const source = await deps.downloadClassroom(summary.backupDateKey, classroom.id)
     // 応答の教室 ID が要求と違えば組み立てない(別教室の混入を防ぐ・INV-08)。
     if (source.classroomId !== classroom.id) {
       throw new Error('取得した教室がバックアップの目次と一致しないため、復元を中止しました。')
