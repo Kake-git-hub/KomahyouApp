@@ -4,14 +4,24 @@
 // ★元に戻せる: 設定を legacy に戻せば次の回から旧形式で書く。両方の形式が混ざっても要約の layout で読み分けるので壊れない
 //   (§9 の分割保存と違って一方通行にする理由は無い)。
 //
-// runtime env(functions/.env.<projectId>・CI は PROD_FUNCTIONS_ENV / staging は deploy-staging.yml が書く):
-//   WORKSPACE_AUTO_BACKUP_LAYOUT            … 全会社の既定。'legacy'(既定・未設定) または 'per-classroom-v1'。
+// 既定はコードの定数 WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT(2026-10-30 オーナー選択「A: Claude がコードで切り替え」: GitHub secret を触らずに
+// commit → main → Functions の自動デプロイだけで切り替え・戻せるようにするため)。runtime env は上書き用(緊急に戻すときは secret 側でも戻せる):
+//   WORKSPACE_AUTO_BACKUP_LAYOUT            … 全会社の既定を上書き。'legacy' または 'per-classroom-v1'。未設定・空 = コードの既定。
 //   WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES  … 会社ごとの指定。'main=per-classroom-v1,demo=legacy' の形(空白は無視・空は無指定)。
-// 知らない値は**旧形式**として扱い、警告を返す(打ち間違いで書けなくならないように・安全側)。
+// (functions/.env.<projectId>・CI は PROD_FUNCTIONS_ENV / staging は deploy-staging.yml が書く)
+// 知らない値はコードの既定として扱い、警告を返す(打ち間違いで書けなくならないように・安全側)。
 import { WORKSPACE_BACKUP_LAYOUT_LEGACY, WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM, type WorkspaceBackupLayout } from './generated/workspaceBackupLayout'
 
 export const WORKSPACE_AUTO_BACKUP_LAYOUT_ENV = 'WORKSPACE_AUTO_BACKUP_LAYOUT'
 export const WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES_ENV = 'WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES'
+
+/**
+ * コードの既定(env が無いときの書く形式)。
+ *  - 2026-10-29 v1.5.662: 'legacy'(段階 0〜2 のコードを出した時点ではまだ旧形式)。
+ *  - 2026-10-30 v1.5.663: **'per-classroom-v1'**(オーナー選択 A・staging 省略・本番 main の 4 教室を同時に切り替え)。
+ * 戻すときはここを 'legacy' に戻して main へ(次の回から旧形式。両形式が混ざっても要約の layout で読み分ける・§10-7)。
+ */
+export const WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT: WorkspaceBackupLayout = WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM
 
 export type WorkspaceAutoBackupLayoutConfig = {
   defaultLayout: WorkspaceBackupLayout
@@ -20,9 +30,11 @@ export type WorkspaceAutoBackupLayoutConfig = {
   warnings: string[]
 }
 
-function parseLayoutValue(raw: string | undefined): WorkspaceBackupLayout | null {
+/** env の値を形式にする。空 = 指定なし(null ではなく undefined)・知らない値 = null。 */
+function parseLayoutValue(raw: string | undefined): WorkspaceBackupLayout | null | undefined {
   const value = (raw ?? '').trim()
-  if (value === '' || value === WORKSPACE_BACKUP_LAYOUT_LEGACY) return WORKSPACE_BACKUP_LAYOUT_LEGACY
+  if (value === '') return undefined
+  if (value === WORKSPACE_BACKUP_LAYOUT_LEGACY) return WORKSPACE_BACKUP_LAYOUT_LEGACY
   if (value === WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM) return WORKSPACE_BACKUP_LAYOUT_PER_CLASSROOM
   return null
 }
@@ -31,10 +43,10 @@ function parseLayoutValue(raw: string | undefined): WorkspaceBackupLayout | null
 export function parseWorkspaceAutoBackupLayoutConfig(env: Record<string, string | undefined>): WorkspaceAutoBackupLayoutConfig {
   const warnings: string[] = []
   const defaultRaw = env[WORKSPACE_AUTO_BACKUP_LAYOUT_ENV]
-  let defaultLayout = parseLayoutValue(defaultRaw)
-  if (defaultLayout === null) {
-    warnings.push(`${WORKSPACE_AUTO_BACKUP_LAYOUT_ENV}=${String(defaultRaw)} は知らない値のため legacy として扱います`)
-    defaultLayout = WORKSPACE_BACKUP_LAYOUT_LEGACY
+  let defaultLayout = parseLayoutValue(defaultRaw) ?? WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT
+  if (parseLayoutValue(defaultRaw) === null) {
+    warnings.push(`${WORKSPACE_AUTO_BACKUP_LAYOUT_ENV}=${String(defaultRaw)} は知らない値のためコードの既定(${WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT})として扱います`)
+    defaultLayout = WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT
   }
   const overrides = new Map<string, WorkspaceBackupLayout>()
   const overridesRaw = (env[WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES_ENV] ?? '').trim()
@@ -49,7 +61,7 @@ export function parseWorkspaceAutoBackupLayoutConfig(env: Record<string, string 
       }
       const workspaceKey = trimmed.slice(0, separator).trim()
       const layout = parseLayoutValue(trimmed.slice(separator + 1))
-      if (!workspaceKey || layout === null) {
+      if (!workspaceKey || layout === null || layout === undefined) {
         warnings.push(`${WORKSPACE_AUTO_BACKUP_LAYOUT_OVERRIDES_ENV} の "${trimmed}" は知らない値のため無視します`)
         continue
       }

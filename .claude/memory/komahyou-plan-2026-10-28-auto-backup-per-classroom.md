@@ -1,6 +1,6 @@
 ---
 name: komahyou-plan-2026-10-28-auto-backup-per-classroom
-description: 15 分毎の自動バックアップの教室別化(gzip＋時点ごとの目次)・2026-10-28 オーナー確定・2026-10-29 v1.5.662 で段階 0〜2 のコード実装済み・書く側の切り替えは設定 WORKSPACE_AUTO_BACKUP_LAYOUT(staging→本番・未)・仕様は spec-save-restore §10
+description: 15 分毎の自動バックアップの教室別化(gzip＋時点ごとの目次)・2026-10-28 オーナー確定・2026-10-29 v1.5.662 で段階 0〜2・**2026-10-30 v1.5.663 で本番 main を切り替え済み(コードの既定 WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT・staging 省略)**・仕様は spec-save-restore §10
 metadata:
   node_type: memory
   type: project
@@ -32,3 +32,5 @@ metadata:
 - テスト: 共有 40 件・ループ 10 件・設定 4 件・配線(functions `workspaceBackup.wiring`・クライアント `serverAutoBackupRestore.wiring`)・INV-14 マトリクス「行: 自動バックアップ」を旧形式/教室別の 2 行へ(台帳 spec-invariants 改定・保証文不変)・snapshot-diff に教室ファイル fixture。
 - **残り(台帳 auto-backup-per-classroom の次の一手)**: 確認リスト ab-1/ab-2(読み手が今までどおり)→ staging で `WORKSPACE_AUTO_BACKUP_LAYOUT=per-classroom-v1`(deploy-staging.yml の functions env)→ 本番 `PROD_FUNCTIONS_ENV` に同じ行→ ab-3/ab-4 を足す→ 翌朝の掃除ログで空実行の件数→ `…DRY_RUN=0`→ 段階 3(10〜20 教室の実測・backupRetentionEstimate・Issue #77)。
 - ⚠️ 切り替え後は Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。戻すなら先に設定を legacy へ。
+
+**2026-10-30 切り替え(v1.5.663)**: オーナーの質問「3(staging の切り替え)は開発教室で試せない？オーナー作業を減らしたい」→ 書く形式は会社単位なので教室だけの切り替えは不可。代わりに切り替えを GitHub secret でなく**コードの既定値** `WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT`(functions/src/workspaceBackupLayoutConfig.ts)にして、Claude が commit → main → Functions 自動デプロイで切り替える案 A をオーナーが選択(staging 省略・分割保存 B と同じ扱い)。切り替え前に読み取りで main の教室 ID 4 件の文字種を照合(全部 OK)。env `WORKSPACE_AUTO_BACKUP_LAYOUT` は上書き用に残した(未設定=コードの既定)。戻すときは定数を legacy に戻して main へ。確認は Claude が読み取り専用トークンで(この環境から firestore/storage.googleapis.com に到達できる)。オーナーは確認リスト ab-1〜ab-4 だけ。
