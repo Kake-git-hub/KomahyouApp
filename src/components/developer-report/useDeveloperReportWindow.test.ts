@@ -18,8 +18,12 @@ import { useDeveloperReportWindow } from './useDeveloperReportWindow'
 
 type Send = (note: string) => Promise<string>
 
+/** 描画のたびに「その描画の resetKey で前の回が見えていたか」を残す(切り替えた直後の 1 回の描画を見るため)。 */
+const renderLog: Array<{ resetKey: string; sessionResetKey: string | null; hasTarget: boolean }> = []
+
 function Harness({ resetKey, send }: { resetKey: string; send: Send }) {
   const report = useDeveloperReportWindow({ classroomName: '開発用教室', resetKey })
+  renderLog.push({ resetKey, sessionResetKey: report.session?.resetKey ?? null, hasTarget: report.target !== null })
   const content = report.session
     ? createElement(DeveloperReportModal, {
       key: report.session.openId,
@@ -68,6 +72,7 @@ describe('useDeveloperReportWindow(質問・要望の別タブ)', () => {
   const popupNote = () => popupDoc().querySelector<HTMLTextAreaElement>('[data-testid="developer-report-note"]')
 
   beforeEach(() => {
+    renderLog.length = 0
     frame = document.createElement('iframe')
     document.body.append(frame)
     popup = frame.contentWindow!
@@ -118,14 +123,28 @@ describe('useDeveloperReportWindow(質問・要望の別タブ)', () => {
     expect(container.querySelector('[data-testid="developer-report-result"]')).toBeNull()
   })
 
-  it('別タブを開いたままもう一度押すと、タブを増やさずそのタブへ移る(書きかけは消えない)', () => {
+  it('別タブを開いたままもう一度押すと、タブを増やさずそのタブへ移る(同じ名前で前に出す・書きかけは消えない)', () => {
     clickOpen()
     act(() => typeInto(popupNote()!, '書きかけ'))
     popupFocus.mockClear()
     clickOpen()
-    expect(openSpy).toHaveBeenCalledTimes(1)
+    // 2 回目は同じ名前の window.open(ブラウザが同じタブを前に出す)＋ focus だけ。文書は作り直さない。
+    expect(openSpy).toHaveBeenCalledTimes(2)
+    expect(openSpy).toHaveBeenLastCalledWith('', DEVELOPER_REPORT_WINDOW_NAME)
     expect(popupFocus).toHaveBeenCalledTimes(1)
+    expect(popupDoc().querySelectorAll(`#${DEVELOPER_REPORT_WINDOW_ROOT_ID}`)).toHaveLength(1)
     expect(popupNote()!.value).toBe('書きかけ')
+  })
+
+  it('閉じたのにまだ気づいていない(pagehide も見張りもまだ)タブなら、押したときに新しく開き直す', () => {
+    clickOpen()
+    act(() => typeInto(popupNote()!, '書きかけ'))
+    Object.defineProperty(popup, 'closed', { value: true, configurable: true })
+    popupFocus.mockClear()
+    clickOpen()
+    Object.defineProperty(popup, 'closed', { value: false, configurable: true })
+    expect(openSpy).toHaveBeenCalledTimes(2)
+    expect(popupNote()!.value).toBe('')
   })
 
   it('「キャンセル」「閉じる」で別タブも閉じ、次に押すとまっさらで開く', () => {
@@ -177,6 +196,39 @@ describe('useDeveloperReportWindow(質問・要望の別タブ)', () => {
     Object.defineProperty(popup, 'closed', { value: false, configurable: true })
     clickOpen()
     expect(popupNote()!.value).toBe('')
+  })
+
+  it('教室を切り替えた直後の描画から、前の回(書きかけ・回答)を描かない(閉じる effect を待たない)', () => {
+    clickOpen()
+    act(() => typeInto(popupNote()!, '教室1の質問'))
+    renderLog.length = 0
+    render('C2|u1')
+    const firstWithNewKey = renderLog.find((entry) => entry.resetKey === 'C2|u1')
+    expect(firstWithNewKey).toEqual({ resetKey: 'C2|u1', sessionResetKey: null, hasTarget: false })
+  })
+
+  it('同じ教室でもユーザーが変わったら(ログアウト・アカウント切替)閉じる', () => {
+    clickOpen()
+    act(() => typeInto(popupNote()!, '前のユーザーの書きかけ'))
+    render('C1|u2')
+    expect(popupClose).toHaveBeenCalled()
+    Object.defineProperty(popup, 'closed', { value: false, configurable: true })
+    clickOpen()
+    expect(popupNote()!.value).toBe('')
+  })
+
+  it('送信の組み立てで例外が出ても「送信中」のまま固まらず、送れなかったことを出して閉じられる', async () => {
+    send.mockImplementationOnce(async () => { throw new Error('教室データを組み立てられませんでした') })
+    clickOpen()
+    act(() => typeInto(popupNote()!, '質問'))
+    await act(async () => {
+      popupDoc().querySelector<HTMLButtonElement>('[data-testid="developer-report-submit"]')!.click()
+    })
+    expect(popupDoc().querySelector('[data-testid="developer-report-result"]')?.textContent).toContain('送れませんでした: 教室データを組み立てられませんでした')
+    const close = popupDoc().querySelector<HTMLButtonElement>('[data-testid="developer-report-close"]')!
+    expect(close.disabled).toBe(false)
+    act(() => close.click())
+    expect(popupClose).toHaveBeenCalled()
   })
 
   it('送信中に別タブを閉じたら、あとで結果が返っても元の画面にモーダルを出さない(報告は送れている)', async () => {
