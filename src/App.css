@@ -5752,6 +5752,49 @@ tr.sa-group-row td {
   font-size: calc(14 * var(--developer-report-unit));
 }
 
+/* 「質問・要望」の別タブ(2026-10-29 オーナー指示「AI 回答を見ながら画面操作する可能性があるので別タブで」)。
+   覆い(暗い背景)の代わりにタブ全体をページとして使い、モーダルを上寄せで中央に置く(長い回答はページごとスクロール)。
+   html, body の min-width: 1280px(index.css)を外す(盤面と横に並べた狭いウィンドウでも右側が切れないように)。 */
+html.developer-report-window,
+body.developer-report-window {
+  min-width: 0;
+  margin: 0;
+  background: #eef3fa;
+}
+
+#developer-report-window-root {
+  min-height: 100%;
+}
+
+/* 余白もモーダルと同じ単位で書く(px 直書きにしない・developerReportModalStyle.test.ts)。単位はモーダルの外側なのでここでも定義する。 */
+.developer-report-window-page {
+  --developer-report-unit: clamp(1px, min(0.0521vw, 0.1111vh), 1.6px);
+  min-height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: calc(24 * var(--developer-report-unit)) calc(16 * var(--developer-report-unit));
+}
+
+.developer-report-modal.is-window {
+  max-height: none;
+  overflow: visible;
+  box-shadow: 0 4px 18px rgba(16, 40, 70, 0.1);
+}
+
+.developer-report-hint.developer-report-window-hint {
+  color: #16314f;
+  font-size: calc(15 * var(--developer-report-unit));
+}
+
+.developer-report-hint.developer-report-window-blocked {
+  color: #7a4a00;
+  background: #fff4e5;
+  padding: calc(8 * var(--developer-report-unit)) calc(12 * var(--developer-report-unit));
+  border-radius: calc(10 * var(--developer-report-unit));
+  line-height: 1.6;
+}
+
 /* 入力のヒント(生徒名・日付・コマ・何が起きたか)は本文と同じ読みやすさで目立たせる。 */
 .developer-report-hint-primary {
   color: #16314f;

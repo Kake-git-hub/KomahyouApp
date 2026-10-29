@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
+import { createPortal } from 'react-dom'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import type { StudentDeletionStockSummary } from './components/basic-data/deleteGuard'
@@ -53,6 +54,7 @@ import { handleCapturedClientError, installClientErrorCapture, setClientErrorAut
 import { captureScreenToDataUrl } from './components/developer-report/screenCapture'
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportStudentLedger, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
+import { useDeveloperReportWindow } from './components/developer-report/useDeveloperReportWindow'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
 import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
@@ -1926,7 +1928,8 @@ function AuthenticatedApp() {
     const student = students.find((row) => row.id === studentId)
     return student ? (student.displayName || student.name) : null
   }, [students])
-  const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
+  // detachedOverlay = 別タブへ描く中身(「質問・要望」の別タブ・2026-10-29)。どの画面でも同じ位置に置き、画面を移っても描き続ける。
+  const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode, detachedOverlay: ReactNode = null) => {
     // A1: 版数衝突(別端末が先に更新)で停止中は、全画面共通の警告バナーで再読み込みを促す。
     const staleConflictBanner = hasRemoteStaleConflict ? (
       <div className="remote-stale-conflict-banner" role="alert" data-testid="remote-stale-conflict-banner">
@@ -1961,12 +1964,13 @@ function AuthenticatedApp() {
       />
     ) : null
 
-    if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !isParentContactHistoryOpen && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
+    if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !isParentContactHistoryOpen && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}{detachedOverlay}</>
 
     return (
       <>
         {suspendedContent}
         {verificationChecklistPanel}
+        {detachedOverlay}
         {staleConflictBanner}
         {submissionAcknowledgements.length > 0 && (
         <div className="submission-acknowledgement-overlay" role="presentation">
@@ -4169,7 +4173,9 @@ function AuthenticatedApp() {
   // 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡(端末内リングバッファ)と
   // 報告時点の教室データ(未保存の変更込み)を開発者へ送る。本番データには一切書かない(Cloud Function は
   // 別コレクション developerReports と Storage にだけ書く)。盤面ツールバーと日程表タブの両方から呼ばれる。
-  const [developerReportModal, setDeveloperReportModal] = useState<{ sending: boolean; resultMessage: string | null } | null>(null)
+  // 盤面の「質問・要望」は別タブで開く(2026-10-29 オーナー指示「AI 回答を見ながら画面操作する可能性があるので」・全教室)。
+  // 開けなければ盤面のモーダル。教室を切り替えた・ログアウトしたら閉じる(resetKey・INV-08)。中身は下の developerReportContent。
+  const developerReport = useDeveloperReportWindow({ classroomName: actingClassroom?.name ?? '', resetKey: `${actingClassroomId ?? ''}|${currentUserId}` })
   const buildDeveloperReportStudentLedger = (payload: AppSnapshotPayload): DeveloperReportStudentLedger | null => {
     try {
       const ledger = buildStudentLessonLedger({ payload })
@@ -4301,16 +4307,12 @@ function AuthenticatedApp() {
       setClientErrorAutoReporter(null)
     }
   }, [actingClassroomIdRef, screenRef])
-  const openDeveloperReportModal = useCallback(() => {
-    recordOperationTrace('navigation', '質問・要望モーダルを開く(盤面)')
-    setDeveloperReportModal({ sending: false, resultMessage: null })
-  }, [])
+  const { runSubmit: runDeveloperReportSubmit } = developerReport
   const handleDeveloperReportSubmit = useCallback(async (note: string, category: DeveloperReportCategory, attachments: DeveloperReportAttachment[] = []) => {
-    setDeveloperReportModal({ sending: true, resultMessage: null })
     // 添付画像(2026-10-22): モーダルで撮った／選んだ画像を同じ 1 通に載せる(確認リストと同じ経路・別の送信口は作らない)。
-    const result = await submitDeveloperReport({ source: 'board', category, note, ...(attachments.length > 0 ? { attachments } : {}) })
-    setDeveloperReportModal({ sending: false, resultMessage: formatDeveloperReportResultMessage(result) })
-  }, [submitDeveloperReport])
+    // 結果は送った回が開いている間だけ出す(送信中に別タブを閉じた・教室を切り替えた後は出さない。報告自体は送れている)。
+    await runDeveloperReportSubmit(async () => formatDeveloperReportResultMessage(await submitDeveloperReport({ source: 'board', category, note, ...(attachments.length > 0 ? { attachments } : {}) })))
+  }, [runDeveloperReportSubmit, submitDeveloperReport])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
@@ -5963,12 +5965,34 @@ function AuthenticatedApp() {
     userId: currentUser?.id ?? null,
   })
 
+  // 「質問・要望」の中身。別タブで開いていればそのタブへ createPortal で描き(renderScreen がどの画面でも同じ位置に置くので、
+  // 基本データなど別の画面へ移っても入力・回答は消えない)、別タブを開けなかったときだけ盤面のモーダルで出す。
+  const developerReportContent = developerReport.session ? (
+    <DeveloperReportModal
+      key={developerReport.session.openId}
+      presentation={developerReport.target ? 'window' : 'modal'}
+      windowBlocked={developerReport.session.windowBlocked}
+      classroomName={actingClassroom?.name ?? ''}
+      aiAnswerEnabled={isFeatureEnabledForClassroom('questionAiAnswer', actingClassroom)}
+      sending={developerReport.session.sending}
+      resultMessage={developerReport.session.resultMessage}
+      onSubmit={(note, category, attachments) => { void handleDeveloperReportSubmit(note, category, attachments) }}
+      onClose={developerReport.close}
+      onCaptureScreen={captureScreenToDataUrl}
+      answers={isRemoteBackendEnabled ? reportAnswers : undefined}
+      canMarkAnswersRead={canMarkReportAnswersRead}
+      onMarkAnswersRead={handleMarkReportAnswersRead}
+    />
+  ) : null
+  const developerReportWindowPortal = developerReportContent && developerReport.target ? createPortal(developerReportContent, developerReport.target.root) : null
+  const renderScreen = (content: ReactNode) => renderWithSubmissionAcknowledgement(content, developerReportWindowPortal)
+
   if (!hasHydratedSnapshot) {
     return <div className="workspace-auth-shell"><div className="workspace-auth-card"><h2>読み込み中</h2><p>教室データを準備しています。</p></div></div>
   }
 
   if (isDuplicateTab) {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card" data-testid="duplicate-tab-block">
           <h2>このタブは利用できません</h2>
@@ -5983,7 +6007,7 @@ function AuthenticatedApp() {
 
   if (!currentUser) {
     if (isRemoteBackendEnabled) {
-      return renderWithSubmissionAcknowledgement(
+      return renderScreen(
         <div className="workspace-auth-shell">
           <div className="workspace-auth-card" data-testid="firebase-login-card">
             <h1>{appName()}ログイン</h1>
@@ -6012,7 +6036,7 @@ function AuthenticatedApp() {
       )
     }
 
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card">
           <p className="panel-kicker">Local Session</p>
@@ -6038,7 +6062,7 @@ function AuthenticatedApp() {
   }
 
   if (isBillingRoute) {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <BillingAutomationScreen
         currentUser={currentUser}
         authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
@@ -6071,7 +6095,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'developer' && currentUser.role === 'developer') {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <DeveloperAdminScreen
         currentUser={currentUser}
         authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
@@ -6140,7 +6164,7 @@ function AuthenticatedApp() {
   }
 
   if (currentUser.role === 'manager' && isCurrentClassroomSuspended) {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card workspace-auth-card--warning">
           <p className="panel-kicker">Suspended</p>
@@ -6157,7 +6181,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'basic-data') {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <BasicDataScreen
         classroomSettings={classroomSettings}
         teachers={teachers}
@@ -6185,7 +6209,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'special-data') {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <SpecialSessionScreen
         sessions={specialSessions}
         students={students}
@@ -6201,7 +6225,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'auto-assign-rules') {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <AutoAssignRuleScreen
         rules={autoAssignRules}
         teachers={teachers}
@@ -6219,7 +6243,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'backup-restore') {
-    return renderWithSubmissionAcknowledgement(
+    return renderScreen(
       <BackupRestoreScreen
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenBasicData={() => navigateClassroomScreen('basic-data')}
@@ -6276,7 +6300,7 @@ function AuthenticatedApp() {
     ? Boolean(isRemoteSyncVisible)
     : isRemoteSyncPending && (isRemoteSyncVisible || hasImmediateUnsavedBoardChanges)
 
-  return renderWithSubmissionAcknowledgement(
+  return renderScreen(
     <>
     <ScheduleBoardScreen
       key={boardMountKey}
@@ -6313,7 +6337,7 @@ function AuthenticatedApp() {
       onDismissUndoSnapshot={dismissUndoSnapshot}
       onLogout={logout}
       onCopyDistributionUrl={copyBoardDistributionUrl}
-      onReportToDeveloper={openDeveloperReportModal}
+      onReportToDeveloper={developerReport.open}
       reportAnswerUnreadCount={unreadReportAnswerCount}
       onOpenParentContactHistory={parentPortalQrEnabled ? openParentContactHistory : undefined}
       parentContactUnconfirmedCount={parentMessageNotifications.length}
@@ -6329,20 +6353,7 @@ function AuthenticatedApp() {
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
       onDeletionStockSummaryChange={handleDeletionStockSummaryChange}
     />
-    {developerReportModal ? (
-      <DeveloperReportModal
-        classroomName={actingClassroom?.name ?? ''}
-        aiAnswerEnabled={isFeatureEnabledForClassroom('questionAiAnswer', actingClassroom)}
-        sending={developerReportModal.sending}
-        resultMessage={developerReportModal.resultMessage}
-        onSubmit={(note, category, attachments) => { void handleDeveloperReportSubmit(note, category, attachments) }}
-        onClose={() => setDeveloperReportModal(null)}
-        onCaptureScreen={captureScreenToDataUrl}
-        answers={isRemoteBackendEnabled ? reportAnswers : undefined}
-        canMarkAnswersRead={canMarkReportAnswersRead}
-        onMarkAnswersRead={handleMarkReportAnswersRead}
-      />
-    ) : null}
+    {developerReport.target ? null : developerReportContent}
     </>
   )
 }
