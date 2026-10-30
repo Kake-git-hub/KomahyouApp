@@ -1,13 +1,22 @@
 // 開発ダッシュボード(開発者画面)に出す【進行中テーマの台帳】= この 1 ファイルが唯一の正本。
 // 正本仕様: docs/spec-developer-report.md §E-3。起点は途中作業の洗い出し docs/review-2026-09-25-work-in-progress-inventory.md。
 //
-// ★何を載せるか
-//   「開発用教室だけで止まっているもの」「作りかけで止まっているもの」「オーナーの判断・確認を待っているもの」
-//   「計画はあるが未着手のもの」「保留にしたもの」を **1 テーマ 1 行**で持つ。完了(全教室へ昇格・マージ済み)した
-//   テーマは**載せない**(確認リストと同じ運用 = 終わったものは git 履歴に残る)。
+// ★何を載せるか(2026-10-30 オーナー指示「開発ダッシュボードは機能の実装がまだのものや、開発・テスト教室だけしか実施していない機能、
+//   やるべきこと(確認リスト以外で)などをわかり易い文章で表示して」)
+//   - 開発・テスト教室だけで動いている機能(機能フラグが全教室でないもの)
+//   - やること(オーナーの判断・作業、Claude の作業)
+//   - まだ作っていないもの(計画だけ・保留)
+//   を **1 テーマ 1 行**で持つ。終わったテーマは**すぐ消す**(git 履歴に残る)。確認リストの結果待ちだけの話は載せない
+//   (確認リストパネルが正本・ダッシュボードと重複させない)。
 //
-// ★いつ更新するか(CLAUDE.md「新機能追加・修正のたびに確認リストを必ず更新」と同じ扱い)
-//   - 機能フラグの scope を変えた(昇格した)・ブランチをマージした・保留を解除した → その行を書き換えるか消す。
+// ★書き方(オーナー指示 2026-10-30「わかり易い文章で」・長さはテストで固定)
+//   - title … 何のことか一目で分かる名前。社内用語・記号(P-9・Q40・tp-51 など)を入れない。
+//   - summary … 何をするもの／今どうなっているかを 1〜2 文。専門用語は避ける。
+//   - nextAction … 次に「誰が」「何を」するかを 1 文。
+//   - notes … 経緯・決定記録・ファイル名など Claude 向けの詳しいメモ(任意・画面では「くわしく」で開く)。
+//
+// ★いつ更新するか(CLAUDE.md「進行中テーマ台帳を更新する」)
+//   - 機能フラグの scope を変えた(昇格した)・ブランチをマージした・保留を解除した・済んだ → その行を書き換えるか消す。
 //   - 新しい先行機能・作りかけの作業・オーナー判断待ちが生まれた → 行を足す。
 //   - 機能フラグと紐づく行は、フラグの scope と stage が食い違うと developmentStatusLedger.test.ts が落ちる
 //     (昇格したのに「開発用教室で先行中」のまま残るのを防ぐ)。
@@ -18,9 +27,9 @@ import type { FeatureRolloutKey } from './featureRollout'
 
 /**
  * テーマの段階。
- *  - development-only … 開発用教室(検証用教室)だけで動いている先行機能。次は確認リスト or 昇格判断。
- *  - awaiting-checklist … 実装済みで、確認リストの結果(OK/要改善)を待っている。
- *  - awaiting-owner … 実装や調査は済んでいて、オーナーの判断(昇格・許可・回答)を待っている。
+ *  - development-only … 開発用教室(検証用教室)だけで動いている先行機能。次は確認 or 昇格判断。
+ *  - awaiting-checklist … 実装済みで、確認リストの結果(OK/要改善)だけを待っている(ダッシュボードには出さない)。
+ *  - awaiting-owner … 実装や調査は済んでいて、オーナーの判断・作業を待っている。
  *  - in-progress … 作りかけ(未マージのブランチなど)。
  *  - planned … 計画・仕様はあるが未着手。
  *  - on-hold … オーナー判断で保留(再開条件つき)。
@@ -32,280 +41,272 @@ export const DEVELOPMENT_STATUS_STAGE_LABELS: Readonly<Record<DevelopmentStatusS
   'development-only': '開発用教室で先行中',
   'awaiting-checklist': '確認リスト結果待ち',
   'awaiting-owner': 'オーナー判断待ち',
-  'in-progress': '作業中(未マージ)',
-  planned: '未着手(計画あり)',
+  'in-progress': '作りかけ',
+  planned: '未着手',
   'on-hold': '保留',
 }
+
+/** 次の一手を持っている人。 */
+export type DevelopmentStatusWho = 'owner' | 'claude'
+
+export const DEVELOPMENT_STATUS_WHO_LABELS: Readonly<Record<DevelopmentStatusWho, string>> = {
+  owner: 'オーナー',
+  claude: 'Claude',
+}
+
+/** 画面で読みやすい長さの上限(テストで固定。超えたら notes へ移す)。 */
+export const DEVELOPMENT_STATUS_TEXT_LIMITS = { title: 40, summary: 140, nextAction: 110 } as const
 
 export type DevelopmentStatusEntry = {
   /** 一意の識別子(英小文字とハイフン)。 */
   id: string
-  /** 画面に出す短い題名。 */
+  /** 画面に出す短い名前(社内用語・記号を入れない)。 */
   title: string
   stage: DevelopmentStatusStage
-  /** 何が済んでいて何が残っているか(1〜3 文)。 */
+  /** 次の一手を持っている人。 */
+  who: DevelopmentStatusWho
+  /** 何をするもの／今どうなっているか(1〜2 文・平易に)。 */
   summary: string
+  /** 次に誰が何をするか(1 文)。 */
+  nextAction: string
+  /** 経緯・決定記録・関係ファイルなど詳しいメモ(任意・画面では「くわしく」で開く)。 */
+  notes?: string
   /** 紐づく機能フラグ(featureRollout.ts のキー)。scope と stage の整合はテストで固定。 */
   featureKeys?: readonly FeatureRolloutKey[]
-  /** 紐づく確認リストの項目 id(verificationChecklist.ts)。版が変わると id も変わるので参考情報。 */
-  checklistItemIds?: readonly string[]
-  /** 次の一手(誰が何をするか)。 */
-  nextAction: string
-  /** 根拠(docs のパス・Issue 番号・ブランチ名など)。 */
+  /** 根拠(docs のパス・Issue 番号・ブランチ名など)。`Issue #N` の形で書くと画面が Issue へのリンクにする。 */
   references: readonly string[]
   /** この行を最後に見直した日(YYYY-MM-DD)。 */
   updatedOn: string
 }
 
 export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
-
-  // ── 最優先(本番の保存が止まった事故の恒久対策) ─────────────────────────────
+  // ── 開発・テスト教室だけで動いている機能 ───────────────────────────────────
   {
-    id: 'classroom-snapshot-capacity',
-    title: '教室データの 1 文書上限(1MiB)超過の恒久対策(週単位の分割保存)— 段階 B まで全教室に展開済み・段階 C/D は保留',
-    stage: 'on-hold',
-    summary: '2026-10-26/27 に日大前校の保存が全部失敗した事故(教室データ 8.3MB を gzip+base64 で 1 文書に入れ、上限 1MiB の 27 バイト手前)の恒久対策。段階 0・A(両形式を読める版・v1.5.651)→ 段階 B(サーバーが目次＋部品〔管理データ・盤面の週以外・週ごと〕に分けて 1 トランザクションで書く・読み戻し検証・QR マージ・旧版部品の掃除・古い画面の拒否・v1.5.654)→ 2026-10-28 オーナー指示で staging を省いて全教室へ展開(v1.5.656)。日大前校は 10/28 14:02 JST の保存で移行し(49 書き込み・1.1 秒・最大文書 7.0%・移行前 95.0%)、以後の保存は変わった部品だけ・バックアップ/直前ロールバック/版履歴も正常。これで 1MiB 上限の問題は解消。残る段階 C(端末も変わった部品だけ送る＝送信 8MB→数百 KB・保存が約 18 秒→数秒)は速さだけの改善で正しさ・容量・教室数には関係しないため、オーナー判断(2026-10-28)で保留。段階 D(古い過去週を閲覧専用に分けるアーカイブ・第 2 段の部品分割)は年数でデータが増えたときの話で、実測してから判断。',
-    checklistItemIds: ['sc-2'],
-    nextAction: '【保留の再開条件(オーナー確定 2026-10-28)】段階 C(差分送信)は室長から「保存が遅い」「回線が弱い場所で失敗する」などの不満が出たら着手する(教室が増えても 1 回の保存の重さは変わらないので教室数は再開条件にしない)。段階 D(アーカイブ・第 2 段)は来年の講習期に保存時間と起動時間を実測してから判断(1 回の書き込み上限 400 件に届くのは約 7 年後・50% 通知 split-capacity-notice が来たら前倒し)。【見守り(Claude)】緑が丘校・テスト教室の最初の保存(次の保存で移行)後に saveAttempts(storageFormat=weekly-parts・writeCountInTx・capacityRatio)・15 分毎バックアップ(missingClassroomIds 無し)を確認。翌朝の掃除ログ(snapshot parts gc)。CLIENT_TOO_OLD のメールが来たら室長へハードリロードを案内。確認リスト sc-2 はオーナー待ち。',
-    references: ['docs/plan-2026-10-27-weekly-split-snapshot-handoff.md', 'docs/spec-save-restore.md §9', 'docs/spec-invariants.md INV-14', 'functions/src/snapshotStorageFormat.ts (フラグ述語・CLIENT_TOO_OLD)', 'functions/src/snapshotPartsWriter.ts (保存の判定・読み戻し検証・QR マージ)', 'functions/src/index.ts (saveClassroomSnapshotAsParts / pruneSnapshotParts / lectureSubmissionApi / readClassroomSnapshotPayload)', 'functions/src/snapshotCapacity.ts', 'functions/src/saveFailureAlert.ts', 'src/integrations/firebase/workspaceStore.ts (readFirebaseSnapshotPayload)', 'src/utils/classroomSnapshotParts.ts', 'functions/src/snapshotPartsReader.ts', 'src/integrations/firebase/snapshotPartsClientRead.ts', 'src/utils/inv14-snapshot-all-or-nothing.matrix.test.ts', 'src/utils/saveProgressMessages.ts', 'src/utils/unsentCloudSave.ts'],
-    updatedOn: '2026-10-27',
-  },
-  // ── 開発用教室だけで動いている先行機能 ──────────────────────────────────────
-  {
-    id: 'template-duplicate-save-guard',
-    title: '日大前校のテンプレの重複(金 3限・机 4 と机 7 に同じ生徒)の案内',
-    stage: 'awaiting-owner',
-    summary: '確認リスト 2026-10-14 の質問「テンプレの講師が追従しない日がある」の調査で見つかった(開発用教室は日大前の写し)。オーナー指示(2026-10-14)でテンプレ編集の追加・変更・Excel 取り込み・保存の同コマ重複検査は全教室で有効になった。日大前校は次のテンプレ保存が「同じコマに同じ生徒が 2 か所に入っているため保存できません(金曜 3限: …)」で止まり、片方を外せば保存できる(11/6 以降の金 3限で机 7 の講師が落ちている症状も直る)。',
+    id: 'template-diff-apply',
+    title: 'テンプレ保存で「変えたコマだけ」盤面に反映する',
+    stage: 'development-only',
+    who: 'owner',
+    summary: 'テンプレを保存すると変えたコマだけを盤面に反映し、手で組んだ授業とぶつかる所は 2 行(緑)で残して室長が選べるようにする。開発用・テスト教室で試用中。',
+    nextAction: 'テスト教室での確認が済んだら、全教室に出すかオーナーが決める(緑が丘校の要望 #72・#75 もこれで解決)。',
+    notes: '機能フラグ templateDiffApply。全教室へ出す前の条件: 旧版のタブで保存すると保留が落ちるすき間(§H Q33-1)の塞ぎ方を決めて実装 → regression-reviewer の INV 監査 → オーナー判断。残課題: 生徒を足すだけの保存は盤面の机がずれているとテンプレの机番号の机へ入る(仕様判断待ち)・休日解除で戻した生徒がメモの席に重なる・一括採用と孤児キーの整合チェックは未着手。開発用教室からの報告 #80(保留を解消したのに講師に保留が残る)もこの機能。決定記録は docs/spec-template-behavior.md §H と docs/plan-2026-10-25-conflict-placement.md、2026-10-30 までの詳しい経過はこのファイルの git 履歴(v1.5.666 時点の summary / nextAction)。',
     featureKeys: ['templateDiffApply'],
-    checklistItemIds: ['tp-41'],
-    nextAction: 'オーナー: 日大前校へ「金曜 3限の机 7 の生徒を外して(机 4 に残す)テンプレを保存し直す」を先に案内するか、保存時の文言に任せるかを決める。',
-    references: ['docs/spec-invariants.md INV-12(2026-10-14)', 'src/components/schedule-board/templateEditorGuards.ts', '受付 20261014-062117803-c223100f'],
-    updatedOn: '2026-10-14',
+    references: ['Issue #72', 'Issue #75', 'docs/spec-template-behavior.md §H', 'docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md', 'docs/plan-2026-10-25-conflict-placement.md', 'src/components/schedule-board/templateDiffApply.ts'],
+    updatedOn: '2026-10-30',
   },
   {
     id: 'parent-portal-qr',
-    title: '保護者向け固定QR(休み連絡専用)',
+    title: '保護者向けQR(休みの連絡)',
     stage: 'awaiting-owner',
-    summary: '第1段を実装(v1.5.513・2026-09-13)。2026-09-18 に「休み連絡」専用へ改定(§0-5・v1.5.550)。2026-10-23 に締切を前日の夜 0時00分に・当日は電話案内(§0-7・v1.5.635)。2026-10-24 開発用教室の確認リスト q-1〜q-7・tp-15 がすべて OK(受付 20261024-062027562-37618588)・同じ受付のメモで今月の「次の月」ボタンを出さないように。クライアントとサーバーの両側に同じ判定があり、昇格は両側同時に行う。',
+    who: 'owner',
+    summary: '生徒ごとの QR を保護者がスマホで読むと、日程の確認と休みの連絡ができる。開発用・テスト教室と検証環境で動作中で、確認はすべて OK。',
+    nextAction: 'どの教室から本番で使い始めるかをオーナーが決める(決まれば 検証環境 → 1 教室 → 全教室 の順に広げる)。',
+    notes: '機能フラグ parentPortalQr(scope staging-environment)。サーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom と同じ判定なので、昇格は両側を同じ push で。2026-10-24 確認リスト q-1〜q-7・tp-15 OK(受付 20261024-062027562-37618588)。同じ受付のメモで今月の「次の月」ボタンを出さないように。使いすぎ防止(1 分 30 件)の要否も昇格時に決める(parent-portal-rate-limit)。',
     featureKeys: ['parentPortalQr'],
-    nextAction: 'オーナーが昇格の時期と最初の本番教室を決める。決まったら staging 実機 → 本番 1 教室(オーナー指定) → 全教室の順(§H)。',
     references: ['docs/spec-parent-portal.md §0-5/§0-7/§H', 'functions/src/parentPortal.ts'],
-    updatedOn: '2026-10-24',
+    updatedOn: '2026-10-30',
   },
   {
     id: 'lesson-history',
-    title: '講習履歴(生徒日程表タブの「講習履歴」ボタン)',
+    title: '講習履歴の一覧(生徒日程表の「講習履歴」ボタン)',
     stage: 'awaiting-owner',
-    summary: '実装済み(v1.5.502・2026-09-12・H-1〜H-4)。確認リストの h-1〜h-10 は OK 済み(Issue #63〜#66・第10版)。全教室へ出すかの判断が未定。',
+    who: 'owner',
+    summary: '生徒ごとに出席・休み・振替・未消化を期間を決めて一覧できる。開発用・テスト教室だけで動作中で、確認はすべて OK。',
+    nextAction: 'オーナーが全教室に出すか決める(決まれば Claude がフラグを全教室へ切り替える)。',
+    notes: '機能フラグ lessonHistory。functions 側は読み取りだけなので、フラグの scope を all-classrooms にするだけで片側だけ広がる非対称は無い。確認 h-1〜h-10 OK(Issue #63〜#66)。',
     featureKeys: ['lessonHistory'],
-    nextAction: 'オーナーが昇格を決めたら scope を all-classrooms へ(functions は読み取りのみなので片側昇格の非対称は無い)。',
     references: ['docs/plan-2026-09-11-five-requests.md §6'],
-    updatedOn: '2026-09-25',
-  },
-  {
-    id: 'template-diff-apply',
-    title: 'テンプレ保存の差分反映＋保留(2 行表示)(Issue #72)',
-    stage: 'development-only',
-    summary: '第 1 段の (A)(B)(C) 実装済み・開発用教室で試用中。確認リスト第 34 版(v1.5.572)の tp-1〜tp-14・tp-16 は OK(2026-09-30)。同日その他欄の指示で突き合わせを机単位から席単位(生徒 1・生徒 2 を別々)へ変更(v1.5.573・§H Q34): テンプレのその席が空なら既存の生徒は 1 行のまま残し、テンプレと同じ生徒×科目×種別は採用、同じ席がテンプレで埋まる生徒だけ下段へ。「既存を採用」は下段の席のテンプレ生徒だけ取り下げ、上段の操作で元の席が空けば下段が自動で戻る。第 35 版(v1.5.573)の結果(2026-10-02)で tp-17/18/20/21/23 は OK。要改善 2 件を v1.5.576 で対応: 保留の見せ方を席ごとに(下段の無い席は 1 行・緑なし・下段の文字は上段と同じスタイル・§H Q34-11)、丸ごと振替した日はテンプレの生徒を置かず振替を優先(§H Q35・置かなかった生徒に抑止キー)。あわせて保留の机メニュー・講師メニューの位置を実測で画面内に収めた。第 36 版(v1.5.576)は tp-19/22/24/25 とも OK(2026-10-02)。オーナー回答で v1.5.577: 保留の操作制限を席単位に(§H Q34-12)・置かなかった生徒の希望回数 −1(§H Q35-8)・保留の席のメニューを 4 択に・テンプレ編集の見出し行をボタン行へ統合。第 37 版(v1.5.577)は tp-26〜29 OK(2026-10-03)。同日のオーナー報告(重大バグ: テンプレで時限を移した生徒が移動元・移動先の両方に出る＝同日移動の写しが印として残った)とその他欄(通常同士なのに保留・生徒 1 の操作で生徒 2 が動く)で v1.5.578: 同日移動の写しはテンプレに合わせ写しの抑止キーも外す(§H Q36)・休み/振無休の記録は席の空白扱い(§H Q37)・採用の 2 択を席ごとに(§H Q26-10)・日程表の「休」に振替先日付を出さない(フラグ transferSourceRestDisplay)。(A) 機能フラグ・保留マップの全経路配線・突き合わせの純関数・保存経路の切替・在庫の走査に下段を含める。(B) 2 行表示・保留件数バッジ・採用ボタン・下段の削除/移動・2 行の机の制限。(C) 周辺処理(詰め直し・講習の講師自動割当・QR 自己修復・退塾・保護者の休み連絡)と INV-13 マトリクス。2026-10-13 オーナー報告(手動追加の通常授業がテンプレと同じ内容なのに別の机だと緑＋別の机の上段の 2 か所)で v1.5.592: 同じコマの別の机にテンプレが同じ生徒×科目を置く手動追加の通常授業はテンプレを自動採用(§H Q38・科目違い／振替・講習は緑のまま)。今ある緑は同じテンプレの再保存で片づく(実データ実測 11 件中 4 件)。同日 v1.5.593: 保留の下段の生徒を長押し D&D で動かせるように(§H Q26-8 追記・上段は従来の生徒 D&D)。2026-10-14 緑が丘校 #75 のオーナー案で v1.5.598: テンプレで変えたコマ(曜日×時限)だけ突き合わせ、違わないコマは一切触らない(§H Q39・確認モーダルに変更点一覧と「すべてのコマ」の選択・変えたコマが 0 なら全コマ)。反映開始日の既定は来週の月曜(過去日は警告)。2026-10-15 の確認リスト(受付 20261015-133308495-046ae8de)で tp-39/40/41/42/43/44/45/46/52・c-6 が OK。同受付のメモ・要改善で v1.5.602: 確認モーダルの範囲のラジオを外して自動に(§H Q39-3 改定・tp-53)、反映開始日は今日より前を選べない(min＋入力値/Excel の丸め・§H Q39-5 追記・tp-47 差し替え)、QR 自動割振りの講師と同じ講師をテンプレが同じコマの別の机に生徒つきで置くなら QR の机の講師を外す(§H Q21-9 例外 1 の絞り込み・差分反映と再マージの両方＝再マージは全教室。オーナー確定 2026-10-15「QR 重複解消を全教室に効かせたままでよい」・tp-54)。tp-47・tp-53・tp-54・c-5 は同日 OK(受付 20261015-151056959-a8890098)。残る兄弟: 手置きの同じ講師とテンプレの講師が同じコマの 2 机に出る形(報告の盤面で 4 コマ・未対応)、上段が空いた保留の QR 机が外れた後に再マージの置き先になりうる(L-3)、机番号のずれによる取りこぼし(L-4)、同じ講師かの判定が表示名一致の箇所(L-5)、読み込み時に外した分が操作ログに残らない(L-6)。',
-    featureKeys: ['templateDiffApply'],
-    checklistItemIds: ['tp-49', 'tp-51', 'tp-57', 'tp-58', 'tp-59', 'tp-60', 'tp-62', 'tp-63'],
-    nextAction: '【2026-10-27・v1.5.653】開発用教室の結果(受付 20261027-144006023-5e34fa4b): tp-48・tp-61・tp-62・tp-63 OK(外した)。tp-51 要改善(同じコマ内の科目変更で移した先の生徒が消える＝Q40-2 が盤面とずれたテンプレの机番号で置き場を探していた)を修正し、科目の往復で授業が消える抑止キーの残りも修正。tp-62 のメモで丸ごと振替の移した先のメモも残す(tp-65)。tp-63 のメモで休日へ生徒を置けないようにした(hd-1)。tp-64 のメモ(「手入力データを採用」が手置き講師の重複で黙って止まる)はオーナー確定「講師と生徒を別々に採用」で作り直し(INV-02 改定 2026-10-27 承認)。残課題: 生徒を足すだけの保存(tp-48 の形)は盤面の机がずれているとテンプレの机番号の机へ入る(仕様判断待ち)・休日解除で戻した生徒がメモの席に重なる。【2026-10-25 夜・v1.5.641】決定記録 48「押し出された授業は保留(下段・緑)で残す」を実装(spec §H Q42・引き継ぎ正本 docs/plan-2026-10-25-conflict-placement.md): (a) 丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加は消さず、元の机の空き席に残す→同じコマの別の机へ→無ければ同じ机番号の下段(wholeDayTransferDisplaced.ts・tp-62)。(b)-1 Q40-2 の満席は未消化へ逃がさず同じ机番号の下段へ(台帳の例外は duplicate/no-target-cell だけに縮み L-5 を閉じた・tp-49 書き換え)。(b)-2 休日解除で席に別の生徒が居れば下段へ戻す(tp-63)。保留に origin(種別＋理由文)を持ち、ツールチップ・確認・帯に理由を出す(色は緑のまま)。上段が空けば Q28 で自動で 1 行に戻る(決定 A・発火はその机を触る確定のとき＝開き直しでは戻らない)。**2026-10-26(v1.5.643)に (b)-3 時限変更の追従(決定記録 46・§H Q40-9)を実装**: テンプレで時限を変えたら丸ごと振替で移送済みの振替と元の日の「休)」も新しい時限へ動く(同じ授業だけ・満席は下段・室長が手で動かした後や出欠記録ありは動かさない・tp-51 書き換え)。往復(5限 → 3限 → 5限)でも戻る(オーナー決定 2026-10-26・決定記録 50)。**同日(v1.5.644)に保留の帯の週をまたいだ一覧も実装(§H Q42-6・buildTemplatePendingList)**: 盤面上部の「保留 n」を押すと保留の机の一覧(日付・時限・由来・下の行／上の行の生徒・理由・「このコマへ」)が開く。読むだけ。これで決定記録 48 の計画は完了。テスト教室で tp-49/51/62/63/64 を確認してもらう。【2026-10-25】テスト教室の要改善 tp-48/tp-49/tp-51 は同じ真因(丸ごと振替した元の日を休日設定すると Q40-2 が起動せず未消化へ逃げる・科目変更では生徒が消える)で v1.5.639 に修正(決定記録 45)。テスト教室で再確認待ち。同日オーナー決定(実装は次セッション・引き継ぎ正本 docs/plan-2026-10-25-conflict-placement.md・決定記録 46〜48): 押し出された授業は別机(矛盾配置)ではなく既存の保留(下段・緑)で残す。順に (a) 丸ごと振替の振替先に室長が置いていた体験・増コマ・手動追加を空き机へずらし無ければ同じ机番号の下段へ(テンプレ由来の通常だけ従来どおり消して −1)→ (b) Q40-2 の満席(台帳の例外が縮み L-5 を閉じる)・休日解除の席ふさがり・時限変更の追従(決定記録 46)の満席。上段が空いたら Q28 で自動で 1 行に戻す(A)。PDF・共有画面は下段を出さない。新しいフラグは作らない(templateDiffApply の教室だけ)。【2026-10-24】開発用教室の tp-15(保護者の休み連絡×緑の机)は OK(受付 20261024-062027562-37618588)。【2026-10-23・テスト教室の結果(受付 20261022-094354322-14472254・v1.5.622)】tp-50・tp-56 OK(確認リスト第69版 v1.5.633 で外した)。要改善 3 件は調査待ち(オーナーの許可後に着手): tp-48「OK の目安の記載事項がすべてうまく作動しない」(v1.5.622 の修正後の再確認で・詳細不明→再現手順の聞き取りが要る)、tp-49(tp-48 の後に再チェック)、tp-51(科目を変えると移した先の授業が消える／振替元・振替先もテンプレ変更後の時限に合わせるべきでは、の提案・スクショ 1 枚)。tp-57 の要改善(LINE)は Q41-13 で対応済み。【2026-10-23・試行中】オーナー指示 2026-10-22「手入力講師がいる場合、テンプレで上書きされずに、手入力されたそのコマの空き講師枠に詰めてずらす」を v1.5.630 で実装(§H Q41-13・権威関数 planManualTeacherDeskShifts): テンプレの講師だけ(生徒なし)の机と同じ番号に手置き講師(保留中は下段の手置き講師)が居て別の講師なら、手置き講師と手で置いた生徒は 1 行のまま残し、テンプレの講師を同じコマの先頭の空き机へずらす(前回ずらした先を優先・同じ講師が既に居れば置かない・空き机が無ければそのコマに置かない)。2 行にしない。同日のオーナー指示「詰めた講師は緑色で分かるように。保留ではない」で、ずらして置いた講師の講師欄を緑に(v1.5.631・机の印 templateTeacherShift・表示専用・PDF には出ない)。Q41-12 (1) の暫定(D に替える)はこれで置き換え。テンプレが別の講師＋生徒を置く形は従来どおり(手で置いた生徒ありは Q41 の 2 行・なしは置き換え)。テスト教室で tp-59 の使用感を確認してもらう(オーナー「一度実装してみて使用感を確認したい」)。v1.5.627 で先に直した理由の文言(講師だけのテンプレ机の誤表示)は teacher-kept の行に置き換わった。なおテンプレの机番号は盤面では空き机を詰めた順になる(regularLessons に机番号が無く buildManagedRegularLessonsRange が先頭の空き机へ置く)ので、テンプレで机 14 に講師だけを置いても盤面では机 13 に出る(テスト担当の「自動スライド」)。これは差分反映より前からの性質で未改修。【2026-10-21】テスト教室(テスト担当・v1.5.604・受付 20261020-092527755-56bbf675)の結果: tp-55 OK。tp-48/tp-51 は本物の不具合で v1.5.622 で修正(Q40-3 の精算済み判定を権威関数 isWholeDayTransferSettled に・Q40-1 の範囲を日単位・決定記録 40/41)、確認の画面に生徒ごとの理由(名前つき・決定記録 42・tp-58)。再発防止は人手でなく自動監査(templateLessonAccountingOracle ＋ inv06-template-save-sequences.matrix.test.ts＝操作の全順序ペア・決定記録 43)。**オーナー決定 2026-10-21**: L-5 は (a) 同じコマの別の机へ置く(v1.5.623 で実装)。手置き講師は案 B(手置き生徒が居る机だけ 2 行＝講師の重複として表す)。INV-02 の例外文の改定(範囲を曜日単位)は承認済み(台帳本文へ反映)。L-5 の残り(オーナー了承 2026-10-21「講師のいない席でも割り振り、満席のみ未消化へ・理由は満席による」): 講師の居ない机にも置くので、残るのは振替先のコマが満席のときだけ(監査は検出・シーケンス監査はこの形だけ許容)。(a) tp-56 case3/tp-57(3)＝オーナー決定 B(2026-10-21): 手置き講師の机に手で置いた生徒が居るときだけ講師ごと保留(緑・下段が講師を持つ)＝§H Q41・Q21-9 例外 3。v1.5.623 で実装(権威関数 resolveManualTeacherOverlap・下段の teacher・既存を採用で講師を戻す・講師の一意性検査・自動割振りは下段の講師を居ると数える・tp-59)。Q41-12 の 5 点(講師だけのテンプレ机は対象外／席ごとの採用で押していない席のテンプレ生徒も手置き講師の担当／「手で置いた生徒」は Q22 の印の集合／同じコマの別の机にテンプレが同じ講師を置く形も 2 行／manualTeacherReplaced の件数表示)と INV-02/INV-13 の改定はオーナー承認済み(2026-10-21)。テスト教室で tp-59 を確認。(b) tp-56 case1＝同じコマに振替が生きている生徒の通常授業を置かない(Q21-11)は仕様どおり。確認の画面に理由が出るようにしたので据え置きでよいか。テスト教室で tp-48〜51・tp-58 を再確認。／緑が丘校の #75(2026-10-14)が本機能の昇格を前提にする(計画 docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md §3: Q33-1・N-1・穴 8・tp-* の OK・INV 監査の後に scope を all-classrooms へ)。段 1-0(Q39・v1.5.598)の tp-44〜47 と段 2(Q40・v1.5.599)の tp-48〜51 を開発用教室(オーナー)とテスト教室(テスト担当・2026-10-15 指示)で確認。開発用教室で第 46 版(v1.5.587 据え置き・v1.5.593 配信)の tp-38(保留の下段の長押し D&D)と、第 45 版(v1.5.592 配信)の tp-36(手動追加の通常授業がテンプレと同じ内容ならテンプレの机に合わせて緑が消える・同じテンプレの再保存で今ある緑 4 件が片づく)・tp-37(科目違い・振替・講習は緑のまま)を確認。残る判断: ぶつからない形(Q21-11 前段で手置きの机に残っていた形)もテンプレの机へ寄せる線引き(Q38・決定記録 33)に異議が無いか。以下は第 38 版からの持ち越し: 開発用教室で第 38 版(v1.5.578)を試用: 同日移動の写しがテンプレに合う tp-31/tp-32(重大バグ＝テンプレで時限を移した生徒が移動元・移動先の両方に出る、の修正。§H Q36)・休みの席の手入力データを自動採用 tp-33(§H Q37)・日程表の「休」に振替先日付を出さない tp-34・採用の 2 択を席ごとに tp-35(§H Q26-10)。tp-30(講習の重複)と tp-15 も結果待ち。残るオーナー判断: 同日移動の写しのうち「テンプレがその日に持つが抑止で置かれず、席もぶつからない」写しだけ残す線引き(Q36-2)に異議が無いか。全 OK・Q33-1 のすき間(旧版タブの保存で保留が落ちる)の塞ぎ方の決定と実装・regression-reviewer の INV 監査の後、全教室へ広げるかをオーナーが判断。第 2 段のうち保留一覧は v1.5.644 で実装(§H Q42-6)。一括採用・孤児キーの整合チェックは未着手。',
-    references: ['docs/spec-template-behavior.md §H', 'Issue #72', 'docs/plan-2026-10-25-conflict-placement.md', 'src/components/schedule-board/templateTransferFollow.ts (planSlotChangeTransferFollow)', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templatePendingResolution.ts', 'src/components/schedule-board/wholeDayTransferDisplaced.ts', 'src/components/schedule-board/inv13-template-pending-scope.matrix.test.ts', 'src/components/schedule-board/inv13-whole-day-transfer-displaced.matrix.test.ts', 'src/components/schedule-board/templateLessonAccountingOracle.ts', 'src/components/schedule-board/inv06-template-save-sequences.matrix.test.ts'],
-    updatedOn: '2026-10-26',
+    updatedOn: '2026-10-30',
   },
   {
     id: 'question-ai-answer',
-    title: '質問への AI 即時回答(Claude API・Haiku・承認なしで即表示・試験)',
+    title: '質問への AI 自動回答',
     stage: 'awaiting-owner',
-    summary: 'オーナー指示(2026-09-14)で開発用教室だけに実装(v1.5.524)。Vertex AI 経由は割り当て 0 の 429 で一度も回答できなかったため、2026-10-16 オーナー指示で Claude API 直(API キー)へ切り替え(支払い窓口が Anthropic に 1 つ増える)。同日、全教室展開(15 教室見込み・月 3,000 円以下)に向けモデルを Haiku 最新へ(1 問約 0.2 円の試算・アプリ側の回数上限なし)。同日(v1.5.609)回答の決まり(謝らない・不具合を認めない・金額を答えない・他教室を出さない)をシステム指示＋機械検査で追加し、確認用の 20 問 qa-q01〜q20 を確認リストへ。v1.5.610 で評価ワークフロー(Actions「Question AI eval」)。同日夜(v1.5.612)オーナー指示で ①モデルを Sonnet 最新へ戻し(1 問約 5 円の試算) ②「マニュアルでは〜」の他責の言い回しを禁止(指示＋機械検査) ③使い方の説明 docs/user-manual.md を骨子から本文(全 12 章・約 1.3 万字)へ拡充。同日夜(v1.5.615)オーナー採用の妥協案 B(質問に名前が出た生徒の数字と日付だけを権威関数の値で渡す・他の生徒名は機械検査で止める)と、開発中の二重回答(主 Sonnet・影 Haiku を同時に呼び aiAnswerShadow* に記録・評価ワークフローも 2 モデル比較)を実装。同日深夜(v1.5.619)オーナー確定: ①モデルは Haiku(評価 4・5 回目で Sonnet とほぼ同等・費用約 1/20)・二重回答は終了 ②「申し訳ありませんが」程度の謝罪は止めない(機械検査から謝罪語を外す) ③オーナー承認なしで室長にすぐ表示 ④開発者にはメールで回答文を知らせる(AI の結果が書かれてから送る)・訂正回答は開発者画面「質問への回答」から ⑤開発者の回答が必要なときの決まり文句は「開発者より別途回答いたします」に統一 ⑥QA の輪のオーナー承認の段も外した。本番教室へ広げる予定は決まっていない(§G-1 は「即答は作らない」)。',
+    who: 'owner',
+    summary: '「質問・要望」で質問を送ると、その場で AI が回答する(1 問 約 0.2 円)。開発用・テスト教室だけで動作中で、確認は OK。',
+    nextAction: 'オーナーが全教室に出すか決める(出すときは画面とサーバーの設定を同時に切り替える)。',
+    notes: '機能フラグ questionAiAnswer と functions/src/questionAiAnswer.ts の isQuestionAiAnswerEnabledForClassroom を同じ push で all-classrooms へ。§G-1 の「即答は作らない」を全教室に広げる仕様改定も同じ push。モデルは Haiku に確定(2026-10-16)。回答の質は Actions「Question AI eval」(23 問)で見る。2026-10-24 qa-ai-5〜7 OK(受付 20261024-062027562-37618588)。',
     featureKeys: ['questionAiAnswer'],
-    nextAction: '【2026-10-24】開発用教室の確認リスト qa-ai-5〜qa-ai-7(回答の簡素化・履歴に残す・短い通知メール)が OK(受付 20261024-062027562-37618588)。同じ受付のオーナー指示「AI 自動回答(20 問)は確認リストからの確認は不要」で qa-q01〜qa-q23 を確認リストから外し、23 問は評価ワークフロー(Actions「Question AI eval」)だけで見る。残るのはオーナーの全教室展開の判断(scope とサーバー判定を同じ push で)。以下は 2026-10-16 時点の記録: オーナーが Anthropic コンソールで請求登録＋API キー発行 → GitHub secret ANTHROPIC_API_KEY を追加 → Actions「Deploy Cloud Functions」を実行。開発用教室で確認リスト qa-ai-1・qa-q01〜q20(20 問)を送り、回答の中身と決まりの守られ方を確かめる。OK なら全教室へ展開する(オーナー確定 2026-10-16「開発用教室で確認後」: featureRollout の scope とサーバーの isQuestionAiAnswerEnabledForClassroom を同時に all-classrooms へ・§G-1 の例外を全教室に広げる仕様改定と同じ push)。モデルは Haiku に確定済み(2026-10-16 夜)。開発用教室で qa-ai-3(すぐ表示＋メールに回答文)・qa-ai-4(訂正回答の経路)・qa-q21〜23(自教室の生徒名に置き換え)を確認。評価ワークフロー(既定 Haiku 23 問・約 6 円)で決まり文句の言い方と謝罪の程度を見る。',
-    references: ['docs/spec-developer-report.md §G-7', 'functions/src/questionAiAnswer.ts', '.github/workflows/deploy-functions.yml'],
-    updatedOn: '2026-10-24',
+    references: ['docs/spec-developer-report.md §G-7', 'functions/src/questionAiAnswer.ts'],
+    updatedOn: '2026-10-30',
   },
 
-  // ── 実装済み・確認リスト結果待ち ──────────────────────────────────────────
+  // ── やること(オーナー) ──────────────────────────────────────────────────────
   {
-    id: 'rapid-response-foundation',
-    title: '即時対応の基盤(保存ごとの版履歴・操作痕跡の保存同梱・自動エラー報告・保存失敗メール・差分ツール・質問要望の画像添付)',
-    stage: 'awaiting-checklist',
-    summary: 'オーナー採用(2026-10-22「即時対応のための案(優先順)に従いすべて採用」・別会社 10 教室の追加に備える)。案 1: 保存ごとの教室版履歴(Storage classroom-save-history/{ws}/{教室}/・gzip・90 日・mirrorLatestClassroomRollback が追記)。案 2: 保存リクエストに前回保存以降の操作痕跡を相乗り(operationTraces/{saveId}・90 日・端末内保持 300→1000 件)。案 3: window.onerror / unhandledrejection / React ErrorBoundary を捕まえて痕跡(kind error)＋自動報告(メールのみ・Issue なし・1 タブ 3 通まで)。案 5: tools/snapshot-diff.mjs(2 時点の教室データを生徒・机単位で比べる)。案 6: 保存失敗(版数衝突・読み戻し失敗・破壊防止ガード)の即時メール(教室ごと 1 時間 1 通)。スクショ添付(オーナー決定 A): 盤面＝「画面を撮る」＋「画像を選ぶ」＋貼り付け、日程表＝「画像を選ぶ」だけ、3 枚まで、メールに 1 枚目 1MB まで添付。15 分毎バックアップ関数を 540 秒/2GiB へ増強。ブランチ ccr-90a9c65f-i1xp3l(未マージ)。',
-    checklistItemIds: ['rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2'],
-    nextAction: 'staging(Actions「Deploy to Staging」・functions 込み)でオーナーが rp-1〜rp-3・sv-1・sv-2 を確認 → main へマージ(hosting / functions の CI が緑か確認) → 本番で「#テスト」付きの送信 1 回で画像とメールを確認。sv-1 は Claude が読み取り専用トークンで版履歴と operationTraces を確かめる。',
-    references: ['docs/spec-developer-report.md §C/§D-2/§D-3', 'docs/spec-save-restore.md §8-1 #14〜#16', 'docs/runbooks/monitoring.md §3/§5〜§7', 'functions/src/saveFailureAlert.ts', 'functions/src/operationTraces.ts', 'src/utils/clientErrorCapture.ts', 'src/components/developer-report/screenCapture.ts', 'tools/snapshot-diff.mjs'],
-    updatedOn: '2026-10-22',
-  },
-
-  // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────
-  {
-    id: 'contract-baseline-arch',
-    title: '株式会社アーチとの契約時環境の固定と復旧計画',
-    stage: 'in-progress',
-    summary: 'ブランチ claude/arch-contract-recovery-plan-m7765e(2026-09-19・5 コミット・未マージ)。release タグ自動付与・stable の印・復旧ワークフロー・runbook を追加する内容。契約時タグの push はオーナー作業。',
-    nextAction: 'オーナーが内容を確認し、マージするか破棄するかを決める(CI ワークフローを増やすので慎重に)。',
-    references: ['claude/arch-contract-recovery-plan-m7765e', 'docs/runbooks/contract-baseline-arch.md(ブランチ内)'],
-    updatedOn: '2026-09-25',
+    id: 'finished-issues-cleanup',
+    title: '対応が済んだ Issue を閉じる(8 件)',
+    stage: 'awaiting-owner',
+    who: 'owner',
+    summary: '中身は済んでいて記録のために開いたままの Issue。確認リストの古い自動起票(#62〜#66)、LINE で回答済みの質問(#69・#70)、修正済みの不具合(#76)。',
+    nextAction: 'オーナーが GitHub で閉じる(Claude に「閉じて」と頼んでもよい)。済んだらこの行を消す。',
+    notes: '#62〜#66 は 2026-09-13 に「確認リストは Issue を起票しない」へ変える前の自動起票。#69・#70 はオーナーから「今日までの質問はすべて LINE で対応済み」(2026-09-28)。#76(生徒を削除して並べ替えると講師の名前が消える)は v1.5.600 で全教室修正・確認 tp-52 OK(2026-10-15)。閉じたら開発者画面「質問への回答」で該当の報告を「解決済みにする」。',
+    references: ['Issue #62', 'Issue #63', 'Issue #64', 'Issue #65', 'Issue #66', 'Issue #69', 'Issue #70', 'Issue #76'],
+    updatedOn: '2026-10-30',
   },
   {
-    id: 'ui-text-review',
-    title: '室長・保護者向け画面の文言棚卸し(Excel・オーナー記入欄つき)',
-    stage: 'in-progress',
-    summary: 'ブランチ claude/stoic-carson-srb4tr(2026-09-19・4 コミット・docs のみ・未マージ)。保護者画面から社内用語を排除する修正案を記入済み。',
-    nextAction: 'オーナーが Excel に可否を記入 → 反映する実装テーマを起票する。',
-    references: ['claude/stoic-carson-srb4tr', 'docs/ui-text-review-2026-09-18.md(ブランチ内)'],
-    updatedOn: '2026-09-25',
+    id: 'template-duplicate-save-guard',
+    title: '日大前校のテンプレで同じ生徒が 2 か所にいる(金曜 3限)',
+    stage: 'awaiting-owner',
+    who: 'owner',
+    summary: '日大前校のテンプレの金曜 3限で、机 4 と机 7 に同じ生徒が入っている。次にテンプレを保存すると「保存できません」と止まり、片方を外せば保存できる。',
+    nextAction: '室長へ先に「机 7 の生徒を外して保存し直して」と伝えるか、保存時の案内に任せるかをオーナーが決める。',
+    notes: '確認リスト 2026-10-14 の質問「テンプレの講師が追従しない日がある」の調査で見つかった。テンプレ編集の同じコマの重複検査は全教室で有効(INV-12・templateEditorGuards.ts)。直せば 11/6 以降の金 3限で机 7 の講師が落ちる症状も直る。受付 20261014-062117803-c223100f。',
+    references: ['docs/spec-invariants.md INV-12', 'src/components/schedule-board/templateEditorGuards.ts'],
+    updatedOn: '2026-10-30',
   },
   {
     id: 'stale-branches-2026-06',
-    title: '古いリモートブランチの削除(3 本は破棄と決定済み・削除操作だけ残り)',
+    title: '使っていない古いブランチを消す',
     stage: 'awaiting-owner',
-    summary: '2026-09-28 オーナー判断で 6 月の 3 本(ci/functions-deploy-409-targeted・claude/test-procedure-docs-tm1y8t・agents/feature-data-integrity-checks)は取り込まず破棄(いずれも main で別対応済み／役目終了)。PR #31 はクローズ済み。Claude のクラウド環境は作業ブランチ以外へ push できないため、リモートからの削除だけ残っている。',
-    nextAction: 'オーナーが Actions →「Delete stale branches」を Run workflow(まず dry_run=true で一覧確認 → false で実行)して 3 本とマージ済み 45 本を削除する。済んだらこの行とワークフローを消す。',
-    references: ['PR #31', '.github/workflows/delete-stale-branches.yml', 'docs/review-2026-09-25-work-in-progress-inventory.md §3'],
-    updatedOn: '2026-09-28',
+    who: 'owner',
+    summary: '不要と決まった古いブランチ 3 本と、取り込み済みのブランチがたくさん残っている。Claude の環境からは消せない。',
+    nextAction: 'オーナーが GitHub の Actions →「Delete stale branches」を実行する(まず dry_run=true で一覧を確認 → false で実行)。',
+    notes: '破棄が決まっているのは ci/functions-deploy-409-targeted・claude/test-procedure-docs-tm1y8t・agents/feature-data-integrity-checks(2026-09-28 オーナー判断)。済んだらこの行と .github/workflows/delete-stale-branches.yml を消す。',
+    references: ['.github/workflows/delete-stale-branches.yml', 'docs/review-2026-09-25-work-in-progress-inventory.md §3'],
+    updatedOn: '2026-10-30',
+  },
+  {
+    id: 'contract-baseline-arch',
+    title: 'アーチ社との契約時点の環境を固定して戻せるようにする(作りかけ)',
+    stage: 'in-progress',
+    who: 'owner',
+    summary: '契約した時点の版に印を付け、いつでもその版へ戻せる手順と仕組みを足す内容。9 月 19 日からブランチに作りかけのまま。',
+    nextAction: 'ブランチを取り込むか捨てるかをオーナーが決める(取り込むなら Claude が仕上げる)。',
+    notes: 'ブランチ claude/arch-contract-recovery-plan-m7765e(5 コミット・未マージ)。release タグ自動付与・stable の印・復旧ワークフロー・runbook。CI ワークフローが増えるので慎重に。契約時タグの push はオーナー作業。',
+    references: ['claude/arch-contract-recovery-plan-m7765e', 'docs/runbooks/contract-baseline-arch.md(ブランチ内)'],
+    updatedOn: '2026-10-30',
+  },
+  {
+    id: 'ui-text-review',
+    title: '室長・保護者向け画面の言葉の見直し(Excel)',
+    stage: 'in-progress',
+    who: 'owner',
+    summary: '画面の言葉から社内用語を減らす修正案を Excel にまとめてある(ブランチ内・まだ取り込んでいない)。',
+    nextAction: 'オーナーが Excel に可否を書き込む → Claude が画面へ反映する。',
+    notes: 'ブランチ claude/stoic-carson-srb4tr(4 コミット・docs のみ)。docs/ui-text-review-2026-09-18.md(ブランチ内)。',
+    references: ['claude/stoic-carson-srb4tr', 'docs/ui-text-review-2026-09-18.md(ブランチ内)'],
+    updatedOn: '2026-10-30',
+  },
+  {
+    id: 'second-company-onboarding',
+    title: '2 社目を受け入れる準備の残り',
+    stage: 'awaiting-owner',
+    who: 'owner',
+    summary: '会社ごとの設定・請求・新しい会社を作る道具などは作成済み。残りは検証環境での予行演習と、請求画面を見られる人の設定。',
+    nextAction: 'オーナーが検証環境で架空の会社を作る予行演習を 1 周する(手順書 docs/runbooks/company-onboarding.md)。',
+    notes: '残り: P-9 予行演習(runbook §2〜§10・所要時間と詰まりを §10 の表へ)、P-0(薬円台校の削除後の記述整理・オーナーの削除待ち)、請求許可者の第 2 段(オーナーが会員文書に billingAllowed を立ててからメール固定を撤去)。確認 mc-1(タブ名)。',
+    references: ['docs/plan-2026-09-18-second-company-onboarding.md §3/§8', 'docs/runbooks/company-onboarding.md', 'docs/spec-multi-tenant.md §11-1/§12/§13'],
+    updatedOn: '2026-10-30',
   },
 
-  // ── オーナー判断待ち(Issue) ─────────────────────────────────────────────────
-  {
-    id: 'user-question-issue-69',
-    title: '緑が丘校からの利用者質問(丸ごと振替後に入った生徒の日付)',
-    stage: 'awaiting-owner',
-    summary: 'Issue #69(2026-09-16・source:user-report)。利用者報告 Issue は勝手に修正を始めない(オーナー指示 2026-09-04)。オーナーから「今日までの質問はすべて LINE で対応済み」(2026-09-28)。',
-    nextAction: 'LINE で対応済みなら、オーナーが Issue #69 をクローズし、「質問への回答」で該当の報告を「解決済みにする」。',
-    references: ['Issue #69', 'docs/spec-developer-report.md §E'],
-    updatedOn: '2026-09-28',
-  },
-  {
-    id: 'user-question-issue-70',
-    title: '緑が丘校からの利用者質問(振替を動かし直したときの振替日表示)と講師日程共有の日付ズレ',
-    stage: 'awaiting-owner',
-    summary: 'Issue #70(2026-09-26・source:user-report)。「講師日程共有で振替先日付が追従しない」の修正(v1.5.558)は確認 t-2 で OK(2026-09-28)。オーナーから「今日までの質問はすべて LINE で対応済み」(2026-09-28)。',
-    nextAction: 'オーナーが Issue #70 をクローズし、「質問への回答」で該当の報告を「解決済みにする」。',
-    references: ['Issue #70', 'CHANGELOG v1.5.558'],
-    updatedOn: '2026-09-28',
-  },
-  {
-    id: 'user-request-issue-75',
-    title: '緑が丘校の質問 #75(実質は要望): テンプレをコマ単位で直したい・祝日/丸ごと振替の日にも追従してほしい',
-    summary: 'Issue #75(2026-10-14・source:user-report・種別は質問だが中身は要望)。「12 月以降の休み・振替を手で組んだのでテンプレ(上書き)を触れない。対象 1 コマだけ変えるテンプレは作れないか。生徒の増減が祝日や丸ごと振替の日にも追従すると効率がいい」。計画: 1 コマ用テンプレは作らず、差分反映(#72・§H)の全教室昇格(段 1)＋変更点一覧などの見え方(段 1b)＋根拠を失った振替の処理と丸ごと振替先への配置(段 2・新規仕様)。祝日由来の未消化の発生は差分反映で既に追従するが、配置済みの振替と丸ごと振替の振替先は追従しない(計画 §1-3)。壁打ち 1 周目(2026-10-14)でオーナー確定: 根拠を失った振替は保存で消す／足した生徒は振替先の同じ机へ置き空きが無ければ未消化／暫定回答は LINE でオーナーが伝える。加えてオーナー案「変化のあったコマだけ差分反映する」(計画 §2-1・§H Q39)で保留を極力減らす。2 周目(同日)で確定: コマ単位・0 件は全コマ・反映開始日の既定は来週の月曜＋過去日は警告・着手順は段 1-0 → 段 2 → 昇格。段 1-0 を v1.5.598 で開発用教室へ(Q39・変更点一覧・ボタン文言・既定日。regression-reviewer の監査 H-1/H-2 と再検査 M-1/L を取り込み済み)。段 2(§H Q40)は 3 周目のオーナー確定(H〜K・2026-10-14)で v1.5.599 に実装(templateTransferFollow.ts: 根拠を失った振替は保存で消し移動元記録も消す／丸ごと振替した日に足した生徒は振替先の同じ机の空席へ振替として置き、置けなければ未消化〔休日でなければ台帳に origin 1 件＝INV-06 の唯一の例外〕)。',
-    stage: 'awaiting-checklist',
-    checklistItemIds: ['tp-48', 'tp-49', 'tp-50', 'tp-51', 'tp-56', 'tp-57', 'tp-58', 'tp-59'],
-    nextAction: '【2026-10-21】テスト教室の結果(受付 20261020-092527755-56bbf675・v1.5.604): tp-55 OK／tp-48・tp-51 は不具合(同じ科目を同じ曜日の別の時限にも持つ生徒の追加が消える・時限変更→科目変更で旧科目の振替が残る)→ v1.5.622 で修正＋自動監査(spec-template-behavior 決定記録 40〜43)／tp-49・tp-50 は tp-48 の前提崩れと手順の説明不足→文面を直した／tp-56 case3・tp-57(3) は Q21-9 どおり(確認リストの文を直した・手置き講師の例外はオーナー判断待ち)／tp-56 case1 は Q21-11 どおり(確認の画面に理由を出すようにした)。テスト教室で tp-48〜51・tp-56〜58 を再確認。／段 1-0 の tp-44〜46 は 2026-10-15 に OK(受付 20261015-133308495-046ae8de・メモの「選択肢は不要」は v1.5.602 で反映＝tp-53)。v1.5.602 の tp-47(今日より前を選べない)・tp-53・tp-54(QR 講師の重複)も同日 OK(受付 20261015-151056959-a8890098)。オーナー: 開発用教室で tp-48〜51、テスト担当: テスト教室(test_classroom_20260507_dai)で tp-48〜51 と基本仕様の tp-55〜57(未消化数が変わらない・日程表とコマ表が一致・意図しない変更が無い)を確認(オーナー指示 2026-10-15)。テスト教室の結果は verification-checklist-report.mjs --classroom test_classroom_20260507_dai で読む。全 OK なら昇格の残課題(Q33-1・N-1・穴 8)→ INV 監査 → 全教室への昇格をオーナーが判断(#75 の緑が丘校はここで解決)。',
-    references: ['Issue #75', 'Issue #72', 'Issue #69', 'docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md', 'docs/spec-template-behavior.md §H'],
-    updatedOn: '2026-10-21',
-  },
-  {
-    id: 'user-report-issue-76',
-    title: '緑が丘校の報告 #76: 生徒を削除して並べ替えると講師の名前が消える(修正済み v1.5.600・全教室)',
-    stage: 'awaiting-checklist',
-    summary: 'Issue #76(2026-10-15・source:user-report・type:bug)。triage(2026-10-15): 想定外。並べ替えで下へ動いたテンプレ由来の講師だけの机を、次のテンプレ再マージ(教室の開き直し・次の生徒削除・基本データ/教室設定の変更の effect)が「同じ机番号の盤面の机に授業があれば消費済み」とみなして戻さず講師を消していた(mergeManagedWeek の consumedManagedTeacherIndexes・pack / seat とも・削除は必要条件でない)。オーナー承認(同日「修正に進めて、すぐに全校展開して」)で v1.5.600 に修正(フラグなし・全教室): テンプレ(抑止後)のそのコマに同じ講師の講師だけの机があり、他の机に同じ講師が居らず、削除記録でもなければ机番号に関係なく今の机に残す。兄弟の「再マージで講師が前の空き机へずれる」(INV-02 L-7 ②)も止まる。INV-02 マトリクスに 9 件、INV-12 の L-7 兄弟 2 の並びの期待を改定(台帳に記録)。',
-    checklistItemIds: [],
-    nextAction: '確認リスト tp-52 は 2026-10-15 に OK(受付 20261015-133308495-046ae8de)。オーナーが Issue #76 をクローズし、室長へ「直った」と伝える(その後この行を消す)。すでに講師が消えてしまった週は、講師セルから手で置き直す(手置きは再マージで消えない)。',
-    references: ['Issue #76', 'CHANGELOG v1.5.600', 'docs/spec-invariants.md INV-02(2026-10-15)', 'src/components/schedule-board/ScheduleBoardScreen.tsx mergeManagedWeek'],
-    updatedOn: '2026-10-15',
-  },
-  {
-    id: 'checklist-issues-cleanup',
-    title: '確認リスト由来の Issue #62〜#66 のクローズ',
-    stage: 'awaiting-owner',
-    summary: '2026-09-13 に「確認リストは Issue を起票しない」へ変えた前に自動起票された 5 件。中身の項目はすべて対応済みで、記録としてだけ残っている。',
-    nextAction: 'オーナーがクローズする(内容は git 履歴と確認リストの版に残る)。',
-    references: ['Issue #62', 'Issue #63', 'Issue #64', 'Issue #65', 'Issue #66'],
-    updatedOn: '2026-09-25',
-  },
-
-  // ── 未着手(計画あり) ────────────────────────────────────────────────────────
+  // ── やること(Claude) ────────────────────────────────────────────────────────
   {
     id: 'auto-backup-per-classroom',
-    title: '15 分毎の自動バックアップの教室別化(教室ごとの gzip＋時点の目次)— 2026-10-30 本番 main を教室別形式に切り替え済み・確認リスト ab-1〜ab-4 OK・残りは取り残し掃除の空実行解除(secret)と段階 3(実測)',
+    title: '自動バックアップ切り替え後の後片付け',
     stage: 'awaiting-owner',
-    summary: 'オーナー確定(2026-10-28 Q1〜Q9 推奨案)。2026-10-29(v1.5.662)に段階 0〜2 のコード(共有純関数 workspaceBackupLayout・両形式を読める callable 3 本・復元前の控えを教室別に・教室ごとの逐次書き込み・会社ごとの try/catch・Drive 教室ごと＋掃除 1 日 1 回・取り残しの掃除〔既定は空実行〕)。2026-10-30(v1.5.663)オーナー選択 A「Claude がコードで切り替え・staging 省略」で、コードの既定 WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT を per-classroom-v1 にして本番 main の 4 教室を切り替えた(切り替え前に教室 ID の文字種を読み取りで照合済み)。JST 9:00 以降の時点から教室別形式。仕様は spec-save-restore §10。',
-    nextAction: '(0) 確認リスト ab-1〜ab-4 は 2026-10-30 にすべて OK(受付 20261030-001600993-0c0555f5・ab-4 は v1.5.665 の読み込み失敗の見える化のあとオーナー報告で OK)→ 外した。(1) 済 2026-10-30: 手動実行(JST 8:30)と自動の初回(JST 9:00)を読み取りで確認。どちらも 4 教室の .json.gz＋index.json・要約 layout=per-classroom-v1・classroomCount=4・missing 空・Drive synced・失敗通知なし・旧形式の 03-00 も残存。復元前の控え(JST 8:24)も教室別で 4 教室＋index。(2) オーナー: 確認リスト ab-1〜ab-3 を教室別の時点(9:00 以降)でもう一度、ab-4(Drive の …_v8OZ7zH8vONNHjjYVcR1.json.gz)。受付 20261029-232853166-07156d5a の ab-1〜ab-3 OK は旧形式の時点(03-00)に対する確認で、他教室が復元されていないことは各教室の最終保存時刻で確認済み。(3) 翌朝以降: 取り残し(要約の無い時点フォルダ)を Storage の一覧で数え、無ければ secret PROD_FUNCTIONS_ENV に WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0(オーナー・急がない)。(4) 段階 3: 教室数が増える前に生成・callable のメモリと時間を実測(staging か本番の読み取り)、backupRetentionEstimate.ts の見積り(1 時点 約 3MB)、Issue #77 のクローズ判断。⚠️ Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。',
-    references: ['docs/spec-save-restore.md §10', 'docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md', 'functions/src/workspaceBackupLayoutConfig.ts (WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT)', 'src/utils/workspaceBackupLayout.ts (共有純関数)', 'functions/src/workspaceBackupWriter.ts (教室ごとに順番に書くループ)', 'functions/src/index.ts (runWorkspaceServerAutoBackup / runPerClassroomWorkspaceBackupForWorkspace / downloadClassroomFromPerClassroomBackup / prepareServerAutoBackupRestore / pruneOrphanedWorkspaceBackupFolders)', 'src/integrations/firebase/adminFunctions.ts (downloadFirebaseServerAutoBackupJson)', 'Issue #77'],
+    who: 'claude',
+    summary: '15 分ごとの自動バックアップを教室ごとのファイルに切り替えた(10/30・確認もすべて OK)。古い形式の取り残しを消す処理は、まだ「試しに数えるだけ」の設定。',
+    nextAction: '明日以降に Claude が取り残しを数え、問題なければオーナーに設定の切り替えを頼む(急がない)。',
+    notes: '取り残し(要約の無い時点フォルダ)を Storage の一覧で数え、無ければ secret PROD_FUNCTIONS_ENV に WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0(オーナー)。教室が増える前の重さの実測は backup-per-workspace の行。⚠️ Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。仕様 docs/spec-save-restore.md §10。',
+    references: ['docs/spec-save-restore.md §10', 'docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md', 'functions/src/workspaceBackupLayoutConfig.ts', 'functions/src/index.ts pruneOrphanedWorkspaceBackupFolders'],
+    updatedOn: '2026-10-30',
+  },
+
+  // ── まだ作っていないもの(計画あり) ──────────────────────────────────────────
+  {
+    id: 'issue-backlog-2026-07',
+    title: '小さな改善の積み残し(8 件)',
+    stage: 'planned',
+    who: 'owner',
+    summary: '教室追加をアプリだけで完結(#38)・消した振替を戻す画面(#39)・使っていない仕組みの撤去(#41・#43)・日程表の二重更新(#42)・出勤できない講師が置かれ続ける(#47)・残数のズレ(#48・#74)。どれも急ぎではない。',
+    nextAction: 'オーナーが優先順を決め、Claude が 1 件ずつ直す。',
+    references: ['Issue #38', 'Issue #39', 'Issue #41', 'Issue #42', 'Issue #43', 'Issue #47', 'Issue #48', 'Issue #74'],
+    updatedOn: '2026-10-30',
+  },
+  {
+    id: 'parent-portal-rate-limit',
+    title: '保護者ページの使いすぎ防止(1 分 30 件まで)',
+    stage: 'planned',
+    who: 'owner',
+    summary: '保護者ページへのアクセス回数の上限はまだ作っていない(今はサーバーの台数の上限で代わりにしている)。',
+    nextAction: '保護者向け QR を本番に出すときに、今のままでよいかをオーナーと決める。',
+    references: ['functions/src/parentPortal.ts', 'docs/spec-parent-portal.md §G'],
+    updatedOn: '2026-10-30',
+  },
+  {
+    id: 'multi-company-phase2-3',
+    title: '会社ごとに別版を作る仕組み・解約時の片付け手順',
+    stage: 'planned',
+    who: 'owner',
+    summary: '会社ごとに専用の版を作るための雛形と、会社が解約したときのデータの片付け手順がまだ無い。',
+    nextAction: '2 社目の要望の大きさを見て、別版を作るかをオーナーが決めてから着手する。',
+    notes: 'フォーク用 CI 雛形(T2-2〜T2-4)、workspace のオフボーディング(T3-4)。バックアップ関数の分割(P-10)は backup-per-workspace の行。',
+    references: ['docs/plan-2026-09-15-multi-company-architecture.md §7/§9-9', 'docs/spec-multi-tenant.md §7'],
+    updatedOn: '2026-10-30',
+  },
+
+  // ── まだ作っていないもの(保留・再開条件つき) ─────────────────────────────────
+  {
+    id: 'classroom-snapshot-capacity',
+    title: '保存をもっと速くする(変わった所だけ送る)',
+    stage: 'on-hold',
+    who: 'owner',
+    summary: '保存できなくなる事故(データの大きさの上限)は分割保存で解決済み。残りは保存時間を約 18 秒から数秒にする改善と、古い週の整理。',
+    nextAction: '室長から「保存が遅い」と声が出たら着手する。古い週の整理は来年の講習期に測ってから決める。',
+    notes: '週単位の分割保存は段階 B まで全教室(v1.5.656)。保留は段階 C(端末も変わった部品だけ送る)と段階 D(過去週のアーカイブ・第 2 段の部品分割)。容量 50% 通知 split-capacity-notice が来たら前倒し。docs/plan-2026-10-27-weekly-split-snapshot-handoff.md・spec-save-restore §9・INV-14。',
+    references: ['docs/plan-2026-10-27-weekly-split-snapshot-handoff.md', 'docs/spec-save-restore.md §9', 'docs/spec-invariants.md INV-14'],
     updatedOn: '2026-10-30',
   },
   {
     id: 'backup-per-workspace',
-    title: '15 分毎バックアップ関数の会社(workspace)ごとの分割実行(別会社 10 教室の追加に備える恒久対策)',
+    title: 'バックアップ処理を会社ごとに分けて動かす',
     stage: 'on-hold',
-    summary: '全 workspace を 1 回の実行で直列に回すため、教室数に比例して時間とメモリが伸びる(spec-multi-tenant §7-16「15 教室前後で枠切れ」の見込み)。2026-10-22 に 300 秒/1GiB → 540 秒/2GiB へ増強して当面の枠を確保した。恒久対策は workspace ごとの別実行(1 社 1 タスク)か教室ごとの gzip 書き出しにし、復元 UI の一覧の読み方を揃える。',
-    nextAction: '2026-10-28 オーナー確定(Q7): 教室別化(auto-backup-per-classroom)を先に、分割実行は条件つきで後回し。2026-10-29(v1.5.662)で「1 社の例外が他社の回を止める」構造は解消済み(runWorkspaceServerAutoBackup が会社ごとに try/catch・失敗は auto-backup-failed のメール)。残る再開条件: 1 回の実行が 300 秒を超えたら、または 3 社目のとき(spec-save-restore §10-12)。Issue #77 はその旨をコメントして保留のまま。',
-    references: ['Issue #77', 'docs/spec-save-restore.md §10-12', 'docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md §3-5 / Q7', 'docs/spec-multi-tenant.md §7-16', 'docs/plan-2026-09-15-multi-company-architecture.md §6-13', 'functions/src/index.ts runWorkspaceServerAutoBackup'],
-    updatedOn: '2026-10-29',
+    who: 'owner',
+    summary: '教室が増えるとバックアップ 1 回にかかる時間が延びる。当面は使える時間とメモリを増やして間に合わせている。',
+    nextAction: '1 回が 300 秒を超えるか 3 社目が来たら着手する(その前に Claude が重さを測る)。',
+    notes: '2026-10-28 オーナー確定(Q7): 教室別化を先に、分割実行は条件つきで後回し。会社ごとの try/catch で「1 社の失敗が他社を止める」は解消済み(v1.5.662)。1 時点 約 3MB の見積りは backupRetentionEstimate.ts。',
+    references: ['Issue #77', 'docs/spec-save-restore.md §10-12', 'docs/spec-multi-tenant.md §7-16'],
+    updatedOn: '2026-10-30',
   },
-  {
-    id: 'second-company-onboarding',
-    title: '2 社目の受け入れ準備(P-1〜P-8・P-11 実装済み / P-9 予行演習・P-0・請求許可者 第 2 段が残り)',
-    stage: 'awaiting-owner',
-    summary: '2026-10-10 に P-1(会社別プロファイル)・P-2(タブ名)・P-3(multi-site)・P-4(会社別配信 CI)・P-5/P-12(workspace 新設ツール)・P-6/P-7/P-8(runbook・Excel 雛形)・P-11(会社宛請求 ①〜③・④ 第 1 段)を main へ。残り: P-9 staging での予行演習(オーナー + Claude・runbook §10 に記録)、P-0(薬円台校の削除後の記述整理・オーナーの削除待ち)、請求許可者の第 2 段(オーナーが会員文書に billingAllowed を立ててからメール固定を撤去)。',
-    nextAction: 'オーナーが staging に架空の会社 demo で予行演習(runbook §2〜§10)を 1 周し、所要時間と詰まりを §10 の表へ。並行して確認リスト mc-1(タブ名)を開発用教室で確認。',
-    checklistItemIds: ['mc-1'],
-    references: ['docs/plan-2026-09-18-second-company-onboarding.md §3/§8', 'docs/runbooks/company-onboarding.md', 'docs/spec-multi-tenant.md §11-1/§12/§13'],
-    updatedOn: '2026-10-10',
-  },
-  {
-    id: 'multi-company-phase2-3',
-    title: '複数会社展開 Phase 2〜3 の残り(フォーク雛形・バックアップ関数の棟分割 P-10・オフボーディング T3-4)',
-    stage: 'planned',
-    summary: 'Phase 2 の multi-site(T2-1)と Phase 3 の新設ツール(T3-1)・会社宛請求(T3-3)は 2 社目受け入れ準備(P-3/P-5/P-11)として 2026-10-10 に実装済み。残りはフォーク用 CI 雛形(T2-2〜T2-4・フォークを切る判断が出てから)、バックアップ関数の棟分割(P-10・15 教室に近づく前)、workspace のオフボーディング手順(T3-4)。',
-    nextAction: '2 社目の要望の大きさを見てフォークを切るか決める(計画 §6 の基準)。P-10 は教室数の推移を見て別 Issue で着手。',
-    references: ['docs/plan-2026-09-15-multi-company-architecture.md §7/§9-9', 'docs/spec-multi-tenant.md §7'],
-    updatedOn: '2026-10-10',
-  },
-  {
-    id: 'issue-backlog-2026-07',
-    title: '7 月の改善バックログ(Issue #38/#39/#41/#42/#43/#47/#48)',
-    stage: 'planned',
-    summary: '教室追加のアプリ内完結(#38)・削除した未消化振替の復帰 UI(#39)・managers 配管の撤去(#41)・日程表ポップアップ二重同期(#42)・旧 QR デッドコード(#43)・出勤不可講師の赤配置(#47)・講習ストック相殺の残数ズレ(#48)。いずれも severity s3。',
-    nextAction: '優先順をオーナーと決めて 1 件ずつ dev-fix へ。',
-    references: ['Issue #38', 'Issue #39', 'Issue #41', 'Issue #42', 'Issue #43', 'Issue #47', 'Issue #48'],
-    updatedOn: '2026-09-25',
-  },
-  {
-    id: 'parent-portal-rate-limit',
-    title: '保護者ページ API の全体レート制限(1 分 30 件)',
-    stage: 'planned',
-    summary: 'functions/src/parentPortal.ts に「未実装(maxInstances で代替)」と明記。保護者 QR を本番へ広げる前に要否を決める。',
-    nextAction: '保護者 QR の昇格判断と同時に、maxInstances のままでよいか決める。',
-    references: ['functions/src/parentPortal.ts', 'docs/spec-parent-portal.md §G'],
-    updatedOn: '2026-09-25',
-  },
-
-  // ── 保留(オーナー判断・再開条件つき) ────────────────────────────────────────
   {
     id: 'classroom-feature-override-o1',
-    title: '教室別オプション基盤 O-1 / 容易度 A 機能のオプション登録 O-2',
+    title: '教室ごとに機能を ON/OFF する仕組み',
     stage: 'on-hold',
-    summary: '機能スイッチは当面 2 段(基本スコープ → 会社既定)。教室単位の要望が増えたら 3 段目(O-1)へ(オーナー確定 2026-09-16)。',
-    nextAction: '教室単位の ON/OFF 要望が複数出たら再開する。',
+    who: 'owner',
+    summary: '今は機能を「全教室」か「会社ごと」でしか切り替えられない。',
+    nextAction: '教室ごとに切り替えたいという要望が複数出たら着手する。',
+    notes: '機能スイッチは当面 2 段(基本スコープ → 会社既定)。3 段目が O-1(オーナー確定 2026-09-16)。',
     references: ['docs/plan-2026-09-11-five-requests.md §4', 'docs/spec-multi-tenant.md §7-1'],
-    updatedOn: '2026-09-25',
+    updatedOn: '2026-10-30',
   },
   {
     id: 'undo-redefinition',
-    title: '戻るボタンの再定義(統一 undo・U-1〜U-6)',
+    title: '「戻る」ボタンの作り直し',
     stage: 'on-hold',
-    summary: 'オーナー判断 2026-09-11 で保留。現行バグの疑い U-0 だけ修正済み(u0-1〜u0-5 OK)。',
-    nextAction: '再定義を再開するときは §2-3 の障害・影響から読み直す。',
+    who: 'owner',
+    summary: 'どの操作でも 1 つ前に戻せるようにする構想。今の「戻る」の不具合だけ直して保留中。',
+    nextAction: 'オーナーが再開を決めたら着手する。',
     references: ['docs/plan-2026-09-11-five-requests.md §2'],
-    updatedOn: '2026-09-25',
+    updatedOn: '2026-10-30',
   },
   {
     id: 'schedule-react-view',
-    title: '対話用日程表の React 化(ドック/ポップアウト)',
+    title: '日程表を画面の横に並べて出す',
     stage: 'on-hold',
-    summary: '2026-07-08 に棚上げ(別ウィンドウへの portal で D&D の drop が届かない)。React ビュー本体のコードは既に無く、scheduleViewData.ts / scheduleViewMove.ts は別タブ方式のコマ組み・日程表で現役。同期とコマ組みは別タブ方式で全教室へ展開済み。',
-    nextAction: '再開しない方針なら spec-schedule-interactive-view.md と handoff 文書に「廃止」と書き、spec-index の「未実装」表記を直す。',
+    who: 'owner',
+    summary: '別ウィンドウだとドラッグが効かないため棚上げ。今の「別タブで開く」方式で足りている。',
+    nextAction: '作らないと決めるなら、Claude が仕様書に「廃止」と書いてこの行を消す。',
+    notes: 'React ビュー本体のコードは既に無い(scheduleViewData.ts / scheduleViewMove.ts は別タブ方式で現役)。',
     references: ['docs/handoff-popup-sync-and-dnd.md', 'docs/spec-schedule-interactive-view.md'],
-    updatedOn: '2026-09-25',
+    updatedOn: '2026-10-30',
   },
   {
     id: 'perf-multi-rule-all-students',
-    title: '多ルール×「全員」対象の自動割振の性能最適化',
+    title: '自動割振の高速化(ルールが多く対象が全員のとき)',
     stage: 'on-hold',
-    summary: '発火条件(実運用で多ルール×全員の教室が出て体感が悪化)を満たしていないため未着手。手順書は用意済み。',
-    nextAction: '室長から「重い」報告が来たら docs/perf-multi-rule-optimization-handoff.md に従って着手する。',
+    who: 'owner',
+    summary: '重くなる条件の教室がまだ無いので未着手。手順書は用意してある。',
+    nextAction: '室長から「重い」と声が出たら着手する。',
     references: ['docs/perf-multi-rule-optimization-handoff.md'],
-    updatedOn: '2026-09-25',
+    updatedOn: '2026-10-30',
   },
 ]

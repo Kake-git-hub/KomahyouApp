@@ -175,7 +175,7 @@ describe('機能フラグの段階', () => {
   it('まだ全教室に出ていないフラグを先に並べ、台帳の題名を添える', () => {
     const rows = buildFeatureRolloutOverview(
       { a: { scope: 'all-classrooms', description: 'A' }, b: { scope: 'development-only', description: 'B' }, c: { scope: 'staging-environment', description: 'C' } },
-      [{ id: 'x', title: 'B の題名', stage: 'development-only', summary: 's', featureKeys: ['b' as never], nextAction: 'n', references: ['r'], updatedOn: '2026-09-25' }],
+      [{ id: 'x', title: 'B の題名', stage: 'development-only', who: 'owner', summary: 's', featureKeys: ['b' as never], nextAction: 'n', references: ['r'], updatedOn: '2026-09-25' }],
     )
     expect(rows.map((row) => `${row.key}:${row.scopeLabel}`)).toEqual(['b:開発用教室のみ', 'c:staging＋検証用教室', 'a:全教室'])
     expect(rows[0].title).toBe('B の題名')

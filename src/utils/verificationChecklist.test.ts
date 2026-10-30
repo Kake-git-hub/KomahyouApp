@@ -173,7 +173,8 @@ describe('確認リストの項目定義', () => {
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
     // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
     // 第93版(2026-10-30): 開発用教室だけの項目(ed-1・ed-2・hd-1)も OK → 残りはテスト教室にも出す項目だけ。
-    for (const id of ids) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。
+    for (const id of ids.filter((id) => id !== 'd-5')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.667')
   })
@@ -202,7 +203,8 @@ describe('確認リストの項目定義', () => {
     // 第90版(2026-10-30): rp-4 は OK(受付 20261029-232853166-07156d5a)で外した。
     // 第91版(2026-10-30): sc-2 は丸ごと振替の記録を Claude が読んで OK → 外した。第92版(同日): ab-1〜ab-4 も OK → 外した。
     // 第93版(2026-10-30): ed-1・ed-2・hd-1 も OK → 外した(版を v1.5.667 へ)。
-    expect(ids).toEqual(['tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5 を先頭に足した(開発用教室だけ)。
+    expect(ids).toEqual(['d-5', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -631,5 +633,16 @@ describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示�
       expect(text, id).not.toContain('tp-41')
       expect(text, id).not.toContain('開発用教室で')
     }
+  })
+})
+
+describe('第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5', () => {
+  it('d-5 は開発用教室だけ(テスト教室には出さない)・v1.5.668 で追加・3 つの欄と確認リストを出さないことを見る', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'd-5')!
+    expect(item.introducedIn).toBe('v1.5.668')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('d-5')
+    expect(item.check!.join('\n')).toContain('確認リストの項目')
+    expect(item.title).toContain('まだ作っていないもの')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.667')
   })
 })
