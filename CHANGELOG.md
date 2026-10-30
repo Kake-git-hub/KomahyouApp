@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.665 (2026-10-30)
+
+- fix: 教室画面の「バックアップを読み込む」で読み込めなかったとき(開いている教室のデータが入っていない・形式が違う)に、上部の小さな文だけでなく**理由とファイル名の確認ダイアログ**を出し、操作の記録(利用者報告に同梱)にも「読み込む/読み込んだ/読み込めず」を残すようにした(確認リスト ab-4 要改善「読み込むのあと見た目変わらず反応がありません」・受付 20261030-001600993-0c0555f5)。Drive の教室ごとのファイルを別の教室で読んだときの止まり方(INV-08)は変えない。ab-4 の手順を「末尾が _v8OZ7zH8vONNHjjYVcR1.json.gz のファイル」「読み込めなければ出た文を「その他」欄に」へ書き換え。sc-2 は同じ受付の丸ごと振替(11/5→11/7・39 名)の記録を読み、机 17 台が切れずに並び残りが「他43件」であることを確認して外した。(src/App.tsx・src/utils/verificationChecklist.ts・src/integrations/firebase/serverAutoBackupRestore.wiring.test.ts)
+
 ## v1.5.664 (2026-10-30)
 
 - docs: 自動バックアップの教室別形式への切り替え(v1.5.663)後の確認結果。手動実行(JST 8:30)と自動の初回(JST 9:00)を読み取りで確認: 4 教室の .json.gz＋index.json・要約 layout=per-classroom-v1・classroomCount=4・missing 空・Drive synced・失敗通知なし・旧形式の 03-00 も残存。復元前の控え(JST 8:24・ab-1)も教室別で 4 教室＋index、他教室の保存は上書きされていない。オーナー確認(受付 20261029-232853166-07156d5a)で OK の rp-4 を確認リストから外す(ab-1〜ab-3 は旧形式の時点での OK だったので教室別の時点でもう一度・sc-2 は丸ごと振替の記録が見当たらず残す)。台帳・memory を更新。(src/utils/verificationChecklist.ts・developmentStatusLedger.ts・.claude/memory)

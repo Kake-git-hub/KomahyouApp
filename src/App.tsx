@@ -5387,6 +5387,8 @@ function AuthenticatedApp() {
   }, [openDeveloperRestoreModal])
 
   const importBackup = useCallback(async (file: File) => {
+    // 読み込みの結果は操作の記録(利用者報告に同梱)にも残す(2026-10-30 確認リスト ab-4「反応がない」の切り分け・ファイル名に生徒名は入らない)。
+    recordOperationTrace('navigation', `バックアップを読み込む file=${file.name} size=${file.size}`)
     try {
       // Google Drive のミラーは gzip(.json.gz)なので、解凍せずそのまま取り込める(2026-09-04)。
       const text = await readBackupFileText(file)
@@ -5399,7 +5401,10 @@ function AuthenticatedApp() {
         // 開いている教室が JSON に無ければ止める(先頭の別教室へ落とさない・INV-08・分割保存の段階 A で「教室を除いた」バックアップが生まれたため)。
         const importTarget = resolveWorkspaceBackupImportTarget(workspaceSnapshot, actingClassroomId)
         if (!importTarget.ok) {
+          // 画面上部の小さな文だけでは気づけない(ab-4)ので、止めた理由は確認ダイアログでも出す。
+          recordOperationTrace('navigation', `バックアップを読み込めず: ${importTarget.message}`)
           setPersistenceMessage(importTarget.message)
+          window.alert(`${importTarget.message}\n\n読み込んだファイル: ${file.name}\n(教室ごとのバックアップは、その教室を開いて読み込んでください。ファイル名の末尾が教室 ID です)`)
           return
         }
         const targetClassroom = importTarget.classroom
@@ -5419,8 +5424,12 @@ function AuthenticatedApp() {
       }
       saveUndoSnapshot('バックアップ復元')
       applySnapshot(snapshot, 'バックアップを読み込みました。')
-    } catch {
+      recordOperationTrace('navigation', `バックアップを読み込んだ file=${file.name} savedAt=${snapshot.savedAt}`)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      recordOperationTrace('navigation', `バックアップの読み込みに失敗 file=${file.name}: ${reason}`)
       setPersistenceMessage('バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
+      window.alert(`バックアップの読み込みに失敗しました。\n\n読み込んだファイル: ${file.name}\n理由: ${reason}`)
     }
   }, [actingClassroomId, applySnapshot, saveUndoSnapshot])
 

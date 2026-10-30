@@ -45,6 +45,17 @@ describe('開発者の全体復元とローカル同期の配線(App.tsx)', () =
     expect(body).not.toContain('downloadFirebaseServerAutoBackup(')
   })
 
+  it('JSON 読込(importBackup): 開いている教室が無い・形式が違うときは、上部の文だけでなく確認ダイアログでも知らせ、操作の記録に残す(ab-4 の切り分け・2026-10-30)', () => {
+    const body = sliceBetween(APP_TSX, 'const importBackup = useCallback(', '\n  }, [')
+    expect(body).toContain("recordOperationTrace('navigation', `バックアップを読み込む file=${file.name} size=${file.size}`)")
+    expect(body).toContain('resolveWorkspaceBackupImportTarget(workspaceSnapshot, actingClassroomId)')
+    expect(body).toContain('window.alert(`${importTarget.message}')
+    expect(body).toContain('recordOperationTrace(\'navigation\', `バックアップの読み込みに失敗 file=${file.name}: ${reason}`)')
+    expect(body).toContain('window.alert(`バックアップの読み込みに失敗しました。')
+    // 読み込めたときも記録する(どの時点を読んだか)。
+    expect(body).toContain("recordOperationTrace('navigation', `バックアップを読み込んだ file=${file.name} savedAt=${snapshot.savedAt}`)")
+  })
+
   it('App.tsx は旧 API downloadFirebaseServerAutoBackup を import しない(全部の入口が layout で読み分ける)', () => {
     expect(APP_TSX).not.toMatch(/\bdownloadFirebaseServerAutoBackup\b[^J]/u)
     expect(APP_TSX).toContain('downloadFirebaseServerAutoBackupJson')
