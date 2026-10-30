@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.664 (2026-10-30)
+
+- docs: 自動バックアップの教室別形式への切り替え(v1.5.663)後の確認結果。手動実行(JST 8:30)と自動の初回(JST 9:00)を読み取りで確認: 4 教室の .json.gz＋index.json・要約 layout=per-classroom-v1・classroomCount=4・missing 空・Drive synced・失敗通知なし・旧形式の 03-00 も残存。復元前の控え(JST 8:24・ab-1)も教室別で 4 教室＋index、他教室の保存は上書きされていない。オーナー確認(受付 20261029-232853166-07156d5a)で OK の rp-4 を確認リストから外す(ab-1〜ab-3 は旧形式の時点での OK だったので教室別の時点でもう一度・sc-2 は丸ごと振替の記録が見当たらず残す)。台帳・memory を更新。(src/utils/verificationChecklist.ts・developmentStatusLedger.ts・.claude/memory)
+
 ## v1.5.663 (2026-10-30)
 
 - feat: **自動バックアップを本番 main で教室別形式に切り替え**(オーナー選択 2026-10-30「A: Claude がコードで切り替え(staging 省略)」・「開発用教室だけで試せないか／オーナー作業を減らしたい」への回答: 書く形式は会社単位なので教室だけの切り替えはできない代わりに、切り替えを GitHub secret でなくコードの既定値にしてオーナー作業をゼロにした)。`functions/src/workspaceBackupLayoutConfig.ts` に `WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT = 'per-classroom-v1'`(env `WORKSPACE_AUTO_BACKUP_LAYOUT` は上書き用・未設定/空=コードの既定・知らない値もコードの既定＋警告)。切り替え前に読み取りで会社 main の教室 ID 4 件が安全な文字種であることを照合。次の 15 分ごとの回(静音帯明け JST 9:00)から教室ごとの `.json.gz`＋`index.json` で書く。戻すときは定数を legacy に戻して main へ。確認リスト ab-1/ab-2 を教室別形式の時点向けに書き換え、ab-3(Feature B)・ab-4(Drive の教室ごとの .json.gz を読み込む)を追加(版は据え置き)。spec §10-7・runbook rollback B-6・functions/.env.example・台帳 auto-backup-per-classroom・memory を更新。INV-08 / INV-14。(functions/src/workspaceBackupLayoutConfig.ts・src/utils/verificationChecklist.ts・developmentStatusLedger.ts・docs/)

@@ -128,17 +128,6 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
 
-  it('第87版(2026-10-29・v1.5.653 据え置き): 質問・要望を別タブで開く確認 rp-4 は開発用教室だけ(全教室に出した機能を開発用教室で確かめる)', () => {
-    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'rp-4')!
-    expect(item).toBeDefined()
-    expect(item.introducedIn).toBe('v1.5.661')
-    expect(item.area).toBe('質問・要望')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('rp-4')
-    expect(item.check?.join('\n')).toContain('元のタブは暗くならずにそのまま操作できる')
-    expect(item.check?.join('\n')).toContain('もう一度押してもタブは増えず')
-    expect(item.check?.join('\n')).toContain('教室を切り替えると、別のタブも閉じる')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
-  })
 
   it('第88版(2026-10-29・v1.5.653 据え置き): 自動バックアップの教室別化(docs/spec-save-restore.md §10)の ab-1(開発者の全体復元)・ab-2(自教室復元)を足した(開発用教室だけ・切り替え前の読み手の確認)', () => {
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
@@ -237,7 +226,7 @@ describe('確認リストの項目定義', () => {
     expect(VERIFICATION_CHECKLIST.items.filter((item) => item.area.startsWith('質問への AI 自動回答'))).toEqual([])
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
     // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
-    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'hd-1' && id !== 'rp-4' && !id.startsWith('ab-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    for (const id of ids.filter((id) => id !== 'sc-2' && id !== 'ed-1' && id !== 'ed-2' && id !== 'hd-1' && !id.startsWith('ab-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.653')
   })
@@ -263,7 +252,8 @@ describe('確認リストの項目定義', () => {
     // 第87版(2026-10-29): 質問・要望を別タブで開く確認 rp-4 を先頭に足した(開発用教室だけ・版は据え置き)。
     // 第88版(2026-10-29・v1.5.653 据え置き): 自動バックアップの教室別化の確認 ab-1(開発者の全体復元)・ab-2(自教室復元)を足した(開発用教室だけ)。
     // 第89版(2026-10-30・v1.5.663): 切り替え後の確認 ab-3・ab-4 を足した。
-    expect(ids).toEqual(['ab-1', 'ab-2', 'ab-3', 'ab-4', 'rp-4', 'ed-2', 'ed-1', 'hd-1', 'sc-2', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第90版(2026-10-30): rp-4 は OK(受付 20261029-232853166-07156d5a)で外した。
+    expect(ids).toEqual(['ab-1', 'ab-2', 'ab-3', 'ab-4', 'ed-2', 'ed-1', 'hd-1', 'sc-2', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
