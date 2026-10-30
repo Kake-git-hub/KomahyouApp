@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.667 (2026-10-30)
+
+- docs: 確認リストから OK 済みの ed-1・ed-2・hd-1 を外す(オーナー報告 2026-10-30「OK としている」)。OK 済みを外したので確認リストの版を v1.5.667 へ上げた。残りはテスト教室の結果待ちのテンプレ関係(tp-49・tp-51・tp-57〜tp-60・tp-64・tp-65)だけ。(src/utils/verificationChecklist.ts)
+
 ## v1.5.666 (2026-10-30)
 
 - docs: 確認リストから OK 済みの ab-1〜ab-4(自動バックアップの教室別化・受付 20261030-001600993-0c0555f5 と ab-4 のオーナー報告)を外す(オーナー指示 2026-10-30「確認リストをアップデートしておいて」)。残りは ed-1・ed-2・hd-1 とテンプレ関係。台帳 auto-backup-per-classroom は「オーナー判断待ち」(取り残し掃除の空実行解除は secret・段階 3 は実測)へ。(src/utils/verificationChecklist.ts・developmentStatusLedger.ts)
