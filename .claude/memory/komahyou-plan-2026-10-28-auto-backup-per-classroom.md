@@ -34,3 +34,4 @@ metadata:
 - ⚠️ 切り替え後は Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。戻すなら先に設定を legacy へ。
 
 **2026-10-30 切り替え(v1.5.663)**: オーナーの質問「3(staging の切り替え)は開発教室で試せない？オーナー作業を減らしたい」→ 書く形式は会社単位なので教室だけの切り替えは不可。代わりに切り替えを GitHub secret でなく**コードの既定値** `WORKSPACE_AUTO_BACKUP_DEFAULT_LAYOUT`(functions/src/workspaceBackupLayoutConfig.ts)にして、Claude が commit → main → Functions 自動デプロイで切り替える案 A をオーナーが選択(staging 省略・分割保存 B と同じ扱い)。切り替え前に読み取りで main の教室 ID 4 件の文字種を照合(全部 OK)。env `WORKSPACE_AUTO_BACKUP_LAYOUT` は上書き用に残した(未設定=コードの既定)。戻すときは定数を legacy に戻して main へ。確認は Claude が読み取り専用トークンで(この環境から firestore/storage.googleapis.com に到達できる)。オーナーは確認リスト ab-1〜ab-4 だけ。
+- **2026-10-30 確認済み**: 手動実行(JST 8:30・2 回押されて同じキーに上書き)と自動の初回(JST 9:00)を読み取りで確認。4 教室の .json.gz(0.6〜0.8MB)＋index.json(2.8KB)・要約 layout=per-classroom-v1/classroomCount=4/missing 空/Drive synced・失敗通知なし・旧形式 03-00(31.7MB)も残存。復元前の控えも教室別で正常。オーナーが Drive の緑が丘校ファイルを読んで「緑が丘しか出ない」→ 仕様どおり(1 教室 1 ファイル・Q1)。sc-2 は丸ごと振替の記録が見当たらず未検証で残す。
