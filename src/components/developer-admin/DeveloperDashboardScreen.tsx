@@ -1,16 +1,14 @@
 // 開発ダッシュボード(開発者画面のサブページ・2026-09-25 オーナー指示)。
 //
-// 2026-09-28 オーナー指示「情報量が多い。重要なのは何が未対応なのか。極力一画面に収まる情報量で、未対応をその画面から
-// 進められる(Claude Code の新セッションに投げかけられる)インターフェースにして」:
-//   - 既定画面は【未対応】= 1 行 1 件の一覧(種別・題名・誰の番か・リンク・Claude Code へ)。済んだものは出さない。
-//     待ち(自動処理待ち・確認リスト結果待ち・保留)は畳んで一画面に収める。
-//   - 行を選んで「Claude Code で開く」を押すと、公式の URL 形式(https://claude.ai/code?prompt=…&repositories=…)で
-//     新セッションが指示入り(入力済み)で開く。URL に載らない長さならクリップボードへ写して素の新セッションを開く。
-//   - 2026-09-28 確認リスト d-4 の要改善: (1) 行の「内容」を押すとその件の詳細を行の下に開く、(2) Claude への指示を短く、
-//     (3) 投げる前に指示をこの画面で書き足し・書き換えできる(常に出ている編集欄。編集後に選択を変えたら「選択から作り直す」)、
-//     (4) 確認リストとの重複をなくす(未確認の項目は出さない = 確認リストパネルが正本)。
-//   - 従来の 5 欄(教室別の報告状況／機能の段階／進行中テーマ／GitHub Issue／確認リスト)は「詳細を見る」で開く
-//     DeveloperDashboardDetail.tsx に移した(内容は据え置き)。
+// 2026-10-30 オーナー指示「開発ダッシュボードが使いづらい。まずシンプルにして。確認リストと重複しており、終わったものも残っている。
+// 開発ダッシュボードは機能の実装がまだのものや、開発・テスト教室だけしか実施していない機能、やるべきこと(確認リスト以外で)などを
+// わかり易い文章で表示して。デザインもわかりやすいように変えて」:
+//   - 既定画面は【いまの状況】= 3 つの欄(やること／開発・テスト教室だけで動いている機能／まだ作っていないもの)のカード。
+//     カードは「何のことか(題名)」「今どうなっているか(1〜2 文)」「次に誰が何をするか」だけを平易な文で出す。経緯は「くわしく」で開く。
+//   - 確認リストの結果(要改善・未確認)は出さない(確認リストパネルが正本)。終わった台帳の行は消し、取り残しは「済み」として知らせる。
+//   - 2026-09-28 の 1 行 1 件の表・複数選択・指示の編集欄はやめ、カードごとの「Claude に頼む」(指示入りの新セッション)だけにした。
+//     指示は Claude Code の入力欄に入るだけなので、送る前にそこで書き足せる。
+//   - 報告の教室別一覧・GitHub Issue・機能フラグの全量は「報告と Issue の一覧」(DeveloperDashboardDetail.tsx)で見る。
 //
 // ★読み取り専用。Firestore(developerReports)は developerReportsStore.ts の getDocs、GitHub は公開 API の GET だけ。
 //   この画面から何かを書き込む導線は作らない(本番データ保護ルール)。Claude Code へ渡すのは URL とクリップボードだけ。
@@ -27,22 +25,22 @@ import {
   buildIssueStateMap,
   formatDashboardDateTime,
   resolveDeveloperDashboardSinceIso,
-  summarizeVerificationChecklistStatus,
   type DeveloperReportRecord,
   type GitHubIssueRecord,
 } from '../../utils/developerDashboard'
 import {
   CLAUDE_CODE_NEW_SESSION_URL,
-  DASHBOARD_ACTION_TURN_LABELS,
-  buildClaudeCodePrompt,
-  buildDashboardActions,
+  DASHBOARD_SECTION_DESCRIPTIONS,
+  DASHBOARD_SECTION_LABELS,
+  DASHBOARD_WHO_LABELS,
+  buildDashboardOverview,
   resolveClaudeCodeSessionUrl,
-  type DashboardActionItem,
-  type DashboardActionTurn,
+  type DashboardCard,
+  type DashboardSection,
 } from '../../utils/developerDashboardActions'
 import { DeveloperDashboardDetail } from './DeveloperDashboardDetail'
 
-export type DeveloperDashboardView = 'todo' | 'detail'
+export type DeveloperDashboardView = 'overview' | 'detail'
 
 export type DeveloperDashboardScreenProps = {
   authMode: 'local' | 'firebase'
@@ -54,14 +52,14 @@ export type DeveloperDashboardScreenProps = {
   loadReports?: (options: { sinceIso: string; limit: number }) => Promise<DeveloperReportRecord[]>
   /** テスト・差し替え用。既定は github/issues.fetchGitHubIssues(公開 API の GET のみ)。 */
   loadIssues?: () => Promise<GitHubIssueRecord[]>
-  /** 最初に開く面。既定は未対応一覧(テストで詳細面を描くために差し替え可)。 */
+  /** 最初に開く面。既定は【いまの状況】(テストで一覧面を描くために差し替え可)。 */
   initialView?: DeveloperDashboardView
 }
 
-const TURN_CHIP_CLASS: Readonly<Record<DashboardActionTurn, string>> = {
-  claude: '',
-  owner: 'danger',
-  waiting: 'secondary',
+const SECTION_ANCHORS: Readonly<Record<DashboardSection, string>> = {
+  todo: 'dashboard-todo',
+  trial: 'dashboard-trial',
+  'not-built': 'dashboard-not-built',
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -75,12 +73,12 @@ async function copyToClipboard(text: string): Promise<boolean> {
       return true
     }
   } catch {
-    // 権限なし・非セキュアコンテキストなど。下の textarea から手でコピーしてもらう。
+    // 権限なし・非セキュアコンテキストなど。
   }
   return false
 }
 
-export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, classrooms, onBack, loadReports = listRecentDeveloperReports, loadIssues = fetchGitHubIssues, initialView = 'todo' }: DeveloperDashboardScreenProps) {
+export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, classrooms, onBack, loadReports = listRecentDeveloperReports, loadIssues = fetchGitHubIssues, initialView = 'overview' }: DeveloperDashboardScreenProps) {
   const [view, setView] = useState<DeveloperDashboardView>(initialView)
   const [sinceDays, setSinceDays] = useState<number>(DEVELOPER_DASHBOARD_DEFAULT_SINCE_DAYS)
   // 読み込みの世代番号(state)。再読込・期間変更で +1 し、effect はその世代の結果だけを state へ入れる。
@@ -89,12 +87,8 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const [requestSerial, setRequestSerial] = useState(0)
   const [reportsResult, setReportsResult] = useState<{ serial: number; reports: DeveloperReportRecord[]; error: string; loadedAt: string } | null>(null)
   const [issuesResult, setIssuesResult] = useState<{ serial: number; issues: GitHubIssueRecord[]; error: string; loadedAt: string } | null>(null)
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set())
-  const [showWaiting, setShowWaiting] = useState(false)
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set())
-  // 画面で書き換えた指示。null = 選択から作った文をそのまま使う。base = 書き換え始めたときの自動文(選択が変わったかの判定用)。
-  const [editedPrompt, setEditedPrompt] = useState<{ text: string; base: string } | null>(null)
-  const [copyStatus, setCopyStatus] = useState<'' | 'copied' | 'failed'>('')
+  const [copiedCardId, setCopiedCardId] = useState('')
 
   const reload = useCallback(() => setRequestSerial((value) => value + 1), [])
   const changeSinceDays = useCallback((days: number) => {
@@ -139,32 +133,8 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const loadedAt = [reportsCurrent?.loadedAt ?? '', issuesCurrent?.loadedAt ?? ''].sort().reverse()[0] ?? ''
 
   const issueStates = useMemo(() => buildIssueStateMap(issues), [issues])
-  const checklist = useMemo(() => summarizeVerificationChecklistStatus(reports), [reports])
-  const actions = useMemo(() => buildDashboardActions({ reports, issues, issueStates, checklist, reportsReady }), [reports, issues, issueStates, checklist, reportsReady])
+  const overview = useMemo(() => buildDashboardOverview({ reports, issues, issueStates }), [reports, issues, issueStates])
 
-  const selectableIds = useMemo(() => new Set([...actions.active, ...actions.waiting].filter((item) => item.prompt !== null).map((item) => item.id)), [actions])
-  const selectedItems = useMemo(
-    () => [...actions.active, ...actions.waiting].filter((item) => selectedIds.has(item.id) && item.prompt !== null),
-    [actions, selectedIds],
-  )
-  const selectedPrompt = useMemo(
-    () => (selectedItems.length === 0 ? '' : buildClaudeCodePrompt(selectedItems, { appVersion, generatedAt: loadedAt })),
-    [selectedItems, appVersion, loadedAt],
-  )
-  const promptText = editedPrompt?.text ?? selectedPrompt
-  const hasPromptText = promptText.trim() !== ''
-  const promptStale = editedPrompt !== null && editedPrompt.base !== selectedPrompt
-  const selectedUrl = useMemo(() => (hasPromptText ? resolveClaudeCodeSessionUrl(promptText) : null), [hasPromptText, promptText])
-
-  const toggleSelected = useCallback((id: string) => {
-    setSelectedIds((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-    setCopyStatus('')
-  }, [])
   const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((current) => {
       const next = new Set(current)
@@ -173,64 +143,59 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
       return next
     })
   }, [])
-  const editPrompt = useCallback(
-    (text: string) => {
-      setEditedPrompt((current) => ({ text, base: current?.base ?? selectedPrompt }))
-      setCopyStatus('')
-    },
-    [selectedPrompt],
-  )
-  const rebuildPrompt = useCallback(() => {
-    setEditedPrompt(null)
-    setCopyStatus('')
+  const copyCardPrompt = useCallback((card: DashboardCard) => {
+    if (card.prompt === null) return
+    void copyToClipboard(card.prompt).then((ok) => setCopiedCardId(ok ? card.id : ''))
   }, [])
-  // 「全選択」は Claude の番の行だけ。オーナーの番(利用者報告 Issue の着手可否・昇格判断など)は 1 件ずつ明示的にチェックする
-  // = その 1 クリックが着手許可(CLAUDE.md「オーナーが内容を確認して許可してから」を一括で肩代わりしない・regression-reviewer 指摘 2026-09-28)。
-  const selectAllClaude = useCallback(() => {
-    setSelectedIds(new Set(actions.active.filter((item) => item.prompt !== null && item.turn === 'claude').map((item) => item.id)))
-    setCopyStatus('')
-  }, [actions])
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set())
-    setCopyStatus('')
-  }, [])
-  const copyPrompt = useCallback(() => {
-    void copyToClipboard(promptText).then((ok) => setCopyStatus(ok ? 'copied' : 'failed'))
-  }, [promptText])
-
-  const singleItemUrl = useCallback(
-    (item: DashboardActionItem) => (item.prompt === null ? null : resolveClaudeCodeSessionUrl(buildClaudeCodePrompt([item], { appVersion, generatedAt: loadedAt }))),
-    [appVersion, loadedAt],
-  )
 
   const loadingNote = [reportsLoading ? '報告を読み込んでいます…' : '', issuesLoading ? 'GitHub Issue を読み込んでいます…' : ''].filter(Boolean).join(' ')
 
+  const tiles: ReadonlyArray<{ section: DashboardSection; count: number; sub: string }> = [
+    { section: 'todo', count: overview.counts.todo, sub: `オーナー ${overview.counts.todoOwner} ／ Claude ${overview.counts.todoClaude}` },
+    { section: 'trial', count: overview.counts.trial, sub: '本番の教室ではまだ使えない' },
+    { section: 'not-built', count: overview.counts.notBuilt, sub: '計画・保留・GitHub の課題' },
+  ]
+
+  const renderCards = (cards: readonly DashboardCard[], emptyLabel: string) =>
+    cards.length === 0 ? (
+      <p className="dev-dash-empty">{emptyLabel}</p>
+    ) : (
+      <div className="dev-dash-cards">
+        {cards.map((card) => (
+          <DashboardCardView key={card.id} card={card} expanded={expandedIds.has(card.id)} copied={copiedCardId === card.id} onToggleExpanded={toggleExpanded} onCopyPrompt={copyCardPrompt} />
+        ))}
+      </div>
+    )
+
   return (
-    <main className={`developer-main developer-dashboard ${view === 'todo' ? 'developer-dashboard-compact' : ''}`} aria-label="開発ダッシュボード">
+    <main className="developer-main developer-dashboard" aria-label="開発ダッシュボード">
       <section className="board-panel board-panel-unified">
         <div className="basic-data-header developer-header developer-dashboard-head">
           <div>
             <p className="panel-kicker">Developer Dashboard</p>
-            <h2>{view === 'todo' ? '未対応' : '開発ダッシュボード(詳細)'}</h2>
-            {view === 'todo' ? (
-              <p className="page-summary">会社「{workspaceKey || '(ローカル)'}」で今止まっているものだけを 1 行ずつ出します。行を選んで「Claude Code で開く」を押すと、指示が入った新しいセッションが開きます(この画面は何も書き込みません)。</p>
-            ) : (
-              <p className="page-summary">会社「{workspaceKey || '(ローカル)'}」の質問・要望の状況、開発の段階、確認リストの要改善です(読み取り専用。項目ごとの確認は確認リストパネルで)。</p>
-            )}
+            <h2>開発ダッシュボード</h2>
+            <p className="page-summary">
+              {view === 'overview'
+                ? `会社「${workspaceKey || '(ローカル)'}」の開発の状況です。やること・開発用とテスト教室だけで動いている機能・まだ作っていないものを分けて出します(確認リストの項目は出しません。この画面は何も書き込みません)。`
+                : `会社「${workspaceKey || '(ローカル)'}」に届いた質問・要望と GitHub の課題、機能の公開範囲の一覧です(読み取り専用)。`}
+            </p>
           </div>
         </div>
         <div className="developer-header-actions">
           <div className="basic-data-row-actions developer-actions-left">
             <button className="secondary-button slim" type="button" onClick={onBack}>← 管理画面に戻る</button>
-            <button className="secondary-button slim" type="button" onClick={() => setView(view === 'todo' ? 'detail' : 'todo')} data-testid="developer-dashboard-view-toggle">
-              {view === 'todo' ? '詳細を見る' : '未対応に戻る'}
-            </button>
-            <label className="basic-data-inline-field developer-dashboard-range-field">
-              <span>報告の期間</span>
-              <select value={sinceDays} onChange={(event) => changeSinceDays(Number(event.target.value))}>
-                {DEVELOPER_DASHBOARD_SINCE_DAY_OPTIONS.map((days) => <option key={days} value={days}>直近 {days} 日</option>)}
-              </select>
-            </label>
+            <div className="dev-dash-view-switch" role="tablist" aria-label="表示の切り替え" data-testid="developer-dashboard-view-toggle">
+              <button type="button" role="tab" aria-selected={view === 'overview'} className={view === 'overview' ? 'is-active' : ''} onClick={() => setView('overview')}>いまの状況</button>
+              <button type="button" role="tab" aria-selected={view === 'detail'} className={view === 'detail' ? 'is-active' : ''} onClick={() => setView('detail')}>報告と Issue の一覧</button>
+            </div>
+            {view === 'detail' ? (
+              <label className="basic-data-inline-field developer-dashboard-range-field">
+                <span>報告の期間</span>
+                <select value={sinceDays} onChange={(event) => changeSinceDays(Number(event.target.value))}>
+                  {DEVELOPER_DASHBOARD_SINCE_DAY_OPTIONS.map((days) => <option key={days} value={days}>直近 {days} 日</option>)}
+                </select>
+              </label>
+            ) : null}
           </div>
           <div className="basic-data-row-actions developer-actions-right">
             <span className="toolbar-status">v{appVersion} / 読込 {formatDashboardDateTime(loadedAt)}</span>
@@ -252,153 +217,116 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
             issuesReady={issuesReady}
             issuesError={issuesError}
             issueStates={issueStates}
-            checklist={checklist}
           />
         ) : (
-          <section className="developer-dashboard-todo" id="dashboard-todo" aria-label="未対応の一覧">
-            <div className="developer-dashboard-todo-counts">
-              <span className="status-chip warning">未対応 {actions.counts.total}</span>
-              <span className="status-chip">Claude の番 {actions.counts.claude}</span>
-              <span className="status-chip danger">オーナーの番 {actions.counts.owner}</span>
-              <span className="status-chip secondary">待ち {actions.counts.waiting}</span>
-              {authMode !== 'firebase' ? <span className="basic-data-subcopy">ローカルモードでは報告を読み込めません(Firebase 接続時のみ)。</span> : null}
-              {loadingNote ? <span className="basic-data-subcopy">{loadingNote}</span> : null}
-              {reportsError ? <span className="developer-report-error">{reportsError}</span> : null}
-              {issuesError ? <span className="developer-report-error">{issuesError}</span> : null}
-              {reportsReady && reports.length >= DEVELOPER_DASHBOARD_REPORT_LIMIT ? <span className="developer-report-error">読み込み上限 {DEVELOPER_DASHBOARD_REPORT_LIMIT} 件。期間を短くしてください。</span> : null}
-            </div>
+          <div className="dev-dash" id="dashboard-overview">
+            <nav className="dev-dash-tiles" aria-label="3 つの欄">
+              {tiles.map((tile) => (
+                // URL の # は変えない(# で始まる URL は共有盤面・講習提出の入口が読む)。押すとその欄まで動くだけ。
+                <button key={tile.section} type="button" className={`dev-dash-tile is-${tile.section}`} onClick={() => document.getElementById(SECTION_ANCHORS[tile.section])?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                  <span className="dev-dash-tile-count">{tile.count}</span>
+                  <span className="dev-dash-tile-label">{DASHBOARD_SECTION_LABELS[tile.section]}</span>
+                  <span className="dev-dash-tile-sub">{tile.sub}</span>
+                </button>
+              ))}
+            </nav>
 
-            <table className="developer-billing-table developer-dashboard-todo-table">
-              <thead>
-                <tr>
-                  <th className="sel">
-                    <button type="button" className="link-button" onClick={selectedItems.length > 0 ? clearSelection : selectAllClaude} title={selectedItems.length > 0 ? '選択を外す' : 'Claude の番の行を全部選ぶ(オーナーの番は 1 件ずつ選ぶ)'}>
-                      {selectedItems.length > 0 ? '解除' : 'Claude を全選択'}
-                    </button>
-                  </th>
-                  <th>種別</th>
-                  <th>内容</th>
-                  <th>番</th>
-                  <th className="act">開く</th>
-                </tr>
-              </thead>
-              <tbody>
-                {actions.active.length === 0 && !loadingNote ? (
-                  <tr><td colSpan={5} className="developer-dashboard-todo-empty">今すぐ動ける未対応はありません。</td></tr>
-                ) : null}
-                {actions.active.map((item) => (
-                  <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} expanded={expandedIds.has(item.id)} onToggle={toggleSelected} onToggleExpanded={toggleExpanded} claudeUrl={singleItemUrl(item)} />
-                ))}
-                {actions.waiting.length > 0 ? (
-                  <tr className="developer-dashboard-todo-group">
-                    <td colSpan={5}>
-                      <button type="button" className="link-button" onClick={() => setShowWaiting(!showWaiting)} aria-expanded={showWaiting}>
-                        {showWaiting ? '▾' : '▸'} 待ち {actions.waiting.length} 件(結果待ち・自動処理待ち・保留)
-                      </button>
-                    </td>
-                  </tr>
-                ) : null}
-                {showWaiting
-                  ? actions.waiting.map((item) => (
-                      <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} expanded={expandedIds.has(item.id)} onToggle={toggleSelected} onToggleExpanded={toggleExpanded} claudeUrl={singleItemUrl(item)} />
-                    ))
-                  : null}
-              </tbody>
-            </table>
+            {authMode !== 'firebase' || loadingNote || reportsError || issuesError ? (
+              <div className="dev-dash-notes">
+                {authMode !== 'firebase' ? <span>ローカルモードでは報告を読み込めません(Firebase 接続時のみ)。</span> : null}
+                {loadingNote ? <span>{loadingNote}</span> : null}
+                {reportsError ? <span className="developer-report-error">{reportsError}</span> : null}
+                {issuesError ? <span className="developer-report-error">{issuesError}</span> : null}
+              </div>
+            ) : null}
 
-            <div className="developer-dashboard-launch" data-testid="developer-dashboard-launch">
-              <span className="developer-dashboard-launch-count">選択 {selectedItems.length} 件</span>
-              {selectedUrl ? (
-                <a className="primary-button slim" href={selectedUrl} target="_blank" rel="noreferrer">Claude Code で開く</a>
-              ) : (
-                <a
-                  className={`primary-button slim ${hasPromptText ? '' : 'is-disabled'}`}
-                  href={CLAUDE_CODE_NEW_SESSION_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(event) => {
-                    if (!hasPromptText) {
-                      event.preventDefault()
-                      return
-                    }
-                    // 指示が URL に載らない長さ → クリップボードへ写してから素の新セッションを開く(貼り付けで続ける)。
-                    copyPrompt()
-                  }}
-                  title={hasPromptText ? '指示が長いのでクリップボードにコピーして新セッションを開きます(貼り付けてください)' : '行を選ぶか、下の欄に指示を書いてください'}
-                >
-                  {hasPromptText ? 'コピーして Claude Code を開く' : 'Claude Code で開く'}
-                </a>
-              )}
-              <button type="button" className="secondary-button slim" onClick={copyPrompt} disabled={!hasPromptText}>指示をコピー</button>
-              {promptStale ? (
-                <button type="button" className="secondary-button slim" onClick={rebuildPrompt} data-testid="developer-dashboard-prompt-rebuild">選択から作り直す</button>
-              ) : null}
-              {copyStatus === 'copied' ? <span className="basic-data-subcopy">コピーしました。新セッションに貼り付けてください。</span> : null}
-              {copyStatus === 'failed' ? <span className="developer-report-error">コピーできませんでした。下の文を選んでコピーしてください。</span> : null}
-            </div>
-            <textarea
-              className="developer-dashboard-prompt"
-              value={promptText}
-              onChange={(event) => editPrompt(event.target.value)}
-              rows={6}
-              placeholder="行を選ぶとここに指示が入ります。投げる前に自由に書き足し・書き換えできます(行を選ばず直接書いても投げられます)。"
-              aria-label="Claude Code への指示(編集できます)"
-              data-testid="developer-dashboard-prompt"
-            />
-            {promptStale ? <span className="basic-data-subcopy">書き換えたあとに選択が変わりました。今の選択を反映するには「選択から作り直す」(書き換えた分は消えます)。</span> : null}
-          </section>
+            <section className="dev-dash-section is-todo" id={SECTION_ANCHORS.todo}>
+              <SectionHead section="todo" count={overview.counts.todo} />
+              <h4 className="dev-dash-subhead"><span className="dev-dash-who is-owner">{DASHBOARD_WHO_LABELS.owner}</span>がやること({overview.counts.todoOwner})</h4>
+              {renderCards(overview.todo.owner, 'オーナーがやることはありません。')}
+              <h4 className="dev-dash-subhead"><span className="dev-dash-who is-claude">{DASHBOARD_WHO_LABELS.claude}</span>がやること({overview.counts.todoClaude})</h4>
+              {renderCards(overview.todo.claude, 'Claude がやることはありません。')}
+            </section>
+
+            <section className="dev-dash-section is-trial" id={SECTION_ANCHORS.trial}>
+              <SectionHead section="trial" count={overview.counts.trial} />
+              {renderCards(overview.trial, '開発・テスト教室だけで動いている機能はありません(すべて全教室に出ています)。')}
+            </section>
+
+            <section className="dev-dash-section is-not-built" id={SECTION_ANCHORS['not-built']}>
+              <SectionHead section="not-built" count={overview.counts.notBuilt} />
+              {renderCards(overview.notBuilt, 'まだ作っていないものはありません。')}
+            </section>
+
+            <p className="dev-dash-footnote">
+              「Claude に頼む」を押すと、指示が入った Claude Code の新しいセッションが開きます(送る前に書き足せます)。
+              白紙で始めるなら <a href={CLAUDE_CODE_NEW_SESSION_URL} target="_blank" rel="noreferrer">Claude Code を開く</a>。
+              {reportsReady && reports.length >= DEVELOPER_DASHBOARD_REPORT_LIMIT ? ` 報告は新しい ${DEVELOPER_DASHBOARD_REPORT_LIMIT} 件までを見ています。` : ''}
+            </p>
+          </div>
         )}
       </section>
     </main>
   )
 }
 
-function TodoRow({
-  item,
-  selected,
-  selectable,
-  expanded,
-  onToggle,
-  onToggleExpanded,
-  claudeUrl,
-}: {
-  item: DashboardActionItem
-  selected: boolean
-  selectable: boolean
-  expanded: boolean
-  onToggle: (id: string) => void
-  onToggleExpanded: (id: string) => void
-  claudeUrl: string | null
-}) {
+function SectionHead({ section, count }: { section: DashboardSection; count: number }) {
   return (
-    <>
-    <tr className={`developer-dashboard-todo-row is-${item.turn} ${selected ? 'is-selected' : ''}`} data-action-id={item.id}>
-      <td className="sel">
-        {selectable ? <input type="checkbox" checked={selected} onChange={() => onToggle(item.id)} aria-label={`${item.title} を選ぶ`} /> : null}
-      </td>
-      <td className="kind"><span className={`status-chip ${item.kind === 'checklist-needs-improvement' || item.kind === 'report-delivery-failed' ? 'warning' : 'secondary'}`}>{item.kindLabel}</span></td>
-      <td className="body">
-        <button type="button" className="developer-dashboard-todo-open" onClick={() => onToggleExpanded(item.id)} aria-expanded={expanded} title={expanded ? '詳細を閉じる' : '押すと詳細を開く'}>
-          <span className="developer-dashboard-todo-title">{expanded ? '▾' : '▸'} {item.title}</span>
-          {item.detail && !expanded ? <span className="developer-dashboard-todo-detail">{item.detail}</span> : null}
+    <div className="dev-dash-section-head">
+      <h3>{DASHBOARD_SECTION_LABELS[section]}<span className="dev-dash-section-count">{count}</span></h3>
+      <p>{DASHBOARD_SECTION_DESCRIPTIONS[section]}</p>
+    </div>
+  )
+}
+
+function DashboardCardView({
+  card,
+  expanded,
+  copied,
+  onToggleExpanded,
+  onCopyPrompt,
+}: {
+  card: DashboardCard
+  expanded: boolean
+  copied: boolean
+  onToggleExpanded: (id: string) => void
+  onCopyPrompt: (card: DashboardCard) => void
+}) {
+  const claudeUrl = card.prompt === null ? null : resolveClaudeCodeSessionUrl(card.prompt)
+  return (
+    <article className={`dev-dash-card is-${card.section}`} data-card-id={card.id}>
+      <div className="dev-dash-card-head">
+        <span className="dev-dash-badge">{card.badge}</span>
+        <h4 className="dev-dash-card-title">{card.title}</h4>
+      </div>
+      <p className="dev-dash-card-summary">{card.summary}</p>
+      <p className="dev-dash-card-next">
+        <span className="dev-dash-card-next-label">次に</span>
+        <span className={`dev-dash-who is-${card.who}`}>{DASHBOARD_WHO_LABELS[card.who]}</span>
+        <span>{card.nextAction}</span>
+      </p>
+      <div className="dev-dash-card-foot">
+        {card.links.map((link) => (
+          <a key={link.href} className="dev-dash-link" href={link.href} target="_blank" rel="noreferrer">GitHub {link.label}</a>
+        ))}
+        {card.prompt !== null ? (
+          claudeUrl ? (
+            <a className="dev-dash-claude" href={claudeUrl} target="_blank" rel="noreferrer" title="指示が入った Claude Code の新しいセッションを開きます">Claude に頼む</a>
+          ) : (
+            // 指示が URL に載らない長さ → クリップボードへ写してから白紙の新セッションを開く(貼り付けて続ける)。
+            <a className="dev-dash-claude" href={CLAUDE_CODE_NEW_SESSION_URL} target="_blank" rel="noreferrer" onClick={() => onCopyPrompt(card)} title="指示をコピーして Claude Code を開きます(貼り付けてください)">コピーして Claude に頼む</a>
+          )
+        ) : null}
+        {copied ? <span className="dev-dash-copied">指示をコピーしました。貼り付けてください。</span> : null}
+        <button type="button" className="dev-dash-more" onClick={() => onToggleExpanded(card.id)} aria-expanded={expanded}>
+          {expanded ? 'とじる' : 'くわしく'}
         </button>
-      </td>
-      <td className="turn"><span className={`status-chip ${TURN_CHIP_CLASS[item.turn]}`}>{DASHBOARD_ACTION_TURN_LABELS[item.turn]}</span></td>
-      <td className="act">
-        {item.href ? <a className="developer-dashboard-issue-link" href={item.href} target="_blank" rel="noreferrer" title="GitHub で開く">GitHub</a> : null}
-        {claudeUrl ? <a className="developer-dashboard-issue-link" href={claudeUrl} target="_blank" rel="noreferrer" title="この 1 件を Claude Code の新セッションに投げる">→Claude</a> : null}
-      </td>
-    </tr>
-    {expanded ? (
-      <tr className="developer-dashboard-todo-facts" data-facts-for={item.id}>
-        <td />
-        <td colSpan={4}>
-          <ul>
-            {item.facts.map((fact, index) => <li key={index}>{fact}</li>)}
-          </ul>
-        </td>
-      </tr>
-    ) : null}
-    </>
+      </div>
+      {expanded ? (
+        <ul className="dev-dash-card-details" data-details-for={card.id}>
+          {card.details.map((detail, index) => <li key={index}>{detail}</li>)}
+        </ul>
+      ) : null}
+    </article>
   )
 }

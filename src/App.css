@@ -811,17 +811,6 @@
   color: #16314f;
 }
 
-.developer-dashboard-count,
-.developer-dashboard-label {
-  font-size: 12px;
-  color: #49627e;
-}
-
-.developer-dashboard-label {
-  margin-right: 6px;
-  font-weight: 700;
-}
-
 .developer-dashboard-report-list,
 .developer-dashboard-issue-list {
   display: grid;
@@ -880,44 +869,6 @@
   text-decoration: none;
 }
 
-.developer-dashboard-ledger-group {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.developer-dashboard-ledger-entry {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-left: 4px solid #d5deea;
-  background: #fbfcfe;
-}
-
-.developer-dashboard-ledger-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  flex-wrap: wrap;
-}
-
-.developer-dashboard-ledger-summary,
-.developer-dashboard-ledger-next {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: #1f2f44;
-}
-
-.developer-dashboard-ledger-meta {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  font-size: 12px;
-}
-
 .developer-dashboard-issue {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -946,27 +897,6 @@
   gap: 6px;
   flex-wrap: wrap;
   align-items: center;
-}
-
-.developer-dashboard-checklist-counts {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.developer-dashboard-other-note {
-  padding: 8px 12px;
-  border-left: 4px solid #f2c94c;
-  background: #fffbf0;
-  margin-bottom: 8px;
-}
-
-.developer-dashboard-other-note p {
-  margin: 4px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .billing-shell,
@@ -6632,152 +6562,6 @@ body.verification-checklist-window {
   gap: 10px;
 }
 
-/* 開発ダッシュボード【未対応】面(2026-09-28 オーナー指示「一画面に収める・未対応をその画面から Claude Code に投げる」)。
-   1 行 1 件・行間を詰め、待ちは畳む。link-button は表の中の文字ボタン。 */
-.developer-dashboard-compact .board-panel {
-  min-width: 0;
-  overflow-x: hidden;
-}
-
-.developer-dashboard-compact .developer-dashboard-head h2 {
-  margin-bottom: 2px;
-}
-
-.developer-dashboard-compact .page-summary {
-  font-size: 13px;
-  margin: 0;
-}
-
-.developer-dashboard-todo {
-  display: grid;
-  gap: 8px;
-}
-
-.developer-dashboard-todo-counts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  font-size: 13px;
-}
-
-.developer-dashboard-todo-table {
-  font-size: 14px;
-  table-layout: auto;
-}
-
-.developer-dashboard-todo-table th,
-.developer-dashboard-todo-table td {
-  padding: 3px 8px;
-  vertical-align: top;
-  line-height: 1.3;
-}
-
-.developer-dashboard-compact .developer-dashboard-range-field span {
-  white-space: nowrap;
-}
-
-.developer-dashboard-compact .developer-header-actions {
-  margin-bottom: 4px;
-}
-
-.developer-dashboard-todo-table th.sel,
-.developer-dashboard-todo-table td.sel {
-  width: 52px;
-  text-align: center;
-  padding-left: 4px;
-  padding-right: 4px;
-  white-space: nowrap;
-}
-
-.developer-dashboard-todo-table td.kind,
-.developer-dashboard-todo-table td.turn,
-.developer-dashboard-todo-table td.act {
-  white-space: nowrap;
-}
-
-.developer-dashboard-todo-table td.act {
-  text-align: right;
-}
-
-.developer-dashboard-todo-table td.body {
-  /* 残り幅を全部取り、題名は 1 行に省略(max-width: 0 は表セルで省略記号を効かせる常套手段)。 */
-  width: 100%;
-  max-width: 0;
-  min-width: 200px;
-}
-
-.developer-dashboard-todo-table .status-chip {
-  font-size: 12px;
-  padding: 1px 8px;
-}
-
-.developer-dashboard-todo-title {
-  display: block;
-  color: #16314f;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.developer-dashboard-todo-detail {
-  display: block;
-  color: #49627e;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.developer-dashboard-todo-open {
-  display: block;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.developer-dashboard-todo-open:hover .developer-dashboard-todo-title {
-  text-decoration: underline;
-}
-
-.developer-dashboard-todo-facts td {
-  background: #fbfcfe;
-  font-size: 13px;
-  color: #1f2f44;
-}
-
-.developer-dashboard-todo-facts ul {
-  margin: 0;
-  padding-left: 18px;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.developer-dashboard-todo-row.is-selected td {
-  background: #eef4ff;
-}
-
-.developer-dashboard-todo-row.is-waiting td {
-  color: #6b7f96;
-}
-
-.developer-dashboard-todo-group td {
-  background: #f4f5f7;
-  padding: 3px 8px;
-}
-
-.developer-dashboard-todo-empty {
-  color: #49627e;
-  text-align: center;
-  padding: 16px 8px;
-}
-
 .link-button {
   margin: 0;
   padding: 0;
@@ -6790,53 +6574,301 @@ body.verification-checklist-window {
   text-decoration: underline;
 }
 
-.developer-dashboard-launch {
-  position: sticky;
-  bottom: 0;
+/* 開発ダッシュボード【いまの状況】(2026-10-30 オーナー指示「使いづらい。まずシンプルに。わかり易い文章で。デザインもわかりやすく」)。
+   上に 3 つの数字のタイル、下に 3 つの欄(やること／開発・テスト教室だけ／まだ作っていない)のカード。
+   欄ごとに左の色帯で見分ける: やること=橙、開発・テスト教室だけ=緑、まだ作っていない=灰。 */
+.dev-dash {
+  --dev-dash-todo: #d9730d;
+  --dev-dash-todo-bg: #fff6ec;
+  --dev-dash-trial: #1f8a5b;
+  --dev-dash-trial-bg: #edf8f2;
+  --dev-dash-later: #7a8699;
+  --dev-dash-later-bg: #f3f5f8;
+  --dev-dash-ink: #1f2f44;
+  --dev-dash-muted: #5a6b80;
+  display: grid;
+  gap: 20px;
+}
+
+.dev-dash-view-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid #d5deea;
+  border-radius: 999px;
+  background: #f4f7fb;
+}
+
+.dev-dash-view-switch button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #49627e;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dev-dash-view-switch button.is-active {
+  background: #fff;
+  color: #16314f;
+  box-shadow: 0 1px 3px rgba(22, 49, 79, 0.18);
+}
+
+.dev-dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.dev-dash-tile {
+  display: grid;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid #e3e9f2;
+  border-left-width: 6px;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--dev-dash-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dev-dash-tile:hover {
+  box-shadow: 0 2px 8px rgba(22, 49, 79, 0.12);
+}
+
+.dev-dash-tile.is-todo { border-left-color: var(--dev-dash-todo); }
+.dev-dash-tile.is-trial { border-left-color: var(--dev-dash-trial); }
+.dev-dash-tile.is-not-built { border-left-color: var(--dev-dash-later); }
+
+.dev-dash-tile-count {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.dev-dash-tile.is-todo .dev-dash-tile-count { color: var(--dev-dash-todo); }
+.dev-dash-tile.is-trial .dev-dash-tile-count { color: var(--dev-dash-trial); }
+.dev-dash-tile.is-not-built .dev-dash-tile-count { color: var(--dev-dash-later); }
+
+.dev-dash-tile-label {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.dev-dash-tile-sub {
+  font-size: 13px;
+  color: var(--dev-dash-muted);
+}
+
+.dev-dash-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--dev-dash-muted);
+}
+
+.dev-dash-section {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 14px;
+  scroll-margin-top: 12px;
+}
+
+.dev-dash-section.is-todo { background: var(--dev-dash-todo-bg); }
+.dev-dash-section.is-trial { background: var(--dev-dash-trial-bg); }
+.dev-dash-section.is-not-built { background: var(--dev-dash-later-bg); }
+
+.dev-dash-section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 19px;
+  color: var(--dev-dash-ink);
+}
+
+.dev-dash-section-head p {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--dev-dash-muted);
+}
+
+.dev-dash-section-count {
+  min-width: 28px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 15px;
+  text-align: center;
+}
+
+.dev-dash-section.is-todo .dev-dash-section-count { color: var(--dev-dash-todo); }
+.dev-dash-section.is-trial .dev-dash-section-count { color: var(--dev-dash-trial); }
+.dev-dash-section.is-not-built .dev-dash-section-count { color: var(--dev-dash-later); }
+
+.dev-dash-subhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: var(--dev-dash-ink);
+}
+
+.dev-dash-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.dev-dash-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid #e3e9f2;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--dev-dash-ink);
+}
+
+.dev-dash-card-head {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.dev-dash-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dev-dash-card.is-todo .dev-dash-badge { background: var(--dev-dash-todo-bg); color: #9a4a00; }
+.dev-dash-card.is-trial .dev-dash-badge { background: var(--dev-dash-trial-bg); color: #16603f; }
+.dev-dash-card.is-not-built .dev-dash-badge { background: var(--dev-dash-later-bg); color: #4b5668; }
+
+.dev-dash-card-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.dev-dash-card-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dev-dash-card-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f7f9fc;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.dev-dash-card-next-label {
+  font-weight: 700;
+  color: var(--dev-dash-muted);
+}
+
+.dev-dash-who {
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dev-dash-who.is-owner { background: #fde8d4; color: #8a3f00; }
+.dev-dash-who.is-claude { background: #e3ecff; color: #1f45a0; }
+
+.dev-dash-card-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid #d5deea;
-  border-radius: 12px;
-  background: #f7f9fc;
-  font-size: 13px;
+  gap: 8px 14px;
+  font-size: 14px;
 }
 
-.developer-dashboard-launch .primary-button {
-  padding: 8px 12px;
-  font-size: 13px;
+.dev-dash-link {
+  color: #2654b9;
+  font-weight: 600;
   text-decoration: none;
 }
 
-.developer-dashboard-launch .primary-button.is-disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-.developer-dashboard-launch-count {
+.dev-dash-claude {
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: #2654b9;
+  color: #fff;
   font-weight: 700;
-  color: #16314f;
+  text-decoration: none;
 }
 
-.developer-dashboard-prompt {
-  width: 100%;
-  box-sizing: border-box;
-  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  padding: 8px 10px;
-  border: 1px solid #d5deea;
-  border-radius: 10px;
-  background: #fff;
-  color: #1f2f44;
-  resize: vertical;
+.dev-dash-claude:hover {
+  background: #1d4396;
+}
+
+.dev-dash-more {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dev-dash-muted);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dev-dash-copied {
+  font-size: 13px;
+  color: #16603f;
+}
+
+.dev-dash-card-details {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-top: 1px dashed #d5deea;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--dev-dash-muted);
+  overflow-wrap: anywhere;
+}
+
+.dev-dash-empty {
+  margin: 0;
+  font-size: 14px;
+  color: var(--dev-dash-muted);
+}
+
+.dev-dash-footnote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dev-dash-muted);
 }
 
 @media (max-width: 720px) {
-  .developer-dashboard-todo-title,
-  .developer-dashboard-todo-detail {
-    white-space: normal;
+  .dev-dash-section {
+    padding: 12px;
+  }
+
+  .dev-dash-tile-count {
+    font-size: 26px;
   }
 }
 
