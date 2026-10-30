@@ -117,18 +117,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     references: ['docs/plan-2026-09-11-five-requests.md §6'],
     updatedOn: '2026-10-30',
   },
-  {
-    id: 'question-ai-answer',
-    title: '質問への AI 自動回答',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '「質問・要望」で質問を送ると、その場で AI が回答する(1 問 約 0.2 円)。開発用・テスト教室だけで動作中で、確認は OK。',
-    nextAction: 'オーナーが全教室に出すか決める(出すときは画面とサーバーの設定を同時に切り替える)。',
-    notes: '機能フラグ questionAiAnswer と functions/src/questionAiAnswer.ts の isQuestionAiAnswerEnabledForClassroom を同じ push で all-classrooms へ。§G-1 の「即答は作らない」を全教室に広げる仕様改定も同じ push。モデルは Haiku に確定(2026-10-16)。回答の質は Actions「Question AI eval」(23 問)で見る。2026-10-24 qa-ai-5〜7 OK(受付 20261024-062027562-37618588)。',
-    featureKeys: ['questionAiAnswer'],
-    references: ['docs/spec-developer-report.md §G-7', 'functions/src/questionAiAnswer.ts'],
-    updatedOn: '2026-10-30',
-  },
 
   // ── やること(オーナー) ──────────────────────────────────────────────────────
   {

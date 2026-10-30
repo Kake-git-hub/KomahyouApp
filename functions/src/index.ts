@@ -2861,7 +2861,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
-  // 質問への AI 即時回答(試験・開発用教室のみ)を呼ぶか。呼ぶなら文書に aiAnswerPending を立て、メール通知(notifyDeveloperReportByMail)は
+  // 質問への AI 即時回答(2026-10-30 全教室・isQuestionAiAnswerEnabledForClassroom)を呼ぶか。呼ぶなら文書に aiAnswerPending を立て、メール通知(notifyDeveloperReportByMail)は
   // AI の結果が書かれてから送る(オーナー指示 2026-10-16 夜「開発者にもメールでやり取りを知らせる」＝回答文をメールに載せる)。
   const answerWithAi = shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)

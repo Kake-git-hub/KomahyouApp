@@ -173,8 +173,8 @@ describe('確認リストの項目定義', () => {
     // 残りはテスト教室の結果待ちだけ(開発用教室にも同じものが出る)。
     // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
     // 第93版(2026-10-30): 開発用教室だけの項目(ed-1・ed-2・hd-1)も OK → 残りはテスト教室にも出す項目だけ。
-    // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。
-    for (const id of ids.filter((id) => id !== 'd-5')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。第95版(同日): AI 回答の全教室展開の確認 ai-1 も開発用教室だけ。
+    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.667')
   })
@@ -204,7 +204,8 @@ describe('確認リストの項目定義', () => {
     // 第91版(2026-10-30): sc-2 は丸ごと振替の記録を Claude が読んで OK → 外した。第92版(同日): ab-1〜ab-4 も OK → 外した。
     // 第93版(2026-10-30): ed-1・ed-2・hd-1 も OK → 外した(版を v1.5.667 へ)。
     // 第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5 を先頭に足した(開発用教室だけ)。
-    expect(ids).toEqual(['d-5', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
+    // 第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1 を先頭に足した(開発用教室だけ)。
+    expect(ids).toEqual(['ai-1', 'd-5', 'tp-49', 'tp-51', 'tp-64', 'tp-65', 'tp-57', 'tp-58', 'tp-59', 'tp-60'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -643,6 +644,17 @@ describe('第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボー
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('d-5')
     expect(item.check!.join('\n')).toContain('確認リストの項目')
     expect(item.title).toContain('まだ作っていないもの')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.667')
+  })
+})
+
+describe('第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1', () => {
+  it('ai-1 は開発用教室だけ・v1.5.669 で追加・本番教室では送らずに注意文だけを見る', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'ai-1')!
+    expect(item.introducedIn).toBe('v1.5.669')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('ai-1')
+    expect(item.steps.join('\n')).toContain('送らずに閉じる')
+    expect(item.check!.join('\n')).toContain('その場で自動の回答が出ます')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.667')
   })
 })

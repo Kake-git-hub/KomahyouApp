@@ -133,9 +133,12 @@ export const featureRolloutRegistry = {
   // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts isQuestionAiAnswerEnabledForClassroom =
   //   検証用教室判定 → 会社既定の 2 段解決。shouldAnswerQuestionWithAi はその結果と「質問 × 確認リスト外」の合成)。
   //   このフラグは表示(注意文・送信中文言・日程表タブの待ち時間)だけを切り替える。昇格するときは**両側を同時に**変える。
+  // 開発用教室で先行(v1.5.524〜・2026-10-24 確認リスト qa-ai-5〜7 OK・モデル Haiku 確定) → オーナー指示(2026-10-30「AI回答機能を
+  // 全教室に展開して」)で全教室へ昇格。サーバーの QUESTION_AI_ANSWER_BASE_SCOPE も同じ push で 'all-classrooms'(パリティテストが突合)。
+  // 回帰で development-only へ戻さない。
   questionAiAnswer: {
-    scope: 'development-only',
-    description: 'Question/request modal: instant AI answer to questions (Claude API with API key via submitDeveloperReport), development classroom only.',
+    scope: 'all-classrooms',
+    description: 'Question/request modal: instant AI answer to questions (Claude API with API key via submitDeveloperReport), all classrooms.',
   },
   // 振替元「休)」表示・振替欄の元起点統一・丸ごと振替/休日設定の記録保持(オーナー確定 2026-09-16)。
   // ON のとき:

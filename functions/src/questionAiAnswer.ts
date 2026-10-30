@@ -1,8 +1,9 @@
-// 「質問・要望」の質問に AI がその場で回答する(試験実装・開発用教室のみ。オーナー指示 2026-09-14)。
+// 「質問・要望」の質問に AI がその場で回答する(開発用教室で試験(オーナー指示 2026-09-14) → 2026-10-30 全教室へ展開)。
 //
-// 位置づけ: docs/spec-developer-report.md §G-7。§G-1「AI 即答は作らない」を**開発用教室に限って**試す例外。
-//  - 対象は category=question かつ 機能が有効な教室だけ(isQuestionAiAnswerEnabledForClassroom = 登録台帳
-//    src/utils/developmentClassroomRegistry.ts の検証用教室 → 会社既定 companyFeatureDefaults の 2 段解決)。本番教室では呼ばない。
+// 位置づけ: docs/spec-developer-report.md §G-7。§G-1「AI 即答は作らない」の例外。開発用教室で先行し、オーナー指示
+// (2026-10-30「AI回答機能を全教室に展開して」)で全教室へ広げた。
+//  - 対象は category=question かつ 機能が有効な教室だけ(isQuestionAiAnswerEnabledForClassroom = 基本スコープ
+//    QUESTION_AI_ANSWER_BASE_SCOPE → 会社既定 companyFeatureDefaults の 2 段解決)。基本スコープは 'all-classrooms'。
 //  - 質問は従来どおり developerReports へ記録・メール通知される(AI 回答は「上乗せ」。記録を置き換えない)。
 //  - AI に渡すのは **使い方の説明(docs/user-manual.md・利用者向け)＋質問文＋直近の操作履歴** だけ。
 //    教室データ(スナップショット)は渡さない(オーナー確定 2026-09-14)。
@@ -68,15 +69,26 @@ export const QUESTION_AI_ANSWER_CHAR_LIMIT = 4000
 export const QUESTION_AI_TIMEOUT_MS = 90_000
 
 /**
+ * 質問 AI 即答の基本スコープ。クライアント src/utils/featureRollout.ts の `questionAiAnswer.scope` と同じ値にする
+ * (questionAiAnswer.test.ts が突合)。開発用教室で先行 → オーナー指示(2026-10-30「AI回答機能を全教室に展開して」)で 'all-classrooms'。
+ * 回帰で 'development-only' へ戻さない(戻すと画面は全教室で「その場で回答」と出るのに AI を呼ばない非対称になる)。
+ */
+export const QUESTION_AI_ANSWER_BASE_SCOPE: 'development-only' | 'all-classrooms' = 'all-classrooms'
+
+/**
  * 質問 AI 即答がその教室で有効か(サーバー側の権威)。
- * 2 段解決(2026-09-18・Phase 1 T1-2): 基本スコープ(development-only = 登録台帳の検証用教室)→ 会社既定
+ * 2 段解決(2026-09-18・Phase 1 T1-2): 基本スコープ(QUESTION_AI_ANSWER_BASE_SCOPE)→ 会社既定
  * (コア台帳 companyFeatureDefaults の複製)。段の順序・台帳はクライアント
  * `isFeatureEnabledForClassroom('questionAiAnswer', …)` と同一(パリティテストで固定)。
+ * 会社や教室 ID が空なら OFF(fail-closed)。
  */
 export function isQuestionAiAnswerEnabledForClassroom(input: { workspaceKey: string | null | undefined; classroomId: string | null | undefined }): boolean {
+  const workspaceKey = (input.workspaceKey ?? '').trim()
+  const classroomId = (input.classroomId ?? '').trim()
+  if (!workspaceKey || !classroomId) return false
   return resolveFeatureEnabledByLayers({
-    scopeEnabled: isDevelopmentClassroomIdentity({ workspaceKey: input.workspaceKey, classroomId: input.classroomId }),
-    companyDefault: resolveCompanyFeatureDefault(input.workspaceKey, 'questionAiAnswer'),
+    scopeEnabled: QUESTION_AI_ANSWER_BASE_SCOPE === 'all-classrooms' || isDevelopmentClassroomIdentity({ workspaceKey, classroomId }),
+    companyDefault: resolveCompanyFeatureDefault(workspaceKey, 'questionAiAnswer'),
   })
 }
 

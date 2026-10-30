@@ -136,8 +136,8 @@ describe('featureRollout: 教室の識別は ID（名前だけでは判定しな
     expect(isFeatureEnabledForClassroom('lessonHistory', { name: '開発用教室' }, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
     // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
-    expect(isFeatureEnabledForClassroom('questionAiAnswer', { name: '開発用教室' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('questionAiAnswer', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', { name: '開発用教室' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
   })
 
   it('all-classrooms の機能は教室・会社に関係なく有効のまま(昇格済みを巻き戻さない)', () => {
@@ -156,13 +156,23 @@ describe('featureRollout: テスト教室(sandbox)は development-only 機能の
   //   盤面ベース予定数・講習履歴が偶然 OFF だった(regression-reviewer 所見 B-1)。台帳化で ON になり、
   //   オーナー確定によりこれが正となった。**この期待値を kind で絞る方向へ黙って反転させない。**
   // ★2026-10-13: 盤面ベース予定数(boardBasedPlannedCount)は全教室へ昇格したので、まだ development-only の
-  //   講習履歴・AI 即答で同じ保証を固定する。
-  it('テスト教室でも development-only 機能(講習履歴・AI 即答)が有効', () => {
+  //   講習履歴・テンプレ差分反映で同じ保証を固定する(AI 即答は 2026-10-30 に全教室へ昇格)。
+  it('テスト教室でも development-only 機能(講習履歴・テンプレ差分反映)が有効', () => {
     const sandbox = { id: 'test_classroom_20260507_dai' }
     expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('questionAiAnswer', sandbox, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', sandbox, 'main')).toBe(true)
     // 別会社(workspaceKey 違い)では同じ ID でも無効(会社の壁)。
     expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'other-company')).toBe(false)
+  })
+})
+
+describe('featureRollout: questionAiAnswer（質問への AI 即時回答）', () => {
+  it('全教室で有効（開発用教室で先行 → オーナー指示 2026-10-30「AI回答機能を全教室に展開して」で昇格・戻さない）', () => {
+    // サーバー functions/src/questionAiAnswer.ts の QUESTION_AI_ANSWER_BASE_SCOPE と同じ値(questionAiAnswer.test.ts が突合)。
+    expect(featureRolloutRegistry.questionAiAnswer.scope).toBe('all-classrooms')
+    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb', 'v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai']) {
+      expect(isFeatureEnabledForClassroom('questionAiAnswer', { id }, 'main'), id).toBe(true)
+    }
   })
 })
 

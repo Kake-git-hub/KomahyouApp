@@ -4531,10 +4531,10 @@ describe('reopenedSlots (後から出席可能に変更) の日程表配線', ()
 // 「開発者へ報告」(2026-09-04・docs/spec-developer-report.md §B/§E): 日程表は表示だけ見て「おかしい」と思うことがあるので、
 // 別タブのツールバー(講習期間表示の右)にもボタンを出し、本体(opener)へ postMessage で報告を依頼する。
 describe('scheduleHtml 開発者へ報告ボタン', () => {
-  // 【2026-09-16】検証用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名では判定しない
-  // (他社が「開発用教室」という名前の教室を作っても AI 即答の表示が出ないようにするため)。
+  // 【2026-09-16】検証用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名では判定しない。
+  // 【2026-10-30】AI 即答は全教室へ昇格(オーナー指示「AI回答機能を全教室に展開して」)したので、どの教室でも true。
   // 別タブへ渡す classroomStorageKey は App.tsx の actingClassroomId ＝ 開いている教室のドキュメントID。
-  it('質問への AI 即時回答フラグは登録済み開発用教室の【教室ID】だけ true(教室名では true にならない)', () => {
+  it('質問への AI 即時回答フラグは全教室で true(2026-10-30 全教室へ昇格・回帰で戻さない)', () => {
     vi.stubEnv('VITE_FIREBASE_WORKSPACE_KEY', 'main')
     const renderFor = (classroomName: string, classroomStorageKey?: string) => {
       const write = vi.fn()
@@ -4563,11 +4563,10 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
       return write.mock.calls[0]?.[0] as string
     }
     expect(renderFor('開発用教室', 'v8OZ7zH8vONNHjjYVcR1')).toContain('"questionAiAnswerEnabled":true')
-    // ★回帰防止: 教室名が「開発用教室」でも、教室IDが台帳に無ければ false。
-    expect(renderFor('開発用教室')).toContain('"questionAiAnswerEnabled":false')
-    expect(renderFor('開発用教室', 'classroom-9')).toContain('"questionAiAnswerEnabled":false')
-    expect(renderFor('スクールIE 日大前校', '5w5OMueETerSKrSf14HC')).toContain('"questionAiAnswerEnabled":false')
-    expect(renderFor('スクールIE 緑が丘校', 'KzFnOQoTFLsCxwUp1tvh')).toContain('"questionAiAnswerEnabled":false')
+    // 2026-10-30 全教室へ昇格(オーナー指示「AI回答機能を全教室に展開して」): 本番教室・台帳に無い教室でも true。
+    expect(renderFor('開発用教室', 'classroom-9')).toContain('"questionAiAnswerEnabled":true')
+    expect(renderFor('スクールIE 日大前校', '5w5OMueETerSKrSf14HC')).toContain('"questionAiAnswerEnabled":true')
+    expect(renderFor('スクールIE 緑が丘校', 'KzFnOQoTFLsCxwUp1tvh')).toContain('"questionAiAnswerEnabled":true')
     vi.unstubAllEnvs()
   })
 
@@ -4638,8 +4637,8 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     // 「#テスト と書いてください」の案内文は削除(オーナー指示 2026-09-14)。
     expect(html).not.toContain('testHint')
     expect(html).not.toContain('テスト送信のときは内容に')
-    // AI 即時回答(開発用教室のみ・spec §G-7): 既定(教室名なし)では無効。有効時だけ注意文・待ち時間を切り替える。
-    expect(html).toContain('"questionAiAnswerEnabled":false')
+    // AI 即時回答(spec §G-7・2026-10-30 全教室へ昇格): 有効時だけ注意文・待ち時間を切り替える。
+    expect(html).toContain('"questionAiAnswerEnabled":true')
     expect(html).toContain('const aiAnswerEnabled = Boolean(DATA.questionAiAnswerEnabled);')
     expect(html).toContain("const waitingForAi = aiAnswerEnabled && selectedCategory === 'question';")
     // 入力のヒント(生徒名・日付・何限・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04・2026-10-10 #464 で短縮)。

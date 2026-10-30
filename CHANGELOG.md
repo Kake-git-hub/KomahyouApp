@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.669 (2026-10-30)
+
+- feat: **質問への AI 即時回答を全教室へ展開**(オーナー指示 2026-10-30「AI回答機能を全教室に展開して」)。開発用・テスト教室で先行(v1.5.524〜・確認リスト qa-ai-1〜7 OK・モデル Haiku 確定)していたものを、画面のフラグ `questionAiAnswer` とサーバーの基本スコープ `QUESTION_AI_ANSWER_BASE_SCOPE`(新設)を**同じ push で** `all-classrooms` にした(片側だけだと「その場で回答と出るのに AI を呼ばない」非対称になる。両側の値はパリティテストで突合)。サーバー判定は会社や教室 ID が空なら OFF(fail-closed)・会社既定 `companyFeatureDefaults` で会社ごとに止められるのは従来どおり。spec §G-1・§G-7 を改定し、使い方の説明 §10(AI の回答の根拠)に「使い方の質問はその場で自動の回答が出る」を足して `sync-shared`。進行中テーマ台帳の `question-ai-answer` 行は消した。確認リストに ai-1(開発用教室だけ・版は v1.5.667 据え置き)。⚠️ `functions/**` を変えたので main マージで「Deploy Cloud Functions」が自動で走る(緑を確認。Hosting だけ先に出ると数分間は本番教室で注意文だけ変わり「自動回答を作れませんでした」になる)。(src/utils/featureRollout.ts・functions/src/questionAiAnswer.ts・docs/spec-developer-report.md・docs/user-manual.md・src/utils/{developmentStatusLedger,verificationChecklist}.ts・各テスト)
+
 ## v1.5.668 (2026-10-30)
 
 - feat: **開発ダッシュボードを作り直し(シンプル・わかりやすい文・確認リストと重複させない)**(オーナー指示 2026-10-30「開発ダッシュボードが使いづらい。まずシンプルにして。確認リストと重複しており、終わったものも残っている。機能の実装がまだのものや、開発・テスト教室だけしか実施していない機能、やるべきこと(確認リスト以外で)などをわかり易い文章で表示して。デザインもわかりやすいように変えて」)。既定面を「いまの状況」にし、上に 3 つの数字のタイル、下に **やること(オーナー／Claude に分ける)・開発・テスト教室だけで動いている機能・まだ作っていないもの** の 3 欄のカード。カードは「何のことか・今の状態・次に誰が何をするか」だけで、経緯は「くわしく」で開く。カードごとの「Claude に頼む」で指示入りの Claude Code が開く(2026-09-28 の 1 行 1 件の表・複数選択・指示の編集欄はやめた。指示は Claude Code の入力欄で書き足せる)。**確認リストの結果(要改善・未確認)は一切出さない**(集計も読まない)。一覧面「報告と Issue の一覧」からも確認リスト欄と台帳欄を外し、報告(教室別)・GitHub Issue・機能の公開範囲の 3 欄に。台帳の行が指す Issue がすべて閉じていれば「済み(台帳から消す)」として Claude のやることへ出す(終わったものの取り残し検知)。**進行中テーマ台帳を全面的に書き直し**: 済んだ行(即時対応の基盤＝マージ済み・確認 OK、#76 修正済み、#69/#70 回答済み、#75 は差分反映の行へ統合)を消し、Issue を閉じるだけの片付けは 1 行(#62〜66・#69・#70・#76)に。全行を平易な文にし、新しい項目 `who`(オーナー／Claude)と `notes`(経緯)を追加。題名・要約・次の一手の長さと社内記号(確認リストの id・§・Q 番号・版・INV)を入れないことをテストで固定。確認リストに d-5(開発用教室だけ・版は v1.5.667 据え置き)。(src/components/developer-admin/{DeveloperDashboardScreen,DeveloperDashboardDetail}.tsx・src/utils/{developerDashboardActions,developmentStatusLedger}.ts・src/App.css・src/utils/verificationChecklist.ts・docs/spec-developer-report.md §E-3・CLAUDE.md)

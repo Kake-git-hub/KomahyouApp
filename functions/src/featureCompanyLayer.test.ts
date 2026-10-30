@@ -35,11 +35,11 @@ describe('サーバー側述語の会社既定(2 段目)', () => {
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'any', projectId: 'komahyouapp-staging' })).toBe(false)
   })
 
-  it('質問 AI: 台帳は (workspaceKey, "questionAiAnswer") で引かれ、行なしなら開発用教室だけ', () => {
+  it('質問 AI: 台帳は (workspaceKey, "questionAiAnswer") で引かれ、行なしなら基本スコープ(全教室・2026-10-30 昇格)のとおり', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: 'v8OZ7zH8vONNHjjYVcR1' })).toBe(true)
-    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: '5w5OMueETerSKrSf14HC' })).toBe(false)
-    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'company-b', classroomId: 'v8OZ7zH8vONNHjjYVcR1' })).toBe(false)
+    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: '5w5OMueETerSKrSf14HC' })).toBe(true)
+    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'company-b', classroomId: 'v8OZ7zH8vONNHjjYVcR1' })).toBe(true)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'questionAiAnswer')
   })
 

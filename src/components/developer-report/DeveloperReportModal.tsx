@@ -46,7 +46,7 @@ import {
 
 export type DeveloperReportModalProps = {
   classroomName: string
-  /** 質問への AI 即時回答が有効か(featureRollout `questionAiAnswer`・開発用教室のみ)。表示の切り替えだけに使う。 */
+  /** 質問への AI 即時回答が有効か(featureRollout `questionAiAnswer`・2026-10-30 全教室)。表示の切り替えだけに使う。 */
   aiAnswerEnabled?: boolean
   sending: boolean
   /** 送信後の結果文。null のうちは入力フォームを表示する。 */

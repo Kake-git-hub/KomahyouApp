@@ -15,6 +15,8 @@ import {
   extractQuestionAiAnswerText,
   findQuestionAiAnswerViolation,
   generateQuestionAiAnswer,
+  isQuestionAiAnswerEnabledForClassroom,
+  QUESTION_AI_ANSWER_BASE_SCOPE,
   QUESTION_AI_ANSWER_CHAR_LIMIT,
   estimateQuestionAiCostYen,
   QUESTION_AI_BEHAVIOR_CHECK_REPLY,
@@ -55,17 +57,30 @@ const baseInput = {
   recentOperations: [],
 }
 
-describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)', () => {
-  it('AI を呼ぶのは 質問 × 開発用教室 × 確認リストでない ときだけ(本番教室・要望・不具合では呼ばない)', () => {
-    // 2026-09-16: 開発用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名では判定しない。
-    const devClassroom = isDevelopmentClassroomIdentity({ workspaceKey: 'main', classroomId: 'v8OZ7zH8vONNHjjYVcR1' })
-    expect(devClassroom).toBe(true)
-    expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: devClassroom, isVerificationChecklist: false })).toBe(true)
-    // 本番3教室は台帳に無い＝AI を呼ばない。別会社(workspace)の同じ教室IDも呼ばない。
-    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
-      expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: isDevelopmentClassroomIdentity({ workspaceKey: 'main', classroomId: id }), isVerificationChecklist: false })).toBe(false)
+describe('questionAiAnswer: 質問への AI 即時回答(全教室・spec-developer-report §G-7)', () => {
+  it('全教室展開(オーナー指示 2026-10-30): 基本スコープは all-classrooms で、クライアントの featureRollout と同じ値。回帰で戻さない', () => {
+    expect(QUESTION_AI_ANSWER_BASE_SCOPE).toBe('all-classrooms')
+    // 片側だけ戻すと「画面は『その場で回答』なのに AI を呼ばない」(またはその逆)の非対称になる。
+    const featureRolloutTs = readFileSync(resolve(repoRoot, 'src/utils/featureRollout.ts'), 'utf8')
+    const start = featureRolloutTs.indexOf('questionAiAnswer: {')
+    expect(start).toBeGreaterThan(-1)
+    const entry = featureRolloutTs.slice(start, featureRolloutTs.indexOf('},', start))
+    expect(entry).toContain(`scope: '${QUESTION_AI_ANSWER_BASE_SCOPE}'`)
+  })
+
+  it('AI を呼ぶのは 質問 × 機能が有効な教室 × 確認リストでない ときだけ(本番 3 教室も開発用・テスト教室も有効・要望・不具合では呼ばない)', () => {
+    for (const id of ['v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai', '5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
+      const enabled = isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: id })
+      expect(enabled, id).toBe(true)
+      expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: enabled, isVerificationChecklist: false }), id).toBe(true)
     }
-    expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: isDevelopmentClassroomIdentity({ workspaceKey: 'company-b', classroomId: 'v8OZ7zH8vONNHjjYVcR1' }), isVerificationChecklist: false })).toBe(false)
+    // 開発用教室の判定は登録台帳の (workspaceKey, 教室ID) のまま(確認リスト送信の除外などで使う)。
+    expect(isDevelopmentClassroomIdentity({ workspaceKey: 'main', classroomId: 'v8OZ7zH8vONNHjjYVcR1' })).toBe(true)
+    expect(isDevelopmentClassroomIdentity({ workspaceKey: 'main', classroomId: '5w5OMueETerSKrSf14HC' })).toBe(false)
+    // 会社や教室 ID が空なら呼ばない(fail-closed)。
+    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: '' })).toBe(false)
+    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: '', classroomId: '5w5OMueETerSKrSf14HC' })).toBe(false)
+    expect(isQuestionAiAnswerEnabledForClassroom({ workspaceKey: 'main', classroomId: null })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'request', isFeatureEnabled: true, isVerificationChecklist: false })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'bug', isFeatureEnabled: true, isVerificationChecklist: false })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'question', isFeatureEnabled: true, isVerificationChecklist: true })).toBe(false)

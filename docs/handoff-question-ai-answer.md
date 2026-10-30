@@ -1,7 +1,10 @@
 # 引き継ぎ: 質問への AI 即時回答(2026-10-16 深夜 時点)
 
-次のセッションはこの文書から読み始める。仕様の正本は `docs/spec-developer-report.md` §G-7、
-進行中テーマ台帳は `src/utils/developmentStatusLedger.ts` の `question-ai-answer` 行。
+次のセッションはこの文書から読み始める。仕様の正本は `docs/spec-developer-report.md` §G-7。
+
+> **2026-10-30 追記(v1.5.669): 全教室へ展開済み**(オーナー指示「AI回答機能を全教室に展開して」)。featureRollout `questionAiAnswer` と
+> サーバーの `QUESTION_AI_ANSWER_BASE_SCOPE`(functions/src/questionAiAnswer.ts)を同じ push で `all-classrooms` にし、spec §G-1・§G-7 と
+> 使い方の説明 §10 を改定、進行中テーマ台帳の `question-ai-answer` 行は消した。下の「対象は開発用教室だけ」は当時の記録。
 
 ## 1. いまの状態(すべて main にマージ済み)
 
