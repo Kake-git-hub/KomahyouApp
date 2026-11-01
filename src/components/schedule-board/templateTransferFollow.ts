@@ -663,27 +663,47 @@ export function planFullDeskDisplacement(cell: SlotCell, pendingDesks: TemplateP
 
 /**
  * 保留の「手入力データを採用」で上段の振替（丸ごと振替の追従・Q40-2 / 丸ごと振替の写像）を取り下げたとき、振替元の日に残っている
- * その生徒×科目の移動元記録（moved・行き先がそのコマの日）を消す（Q40-1 の removeOrphanedMakeups と同じ日単位の規則・2026-11-01）。
+ * その生徒×科目の移動元記録（moved・行き先がそのコマの日）を消す（2026-11-01）。
  * 取り下げた振替は呼び出し側が未消化振替（台帳 origin）へ戻すので、記録を残すと「休)→ 先」の先に授業が無い写しだけが残る。純関数。
+ * ★regression-reviewer 2026-11-01（要修正 1 (a)）: 照合は**日付×生徒×科目×行き先の日に加えて振替元の時限**（振替のラベル `makeupSourceLabel` の時限＝記録の
+ *   あるセルの時限）で行い、取り下げた振替 1 件につき記録 1 件だけ消す。同じ生徒×科目が同じ振替元の日に 2 時限以上ある（連続授業）形で、
+ *   取り下げていない時限の記録まで消さない（Q40-1 の removeOrphanedMakeups は日単位だが、あちらは根拠が日単位で消えるときの処理）。
+ *   ラベルから時限が取れない旧データは従来どおり日単位（それでも件数は 1 件）。
  */
 export function removeMovedSourceRecordsForWithdrawnMakeups(weeks: SlotCell[][], students: readonly StudentEntry[], targetDateKey: string): { weeks: SlotCell[][]; removedMovedRecords: number } {
-  const targets = new Map<string, Set<string>>()
+  type Target = { dateKey: string; slotNumber: number | null; key: string; remaining: number }
+  const targets: Target[] = []
   for (const student of students) {
     if (student.lessonType !== 'makeup' || !student.makeupSourceDate) continue
-    targets.set(student.makeupSourceDate, (targets.get(student.makeupSourceDate) ?? new Set<string>()).add(studentSubjectKey(student)))
+    const slotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+    const key = studentSubjectKey(student)
+    const found = targets.find((target) => target.dateKey === student.makeupSourceDate && target.slotNumber === slotNumber && target.key === key)
+    if (found) found.remaining += 1
+    else targets.push({ dateKey: student.makeupSourceDate, slotNumber, key, remaining: 1 })
   }
-  if (targets.size === 0) return { weeks, removedMovedRecords: 0 }
+  if (targets.length === 0) return { weeks, removedMovedRecords: 0 }
+  const matchTarget = (cell: SlotCell, entry: StudentStatusEntry | null): Target | null => {
+    if (!entry || entry.status !== 'moved') return null
+    if ((entry.moveDestinationDateKey ?? targetDateKey) !== targetDateKey) return null
+    const key = studentSubjectKey(entry)
+    return targets.find((target) => target.remaining > 0 && target.dateKey === cell.dateKey && target.key === key && (target.slotNumber == null || target.slotNumber === cell.slotNumber)) ?? null
+  }
   let removedMovedRecords = 0
   const nextWeeks = weeks.map((week) => {
     const nextWeek = week.map((cell) => {
-      const keys = targets.get(cell.dateKey)
-      if (!keys) return cell
+      if (!targets.some((target) => target.dateKey === cell.dateKey)) return cell
       let changed = false
       const desks = cell.desks.map((desk) => {
-        const hit = desk.statusSlots?.some((entry) => entry && entry.status === 'moved' && keys.has(studentSubjectKey(entry)) && (entry.moveDestinationDateKey ?? targetDateKey) === targetDateKey)
-        if (!hit) return desk
-        const statusSlots = desk.statusSlots!.map((entry) => (entry && entry.status === 'moved' && keys.has(studentSubjectKey(entry)) && (entry.moveDestinationDateKey ?? targetDateKey) === targetDateKey ? (removedMovedRecords += 1, null) : entry)) as StatusPair
-        changed = true
+        if (!desk.statusSlots) return desk
+        const statusSlots = desk.statusSlots.map((entry) => {
+          const target = matchTarget(cell, entry)
+          if (!target) return entry
+          target.remaining -= 1
+          removedMovedRecords += 1
+          changed = true
+          return null
+        }) as StatusPair
+        if (statusSlots.every((entry, index) => entry === desk.statusSlots![index])) return desk
         const next = { ...desk }
         if (statusSlots.some(Boolean)) next.statusSlots = statusSlots
         else delete next.statusSlots
