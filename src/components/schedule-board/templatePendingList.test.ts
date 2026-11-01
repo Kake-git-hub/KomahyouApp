@@ -156,6 +156,7 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     const key = buildTemplatePendingDeskKey('2026-10-14_2', '2026-10-14_2_desk_1')
     const base = { lower: { lesson: { id: 'l', studentSlots: [student('x', '生徒X'), null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT }
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-full', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席')
+    expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席（手入力を下段へ）')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除')
     // 理由文が空の origin は既定文に落ちる（見出しは種別のまま）
     const empty = buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: '' } } }, WEEKS)[0]

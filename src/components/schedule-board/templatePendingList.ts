@@ -35,6 +35,7 @@ export type TemplatePendingListRow = {
 const ORIGIN_KIND_LABELS: Record<TemplatePendingOriginKind, string> = {
   'whole-day-transfer-displaced': '丸ごと振替',
   'transfer-follow-full': '振替先が満席',
+  'transfer-follow-displaced': '振替先が満席（手入力を下段へ）',
   'holiday-release-seat-taken': '休日解除',
   'slot-follow-full': '時限変更の追従',
 }
