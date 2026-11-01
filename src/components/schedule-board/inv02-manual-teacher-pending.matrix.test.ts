@@ -621,6 +621,59 @@ describe('Q41-9 兄弟（オーナー決定 2026-11-01「緑 2 段へ広げる�
     expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending').map((note) => [note.keptStudentNames ?? [], note.templateTeacherOnly])).toEqual([[[], true]])
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
   })
+  // regression-reviewer 2026-11-01 要修正 2（旧データ互換・INV-03）: v1.5.633〜v1.5.669 の保存がずらして置いた先（templateTeacherShift つき・非 manual の講師だけの机）が
+  // 盤面に残っている形。ずらし先は「既に居る」に数えず、1 回目の保存で「机 0 が講師ごと保留・ずらし先は空」の最終形にする（2 回目で形が変わらない）。
+  it('旧データ互換: ずらし済みの田村（机 3・印つき）が残る盤面を同じテンプレで保存すると、1 回で机 1 が保留（上段 D／下段 B＋A）・机 3 は空になり、2 回目の保存で形が変わらない', () => {
+    const week = mutateDesk(boardWith(MAKEUP_A, 0, MANUAL_TEACHER_B, 3), 2, (desk) => ({ ...desk, teacher: '田村', manualTeacher: false, teacherAssignmentTeacherId: 'tD', templateTeacherShift: { teacher: '田村', fromDeskIndex: 0 } }))
+    expect(isShiftedTemplateTeacherDesk(cellOf([week]).desks[2])).toBe(true)
+    const saved = save(week, TEACHER_ONLY_ROWS, {}, [], 3)
+    const key = key0(saved.nextWeeks)
+    const desks = cellOf(saved.nextWeeks).desks
+    expect(desks.map((item) => item.teacher)).toEqual(['田村', '藤井', ''])
+    expect(desks[2].templateTeacherShift).toBeUndefined()
+    expect(ids(desks[0])).toEqual([])
+    expect(saved.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    expect(ids({ id: 'x', teacher: '', lesson: saved.nextPendingDesks[key]?.lower.lesson })).toEqual(['sA', null])
+    expect(saved.summary.manualTeacherPending).toBe(1)
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending').map((note) => note.studentName)).toEqual(['倉島'])
+    // 田村は理由なしに消えない（机 1 の上段に居る）・2 回目の保存で形が変わらない・再マージの不動点
+    const again = save(saved.nextWeeks[0], TEACHER_ONLY_ROWS, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences, 3)
+    expect(cellOf(again.nextWeeks).desks).toEqual(desks)
+    expect(again.nextPendingDesks).toEqual(saved.nextPendingDesks)
+    expect(again.summary.manualTeacherPending).toBe(1)
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
+  })
+  // regression-reviewer 2026-11-01 要確認 6（INV-01）: 旧 'present' と同じく、別の机の保留の下段に居る手置きの同じ講師も「既に居る」に数える。
+  it('講師だけのテンプレ机で D が同じコマの別の机の保留の下段（手置き）に居る: 机 1 は 2 行にせず B＋A のまま・D は再保存で元の机へ戻る（同じ講師を 2 机にしない）', () => {
+    const MANUAL_TEACHER_D: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentTeacherId'> = { teacher: '田村', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 'tD' }
+    const week = mutateDesk(boardWith(MAKEUP_A, 0, MANUAL_TEACHER_B, 3), 2, (desk) => ({ ...desk, teacher: '', manualTeacher: false, teacherAssignmentTeacherId: undefined }))
+    const desk2Key = buildTemplatePendingDeskKey(CELL_ID, cellOf([week]).desks[2].id)
+    const pending: TemplatePendingDeskMap = { [desk2Key]: { lower: { teacher: MANUAL_TEACHER_D }, effectiveStartDate: EFFECTIVE, createdAt: '2026-10-21T10:00:00.000Z' } }
+    const saved = save(week, TEACHER_ONLY_ROWS, pending, [], 3)
+    expect(cellOf(saved.nextWeeks).desks.map((item) => item.teacher)).toEqual(['倉島', '藤井', '田村'])
+    expect(ids(desk0(saved.nextWeeks))).toEqual(['sA', null])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
+    expect(saved.nextPendingDesks[desk2Key]).toBeUndefined()
+    expect(saved.summary.manualTeacherPending).toBe(0)
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending')).toEqual([])
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
+  })
+  // 通しの行（regression-reviewer 2026-11-01 推奨）: 例外 1（QR 自動割振り）・例外 2（削除記録）× 手置き講師だけ／テンプレ机が講師だけ ＝ 保留 0 のまま。
+  for (const [exceptionLabel, teacherFields, expectedTeacher] of [
+    ['QR 自動割振りの講師', { teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'session_x', teacherAssignmentTeacherId: 'tB' }, '倉島'],
+    ['講師の削除記録', { teacher: '', manualTeacher: false, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: undefined }, ''],
+  ] as const) {
+    for (const [shapeLabel, rows] of [['テンプレが別の講師＋生徒（手で置いた生徒なし）', NEW_ROWS], ['テンプレ机が講師だけ', TEACHER_ONLY_ROWS]] as const) {
+      it(`例外は変わらない: ${exceptionLabel} × ${shapeLabel} → 講師ごと保留にしない（保留 0・下段に講師なし）`, () => {
+        const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...teacherFields }))
+        const saved = save(week, rows)
+        expect(saved.summary.manualTeacherPending).toBe(0)
+        expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toBeUndefined()
+        expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending')).toEqual([])
+        if (expectedTeacher) expect(desk0(saved.nextWeeks).teacher).toBe(expectedTeacher)
+      })
+    }
+  }
   it('講師だけのテンプレ机で D が同じコマの別の机に手で置かれている: 2 行にせず D をこの机に置かない（同じ講師を 2 机にしない・INV-01・旧「既に居る」の扱いを維持）', () => {
     const week = mutateDesk(boardWith(MAKEUP_A, 0, MANUAL_TEACHER_B, 3), 2, (desk) => ({ ...desk, teacher: '田村', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 'tD' }))
     const saved = save(week, TEACHER_ONLY_ROWS, {}, [], 3)
