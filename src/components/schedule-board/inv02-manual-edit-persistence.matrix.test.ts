@@ -1703,8 +1703,10 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
   // 移動先のコマにも両方表示された」「まだ通常同士なのに保留扱いになっています」）:
   // 旧テンプレの通常授業を同じ日の中で動かした写し（手動追加でない regular で sameDayMoveSourceDate／makeupSourceDate がその日）は手入力データではなく
   // 「その日のテンプレの授業そのもの」。テンプレがその日にその生徒×科目を持ち、写しの抑止で置かれていない間だけ写しが残る（手で動かした先が勝つ）。
-  // 新テンプレが同じ日の別のコマに置く／テンプレに無い／写しの席を新テンプレの別の生徒が埋める → 写しを外し、写しの抑止キーも外してテンプレの位置へ。
-  describe('同日移動の写し（Q36）: テンプレの決め手に従う。残るのは「テンプレが持ち・抑止で置かれず・席がぶつからない」ときだけ', () => {
+  // 〜2026-10-31: 新テンプレが同じ日の別のコマに置く／テンプレに無い／写しの席を新テンプレの別の生徒が埋める → 写しを外し、写しの抑止キーも外してテンプレの位置へ。
+  // 2026-11-01（オーナー決定 A-12）: 写しは**手入力データとして残す**（INV-02 の「手入力は消えない」側に戻る）。superseded／stale は印（templateCopyNotice）で知らせ、
+  // collided は下段（保留・緑）に残す。抑止キーは外さない。
+  describe('同日移動の写し（Q36・2026-11-01 改定）: 手入力データとして残す。テンプレと合わない分は印か下段で知らせる', () => {
     const KEY_M_SLOT5 = buildManagedOccurrenceKey(entry('sM'), DATE, 5)
     const copyOfM = () => entry('sM', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '2026/10/7(水) 5限' })
     // 旧テンプレ: 机 0=田中(A)・机 1=鈴木(B)・机 2=佐藤(M)。M は机 2 から机 0 の生徒 2 の席へ机替え（写し・抑止キー M × 5 限）。
@@ -1737,36 +1739,39 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
       expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
       expect(lower).toBeUndefined()
-      expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
+      expect(saved.summary.sameDayMoveCopiesKept).toBe(0)
       expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
     })
 
-    it('collided（通常同士なのに保留 → 保留にしない）: 新テンプレが机 0 の生徒 2 に C を入れる → 写しを外し抑止キーも外して M はテンプレの机 2 へ。保留なし・再マージ 2 回でも不動点', () => {
+    it('collided: 新テンプレが机 0 の生徒 2 に C を入れる → 写しの M は机 0 の下段（保留・緑）に残り、机 2 のテンプレの M は抑止のまま置かない。再マージ 2 回でも不動点', () => {
       const rows = [{ ...row('r0', 't1', 'sA'), student2Id: 'sC', subject2: '数' }, row('r1', 't2', 'sB'), row('r2', 't3', 'sM')]
       const { saved, desk0, lower } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
       expect(liveIds(desk0.lesson)).toEqual(['sA', 'sC'])
-      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sM'])
-      expect(lower).toBeUndefined()
-      expect(saved.summary.pending).toBe(0)
-      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
-      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([KEY_M_SLOT5])
+      expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
+      expect(lower?.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sM'])
+      expect(saved.summary.pending).toBe(1)
+      expect(saved.summary.sameDayMoveCopiesKept).toBe(1)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
     })
 
-    it('superseded（移動元にも移動先にも出る二重配置の原因）: 新テンプレが M を同じ日の 4 限へ移す → 5 限の写しを外し、M は 4 限だけ', () => {
+    it('superseded: 新テンプレが M を同じ日の 4 限へ移す → 5 限の写しは残り（superseded の印）、M は 4 限と 5 限の 2 か所。抑止キーは外さない', () => {
       const rows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), { ...row('r2', 't3', 'sM'), slotNumber: 4 }]
-      const { saved } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
-      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(1)
-      expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
-      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
-      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([KEY_M_SLOT5])
+      const { saved, desk0 } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
+      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(2)
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
+      expect(desk0.lesson?.studentSlots[1]?.templateCopyNotice).toBe('superseded')
+      expect(saved.summary.sameDayMoveCopiesKept).toBe(1)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
     })
 
-    it('stale（テンプレから外した授業の残骸）: 新テンプレにその曜日の M が無い → 写しも外れる（Q21-8 の同胞）', () => {
+    it('stale: 新テンプレにその曜日の M が無い → 写しは残る（stale の印・手入力データ）', () => {
       const rows = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]
       const { saved, desk0 } = saveAndRemerge(boardWithCopy(), rows, { suppressed: [KEY_M_SLOT5] })
-      expect(liveIds(desk0.lesson)).toEqual(['sA'])
-      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(0)
-      expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sM'])
+      expect(desk0.lesson?.studentSlots[1]?.templateCopyNotice).toBe('stale')
+      expect(liveOnDay(saved.nextWeeks, 'sM')).toBe(1)
+      expect(saved.summary.sameDayMoveCopiesKept).toBe(1)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
     })
 
     it('手動追加の通常授業（手入力データ）は写しでないが、テンプレと同じ内容（同じ生徒×科目）なら Q38 でテンプレの机 2 に合わせる（2026-10-13 改定・Q36 の件数は 0）', () => {
@@ -1779,7 +1784,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       const { saved, desk0 } = saveAndRemerge(week, OLD_ROWS_WITH_M)
       expect(liveIds(desk0.lesson)).toEqual(['sA'])
       expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sM'])
-      expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
+      expect(saved.summary.sameDayMoveCopiesKept).toBe(0)
       expect(saved.summary.skippedDuplicateStudents).toBe(0)
       expect(saved.summary.manualRegularAdoptedByCellTemplate).toBe(1)
       expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
@@ -1829,16 +1834,18 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     })
   })
 
-  describe('講師系の印は削除記録だけ（講師の配置は印に数えない）', () => {
+  describe('講師系の印は削除記録だけ（講師の配置は印に数えない）。ただし手置き講師×テンプレの別の講師は講師ごと保留（オーナー決定 2026-11-01・Q41）', () => {
     it.each([
       ['手置き（manual）', { manualTeacher: true, teacherAssignmentSource: 'manual' as const }],
       ['入替（manual-replaced）', { manualTeacher: true, teacherAssignmentSource: 'manual-replaced' as const }],
-    ])('講師 %s だけの机 → 印なし＝生徒はテンプレで置き換わり、講師はテンプレ机の講師に揃う', (_label, teacherFields) => {
+    ])('講師 %s だけの机 → 生徒はテンプレで置き換わり（印なし）、講師はテンプレ机の講師が上段・手置き講師は下段に講師だけの保留（旧: 黙って揃う）', (_label, teacherFields) => {
       const { desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '佐藤', ...teacherFields })), ROWS_WITH_C)
       expect(liveIds(desk0.lesson)).toEqual(['sC'])
       expect(desk0.teacher).toBe('鈴木')
       expect(desk0.manualTeacher).toBe(false)
-      expect(lower).toBeUndefined()
+      expect(lower?.lesson).toBeUndefined()
+      expect(lower?.teacher?.teacher).toBe('佐藤')
+      expect(lower?.teacher?.teacherAssignmentSource).toBe(teacherFields.teacherAssignmentSource)
     })
 
     it('QR 自動割振り講師だけの机 → 印なし＝生徒は置き換わるが、講師は置き換えず QR 講師（由来・講習期間 ID）のまま（例外 1）', () => {

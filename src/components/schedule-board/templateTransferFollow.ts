@@ -13,7 +13,7 @@
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { studentHasManualMark, studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, isTemplatePendingLowerEmpty, placeIntoPendingLower, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -349,10 +349,18 @@ export type WholeDayTransferPendingPlacement = {
   /** 下段を持つ机（同じ机番号。埋まっていれば次の机）。 */
   deskId: string
   deskIndex: number
-  /** 下段の席。 */
+  /** 下段の席（displaced の形では、下段へ残した手入力の生徒の席＝上段の振替を置いた席）。 */
   seatIndex: number
-  /** 同じ机番号の下段が埋まっていて次の机の下段へ置いた。 */
+  /** 同じ机番号の下段が埋まっていて次の机の下段へ置いた（lower の形だけ）。 */
   fallbackDesk: boolean
+  /**
+   * オーナー決定 2026-11-01（テスト教室 6/29 4限 席14・「上段＝テンプレ／下段＝手入力の関係を保つ」）:
+   *  - displaced … 席に居た手入力の生徒（Q22 の印）を同じ机・同じ席の下段（保留）へ残し、その席（上段）へテンプレの生徒の振替を置いた。
+   *  - lower     … 従来の形。振替そのものを下段へ置いた（席の生徒が振替先の日のテンプレの通常生徒＝手入力でない、または机が既に保留のとき）。
+   */
+  shape: 'displaced' | 'lower'
+  /** displaced の形で下段へ残した手入力の生徒。 */
+  displacedStudent?: StudentEntry
 }
 
 export type WholeDayTransferFollowPlan = {
@@ -548,15 +556,38 @@ export function planWholeDayTransferPlacements(params: {
     }
     const moved = params.prepareStudentForMove({ ...item.student, id: `transfer_${item.dateKey}_${item.slotNumber}_${item.deskIndex}_${item.seatIndex}` }, item.dateKey, item.slotNumber, destination.dateKey)
     if (!targetDesk || seatIndex < 0) {
-      // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机の**下段（保留・緑）**へ振替として置く（埋まっていれば次の机の下段）。
-      // 下段の振替は在庫の消化に数える（INV-06 の 3 本目の走査）ので台帳には積まない＝在庫中立。L-5（台帳に積んでも残数が増えない消失）はこれで閉じる。
-      // tp-51（2026-10-27）: 科目変更で旧科目を外した机があればその机の下段を先に見る（旧科目の机が保留の机だったときなど）。
+      // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机を**保留（緑・2 行）**にする。
+      // 下段の振替・講習は在庫の消化に数える（INV-06 の 3 本目の走査）ので台帳には積まない＝在庫中立。L-5（台帳に積んでも残数が増えない消失）はこれで閉じる。
+      // tp-51（2026-10-27）: 科目変更で旧科目を外した机があればその机を先に見る（旧科目の机が保留の机だったときなど）。
       const lowerDeskIndex = replacedDesk ? targetCell.desks.indexOf(replacedDesk) : item.deskIndex
       const lowerSeat = replaced && replacedDesk ? replaced.targetSeatIndex : item.seatIndex
-      const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: lowerDeskIndex, preferredSeat: lowerSeat, student: moved, effectiveStartDate: destination.dateKey, createdAt: params.createdAt ?? new Date().toISOString(), kind: 'transfer-follow-full', note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
-      if (!lowerPlacement) { stock(item, 'no-seat'); continue }
-      nextPendingDesks = lowerPlacement.nextPendingDesks
-      pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: lowerPlacement.deskId, deskIndex: lowerPlacement.deskIndex, seatIndex: lowerPlacement.seatIndex, fallbackDesk: lowerPlacement.deskIndex !== lowerDeskIndex })
+      const createdAt = params.createdAt ?? new Date().toISOString()
+      // ★オーナー決定 2026-11-01（テスト教室 6/29 4限 席14「山口が手置きで富樫がテンプレなのに逆に認識される」）: 緑 2 行は「上段＝テンプレ／下段＝手入力」。
+      //   振替そのものを下段へ置くとこの関係が逆転し、下段のメニュー（手入力データを採用／削除／移動）の意味も逆になる。そこで、同じ机番号の机が
+      //   まだ保留でなく、席に手入力の印（Q22・studentHasManualMark）を持つ生徒が居れば、その生徒を同じ机・同じ席の下段へ残し、その席へ振替を置く。
+      //   望みの席（テンプレの席）→ もう一方の席の順。同じ振替元の日から丸ごと振替で来た振替（同じ組の写像）は押し出さない（それもテンプレ由来）。
+      //   両席ともテンプレの通常生徒（印なし）か、机が既に保留なら従来どおり振替を下段へ（理由文で「席の生徒はテンプレの生徒」と分かるようにする）。
+      const displacement = planFullDeskDisplacement(targetCell, nextPendingDesks, lowerDeskIndex, lowerSeat, item.dateKey)
+      let displaced = false
+      if (displacement) {
+        const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: lowerDeskIndex, preferredSeat: displacement.seatIndex, student: displacement.occupant, effectiveStartDate: destination.dateKey, createdAt, kind: 'transfer-follow-displaced', note: buildTransferFollowDisplacedNote(item.dateKey, destination.dateKey) })
+        // 机は保留でなく下段は空なので必ず同じ机・同じ席へ入る（入らなければ従来の形へ＝黙って別の机にしない）。
+        if (lowerPlacement && lowerPlacement.deskIndex === lowerDeskIndex && lowerPlacement.seatIndex === displacement.seatIndex) {
+          nextPendingDesks = lowerPlacement.nextPendingDesks
+          const slots = [...(displacement.desk.lesson?.studentSlots ?? [null, null])] as StudentPair
+          slots[displacement.seatIndex] = moved
+          const nextTargetDesk: DeskCell = { ...displacement.desk, lesson: { ...(displacement.desk.lesson ?? { id: `daymove_${item.dateKey}_${item.slotNumber}_${item.deskIndex}` }), studentSlots: slots } }
+          replaceCell({ ...targetCell, desks: targetCell.desks.map((desk) => (desk === displacement.desk ? nextTargetDesk : desk)) })
+          pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: displacement.desk.id, deskIndex: lowerDeskIndex, seatIndex: displacement.seatIndex, fallbackDesk: false, shape: 'displaced', displacedStudent: displacement.occupant })
+          displaced = true
+        }
+      }
+      if (!displaced) {
+        const lowerPlacement = placeIntoPendingLower({ cell: targetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: lowerDeskIndex, preferredSeat: lowerSeat, student: moved, effectiveStartDate: destination.dateKey, createdAt, kind: 'transfer-follow-full', note: buildTransferFollowPendingNote(item.dateKey, destination.dateKey) })
+        if (!lowerPlacement) { stock(item, 'no-seat'); continue }
+        nextPendingDesks = lowerPlacement.nextPendingDesks
+        pendingPlaced.push({ student: item.student, sourceDateKey: item.dateKey, sourceSlotNumber: item.slotNumber, targetDateKey: destination.dateKey, targetCellId: targetCell.id, deskId: lowerPlacement.deskId, deskIndex: lowerPlacement.deskIndex, seatIndex: lowerPlacement.seatIndex, fallbackDesk: lowerPlacement.deskIndex !== lowerDeskIndex, shape: 'lower' })
+      }
     } else {
       const teacherless = !targetDesk.teacher.trim()
       const slots = [...(targetDesk.lesson?.studentSlots ?? [null, null])] as StudentPair
@@ -598,11 +629,92 @@ export function planWholeDayTransferPlacements(params: {
   return { weeks, placed, stocked, settled, pendingPlaced, nextPendingDesks, handledKeys, handledCount, touchedCellIds }
 }
 
-/** 下段の理由文（Q40-2 の満席・決定記録 48）。 */
+/** 下段の理由文（Q40-2 の満席・決定記録 48・従来の形＝振替そのものを下段へ置いた。席の生徒がテンプレの通常生徒か、机が既に保留のとき）。 */
 export function buildTransferFollowPendingNote(sourceDateKey: string, targetDateKey: string) {
-  return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました。室長が動かすか採用で片づけてください。`
+  return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました（席の生徒はテンプレの生徒なので下段にできません）。室長が動かすか採用で片づけてください。`
 }
 
+/** 下段の理由文（Q40-2 の満席・オーナー決定 2026-11-01）: 席に居た手入力の生徒を下段へ残し、その席にテンプレの生徒の振替を置いた形。 */
+export function buildTransferFollowDisplacedNote(sourceDateKey: string, targetDateKey: string) {
+  return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、この席に居た手入力の生徒を下段（保留）に残し、上段にテンプレの生徒の振替を置きました。室長が採用か移動で片づけてください。`
+}
+
+/**
+ * Q40-2 の満席で「上段＝テンプレ／下段＝手入力」を保つための押し出し先（オーナー決定 2026-11-01）。純関数。
+ * 同じ机番号の机がまだ保留でなく、望みの席 → もう一方の席の順に、手入力の印（Q22・studentHasManualMark）を持つ生きている生徒が居て
+ * その席に出欠記録が無ければ、その席と生徒を返す。同じ振替元の日から丸ごと振替で来た振替（同じ組の写像＝テンプレ由来）は押し出さない。
+ * 無ければ null（従来の形＝振替そのものを下段へ）。
+ */
+export function planFullDeskDisplacement(cell: SlotCell, pendingDesks: TemplatePendingDeskMap, deskIndex: number, preferredSeat: number, sourceDateKey: string): { desk: DeskCell; seatIndex: number; occupant: StudentEntry } | null {
+  const desk = cell.desks[deskIndex]
+  if (!desk) return null
+  if (pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]) return null
+  const seats = preferredSeat === 0 ? [0, 1] : [1, 0]
+  for (const seatIndex of seats) {
+    const occupant = desk.lesson?.studentSlots[seatIndex] ?? null
+    if (!occupant || desk.statusSlots?.[seatIndex]) continue
+    if (!studentHasManualMark(occupant)) continue
+    if (occupant.lessonType === 'makeup' && occupant.makeupSourceDate === sourceDateKey) continue
+    return { desk, seatIndex, occupant }
+  }
+  return null
+}
+
+
+/**
+ * 保留の「手入力データを採用」で上段の振替（丸ごと振替の追従・Q40-2 / 丸ごと振替の写像）を取り下げたとき、振替元の日に残っている
+ * その生徒×科目の移動元記録（moved・行き先がそのコマの日）を消す（2026-11-01）。
+ * 取り下げた振替は呼び出し側が未消化振替（台帳 origin）へ戻すので、記録を残すと「休)→ 先」の先に授業が無い写しだけが残る。純関数。
+ * ★regression-reviewer 2026-11-01（要修正 1 (a)）: 照合は**日付×生徒×科目×行き先の日に加えて振替元の時限**（振替のラベル `makeupSourceLabel` の時限＝記録の
+ *   あるセルの時限）で行い、取り下げた振替 1 件につき記録 1 件だけ消す。同じ生徒×科目が同じ振替元の日に 2 時限以上ある（連続授業）形で、
+ *   取り下げていない時限の記録まで消さない（Q40-1 の removeOrphanedMakeups は日単位だが、あちらは根拠が日単位で消えるときの処理）。
+ *   ラベルから時限が取れない旧データは従来どおり日単位（それでも件数は 1 件）。
+ */
+export function removeMovedSourceRecordsForWithdrawnMakeups(weeks: SlotCell[][], students: readonly StudentEntry[], targetDateKey: string): { weeks: SlotCell[][]; removedMovedRecords: number } {
+  type Target = { dateKey: string; slotNumber: number | null; key: string; remaining: number }
+  const targets: Target[] = []
+  for (const student of students) {
+    if (student.lessonType !== 'makeup' || !student.makeupSourceDate) continue
+    const slotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+    const key = studentSubjectKey(student)
+    const found = targets.find((target) => target.dateKey === student.makeupSourceDate && target.slotNumber === slotNumber && target.key === key)
+    if (found) found.remaining += 1
+    else targets.push({ dateKey: student.makeupSourceDate, slotNumber, key, remaining: 1 })
+  }
+  if (targets.length === 0) return { weeks, removedMovedRecords: 0 }
+  const matchTarget = (cell: SlotCell, entry: StudentStatusEntry | null): Target | null => {
+    if (!entry || entry.status !== 'moved') return null
+    if ((entry.moveDestinationDateKey ?? targetDateKey) !== targetDateKey) return null
+    const key = studentSubjectKey(entry)
+    return targets.find((target) => target.remaining > 0 && target.dateKey === cell.dateKey && target.key === key && (target.slotNumber == null || target.slotNumber === cell.slotNumber)) ?? null
+  }
+  let removedMovedRecords = 0
+  const nextWeeks = weeks.map((week) => {
+    const nextWeek = week.map((cell) => {
+      if (!targets.some((target) => target.dateKey === cell.dateKey)) return cell
+      let changed = false
+      const desks = cell.desks.map((desk) => {
+        if (!desk.statusSlots) return desk
+        const statusSlots = desk.statusSlots.map((entry) => {
+          const target = matchTarget(cell, entry)
+          if (!target) return entry
+          target.remaining -= 1
+          removedMovedRecords += 1
+          changed = true
+          return null
+        }) as StatusPair
+        if (statusSlots.every((entry, index) => entry === desk.statusSlots![index])) return desk
+        const next = { ...desk }
+        if (statusSlots.some(Boolean)) next.statusSlots = statusSlots
+        else delete next.statusSlots
+        return next
+      })
+      return changed ? { ...cell, desks } : cell
+    })
+    return nextWeek.some((cell, index) => cell !== week[index]) ? nextWeek : week
+  })
+  return { weeks: nextWeeks, removedMovedRecords }
+}
 
 /** 保存直後の再マージの重ね合わせを、追従で触ったセルにも当てるための絞り込み。絞り込みが無い（全コマ）ならそのまま。 */
 export function extendTemplateDiffSlotFilterWithCells(filter: TemplateDiffSlotFilter | null | undefined, cellIds: ReadonlySet<string>): TemplateDiffSlotFilter | null | undefined {

@@ -10,6 +10,7 @@ import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
+import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -313,6 +314,8 @@ function BoardGridComponent({
     () => buildLinkedLessonDestinationMap(linkResolutionCells ?? cells),
     [cells, linkResolutionCells],
   )
+  // A-12（2026-11-01・Q36）: 同日移動の写しの注意（superseded は同じ日の別のコマに同じ授業が今も生きているときだけ出す）。
+  const sameDayRegularSlotIndex = useMemo(() => buildSameDayRegularSlotIndex(cells), [cells])
 
   useLayoutEffect(() => {
     const root = gridRef.current
@@ -360,6 +363,7 @@ function BoardGridComponent({
     studentManagedId: string | undefined = undefined,
     extraClassName = '',
     pendingLowerNode: ReactNode = null,
+    copyNotice: SameDayMoveCopyNoticeView | null = null,
   ) => {
     const effectiveName = studentName || statusEntry?.name || ''
     const effectiveGrade = studentName ? studentGrade : (statusEntry?.grade ?? studentGrade)
@@ -416,6 +420,7 @@ function BoardGridComponent({
       statusNotice,
       studentWarning,
       missingTeacherWarning,
+      copyNotice?.title,
       visibleNote,
       originalLessonLabel && visibleNote?.includes(originalLessonLabel) ? '' : originalLessonLabel,
     ].filter(Boolean)))
@@ -424,7 +429,7 @@ function BoardGridComponent({
     return (
       <td
         key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
-        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}${pendingLowerNode ? ' sa-pending' : ''}`}
+        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}${pendingLowerNode ? ' sa-pending' : ''}${copyNotice ? ` ${SAME_DAY_MOVE_COPY_NOTICE_CLASS}` : ''}`}
         onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, statusEntry?.status ?? null, event.clientX, event.clientY)}
         onMouseDown={onStudentMouseDown ? (event) => onStudentMouseDown(cell.id, deskIndex, studentIndex, Boolean(studentName), statusEntry?.status === 'attended', event.button, event.clientX, event.clientY) : undefined}
         data-cell-id={cell.id}
@@ -455,6 +460,8 @@ function BoardGridComponent({
                   {displayName}
                 </span>
                 {visibleDateLabel ? <span className="sa-student-origin-date">{visibleDateLabel}</span> : null}
+                {/* A-12（2026-11-01）: 同日移動の写しの注意の帯（1 行目）。PDF は stripTemplatePendingLowerForPdf が外す。 */}
+                {copyNotice ? <span className={SAME_DAY_MOVE_COPY_NOTE_CLASS} title={copyNotice.title} data-testid={`student-copy-note-${cell.id}-${deskIndex}-${studentIndex}`}>{copyNotice.badge}</span> : null}
               </span>
               <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
                 {lessonPrefix || teacherStar ? (
@@ -881,6 +888,7 @@ function BoardGridComponent({
                           firstStudent?.managedStudentId,
                           pendingEntry ? 'sa-pending-desk' : '',
                           pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 0, pendingEntry) : null,
+                          firstStudent ? resolveSameDayMoveCopyNotice(firstStudent, cell, sameDayRegularSlotIndex) : null,
                         ),
                         renderStudentCell(
                           cell,
@@ -906,6 +914,7 @@ function BoardGridComponent({
                           secondStudent?.managedStudentId,
                           pendingEntry ? 'sa-day-group-end sa-pending-desk' : 'sa-day-group-end',
                           pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 1, pendingEntry) : null,
+                          secondStudent ? resolveSameDayMoveCopyNotice(secondStudent, cell, sameDayRegularSlotIndex) : null,
                         ),
                       ]
                     })}

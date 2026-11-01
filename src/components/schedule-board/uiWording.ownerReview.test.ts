@@ -103,7 +103,8 @@ describe('テンプレの流れは 1 行（オーナー指示 2026-10-24「モ�
     expect(BOARD).toContain("'テンプレ編集中（前回のテンプレを読み込みました）。'")
     expect(BOARD).toContain("setStatusMessage('保留の席です。残す方を選んでください。')")
     expect(BOARD).toContain('return `テンプレ授業を採用します。${dropped ? `下段の ${dropped} は外します。` : \'\'}よろしいですか？`')
-    expect(BOARD).toContain('return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます。` : \'\'}よろしいですか？`')
+    // 2026-11-01: 上段が丸ごと振替の追従で置いた振替なら「未消化振替へ戻します」を括弧で添える（1 行のまま）。
+    expect(BOARD).toContain('return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます${makeupNote}。` : \'\'}よろしいですか？`')
     // tp-64（2026-10-27）: 講師欄の 2 択の確認文も 1 行（講師だけを決める）。
     expect(read('./templatePendingResolution.ts')).toContain("if (choice === 'template') return `テンプレの講師 ${templateName} を採用します。手で置いた講師 ${manualName} はこの机から外れます。よろしいですか？`")
     expect(BOARD).toContain('以降をテンプレだけで作り直します。手入力・メモ・振替・講習は消えます。')

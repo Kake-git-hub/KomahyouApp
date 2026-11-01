@@ -2734,6 +2734,30 @@ tr.sa-group-row td {
   box-shadow: inset 3px 0 0 #2e7d32;
 }
 
+/* A-12（オーナー決定 2026-11-01・spec-template-behavior §H Q36）: 同日移動の写し（日の中で手で動かした通常授業）で、テンプレが同じ日の別のコマにも
+   同じ授業を置く／テンプレに無くなったもの。手入力データとして残し、保留と同じ緑＋左の縦線で知らせる（保留ではないので操作の制限は無い）。
+   名前の行の短い帯（.sa-student-copy-note）とツールチップに注意文。盤面 PDF は stripTemplatePendingLowerForPdf が両方外す。 */
+.sa-student.sa-student-copy-notice {
+  background: #e3f4e6;
+  box-shadow: inset 3px 0 0 #2e7d32;
+}
+
+.sa-student.sa-student-copy-notice:hover:not(.sa-inactive) {
+  background: #d4eed9;
+}
+
+.sa-student-copy-note {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #2e7d32;
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
 /* 保留の机の席（下段の無い席を含む・席ごと表示 2026-10-02）: 上段を上詰めにし、1 行の席と 2 行の席で上段の高さを揃える。
    緑（sa-pending）は下段のある席だけ。盤面 PDF は stripTemplatePendingLowerForPdf が両方の印を外す。 */
 .sa-student.sa-pending-desk {

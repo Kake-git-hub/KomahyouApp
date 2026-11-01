@@ -545,17 +545,20 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [keyA5], templatePendingDesks: {}, createdAt: '2026-10-03T10:00:00.000Z', manualMakeupAdjustments: {},
     })
     const liveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sA')
+    // 2026-11-01（オーナー決定 A-12・台帳改定）: 写しは手入力データとして残す（外さない・抑止キーも外さない）。この形では 5 限の机 0 が B のテンプレ机になり
+    // 写しの席を埋めるので、写しは机 0 の下段（保留・緑）に残り、上段の A は 4 限だけ。同一コマ（INV-12 の保証文）の生存数は 1 のまま。再マージでも不動点。
     expect(liveOnDay(saved.nextWeeks).map(() => 1)).toHaveLength(1)
     expect(liveCount(saved.nextWeeks, 'sA')).toBe(0)
-    expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
-    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([keyA5])
+    const desk0 = cellOf(saved.nextWeeks).desks[0]
+    expect(saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL, desk0.id)]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(saved.summary.sameDayMoveCopiesKept).toBe(1)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
     const remerged = remergeBoardWeeksWithManagedData(saved.nextWeeks, {
       classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
-      suppressedRegularLessonOccurrences: [...saved.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
+      suppressedRegularLessonOccurrences: [keyA5, ...saved.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
     })
     expect(liveOnDay(remerged)).toHaveLength(1)
     expect(liveCount(remerged, 'sA')).toBe(0)
-    // 回帰防止: 写しの抑止キーを外さないと（旧の抑止のまま再マージ）、A は 4 限と 5 限で 1 か所になるが写しが消えた机では戻れない。キーを外して不動点。
     expect(remerged.flat().find((cell) => cell.id === CELL)).toEqual(cellOf(saved.nextWeeks))
   })
 
@@ -578,17 +581,19 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     })
     const scoped = save({ slotKeys: new Set([buildTemplateSlotKey(3, 4), buildTemplateSlotKey(3, 5)]), sameDayMoveStudentIdsByWeekday: new Map([[3, new Set(['sA'])]]) })
     const full = save(undefined)
-    expect(liveOnDay(scoped.nextWeeks)).toHaveLength(1)
+    // 2026-11-01（A-12）: 写しは残る → その日に 2 か所（4 限＝テンプレ・3 限＝写し・superseded の印）。全コマの保存と同じ結果。
+    expect(liveOnDay(scoped.nextWeeks)).toHaveLength(2)
     expect(scoped.nextWeeks.flat().find((cell) => cell.id === `${DATE}_4`)!.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
-    expect(scoped.summary.sameDayMoveCopiesReverted).toBe(1)
-    expect(scoped.removedSuppressedRegularLessonOccurrences).toEqual([keyA5])
+    expect(scoped.nextWeeks.flat().find((cell) => cell.id === `${DATE}_3`)!.desks[0].lesson?.studentSlots[0]?.templateCopyNotice).toBe('superseded')
+    expect(scoped.summary.sameDayMoveCopiesKept).toBe(1)
+    expect(scoped.removedSuppressedRegularLessonOccurrences).toEqual([])
     expect(scoped.scopedFullDates).toEqual([DATE])
     expect(scoped.nextWeeks.flat().filter((cell) => cell.dateKey === DATE)).toEqual(full.nextWeeks.flat().filter((cell) => cell.dateKey === DATE))
     const remerged = remergeBoardWeeksWithManagedData(scoped.nextWeeks, {
       classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rowsMovedTo4,
-      suppressedRegularLessonOccurrences: [...scoped.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
+      suppressedRegularLessonOccurrences: [keyA5, ...scoped.addedSuppressedRegularLessonOccurrences], todayKey: '2026-09-29',
     })
-    expect(liveOnDay(remerged)).toHaveLength(1)
+    expect(liveOnDay(remerged)).toHaveLength(2)
     expect(remerged.flat().filter((cell) => cell.dateKey === DATE)).toEqual(scoped.nextWeeks.flat().filter((cell) => cell.dateKey === DATE))
   })
 

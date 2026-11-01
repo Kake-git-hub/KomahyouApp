@@ -264,7 +264,7 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     expect(thu.desks[1]).toBe(weeks[0][1].desks[1])
   })
 
-  it('テンプレの席が埋まっていればもう一方の席。同じ机が満席なら同じコマの別の机へ（講師が居る机を優先）。満席なら同じ机番号の下段（保留）へ（決定記録 48・休日でも同じ）', () => {
+  it('テンプレの席が埋まっていればもう一方の席。同じ机が満席なら同じコマの別の机へ（講師が居る机を優先）。満席なら同じ机番号の机を保留にし、席の手入力の生徒を下段へ残して上段に振替を置く（決定記録 48・オーナー決定 2026-11-01・休日でも同じ）', () => {
     const otherSeat = run(board(desk('t5d1', '鈴木', [null, makeupOf('sB_mk', '馬場', WED, labelWed5)])))
     expect(otherSeat.placed[0]?.seatIndex).toBe(0)
     expect(otherSeat.placed[0]?.fallbackDesk).toBe(false)
@@ -278,25 +278,93 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     const teacherless = run(teacherlessOther)
     expect(teacherless.placed).toEqual([expect.objectContaining({ deskId: 't5d2', fallbackDesk: true, teacherless: true })])
     const full = fullSameDesk.map((week) => week.map((entry) => (entry.id === `${THU}_5` ? { ...entry, desks: [entry.desks[0], desk('t5d2', '佐藤', [student('sE_m', '江藤', { manualAdded: true }), student('sF_m', '藤井', { manualAdded: true })])] } : entry)))
-    // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机の下段（保留・緑）へ振替として置く（台帳には積まない）。
+    // 決定記録 48（2026-10-25・(b)-1）: 満席なら未消化へ逃がさず、同じ机番号の机を保留（緑・2 行）にする（台帳には積まない）。
+    // オーナー決定 2026-11-01: 「上段＝テンプレ／下段＝手入力」を保つ＝テンプレの席（席 1）に居た手入力の生徒（土屋・手動追加）を下段へ残し、その席へ振替を置く。
     const full_ = run(full)
     expect(full_.placed).toHaveLength(0)
     expect(full_.stocked).toHaveLength(0)
-    expect(full_.pendingPlaced).toEqual([expect.objectContaining({ sourceDateKey: WED, sourceSlotNumber: 5, targetDateKey: THU, deskId: 't5d1', deskIndex: 0, fallbackDesk: false })])
+    expect(full_.pendingPlaced).toEqual([expect.objectContaining({ sourceDateKey: WED, sourceSlotNumber: 5, targetDateKey: THU, deskId: 't5d1', deskIndex: 0, seatIndex: 1, fallbackDesk: false, shape: 'displaced', displacedStudent: expect.objectContaining({ managedStudentId: 'sD' }) })])
     const key = buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')
     expect(Object.keys(full_.nextPendingDesks)).toEqual([key])
-    expect(full_.nextPendingDesks[key].lower.lesson?.studentSlots[full_.pendingPlaced[0].seatIndex]).toMatchObject({ managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: WED })
-    expect(full_.nextPendingDesks[key].origin?.kind).toBe('transfer-follow-full')
+    expect(full_.nextPendingDesks[key].lower.lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sD', lessonType: 'regular', manualAdded: true })
+    expect(full_.nextPendingDesks[key].lower.lesson?.studentSlots[0]).toBeNull()
+    expect(full_.nextPendingDesks[key].origin?.note).toContain('手入力の生徒を下段（保留）に残し')
+    const thuFull = full_.weeks[0].find((entry) => entry.id === `${THU}_5`)!
+    expect(thuFull.desks[0].lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: WED })
+    expect(thuFull.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sB')
+    expect(thuFull.desks[0].teacher).toBe('鈴木')
+    expect(full_.nextPendingDesks[key].origin?.kind).toBe('transfer-follow-displaced')
     expect(full_.nextPendingDesks[key].effectiveStartDate).toBe(THU)
     expect(full_.handledKeys.has('sC__数__2026-10-07')).toBe(true)
     expect(full_.handledCount).toBe(1)
-    // 振替元の机には置いたときと同じく移動元記録を残す（授業は下段に生きている）。振替先のセルの上段は変えない。
+    // 振替元の机には置いたときと同じく移動元記録を残す（授業は上段に生きている）。振替先の別の机（t5d2）は参照ごと変えない。
     const wedFull = full_.weeks[0].find((entry) => entry.id === `${WED}_5`)!
     expect(wedFull.desks[0].statusSlots?.some((entry) => entry?.status === 'moved' && entry.managedStudentId === 'sC')).toBe(true)
-    expect(full_.weeks[0].find((entry) => entry.id === `${THU}_5`)).toBe(full[0].find((entry) => entry.id === `${THU}_5`))
+    expect(thuFull.desks[1]).toBe(full[0].find((entry) => entry.id === `${THU}_5`)!.desks[1])
     const holiday = run(full, { classroomSettings: settings({ holidayDates: [WED] }) })
     expect(holiday.pendingPlaced).toHaveLength(1)
     expect(holiday.stocked).toHaveLength(0)
+  })
+
+  // オーナー決定 2026-11-01（テスト教室 6/29 4限 席14「手置きの講習が上段・テンプレ由来の振替が下段で、逆に認識されている」）:
+  // 緑 2 行の「上段＝テンプレ／下段＝手入力」を Q40-2 の満席でも保つ。押し出す相手と従来の形へ戻る条件を固定する。
+  describe('満席の押し出し（上段＝テンプレ／下段＝手入力・2026-11-01）', () => {
+    const fullOther = (deskSeat0: StudentEntry, deskSeat1: StudentEntry) => board(desk('t5d1', '鈴木', [deskSeat0, deskSeat1])).map((week) => week.map((entry) => (entry.id === `${THU}_5`
+      ? { ...entry, desks: [entry.desks[0], desk('t5d2', '佐藤', [student('sE_m', '江藤', { manualAdded: true }), student('sF_m', '藤田', { manualAdded: true })])] }
+      : entry)))
+    const thuOf = (plan: ReturnType<typeof run>) => plan.weeks[0].find((entry) => entry.id === `${THU}_5`)!
+    const key = buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')
+
+    it('(a) テンプレの席に手置きの講習（未消化講習から置いたもの）が居る: 講習を下段へ残し、その席に振替を置く。理由文は押し出しの形', () => {
+      const lecture = student('sG_sp', '後藤', { lessonType: 'special', specialStockSource: 'session', specialSessionId: 'ss1' })
+      const plan = run(fullOther(makeupOf('sB_mk', '馬場', WED, labelWed5), lecture))
+      expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', seatIndex: 1, shape: 'displaced', displacedStudent: expect.objectContaining({ managedStudentId: 'sG', lessonType: 'special' }) })])
+      expect(plan.nextPendingDesks[key].lower.lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sG', lessonType: 'special' })
+      expect(plan.nextPendingDesks[key].origin).toEqual({ kind: 'transfer-follow-displaced', note: expect.stringContaining('この席に居た手入力の生徒を下段（保留）に残し') })
+      expect(thuOf(plan).desks[0].lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: WED })
+      expect(plan.stocked).toHaveLength(0)
+      expect(plan.handledCount).toBe(1)
+    })
+
+    it('(b) テンプレの席が同じ振替元の日から来た振替（同じ組の写像＝押し出さない）で、もう一方の席が手入力: もう一方の席を下段へ', () => {
+      // テンプレの席＝席 0。席 0 は水から丸ごと振替で来た馬場（押し出さない）。席 1 の土屋（手動追加）を下段へ。
+      const plan = run(fullOther(makeupOf('sB_mk', '馬場', WED, labelWed5), student('sD_m', '土屋', { manualAdded: true })), { skipped: [{ ...skippedC, seatIndex: 0 }] })
+      expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', seatIndex: 1, shape: 'displaced', displacedStudent: expect.objectContaining({ managedStudentId: 'sD' }) })])
+      expect(thuOf(plan).desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sB')
+      expect(thuOf(plan).desks[0].lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sC', lessonType: 'makeup' })
+    })
+
+    it('(c) 両席とも振替先の日のテンプレの通常生徒（印なし）: 押し出す相手が居ないので従来の形（振替そのものを下段へ）。理由文で分かる', () => {
+      const plan = run(fullOther(student('sX_t', '山本'), student('sY_t', '吉田')))
+      expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', shape: 'lower', fallbackDesk: false })])
+      expect(plan.nextPendingDesks[key].lower.lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sC' && entry.lessonType === 'makeup')).toBe(true)
+      expect(plan.nextPendingDesks[key].origin?.kind).toBe('transfer-follow-full')
+      expect(plan.nextPendingDesks[key].origin?.note).toContain('席の生徒はテンプレの生徒なので下段にできません')
+      // 上段は変えない
+      expect(thuOf(plan).desks[0].lesson?.studentSlots.map((entry) => entry?.managedStudentId)).toEqual(['sX', 'sY'])
+    })
+
+    it('(d) 両席とも同じ振替元の日から来た振替（同じ組）: 押し出さず従来の形', () => {
+      const plan = run(fullOther(makeupOf('sB_mk', '馬場', WED, labelWed5), makeupOf('sA_mk', '青木', WED, labelWed5)))
+      expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', shape: 'lower' })])
+      expect(thuOf(plan).desks[0].lesson?.studentSlots.map((entry) => entry?.managedStudentId)).toEqual(['sB', 'sA'])
+    })
+
+    it('(e) 席に出欠記録がある手入力の生徒は押し出さない（記録を下段へ持っていかない）', () => {
+      const weeks = fullOther(makeupOf('sB_mk', '馬場', WED, labelWed5), student('sD_m', '土屋', { manualAdded: true }))
+      const withRecord = weeks.map((week) => week.map((entry) => (entry.id === `${THU}_5` ? { ...entry, desks: [{ ...entry.desks[0], statusSlots: [null, status(student('sZ', '財前'), THU, 5, 'attended')] as [StudentStatusEntry | null, StudentStatusEntry | null] }, entry.desks[1]] } : entry)))
+      const plan = run(withRecord)
+      expect(plan.pendingPlaced[0]?.shape).toBe('lower')
+    })
+
+    it('(f) 机が既に保留（2 行）なら押し出さず従来どおり下段へ相乗り（由来は上書きしない）', () => {
+      const weeks = fullOther(makeupOf('sB_mk', '馬場', WED, labelWed5), student('sD_m', '土屋', { manualAdded: true }))
+      const pendingDesks = { [key]: { lower: {}, effectiveStartDate: WED, createdAt: 'x' } }
+      const plan = run(weeks, { pendingDesks })
+      expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', shape: 'lower' })])
+      expect(plan.nextPendingDesks[key].origin).toBeUndefined()
+      expect(thuOf(plan).desks[0].lesson?.studentSlots[1]?.managedStudentId).toBe('sD')
+    })
   })
 
   it('振替元の机の記録は授業も記録も無い席に置く（監査 L-3）: テンプレの席に生きている生徒（記録なし）が居れば、もう一方の席へ', () => {
@@ -340,7 +408,7 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
     // 決定記録 48: 置ける机が無ければ同じ机番号の机の下段へ（既にある保留の下段の空いた席に相乗り）。未消化にはしない。
     const pending = run(weeks, { pendingDesks: bothPending })
     expect(pending.stocked).toHaveLength(0)
-    expect(pending.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', fallbackDesk: false })])
+    expect(pending.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', fallbackDesk: false, shape: 'lower' })])
     expect(pending.nextPendingDesks[buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')].lower.lesson?.studentSlots.some((student) => student?.managedStudentId === 'sC')).toBe(true)
     // 既存の保留の由来（テンプレ保存）は上書きしない。
     expect(pending.nextPendingDesks[buildTemplatePendingDeskKey(`${THU}_5`, 't5d1')].origin).toBeUndefined()

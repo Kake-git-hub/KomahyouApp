@@ -152,7 +152,7 @@ describe('旧・既知の限界 L-5（2026-10-21）→ 決定記録 48（2026-10
   // 旧挙動: 置けないと台帳に origin（水 4限）を積むが、在庫の消化（consumeMatchingOriginTokens）の同じ日付へのフォールバックで移送済みの振替に食われ、
   // 台帳には積まれるが残数は増えず、4限の分の授業は盤面にも在庫にも無い（監査が「無言の消失」として検出していた形）。
   // 新挙動: 下段に振替として置く。下段の振替は監査の説明（collectLessonExplanationFacts）にも在庫の消化にも数えるので、違反 0・台帳 0・残数 0。
-  it('監査に違反が無く、台帳には積まれず、下段に A の振替（振替元 水 4限）が居る。再保存は冪等', () => {
+  it('監査に違反が無く、台帳には積まれず、上段に A の振替（振替元 水 4限）・下段に押し出した手入力の生徒が居る。再保存は冪等', () => {
     const BASE = [...OLD_ROWS.slice(0, 2), row('r2', 't3', '', '', 4)]
     const NEXT = [...BASE, row('r5', 't3', 'sA', '', 3, { slotNumber: 4 })]
     // 木 4限 を満席にする（オーナー指示 2026-10-21: 講師が居なくても空席なら置くので、残る形は満席だけ）
@@ -166,8 +166,12 @@ describe('旧・既知の限界 L-5（2026-10-21）→ 決定記録 48（2026-10
     expect(state.ledgers['sA__数'] ?? []).toHaveLength(0)
     const pendingEntries = Object.values(state.pendingDesks)
     expect(pendingEntries).toHaveLength(1)
-    expect(pendingEntries[0].lower.lesson?.studentSlots.some((student) => student?.managedStudentId === 'sA' && student.lessonType === 'makeup' && student.makeupSourceDate === WED)).toBe(true)
-    expect(pendingEntries[0].origin?.kind).toBe('transfer-follow-full')
+    // 2026-11-01（オーナー決定「上段＝テンプレ／下段＝手入力」）: 振替は上段（テンプレの席＝席 0）へ、席に居た手入力の X は下段へ。
+    expect(pendingEntries[0].lower.lesson?.studentSlots.some((student) => student?.name === 'X' && student.manualAdded)).toBe(true)
+    expect(pendingEntries[0].lower.lesson?.studentSlots.some((student) => student?.managedStudentId === 'sA')).toBe(false)
+    const thu4 = state.weeks.flat().find((cell) => cell.id === `${THU}_4`)!
+    expect(thu4.desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: WED })
+    expect(pendingEntries[0].origin?.kind).toBe('transfer-follow-displaced')
     expectNoViolation(state, NEXT, 'L-5 の形（満席 → 下段）')
     expect(balances(state.weeks, NEXT, state.ledgers)['sA__数'] ?? 0).toBe(0)
     expectFixpoint(state, NEXT)
