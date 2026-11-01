@@ -6116,6 +6116,24 @@ body.verification-checklist-window {
   color: #5b7390;
 }
 
+/* 確認リスト: オーナーの新しい決定(2026-11-01)。準備の行と同じ段組みで、色だけ変えて目に留まるようにする。 */
+.verification-checklist-owner-decision {
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #d97706;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.verification-checklist-owner-decision .verification-checklist-label {
+  color: #b45309;
+  margin-right: 6px;
+}
+/* 確認リスト: フリーメモ(先頭)。 */
+.verification-checklist-free-memo {
+  margin-bottom: 10px;
+}
 .verification-checklist-prep {
   margin: 6px 0 0;
   padding: 6px 10px;
