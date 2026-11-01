@@ -24,8 +24,10 @@ describe('時限の追従の配線（決定記録 46）', () => {
     const start = BOARD_TSX.indexOf('export function computeTemplateDiffApplyForBoard(')
     const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('function runTemplateDiffApplyWithCopyReverts', start))
     expect(body).toContain('const slotFollow = planSlotChangeTransferFollow({')
-    expect(body).toContain('const nextWeeks = slotFollow.weeks.map(')
-    expect(body).toContain('nextPendingDesks: slotFollow.nextPendingDesks,')
+    // 2026-11-01（A-12）: 追従の結果に同日移動の写しの注意の印を付けてから保存結果にする（weeks も保留も noticed 経由）。
+    expect(body).toContain('const settledWeeks = slotFollow.weeks.map(')
+    expect(body).toContain('applySameDayMoveCopyNotices({ weeks: settledWeeks, pendingDesks: slotFollow.nextPendingDesks, kept: keptCopies')
+    expect(body).toContain('nextPendingDesks: noticed.pendingDesks,')
     expect(body).toContain('...slotFollow.touchedCellIds')
     // 省略できる手がかり・条件の渡し忘れは黙って効かなくなるので字面で固定（再監査 2026-10-26）。
     expect(body).toContain('templateCells: run.templateCells')
