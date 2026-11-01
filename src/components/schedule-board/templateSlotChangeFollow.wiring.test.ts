@@ -22,7 +22,7 @@ describe('時限の追従の配線（決定記録 46）', () => {
 
   it('入口は時限の追従の結果（盤面・保留・触ったコマ）を保存結果へ合流させる', () => {
     const start = BOARD_TSX.indexOf('export function computeTemplateDiffApplyForBoard(')
-    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('function runTemplateDiffApplyWithCopyReverts', start))
+    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('function runTemplateDiffApply(', start))
     expect(body).toContain('const slotFollow = planSlotChangeTransferFollow({')
     // 2026-11-01（A-12）: 追従の結果に同日移動の写しの注意の印を付けてから保存結果にする（weeks も保留も noticed 経由）。
     expect(body).toContain('const settledWeeks = slotFollow.weeks.map(')
