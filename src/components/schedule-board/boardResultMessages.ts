@@ -29,13 +29,16 @@ export function buildHolidayReleaseResultMessage(params: {
   restoredCount: number
   /** 決定記録 48（2026-10-25）: 席に別の生徒が居るため、その机の下段（保留・緑）へ戻した件数。0 なら出さない。 */
   pendingRestoredCount?: number
+  /** 決定記録 59（2026-11-01・(b)-2「上段＝テンプレ／下段＝手入力」）: 席に居た手入力の生徒を下段（保留・緑）へ残して、戻す通常授業を席へ置いた件数。0 なら出さない。 */
+  displacedCount?: number
   removedMakeupCount: number
   skippedCount: number
   skippedSummary: string
 }): string {
-  const { dateKey, isClosedWeekday, restoredCount, pendingRestoredCount = 0, removedMakeupCount, skippedCount, skippedSummary } = params
+  const { dateKey, isClosedWeekday, restoredCount, pendingRestoredCount = 0, displacedCount = 0, removedMakeupCount, skippedCount, skippedSummary } = params
   return `${dateKey} の${isClosedWeekday ? '休校' : '休日'}を解除しました${joinResultNotes([
     restoredCount > 0 ? `元の席へ ${restoredCount}件` : '',
+    displacedCount > 0 ? `席の手入力の生徒を下の行へ ${displacedCount}件` : '',
     pendingRestoredCount > 0 ? `保留(下段)に ${pendingRestoredCount}件` : '',
     removedMakeupCount > 0 ? `別日のコマ ${removedMakeupCount}件を削除` : '',
     skippedCount > 0 ? `戻せない ${skippedCount}件${skippedSummary ? `: ${skippedSummary}` : ''}` : '',

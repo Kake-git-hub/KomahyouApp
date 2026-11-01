@@ -158,6 +158,7 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-full', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席（手入力を下段へ）')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除')
+    expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除（手入力を下段へ）')
     // 理由文が空の origin は既定文に落ちる（見出しは種別のまま）
     const empty = buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: '' } } }, WEEKS)[0]
     expect(empty.kindLabel).toBe('休日解除')

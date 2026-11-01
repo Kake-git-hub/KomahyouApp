@@ -55,6 +55,9 @@ describe('休日解除の配線(席の復元・在庫巻き戻し)', () => {
     const branch = holidayReleaseBranch()
     // 2026-10-25 2 行化（オーナー指示）: 件数（元の席へ n人・別日のコマ・戻せない人数）は確認に残す。
     expect(branch).toContain('`元の席へ ${restoration.restoredStudentNames.length}人`')
+    // 決定記録 59（2026-11-01）: 席に居た手入力の生徒を下の行へ残して戻した人数も確認に出す。
+    expect(branch).toContain('席に居た手入力の生徒を下の行に残して戻す ${restoration.displacedOccupantNames.length}人')
+    expect(branch).toContain('displacedCount: restoration?.displacedOccupantNames.length ?? 0')
     expect(branch).toContain('`別日のコマ ${removedLabel} を削除`')
     const confirmIndex = branch.indexOf('if (!window.confirm(confirmText))')
     expect(confirmIndex).toBeGreaterThan(0)
