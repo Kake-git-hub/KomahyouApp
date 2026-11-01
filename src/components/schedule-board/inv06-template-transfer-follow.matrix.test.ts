@@ -619,37 +619,49 @@ describe('Q42 × テンプレ再保存（regression-reviewer 2026-10-25 H-1 / M-
     }
     const weeks = withDesk(base, WED_CELL, 0, (desk) => ({ ...desk, lesson: { id: 'other-lesson', studentSlots: [MANUAL_D, null] }, statusSlots: [record, null] }))
     const released = computeHolidayReleaseRestoration({ weeks, dateKey: WED, ledgers: emptyLedgers, managedStudentByAnyName: roster, resolveDisplayName: (name) => name, resolveStockId: resolveStudentKey, templatePendingDesks: {}, createdAt: '2026-10-25T09:00:00.000Z' })
-    // 休日解除ハンドラと同じく、その日のテンプレの出現は抑止したまま（下段へ戻した分は外さない）。
-    const suppressed = [`sA__数__${WED}__${SLOT}`]
+    // 決定記録 59（2026-11-01）: D は手入力の印（manualAdded）なので A が席（上段）へ戻り D が下段へ。ハンドラは戻した A の抑止キーを外す（restoredOccurrenceKeys）。
+    const suppressed: string[] = []
     return { released, suppressed }
   }
 
-  it('H-1: 休日解除で下段へ戻した通常授業（印つき）は、同じテンプレの再保存で消えず下段に残る（保存則の違反なし・不動点）', () => {
+  it('H-1（決定記録 59・2026-11-01）: 休日解除で席に手入力の D が居れば A は席（上段）へ戻り D は下段へ（上段＝テンプレ／下段＝手入力）。同じテンプレの再保存でも形が変わらない（保存則の違反なし・不動点）', () => {
     const { released, suppressed } = holidayWithSeatTaken()
-    expect(released.pendingRestoredStudentNames).toEqual(['青木'])
+    expect(released.restoredStudentNames).toEqual(['青木'])
+    expect(released.displacedOccupantNames).toEqual(['土屋'])
+    expect(released.pendingRestoredStudentNames).toEqual([])
+    expect(released.skipped).toEqual([])
+    expect(released.restoredOccurrenceKeys).toEqual([`sA__数__${WED}__${SLOT}`])
     const pending = released.nextTemplatePendingDesks!
-    const key = buildTemplatePendingDeskKey(WED_CELL, cellOf(released.nextWeeks, WED_CELL).desks[0].id)
-    expect(pending[key].lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'regular', manualAdded: true })
+    const desk0 = cellOf(released.nextWeeks, WED_CELL).desks[0]
+    const key = buildTemplatePendingDeskKey(WED_CELL, desk0.id)
+    expect(desk0.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'regular' })
+    expect(desk0.lesson?.studentSlots[0]?.manualAdded).toBeFalsy()
+    expect(desk0.statusSlots?.some(Boolean) ?? false).toBe(false)
+    expect(pending[key].lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sD', manualAdded: true })
+    expect(pending[key].origin?.kind).toBe('holiday-release-displaced')
     expect(audit(released.nextWeeks, OLD_ROWS, pending, suppressed), describeLessonAccountingViolations(audit(released.nextWeeks, OLD_ROWS, pending, suppressed))).toEqual([])
     const saved = save(released.nextWeeks, OLD_ROWS, suppressed, { templatePendingDesks: pending })
-    expect(saved.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', manualAdded: true })
-    expect(saved.nextPendingDesks[key]?.origin?.kind).toBe('holiday-release-seat-taken')
-    expect(liveIds(saved.nextWeeks, WED_CELL)).toEqual(['sD', 'sB'])
+    expect(liveIds(saved.nextWeeks, WED_CELL)).toEqual(['sA', 'sB'])
+    expect(saved.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sD', manualAdded: true })
+    expect(saved.nextPendingDesks[key]?.origin?.kind).toBe('holiday-release-displaced')
     expect(audit(saved.nextWeeks, OLD_ROWS, saved.nextPendingDesks, suppressed)).toEqual([])
     expectFixpoint(saved, OLD_ROWS, suppressed)
   })
 
-  it('H-1 続き: 上段の席が空いて Q28 で 1 行に戻った後の再保存でも消えない（手で足し直した通常授業と同じ形）', () => {
-    const { released, suppressed } = holidayWithSeatTaken()
+  it('H-1 続き: 上段の A を（記録を残さず）外して抑止すると Q28 で D が 1 行に戻り、その後の再保存でも D は消えない（手で足し直した通常授業と同じ形）', () => {
+    const { released } = holidayWithSeatTaken()
     const pending = released.nextTemplatePendingDesks!
+    // 盤面で A を単発削除した形＝抑止キーが積まれる。
+    const suppressed = [`sA__数__${WED}__${SLOT}`]
     const emptied = released.nextWeeks.map((week) => week.map((cell) => (cell.id !== WED_CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) })))
     const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: emptied, templatePendingDesks: pending })
     expect(settled.nextTemplatePendingDesks).toEqual({})
-    expect(cellOf(settled.nextWeeks, WED_CELL).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', manualAdded: true })
+    expect(cellOf(settled.nextWeeks, WED_CELL).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sD', manualAdded: true })
     const saved = save(settled.nextWeeks, OLD_ROWS, suppressed, { templatePendingDesks: {} })
-    expect(liveIds(saved.nextWeeks, WED_CELL).sort()).toEqual(['sA', 'sB'])
-    expect(liveIds(saved.nextWeeks, WED_CELL).filter((id) => id === 'sA')).toHaveLength(1)
-    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed)).toEqual([])
+    expect(liveIds(saved.nextWeeks, WED_CELL).sort()).toEqual(['sB', 'sD'])
+    expect(liveIds(saved.nextWeeks, WED_CELL).filter((id) => id === 'sD')).toHaveLength(1)
+    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed).filter((violation) => !JSON.stringify(violation).includes('sA'))).toEqual([])
+    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed).filter((violation) => (violation as { studentId?: string }).studentId !== 'sA' && !JSON.stringify(violation).includes('sA'))).toEqual([])
     expectFixpoint(saved, OLD_ROWS, suppressed)
   })
 
