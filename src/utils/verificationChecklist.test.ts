@@ -207,7 +207,7 @@ describe('確認リストの項目定義', () => {
     // 第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5 を先頭に足した(開発用教室だけ)。
     // 第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1 を先頭に足した(開発用教室だけ)。
     // 第96版(2026-11-01・v1.5.670): テスト教室の tp-59/tp-64「手置き講師が抹消される」のオーナー確認 tp-66 と、テンプレ保存後の「元に戻す」の tp-67 を足した。
-    expect(ids).toEqual(['ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    expect(ids).toEqual(['ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -624,7 +624,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
@@ -676,6 +676,13 @@ describe('第96版(2026-11-01・v1.5.670): テスト教室 受付 20261101-01563
     expect(item.title).toContain('【オーナー確認】')
     expect(item.check?.join('\n')).toContain('講師欄が上下 2 段')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-66')
+  })
+
+  it('tp-71 / tp-72: 同日移動の写しは消さず緑＋注意文(A-12・決定記録 53)', () => {
+    expect(byId.get('tp-71')!.check?.join('\n')).toContain('※4限にも')
+    expect(byId.get('tp-71')!.check?.join('\n')).toContain('※テンプレに無し')
+    expect(byId.get('tp-72')!.check?.join('\n')).toContain('上の行が C・下の行が A の緑 2 行')
+    for (const id of ['tp-71', 'tp-72']) { expect(byId.get(id)!.introducedIn, id).toBe('v1.5.670'); expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id) }
   })
 
   it('tp-67: テンプレ保存のあとは「元に戻す／やり直し」が無効で、保存前の手操作まで巻き戻らない', () => {
