@@ -53,8 +53,10 @@ export type TemplatePendingLower = {
  *                                  「上段＝テンプレ／下段＝手入力の関係を保つ」）。中身は普通のテンプレ保存の保留と同じ形（上段＝テンプレ側）。
  *  - holiday-release-seat-taken  … 休日解除で戻す席に別の生徒が居たもの（(b)-2）。
  *  - slot-follow-full            … 時限変更の追従（決定記録 46・§H Q40-9）で新しい時限が満席だったもの（(b)-3・v1.5.643）。
+ *  - same-slot-template-duplicate … 決定記録 57（オーナー決定 2026-11-01・A-10）: テンプレ机 T にその生徒を置くため、同じコマの別の机 D に 1 行で
+ *                                  生きていた手入力の授業を D の同じ席の下段へ移したもの（D の上段のその席は空白のまま 2 段）。旧 Q21-11 の置き換え。
  */
-export type TemplatePendingOriginKind = 'whole-day-transfer-displaced' | 'transfer-follow-full' | 'transfer-follow-displaced' | 'holiday-release-seat-taken' | 'slot-follow-full'
+export type TemplatePendingOriginKind = 'whole-day-transfer-displaced' | 'transfer-follow-full' | 'transfer-follow-displaced' | 'holiday-release-seat-taken' | 'slot-follow-full' | 'same-slot-template-duplicate'
 
 export type TemplatePendingOrigin = {
   kind: TemplatePendingOriginKind
@@ -72,7 +74,7 @@ export type TemplatePendingDesk = {
   origin?: TemplatePendingOrigin
 }
 
-const PENDING_ORIGIN_KINDS = new Set<TemplatePendingOriginKind>(['whole-day-transfer-displaced', 'transfer-follow-full', 'transfer-follow-displaced', 'holiday-release-seat-taken', 'slot-follow-full'])
+const PENDING_ORIGIN_KINDS = new Set<TemplatePendingOriginKind>(['whole-day-transfer-displaced', 'transfer-follow-full', 'transfer-follow-displaced', 'holiday-release-seat-taken', 'slot-follow-full', 'same-slot-template-duplicate'])
 
 /** 読込時の正規化: 種別が既知で理由文が文字列のときだけ受け付ける（形が壊れた値は捨てる＝従来のテンプレ保存の保留として扱う）。 */
 export function normalizeTemplatePendingOrigin(value: unknown): TemplatePendingOrigin | undefined {
