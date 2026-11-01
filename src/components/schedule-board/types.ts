@@ -57,6 +57,10 @@ export type StudentEntry = {
   // 「編集」で振替にした元の通常授業(2026-10-27・INV-03/INV-06)。テンプレの通常授業から変えたときだけ持つ。
   // 編集で積んだ抑止(元の授業の抑止キー・科目を変えたときの元科目の振替抑止)を、振替 → 通常 の編集し直しで外すために控える。
   editedFromRegular?: EditedFromRegular
+  // 同日移動の写し(旧テンプレの通常授業を日の中で手で動かしたもの)への、テンプレ保存が付ける注意の印(オーナー決定 2026-11-01・A-12・
+  // spec-template-behavior §H Q36)。写しは手入力データとして残し、superseded＝同じ日の別のコマにテンプレが同じ授業を置く／stale＝テンプレでは
+  // この日にこの授業が無い、を盤面で緑＋注意文で知らせる。テンプレ保存のたびに付け直す(状態が変われば消える)。日程表・PDF・回数には出ない。
+  templateCopyNotice?: 'superseded' | 'stale'
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
