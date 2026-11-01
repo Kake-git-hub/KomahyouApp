@@ -1859,7 +1859,22 @@ function applyTemplateDiffToCell(context: {
       const pending = context.pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]
       const manualTeacher = pending?.lower.teacher ?? (isManualPlacedTeacher(desk) ? desk : null)
       if (!manualTeacher || isSameTeacherByAliases(manualTeacher.teacher, templateDesk.teacher, context.teacherAliases)) return
-      if (isTeacherElsewhereInCell(cell, desk.id, { teacher: templateDesk.teacher, teacherAssignmentTeacherId: templateDesk.teacherAssignmentTeacherId }, context.teacherAliases)) blanked.add(index)
+      // 「既に居る」の相手（regression-reviewer 2026-11-01 要修正 2・要確認 6）:
+      //  - 旧 Q41-13 がずらして置いた先（templateTeacherShift つき・非 manual・テンプレ机が空）は数えない。その机は同じ保存で 'replace'
+      //    になりテンプレ机が空なので足場講師として外れる＝1 回の保存で「机 0 が保留・ずらし先は空」の最終形にする（2 回目で形が変わらない・INV-03）。
+      //  - 別の机の保留の下段に居る手置きの同じ講師は数える（旧 'present' と同じ。再保存で机へ戻るので上段に置くと 2 机になる・INV-01）。
+      const isTemplateDeskEmptyAt = (j: number) => {
+        const empty = (candidate: DeskCell | undefined) => !candidate || (!candidate.teacher.trim() && liveStudents(candidate.lesson).length === 0)
+        return empty(templateDesks[j]) && empty(rawTemplateDesks[j])
+      }
+      const candidates: DeskCell[] = []
+      cell.desks.forEach((other, j) => {
+        if (j === index) return
+        if (!(isShiftedTemplateTeacherDesk(other) && isTemplateDeskEmptyAt(j))) candidates.push(other)
+        const lowerTeacher = context.pendingDesks[buildTemplatePendingDeskKey(cell.id, other.id)]?.lower.teacher
+        if (lowerTeacher) candidates.push({ id: other.id, teacher: lowerTeacher.teacher, teacherAssignmentTeacherId: lowerTeacher.teacherAssignmentTeacherId })
+      })
+      if (isTeacherElsewhereInCell({ desks: candidates }, desk.id, { teacher: templateDesk.teacher, teacherAssignmentTeacherId: templateDesk.teacherAssignmentTeacherId }, context.teacherAliases)) blanked.add(index)
     })
     if (blanked.size > 0) {
       templateDesks = templateDesks.map((templateDesk, index) => (blanked.has(index) ? { ...templateDesk, teacher: '', teacherAssignmentTeacherId: undefined } : templateDesk))
@@ -2351,13 +2366,14 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
       return `${head}${students}${templateOnly}緑の下の行の講師名を押して、どちらの講師にするか選んでください。`
     }
     case 'teacher-replaced': {
-      const templateTeacher = note.detail ? `テンプレの講師（${note.detail}）` : 'テンプレの講師'
-      // Q41-12 (1)（暫定・オーナー確定 2026-10-21）: テンプレの机が講師だけ（生徒なし）なら、手で置いた生徒が居ても講師はテンプレに揃い、生徒はその講師の担当で机に残る。
-      // 理由を「手で置いた生徒が居ないため」と出すと手置きの振替・講習が認識されていないように読める（テスト教室 2026-10-22）ので、形ごとに分ける。
-      if (note.keptStudentNames && note.keptStudentNames.length > 0) {
-        return `${where} ${who}: 手で置いた講師ですが、テンプレのこの机が講師だけ（生徒なし）のため${templateTeacher}に替わります。手で置いた ${note.keptStudentNames.join('・')} は${note.detail || 'テンプレの講師'}の担当で机に残ります。`
+      // 2026-11-01 以降この行が出る形は 2 つだけ（regression-reviewer メモ 8）。旧「手で置いた生徒が居ないため」「講師だけのため」は出ない。
+      //  (a) 保留中の再保存でテンプレのこの机に講師が無く、下段の手置き講師が同じコマの別の机に居る（Q41-8・INV-01）→ 机へ戻さない。
+      //  (b) 下段の講師が手置きでない（日程表の自動割振り・削除の記録。整合の取れた保留では起きない）→ テンプレの講師にする。
+      if (!note.detail) {
+        return `${where} ${who}: テンプレのこの机に講師は無く、手で置いた講師 ${note.studentName} は同じコマの別の机に居るため、この机には戻しません（同じ講師を 2 つの机に置けません）。`
       }
-      return `${where} ${who}: 手で置いた講師ですが、手で置いた生徒が居ないため${templateTeacher}に替わります。`
+      const students = note.keptStudentNames && note.keptStudentNames.length > 0 ? `手で置いた ${note.keptStudentNames.join('・')} はテンプレの講師（${note.detail}）の担当で机に残ります。` : ''
+      return `${where} ${who}: 下の行の講師は手で置いた講師ではない（日程表の自動割振り・削除の記録）ため、テンプレの講師（${note.detail}）にします。${students}`
     }
     case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。`
     case 'transfer-placed': return `${where} ${who}: 丸ごと振替した日なので、振替先${note.detail ? `（${note.detail}）` : ''}の同じ机へ振替として置きます。`
@@ -2468,7 +2484,7 @@ function buildTemplateDiffConfirmLines(effectiveStartDate: string, summary: Temp
     ...(summary.wholeDayTransferPlacedStudents + summary.wholeDayTransferStockedStudents + summary.wholeDayTransferPendingStudents > 0 ? [`丸ごと振替した日に足した生徒${summary.wholeDayTransferPlacedStudents}名を振替先へ置きます（${summary.wholeDayTransferPendingStudents > 0 ? `満席の${summary.wholeDayTransferPendingStudents}名は同じ机を保留〔緑の 2 行〕にして置く・` : ''}空きが無い${summary.wholeDayTransferStockedStudents}名は未消化振替へ）。`] : []),
     ...(summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0 ? [`時限を変えた生徒の丸ごと振替の振替${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件を新しい時限へ移します${summary.slotFollowPendingMakeups > 0 ? `（満席の${summary.slotFollowPendingMakeups}件は同じ机の保留〔下段〕へ）` : ''}。`] : []),
     ...(summary.manualTeacherPending > 0 ? [`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: ${summary.manualTeacherPending}机。`] : []),
-    ...(summary.manualTeacherReplaced > 0 ? [`手で置いた講師をテンプレの講師に替える机: ${summary.manualTeacherReplaced}机。`] : []),
+    ...(summary.manualTeacherReplaced > 0 ? [`手で置いた講師を机に戻さずテンプレに合わせる机: ${summary.manualTeacherReplaced}机。`] : []),
     ...(context?.studentNotes && context.studentNotes.length > 0 ? ['', ...buildTemplateDiffStudentNoteLines(context.studentNotes)] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
@@ -2501,6 +2517,6 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.wholeDayTransferPlacedStudents + summary.wholeDayTransferStockedStudents + summary.wholeDayTransferPendingStudents > 0) parts.push(`丸ごと振替した日に足した生徒を振替先へ置いた: ${summary.wholeDayTransferPlacedStudents}名（${summary.wholeDayTransferPendingStudents > 0 ? `満席で保留〔緑の 2 行〕にした: ${summary.wholeDayTransferPendingStudents}名・` : ''}未消化振替にした: ${summary.wholeDayTransferStockedStudents}名）。`)
   if (summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0) parts.push(`時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: ${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件${summary.slotFollowPendingMakeups > 0 ? `（満席で保留〔下段〕にした: ${summary.slotFollowPendingMakeups}件）` : ''}。`)
   if (summary.manualTeacherPending > 0) parts.push(`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にした机: ${summary.manualTeacherPending}机。`)
-  if (summary.manualTeacherReplaced > 0) parts.push(`手で置いた講師をテンプレの講師に替えた机: ${summary.manualTeacherReplaced}机。`)
+  if (summary.manualTeacherReplaced > 0) parts.push(`手で置いた講師を机に戻さずテンプレに合わせた机: ${summary.manualTeacherReplaced}机。`)
   return parts.join('')
 }

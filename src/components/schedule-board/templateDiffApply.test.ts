@@ -1108,21 +1108,23 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(buildTemplateDiffStudentNoteLines(undefined)).toEqual([])
   })
 
-  it('Q41-11（テスト教室 2026-10-22）: 講師の行は「手で置いた生徒が居ない」と「講師だけのテンプレ机（手で置いた生徒は机に残る）」で文を分ける', () => {
+  it('Q41-11（2026-11-01 改定・regression-reviewer メモ 8）: 講師の行は、出る形（テンプレ机に講師なし×別の机に同じ講師／下段が手置きでない講師）に合う文にし、旧「手で置いた生徒が居ないため」「講師だけのため」は出さない', () => {
     const summary = { ...createEmptyTemplateDiffApplySummary(), manualTeacherReplaced: 2, manualTeacherPending: 1 }
     const notes: TemplateDiffStudentNote[] = [
       { kind: 'teacher-replaced', studentName: '堀尾', subject: '', dateKey: '2027-11-24', slotNumber: 5, detail: '中川', keptStudentNames: ['井桁悠希'] },
-      { kind: 'teacher-replaced', studentName: '倉島', subject: '', dateKey: '2027-11-24', slotNumber: 4, detail: '田村' },
+      { kind: 'teacher-replaced', studentName: '倉島', subject: '', dateKey: '2027-11-24', slotNumber: 4, detail: '' },
       { kind: 'teacher-replaced', studentName: '倉島', subject: '', dateKey: '2027-11-24', slotNumber: 3, detail: '田村', keptStudentNames: [] },
       { kind: 'teacher-pending', studentName: '倉島', subject: '', dateKey: '2027-11-24', slotNumber: 2, detail: '田村' },
     ]
     const message = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: notes })
-    // 講師だけのテンプレ机（Q41-12 (1)）: 手で置いた生徒が居ない、とは言わない（未消化講習の手置きが認識されていないと誤読させた形）
-    expect(message).toContain('・11/24 5限 講師 堀尾: 手で置いた講師ですが、テンプレのこの机が講師だけ（生徒なし）のためテンプレの講師（中川）に替わります。手で置いた 井桁悠希 は中川の担当で机に残ります。')
-    expect(message).not.toContain('11/24 5限 講師 堀尾: 手で置いた講師ですが、手で置いた生徒が居ないため')
-    // 手で置いた生徒が居ない（keptStudentNames 無し／空）は従来の文
-    expect(message).toContain('・11/24 4限 講師 倉島: 手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師（田村）に替わります。')
-    expect(message).toContain('・11/24 3限 講師 倉島: 手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師（田村）に替わります。')
+    // (b) 下段の講師が手置きでない（QR／削除記録）→ テンプレの講師にする。手で置いた生徒が居れば名前つき
+    expect(message).toContain('・11/24 5限 講師 堀尾: 下の行の講師は手で置いた講師ではない（日程表の自動割振り・削除の記録）ため、テンプレの講師（中川）にします。手で置いた 井桁悠希 はテンプレの講師（中川）の担当で机に残ります。')
+    expect(message).toContain('・11/24 3限 講師 倉島: 下の行の講師は手で置いた講師ではない（日程表の自動割振り・削除の記録）ため、テンプレの講師（田村）にします。')
+    // (a) テンプレ机に講師なし × 同じ講師が別の机（Q41-8・INV-01）→ 机へ戻さない
+    expect(message).toContain('・11/24 4限 講師 倉島: テンプレのこの机に講師は無く、手で置いた講師 倉島 は同じコマの別の机に居るため、この机には戻しません（同じ講師を 2 つの机に置けません）。')
+    expect(message).not.toContain('手で置いた生徒が居ないため')
+    expect(message).not.toContain('講師だけ（生徒なし）のため')
+    expect(message).not.toContain('に替わります')
     // オーナー決定 2026-11-01: 講師ごと保留の行は、手で置いた生徒の有無・テンプレ机が講師だけかで文を分ける
     expect(message).toContain('・11/24 2限 講師 倉島: 手で置いた講師の机にテンプレの講師（田村）が入るため、講師だけ下の行に残して保留（緑）にします（手で置いた生徒は居ません）。')
     const pendingWithStudents: TemplateDiffStudentNote[] = [
@@ -1134,7 +1136,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(pendingMessage).toContain('・11/24 5限 講師 堀尾: 手で置いた講師の机にテンプレの講師（中川）が入るため、手で置いた 井桁 と一緒に下の行に残して保留（緑）にします。テンプレのこの机は講師だけ（生徒なし）なので、上の行の席は空のままです。')
     expect(pendingMessage).toContain('手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: 2机。')
     expect(pendingMessage).not.toContain('ずらす')
-    expect(message).toContain('手で置いた講師をテンプレの講師に替える机: 2机。')
+    expect(message).toContain('手で置いた講師を机に戻さずテンプレに合わせる机: 2机。')
   })
 
   it('条件 25：確認文の試し実行と保存本体は同じ入力で同じ件数になる（同じ関数）', () => {
