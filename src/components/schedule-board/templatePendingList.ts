@@ -38,6 +38,7 @@ const ORIGIN_KIND_LABELS: Record<TemplatePendingOriginKind, string> = {
   'transfer-follow-displaced': '振替先が満席（手入力を下段へ）',
   'holiday-release-seat-taken': '休日解除',
   'slot-follow-full': '時限変更の追従',
+  'slot-follow-displaced': '時限変更の追従（手入力を下段へ）',
 }
 
 export const TEMPLATE_SAVE_PENDING_KIND_LABEL = 'テンプレ保存'

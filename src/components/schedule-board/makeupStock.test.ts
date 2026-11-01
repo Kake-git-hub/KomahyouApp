@@ -3,7 +3,7 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildMakeupStockEntries, computeAutomaticShortageOrigins, computeOutstandingAbsenceOrigins, countPlannedMakeupsByKey, resolveMakeupStatusOriginToMaterialize } from './makeupStock'
+import { buildMakeupStockEntries, computeAutomaticShortageOrigins, computeOutstandingAbsenceOrigins, consumeMatchingOriginTokens, countPlannedMakeupsByKey, resolveMakeupStatusOriginToMaterialize } from './makeupStock'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -1552,5 +1552,63 @@ describe('INV-06 休日記録(holiday)は在庫に影響しない', () => {
       statusEntry: { status: 'absent', lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限' },
       ledgerOriginDates: [],
     })).toEqual({ dateKey: '2026-07-01', slotNumber: 1 })
+  })
+})
+
+// ★決定記録 58（オーナー決定 2026-11-01・旧 既知の限界 L-6 の解消）: 消化の突き合わせ規則。
+//   ガード（同日フォールバック・対応の取れない使用数を古い順に消す）は旧データ・時限食い違いの受け皿なので**残す**。
+//   変えたのは「移送で置かれた振替（strictSlot）」だけ: 時限が明示的に食い違う origin を同日フォールバックで食わない（完全一致 → 時限の無い origin → 食わない）。
+describe('consumeMatchingOriginTokens（決定記録 58・strictSlot）', () => {
+  it('従来の文字列の使用: 完全一致を優先し、無ければ同じ日付の最初の origin（時限が食い違っても）を 1 件だけ消す＝旧データの受け皿は残る', () => {
+    expect(consumeMatchingOriginTokens(['2026-10-07#4', '2026-10-07#5'], ['2026-10-07#5'])).toEqual(['2026-10-07#4'])
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], ['2026-10-07#4'])).toEqual([])
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], ['2026-10-07'])).toEqual([])
+    expect(consumeMatchingOriginTokens(['2026-10-07', '2026-10-07'], ['2026-10-07#4'])).toEqual(['2026-10-07'])
+  })
+
+  it('strictSlot の使用（移送で置かれた振替）: 完全一致は消す・時限の無い origin は同日で消す・時限が明示的に食い違う origin は食わない', () => {
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], [{ token: '2026-10-07#5', strictSlot: true }])).toEqual([])
+    expect(consumeMatchingOriginTokens(['2026-10-07'], [{ token: '2026-10-07#4', strictSlot: true }])).toEqual([])
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], [{ token: '2026-10-07#4', strictSlot: true }])).toEqual(['2026-10-07#5'])
+    // 自分の時限が分からない strictSlot の使用は従来どおり同日の最初を消す
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], [{ token: '2026-10-07', strictSlot: true }])).toEqual([])
+    // 混在: strictSlot が食わなかった origin を、別の普通の使用が食える（1 対 1 は不変）
+    expect(consumeMatchingOriginTokens(['2026-10-07#5'], [{ token: '2026-10-07#4', strictSlot: true }, '2026-10-07#4'])).toEqual([])
+  })
+})
+
+describe('computeOutstandingAbsenceOrigins × 移送で置かれた振替（決定記録 58）', () => {
+  const resolveStudentKey = (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => entry.managedStudentId ?? entry.name
+  const cell = (dateKey: string, slotNumber: number, desk: Partial<SlotCell['desks'][number]>): SlotCell => ({
+    id: `${dateKey}_${slotNumber}`, dateKey, dayLabel: '', dateLabel: dateKey, slotLabel: `${slotNumber}限`, slotNumber, timeLabel: '', isOpenDay: true,
+    desks: [{ id: `${dateKey}_${slotNumber}_d1`, teacher: '講師A', ...desk }],
+  })
+  const student = (extra: Partial<StudentEntry>): StudentEntry => ({ id: 'e', name: '生徒A', managedStudentId: 'sX', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', ...extra })
+  const status = (dateKey: string, slotNumber: number, extra: Partial<StudentStatusEntry>): StudentStatusEntry => ({
+    id: `st_${dateKey}_${slotNumber}`, studentId: 'e', sourceManagedLesson: true, name: '生徒A', managedStudentId: 'sX', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', dateKey, slotNumber, status: 'absent', ...extra,
+  } as StudentStatusEntry)
+  const absent5 = cell('2026-10-07', 5, { statusSlots: [status('2026-10-07', 5, { status: 'absent' }), null] })
+  const makeupFrom4 = (dateKey: string) => cell(dateKey, 4, { lesson: { id: 'mk', studentSlots: [student({ id: 'mk', lessonType: 'makeup', makeupSourceDate: '2026-10-07', makeupSourceLabel: '2026/10/7(水) 4限' }), null] } })
+
+  it('移送で置かれた振替（振替元 水 4限 に移動元記録あり）は、水 5限 の休みの義務を食わない → 1 件残る', () => {
+    const moved4 = cell('2026-10-07', 4, { statusSlots: [status('2026-10-07', 4, { status: 'moved', moveDestinationDateKey: '2026-10-08', moveDestinationSlotNumber: 4 }), null] })
+    const weeks = [[moved4, absent5, makeupFrom4('2026-10-08')]]
+    expect(computeOutstandingAbsenceOrigins({ weeks, resolveStudentKey })).toEqual({ 'sX__数': ['2026-10-07#5'] })
+  })
+
+  it('旧データの受け皿: 移動元記録の無い振替（ラベルの時限が食い違うだけ）は従来どおり同日フォールバックで食う → 0 件', () => {
+    const weeks = [[absent5, makeupFrom4('2026-10-08')]]
+    expect(computeOutstandingAbsenceOrigins({ weeks, resolveStudentKey })).toEqual({})
+  })
+
+  it('移送で置かれた振替でも、完全一致（同じ時限）の義務は消す・行き先の日が違う記録は移送の根拠にしない', () => {
+    const moved5 = cell('2026-10-07', 5, { statusSlots: [status('2026-10-07', 5, { status: 'moved', moveDestinationDateKey: '2026-10-08' }), null] })
+    const absent4 = cell('2026-10-07', 4, { statusSlots: [status('2026-10-07', 4, { status: 'absent' }), null] })
+    const makeupFrom5 = cell('2026-10-08', 5, { lesson: { id: 'mk5', studentSlots: [student({ id: 'mk5', lessonType: 'makeup', makeupSourceDate: '2026-10-07', makeupSourceLabel: '2026/10/7(水) 5限' }), null] } })
+    // 水 4限 休み・水 5限 移送（木 5限 の振替）: 振替は自分の 5限 を完全一致で消そうとするが義務は 4限 → strictSlot なので食わない → 4限 が 1 件残る
+    expect(computeOutstandingAbsenceOrigins({ weeks: [[moved5, absent4, makeupFrom5]], resolveStudentKey })).toEqual({ 'sX__数': ['2026-10-07#4'] })
+    // 行き先が別の日（金）の記録しか無ければ、木の振替は移送で置かれたとみなさず従来どおり食う
+    const movedToFri = cell('2026-10-07', 4, { statusSlots: [status('2026-10-07', 4, { status: 'moved', moveDestinationDateKey: '2026-10-09', moveDestinationSlotNumber: 4 }), null] })
+    expect(computeOutstandingAbsenceOrigins({ weeks: [[movedToFri, absent5, makeupFrom4('2026-10-08')]], resolveStudentKey })).toEqual({})
   })
 })
