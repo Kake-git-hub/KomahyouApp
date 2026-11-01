@@ -931,6 +931,19 @@ export function applySameDayMoveCopyNotices(params: {
   return { weeks, pendingDesks }
 }
 
+/**
+ * 決定記録 57（オーナー決定 2026-11-01・自動処理一覧 A-10「緑化」・原文「机 3 の方を下段表示にして机 7 は他と同じようにテンプレなので上段。机 3 が空きでも
+ * 一行目を空白にして 2 段表示」）: テンプレ机 T（templateDeskIndex）に生徒 S を置くために、同じコマの別の机 D（deskIndex）の 1 行で生きていた
+ * S の手入力の授業（振替・講習・体験・増コマ・手動追加・同日移動の写し＝旧 Q21-11 が「1 行で生きる生徒」として見ていた集合）を D の同じ席の
+ * 下段（保留・緑）へ移した記録。確認の画面の理由の行（名前つき）に使う。
+ */
+export type TemplateDiffDuplicateDemotion = { student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seat: number; templateDeskIndex: number }
+
+/** 決定記録 57: 下段へ移した保留の理由文（ツールチップ・保留の一覧・確認の画面）。 */
+export function buildSameSlotTemplateDuplicateNote(templateDeskNumber: number, subject: string) {
+  return `同じコマの机 ${templateDeskNumber} にテンプレの通常授業（${subject}）を置いたため、手で置いた授業を下の行（保留・緑）に残しました。どちらかを片づけてください（「手入力データを採用」で机 ${templateDeskNumber} のテンプレの授業を外します）。`
+}
+
 export type TemplateDeskSeatCandidate = { student: StudentEntry; seat: number }
 
 export type TemplateDeskSeatPlan = {
@@ -958,7 +971,14 @@ export type TemplateDeskSeatPlan = {
  * reservedSeats（机に残す会計を持つ出欠記録の数）の分の空き席は記録のために空けておく: 記録が席を失うと上段の生徒の下に
  * 隠れ、その生徒を休みにしたときに上書きされて在庫が狂う（INV-06）。空き席が足りなければ既存の生徒の方を下段へ入れる（従来の保留）。
  */
-export function planTemplateDeskSeats(templateLesson: DeskLesson | undefined, candidates: readonly TemplateDeskSeatCandidate[], dateKey: string, options: { reservedSeats?: number } = {}): TemplateDeskSeatPlan {
+export function planTemplateDeskSeats(templateLesson: DeskLesson | undefined, candidates: readonly TemplateDeskSeatCandidate[], dateKey: string, options: {
+  reservedSeats?: number
+  /**
+   * 決定記録 57（2026-11-01・A-10）: 真を返す既存の生徒は、席が空いていても下段（保留）に置く。同じコマの別のテンプレ机にその生徒がテンプレどおり
+   * 置かれている間、D の上段へ上げると同じコマに 2 か所で生きる（INV-12）ため。T からその生徒が消えれば Q28 で自動で上がる。
+   */
+  forcedLower?: (student: StudentEntry) => boolean
+} = {}): TemplateDeskSeatPlan {
   const upperSlots: StudentPair = [
     templateLesson?.studentSlots[0] ? { ...templateLesson.studentSlots[0] } : null,
     templateLesson?.studentSlots[1] ? { ...templateLesson.studentSlots[1] } : null,
@@ -969,6 +989,10 @@ export function planTemplateDeskSeats(templateLesson: DeskLesson | undefined, ca
   const toSeat: TemplateDeskSeatCandidate[] = []
   const toLower: TemplateDeskSeatCandidate[] = []
   for (const candidate of candidates) {
+    if (options.forcedLower?.(candidate.student)) {
+      toLower.push(candidate)
+      continue
+    }
     const identical = templateStudents.find((student) => (
       !matched.has(student)
       && student.subject === candidate.student.subject
@@ -1253,8 +1277,16 @@ export type TemplateDiffApplySummary = {
   deletedTeacherDeskFilled: number
   /** 講師を削除した机に、削除した講師とは別のテンプレの講師を置いた机（Q21-9 例外 2 の改定・オーナー決定 2026-10-14）。 */
   deletedTeacherDeskReassigned: number
-  /** 同じコマの別の 1 行の机に生きているため上段に置かなかった生徒（Q21-11）。 */
+  /**
+   * 同じコマの別の 1 行の机に生きているため上段に置かなかった生徒（旧 Q21-11）。2026-11-01（決定記録 57）以降は、下段へ移す席が無い
+   * （その机の保留の下段が 2 席とも埋まっている）形だけの予備経路で増える。
+   */
   skippedDuplicateStudents: number
+  /**
+   * 決定記録 57（オーナー決定 2026-11-01・自動処理一覧 A-10「緑化」）: 同じコマの別の机 D に 1 行で生きていた手入力の生徒を、テンプレ机 T に
+   * その生徒をテンプレどおり置くために D の同じ席の下段（保留・緑）へ移した数（D の上段のその席は空白のまま 2 段表示）。
+   */
+  duplicateDemotedStudents: number
   /**
    * 印あり＋中身が違う机を席ごとに突き合わせ、テンプレの生徒と既存の生徒（空いた席に残した生徒）を 1 行にまとめた机
    * （オーナー指示 2026-09-30。保留にならなかった机）。
@@ -1305,7 +1337,7 @@ export type TemplateDiffApplySummary = {
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, qrTeacherRemoved: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesKept: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0, wholeDayTransferPendingStudents: 0, slotFollowMovedMakeups: 0, slotFollowPendingMakeups: 0, manualTeacherPending: 0, manualTeacherReplaced: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, qrTeacherRemoved: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, duplicateDemotedStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesKept: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0, wholeDayTransferPendingStudents: 0, slotFollowMovedMakeups: 0, slotFollowPendingMakeups: 0, manualTeacherPending: 0, manualTeacherReplaced: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -1344,8 +1376,10 @@ export type ComputeTemplateDiffApplyResult = {
   wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }>
   /** Q40-3: wholeDayTransferSkipped のうち精算済み（置かず・未消化にせず・−1 もしない）の生徒。配置計画は同じ要素参照で除外する。 */
   wholeDayTransferSettled: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }>
-  /** Q21-11 で上段に置かなかった生徒（同じコマの別の 1 行の机に同じ生徒が生きている）。確認の画面に名前と理由を出すため（2026-10-21・tp-56 case1）。 */
+  /** 旧 Q21-11 で上段に置かなかった生徒（2026-11-01 以降は下段へ移す席が無い予備経路だけ）。確認の画面に名前と理由を出すため（2026-10-21・tp-56 case1）。 */
   skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }>
+  /** 決定記録 57（2026-11-01・A-10）: テンプレ机 T に置くために別の机 D の下段へ移した手入力の生徒（確認の画面の理由の行に名前つきで出す）。 */
+  duplicateDemotions: TemplateDiffDuplicateDemotion[]
   /** Q41: 手置き講師の扱い（重ねて保留／テンプレの講師に替えた）。確認の画面の理由の行に出す。 */
   teacherNotes: TemplateDiffTeacherNote[]
   /**
@@ -1522,6 +1556,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   const existingSuppressed = new Set(params.suppressedRegularLessonOccurrences)
   const wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }> = []
   const skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }> = []
+  const duplicateDemotions: TemplateDiffDuplicateDemotion[] = []
   const teacherNotes: TemplateDiffTeacherNote[] = []
   const sameDayMoveCopyReverts: SameDayMoveCopyRevert[] = []
   // Q36 H-1（regression-reviewer 2026-10-03）: その日に同じ生徒×科目の**会計を持つ出欠記録**（休み・振無休・出席）がある生徒は写しとしない。
@@ -1597,6 +1632,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
         addedSuppressed,
         wholeDayTransferSkipped,
         skippedDuplicates,
+        duplicateDemotions,
         teacherNotes,
         sameDayMoveCopyReverts,
         templatePlacedOnDate: templatePlacedByDate.get(cell.dateKey),
@@ -1632,6 +1668,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
     wholeDayTransferSkipped,
     wholeDayTransferSettled: wholeDayTransferSkipped.filter((item) => wholeDayTransferSettledSet.has(item)),
     skippedDuplicates,
+    duplicateDemotions,
     teacherNotes,
     sameDayMoveCopyReverts,
   }
@@ -1650,6 +1687,7 @@ function applyTemplateDiffToCell(context: {
   addedSuppressed: Set<string>
   wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string; slotNumber: number; deskIndex: number; seatIndex: number }>
   skippedDuplicates: Array<{ student: StudentEntry; dateKey: string; slotNumber: number }>
+  duplicateDemotions: TemplateDiffDuplicateDemotion[]
   teacherNotes: TemplateDiffTeacherNote[]
   sameDayMoveCopyReverts: SameDayMoveCopyRevert[]
   /** Q36: その日に新テンプレが置く生徒×科目 → 置くコマ ID（抑止後）。 */
@@ -1732,10 +1770,13 @@ function applyTemplateDiffToCell(context: {
     })
   })
   // collided: 席ごとの突き合わせで下段へ入る写し（新テンプレの別の生徒が席を埋めた）。写しは上段（机）か下段（保留中の再保存）から来る。
-  const collectCollidedCopies = (desk: DeskCell, pending: TemplatePendingDesk | undefined, plan: TemplateDeskSeatPlan) => {
+  const collectCollidedCopies = (desk: DeskCell, pending: TemplatePendingDesk | undefined, plan: TemplateDeskSeatPlan, deskIndex: number) => {
     if (isClosed) return
     for (const student of plan.lowerSlots) {
       if (!student || !isRevertibleCopy(student)) continue
+      // 決定記録 57（2026-11-01・A-10）: 同じコマの別のテンプレ机にその生徒が置かれるため下段に居る写しは「席がぶつかった（collided）」ではない
+      // （理由の行は duplicate-demoted で出す。A-12 の注意の印とも二重にしない）。
+      if (isTemplateDuplicateElsewhere(deskIndex, student)) continue
       // 写しの所在は id で引く（planTemplateDeskSeats は下段の席が埋まっていればもう一方の席へ置くので、plan 上の席番号は元の席と限らない）。
       const upperSeat = (desk.lesson?.studentSlots ?? []).findIndex((item) => item?.id === student.id)
       if (upperSeat >= 0) { pushRevert(desk, 'upper', upperSeat, student, 'collided'); continue }
@@ -1744,9 +1785,18 @@ function applyTemplateDiffToCell(context: {
     }
   }
 
-  // ── 1. 机ごとの振り分け（Q21-3・Q29）。Q21-11 の重複は 2. で除いてから振り分け直す。
+  // 決定記録 57（2026-11-01・A-10）: この保存がこのコマで新しく作る／中身を足す保留（別の机 D の下段へ移した手入力の生徒）。振り分け・席ごとの
+  // 突き合わせはこの保留を既存の保留と同じに見る（D は 'pending-rebase' になる）。
+  const localPending: TemplatePendingDeskMap = {}
+  const pendingOfDesk = (desk: DeskCell) => localPending[buildTemplatePendingDeskKey(cell.id, desk.id)] ?? context.pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]
+  /** 決定記録 57: その生徒が、この机以外のテンプレ机に（テンプレどおり）置かれるか。 */
+  const isTemplateDuplicateElsewhere = (deskIndex: number, student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => (
+    templateDesks.some((templateDesk, otherIndex) => otherIndex !== deskIndex && liveStudents(templateDesk.lesson).some((other) => isSameTemplateStudent(other, student)))
+  )
+
+  // ── 1. 机ごとの振り分け（Q21-3・Q29）。Q21-11（2026-11-01 改定）の重複は 2. で D の下段へ移してから振り分け直す。
   const classify = (desk: DeskCell, index: number, templateDesk: DeskCell): DeskDecision => {
-    const pending = context.pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]
+    const pending = pendingOfDesk(desk)
     if (pending) return { kind: 'pending-rebase', pending }
     const mark = resolveDeskManualInputMark(desk, {
       dateKey: cell.dateKey,
@@ -1794,7 +1844,7 @@ function applyTemplateDiffToCell(context: {
     if (decision.kind === 'keep') return liveStudents(desk.lesson).filter((student) => isAdoptedByCellTemplate(student, deskIndex))
     return markedSeatCandidates(desk, decision).map((candidate) => candidate.student).filter((student) => isAdoptedByCellTemplate(student, deskIndex))
   }
-  const planSeatsFor = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): TemplateDeskSeatPlan | null => {
+  const planSeatsFor = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number, options: { forceTemplateDuplicatesLower?: boolean } = {}): TemplateDeskSeatPlan | null => {
     if (decision.kind !== 'pending' && decision.kind !== 'pending-rebase') return null
     const marked = markedSeatCandidates(desk, decision)
     // 'pending' で印のある生きている生徒がいなければ null（記録・メモだけの机＝Q28-6）。Q38 で全員外した机は候補 0 の plan（＝テンプレを採用）。
@@ -1803,7 +1853,9 @@ function applyTemplateDiffToCell(context: {
     const reservedSeats = decision.kind === 'pending'
       ? accountingCount(desk.statusSlots)
       : accountingCount(desk.statusSlots) + accountingCount(decision.pending.lower.statusSlots)
-    return planTemplateDeskSeats(templateLessonOf(templateDesk), candidates, cell.dateKey, { reservedSeats })
+    // 決定記録 57: 同じコマの別のテンプレ机に置かれる生徒は席が空いていても下段（検出の段だけ forceTemplateDuplicatesLower: false で旧来の形を見る）。
+    const forcedLower = options.forceTemplateDuplicatesLower === false ? undefined : (student: StudentEntry) => isTemplateDuplicateElsewhere(deskIndex, student)
+    return planTemplateDeskSeats(templateLessonOf(templateDesk), candidates, cell.dateKey, { reservedSeats, forcedLower })
   }
 
   // 1 行の机として机に残る「テンプレ以外の生きている生徒」（Q21-11 の重複判定の相手）。
@@ -1817,9 +1869,9 @@ function applyTemplateDiffToCell(context: {
     if (decision.kind !== 'pending' && !(decision.kind === 'pending-rebase' && decision.pending.lower.teacher)) return false
     return resolveManualTeacherOverlap({ existingTeacher, templateDesk, resolveAliases: context.teacherAliases })
   }
-  const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): StudentEntry[] => {
+  const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number, options: { forceTemplateDuplicatesLower?: boolean } = {}): StudentEntry[] => {
     if (decision.kind === 'keep') return liveStudents(stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(deskIndex)))
-    const plan = planSeatsFor(desk, decision, templateDesk, deskIndex)
+    const plan = planSeatsFor(desk, decision, templateDesk, deskIndex, options)
     if (isManualTeacherOverlapDesk(desk, decision, templateDesk, plan)) return []
     return plan && !plan.overflow ? plan.kept : []
   }
@@ -1884,40 +1936,75 @@ function applyTemplateDiffToCell(context: {
   // Q38: 手動追加の通常授業をテンプレの机に任せるかは、Q35 を当てた後・Q21-11 の反復の前のテンプレ机で固定する。
   adoptionTemplateDesks = templateDesks
   let decisions = cell.desks.map((desk, index) => classify(desk, index, templateDesks[index]))
-  const skippedByDesk = cell.desks.map(() => [] as StudentEntry[])
-  // ── 2. Q21-11：同じコマの別の 1 行の机に生きている生徒は上段に置かない（振り分けが安定するまで繰り返す）。
-  // テンプレ側の生徒は反復ごとに減るだけ（単調）なので、テンプレの生徒数＋1 回で必ず収束する（席ごとの突き合わせで「残した既存の生徒」が
-  // テンプレの中身に依存するようになったため、机の数では足りない連鎖がありうる・regression-reviewer L-4）。
-  const iterationLimit = appliedTemplateDesks.reduce((sum, desk) => sum + liveStudents(desk.lesson).length, 0) + 1
-  for (let iteration = 0; iteration <= iterationLimit; iteration += 1) {
-    const livingByDesk = cell.desks.map((desk, index) => oneRowNonTemplateLiveStudents(desk, decisions[index], templateDesks[index], index))
-    let changed = false
-    const nextTemplateDesks = templateDesks.map((templateDesk, index) => {
-      const elsewhere = livingByDesk.flatMap((students, otherIndex) => (otherIndex === index ? [] : students))
-      // stripScaffoldTeacher: 丸ごと振替の日は Q35（手順 0）が先にテンプレの生徒を全員外すので、ここで strip に当たる机は今は無い。
-      // Q35 を狭める・戻すときは、L-7 兄弟 1（21d5573）の「Q21-11 で空けた机にも strip」の assert をこの経路へ戻すこと。
-      const filtered = filterTemplateDeskStudents(templateDesk, elsewhere, { stripScaffoldTeacher: Boolean(templateCell.scaffoldTeachersStripped) })
-      if (filtered.removed.length > 0) {
-        changed = true
-        skippedByDesk[index].push(...filtered.removed)
+  // ── 2. Q21-11（オーナー決定 2026-11-01・決定記録 57「A-10 を緑化する」）: テンプレ机 T の生徒 S が同じコマの別の机 D に手入力の印つきで
+  //   1 行で生きているとき、旧（2026-09-29〜）は T に S を置かず抑止キーを積んでいた（手置き側が無言で勝つ）。新: **T には S をテンプレどおり置き**
+  //   （上段・抑止キーは積まない）、**D では S の手入力の授業を同じ席の下段（保留・緑）へ移す**（D の上段のその席は空白のまま 2 段表示。もう一方の
+  //   席・机の講師は不変。D に他に何も無くても 2 段）。D は 'pending-rebase' として席ごとの突き合わせへ回り、S は forcedLower で下段に留まる。
+  //   片づけ: D で「テンプレ授業を採用」→ 下段を既存の処分規則で外す／「手入力データを採用」→ S を D の上段へ戻し、T の S を外して旧 Q21-11 と同じ
+  //   抑止キーを積む（computePendingDeskResolution）。Q28 の自動 1 行化は S が T に生きている間は 'duplicate-student' で効かない。
+  //   予備: D の保留の下段に S を置く席が無い（2 席とも埋まっている・整合の取れたデータでは起きない）ときだけ旧 Q21-11（T に置かず抑止キー）。
+  //   ★旧「T に置かない」を既定に戻さない（回帰防止・inv12-placement-uniqueness.matrix.test.ts 決定記録 57 の行が検出する）。
+  const workingDesks = [...cell.desks]
+  const legacySkippedByDesk = cell.desks.map(() => [] as StudentEntry[])
+  cell.desks.forEach((desk, index) => {
+    const living = oneRowNonTemplateLiveStudents(desk, decisions[index], templateDesks[index], index, { forceTemplateDuplicatesLower: false })
+    for (const student of living) {
+      const templateDeskIndex = templateDesks.findIndex((templateDesk, otherIndex) => otherIndex !== index && liveStudents(templateDesk.lesson).some((other) => isSameTemplateStudent(other, student)))
+      if (templateDeskIndex < 0) continue
+      const current = workingDesks[index]
+      const seat = (current.lesson?.studentSlots ?? []).findIndex((candidate) => candidate === student || (candidate != null && candidate.id === student.id))
+      if (seat < 0 || !current.lesson) continue // 既に下段（保留中の再保存）＝そのまま下段に留まる（forcedLower）
+      const key = buildTemplatePendingDeskKey(cell.id, desk.id)
+      const existing = pendingOfDesk(desk)
+      const lowerSlots: StudentPair = [existing?.lower.lesson?.studentSlots[0] ?? null, existing?.lower.lesson?.studentSlots[1] ?? null]
+      const otherSeat = seat === 0 ? 1 : 0
+      const lowerSeat = !lowerSlots[seat] && !existing?.lower.statusSlots?.[seat] && !hasMemoText(existing?.lower.memoSlots?.[seat]) ? seat
+        : (!lowerSlots[otherSeat] && !existing?.lower.statusSlots?.[otherSeat] && !hasMemoText(existing?.lower.memoSlots?.[otherSeat]) ? otherSeat : -1)
+      if (lowerSeat < 0) {
+        legacySkippedByDesk[templateDeskIndex].push(student)
+        continue
+      }
+      // 下段では A-12 の注意の印（templateCopyNotice）を持たない（保留の緑と理由文で足りる・二重表示にしない）。
+      const { templateCopyNotice: _notice, ...demoted } = student
+      void _notice
+      lowerSlots[lowerSeat] = { ...demoted }
+      const lessonId = existing?.lower.lesson?.id ?? `pending_lower_${cell.dateKey}_${cell.slotNumber}_${index}`
+      const lower: TemplatePendingLower = existing
+        ? { ...existing.lower, lesson: { ...(existing.lower.lesson ?? { id: lessonId }), studentSlots: lowerSlots } }
+        : { lesson: { id: lessonId, studentSlots: lowerSlots } }
+      const templateStudent = liveStudents(templateDesks[templateDeskIndex].lesson).find((other) => isSameTemplateStudent(other, student))
+      localPending[key] = existing
+        ? { ...existing, lower }
+        : { lower, effectiveStartDate: context.effectiveStartDate, createdAt: context.createdAt, origin: { kind: 'same-slot-template-duplicate', note: buildSameSlotTemplateDuplicateNote(templateDeskIndex + 1, templateStudent?.subject ?? student.subject) } }
+      const slots = current.lesson.studentSlots.map((candidate, candidateSeat) => (candidateSeat === seat ? null : candidate)) as StudentPair
+      if (slots[0] || slots[1]) workingDesks[index] = { ...current, lesson: { ...current.lesson, studentSlots: slots } }
+      else {
+        const { lesson: _lesson, ...rest } = current
+        void _lesson
+        workingDesks[index] = rest
+      }
+      summary.duplicateDemotedStudents += 1
+      context.duplicateDemotions.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex: index, seat: lowerSeat, templateDeskIndex })
+    }
+  })
+  // 予備経路（旧 Q21-11）: 下段へ移せなかった生徒は T に置かず抑止キーを積む（テンプレ側の生徒が減るだけ＝1 回で収束）。
+  if (legacySkippedByDesk.some((removed) => removed.length > 0)) {
+    templateDesks = templateDesks.map((templateDesk, index) => {
+      if (legacySkippedByDesk[index].length === 0) return templateDesk
+      const filtered = filterTemplateDeskStudents(templateDesk, legacySkippedByDesk[index], { stripScaffoldTeacher: Boolean(templateCell.scaffoldTeachersStripped) })
+      for (const student of filtered.removed) {
+        summary.skippedDuplicateStudents += 1
+        context.skippedDuplicates.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+        const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
+        if (!context.existingSuppressed.has(key)) context.addedSuppressed.add(key)
       }
       return filtered.desk
     })
-    if (!changed) break
-    templateDesks = nextTemplateDesks
-    decisions = cell.desks.map((desk, index) => classify(desk, index, templateDesks[index]))
   }
-  skippedByDesk.forEach((removed) => {
-    for (const student of removed) {
-      summary.skippedDuplicateStudents += 1
-      context.skippedDuplicates.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
-      const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
-      if (!context.existingSuppressed.has(key)) context.addedSuppressed.add(key)
-    }
-  })
+  decisions = workingDesks.map((desk, index) => classify(desk, index, templateDesks[index]))
 
   // ── 3. 机を組み立てる。
-  const nextDesks = cell.desks.map((desk, index) => {
+  const nextDesks = workingDesks.map((desk, index) => {
     const templateDesk = templateDesks[index]
     const decision = decisions[index]
     const pendingKey = buildTemplatePendingDeskKey(cell.id, desk.id)
@@ -2000,7 +2087,7 @@ function applyTemplateDiffToCell(context: {
       // Q38: テンプレが同じコマの別の机に置く手動追加の通常授業は候補から外れ（下段にも入れない）、テンプレの机に任せる。
       summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
       const plan = planSeatsFor(desk, decision, templateDesk, index)
-      if (plan) collectCollidedCopies(desk, undefined, plan)
+      if (plan) collectCollidedCopies(desk, undefined, plan, index)
       const filledDeletedTeacherDeskBySeat = teacher.reason === 'kept-deleted' && Boolean(upperLesson)
       // Q41（オーナー決定 B・2026-10-21 → オーナー決定 2026-11-01「緑 2 段へ広げる」）: 手置き講師の机にテンプレの別の講師が入る → 手で置いた生徒が
       // 居れば席の空きに関係なく全員と、手置き講師を下段に残して保留（緑）にする（Q34-4 の「空いた席なら 1 行のまま」をこの机には当てない＝生徒が
@@ -2114,7 +2201,7 @@ function applyTemplateDiffToCell(context: {
     // Q38: 下段（旧版の保存が作った保留を含む）の手動追加の通常授業も、テンプレが同じコマの別の机に同じ生徒×科目を置くなら外す（再保存で片づく）。
     summary.manualRegularAdoptedByCellTemplate += cellAdoptedStudents(desk, decision, index).length
     const plan = planSeatsFor(desk, decision, templateDesk, index)!
-    collectCollidedCopies(desk, pending, plan)
+    collectCollidedCopies(desk, pending, plan, index)
     if (plan.overflow) {
       // 下段の席が足りない（整合の取れたデータでは起きない）→ 机の中身と保留を変えずに残す（黙って捨てない）。
       summary.pending += 1
@@ -2311,7 +2398,7 @@ export type TemplateDiffConfirmContext = {
  * 名前つきで出すことで、黙って消える形（改定前の M-1 の誤認など）が確認の画面の時点で見える。
  */
 export type TemplateDiffStudentNote = {
-  kind: 'duplicate-skipped' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced'
+  kind: 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced'
     | 'copy-kept-superseded' | 'copy-kept-stale' | 'copy-kept-collided'
   /** 生徒の名前（講師の行では講師の名前）。 */
   studentName: string
@@ -2375,7 +2462,9 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
       const students = note.keptStudentNames && note.keptStudentNames.length > 0 ? `手で置いた ${note.keptStudentNames.join('・')} はテンプレの講師（${note.detail}）の担当で机に残ります。` : ''
       return `${where} ${who}: 下の行の講師は手で置いた講師ではない（日程表の自動割振り・削除の記録）ため、テンプレの講師（${note.detail}）にします。${students}`
     }
-    case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。`
+    case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があり、その机の下の行に空きが無いため、テンプレの通常授業は置きません。`
+    // 決定記録 57（2026-11-01・A-10）: detail＝テンプレの机番号（「机 n」）。
+    case 'duplicate-demoted': return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}にテンプレの通常授業を置くため、手で置いた授業（振替・講習など）はその机の下の行（保留・緑）に残します。どちらかを片づけてください。`
     case 'transfer-placed': return `${where} ${who}: 丸ごと振替した日なので、振替先${note.detail ? `（${note.detail}）` : ''}の同じ机へ振替として置きます。`
     case 'transfer-pending': return note.displacedName
       ? `${where} ${who}: 丸ごと振替した日ですが振替先${note.detail ? `（${note.detail}）` : ''}が満席のため、席に居た手入力の ${note.displacedName} を下段（保留・緑）に残し、その席へ振替として置きます。`
@@ -2479,6 +2568,7 @@ function buildTemplateDiffConfirmLines(effectiveStartDate: string, summary: Temp
     `${summary.replaced}机を置き換え、${summary.pending}机が保留（緑）になります。`,
     `そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
     ...(summary.seatMerged > 0 ? [`テンプレの空いた席に既存の生徒を残して 1 行にする${summary.seatMerged}机。`] : []),
+    ...(summary.duplicateDemotedStudents > 0 ? [`同じコマの別の机にテンプレの通常授業を置くため、手で置いた授業を下の行（保留・緑）に残す生徒: ${summary.duplicateDemotedStudents}名。`] : []),
     ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`] : []),
     ...(summary.sameDayMoveCopiesKept > 0 ? [`同じ日の中で手で動かしていた通常授業${summary.sameDayMoveCopiesKept}名はそのまま残し、緑で知らせます（テンプレと合わない分）。`] : []),
     ...(summary.manualRegularAdoptedByCellTemplate > 0 ? [`手動追加の通常授業${summary.manualRegularAdoptedByCellTemplate}名はテンプレと同じ内容なのでテンプレの机に合わせます。`] : []),
@@ -2510,6 +2600,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.qrTeacherRemoved > 0) parts.push(`テンプレの同じ講師が同じコマに居るため日程表登録の講師を外した机: ${summary.qrTeacherRemoved}机。`)
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
   if (summary.deletedTeacherDeskReassigned > 0) parts.push(`講師を削除した机に別の講師をテンプレから置いた机: ${summary.deletedTeacherDeskReassigned}机。`)
+  if (summary.duplicateDemotedStudents > 0) parts.push(`同じコマの別の机にテンプレの通常授業を置き、手で置いた授業を下の行（保留）に残した生徒: ${summary.duplicateDemotedStudents}名。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
   if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`)
   if (summary.sameDayMoveCopiesKept > 0) parts.push(`同じ日の中で手で動かしていた通常授業をそのまま残して緑で知らせた生徒: ${summary.sameDayMoveCopiesKept}名。`)

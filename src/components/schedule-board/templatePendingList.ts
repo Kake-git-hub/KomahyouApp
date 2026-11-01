@@ -40,6 +40,7 @@ const ORIGIN_KIND_LABELS: Record<TemplatePendingOriginKind, string> = {
   'holiday-release-displaced': '休日解除（手入力を下段へ）',
   'slot-follow-full': '時限変更の追従',
   'slot-follow-displaced': '時限変更の追従（手入力を下段へ）',
+  'same-slot-template-duplicate': '同じコマにテンプレの授業',
 }
 
 export const TEMPLATE_SAVE_PENDING_KIND_LABEL = 'テンプレ保存'
