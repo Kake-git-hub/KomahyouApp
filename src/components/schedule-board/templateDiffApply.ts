@@ -482,109 +482,23 @@ export function isSameTeacherByAliases(left: string, right: string, resolveAlias
 }
 
 /**
- * Q41-2（オーナー決定 B・2026-10-21・テスト教室 tp-56 case3）: 手置き講師の机をテンプレの別の講師と重ねて保留（緑）にするか。権威関数（差分反映の保留の作成だけが使う）。
+ * Q41-2（オーナー決定 B・2026-10-21・テスト教室 tp-56 case3 → **オーナー決定 2026-11-01「緑 2 段へ広げる」で (c)(d) を撤廃**）:
+ * 手置き講師の机をテンプレの別の講師と重ねて保留（緑）にするか。権威関数（差分反映の保留の作成と保留中の再保存だけが使う）。
  *  (a) 既存の講師が手置き講師（保留中の再保存では下段の講師を既存の講師とみなす＝呼び出し側が渡す）
  *  (b) テンプレ机に別の講師が居る（同じ講師なら 2 行にしない）
- *  (c) テンプレ机に生徒が居る（講師だけのテンプレ机は暫定で対象外・Q41-12 (1)）
- *  (d) 手で置いた生徒（Q22 の印を持つ生きている生徒から Q34-2 の採用・Q38・Q36 で外れる生徒を除いた集合）が 1 人以上居る
+ * 旧 (c)「テンプレ机に生徒が居る」（講師だけのテンプレ机は Q41-13 で空き机へずらしていた）と旧 (d)「手で置いた生徒が 1 人以上居る」
+ * （居なければテンプレの講師に黙って替えていた＝旧 A-6）は、テスト担当の指摘（自動処理一覧 A-6・A-7「緑化してほしい」）を受けた
+ * オーナー決定 2026-11-01 で撤廃。手置き講師とテンプレの別の講師の衝突は、形を問わず講師ごと保留（緑 2 段）にして室長に選ばせる。
+ * ★撤廃前の条件を戻さない（回帰防止・inv02-manual-teacher-pending.matrix.test.ts「オーナー決定 2026-11-01」の行が検出する）。
  */
 export function resolveManualTeacherOverlap(params: {
   existingTeacher: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId'>
   templateDesk: Pick<DeskCell, 'teacher' | 'lesson'>
-  handPlacedStudents: readonly StudentEntry[]
   resolveAliases?: TeacherAliasResolver
 }): boolean {
   if (!isManualPlacedTeacher(params.existingTeacher)) return false
   if (!params.templateDesk.teacher.trim()) return false
-  if (liveStudents(params.templateDesk.lesson).length === 0) return false
-  if (isSameTeacherByAliases(params.existingTeacher.teacher, params.templateDesk.teacher, params.resolveAliases)) return false
-  return params.handPlacedStudents.length > 0
-}
-
-export type ManualTeacherDeskShift = {
-  /** 手置き講師の机（テンプレの講師だけの机と同じ番号）。 */
-  fromIndex: number
-  manualTeacher: Pick<DeskCell, 'teacher'>
-  templateTeacher: string
-  /** その机に手で置いた生徒（保留中は下段の生徒も）。文言用。 */
-  handPlacedStudentNames: string[]
-  /**
-   * テンプレの講師の置き先。placed＝同じコマの空き机（前回ずらした先の講師だけの机を含む）へ／present＝同じコマの別の机に既に居るので置かない／
-   * none＝空き机が無いのでこのコマには置かない。
-   */
-  placement: { kind: 'placed'; deskIndex: number } | { kind: 'present'; deskIndex: number } | { kind: 'none' }
-}
-
-/**
- * Q41-13（オーナー指示 2026-10-22「手入力講師がいる場合、テンプレで上書きされずに、手入力されたそのコマの空き講師枠に詰めてずらす」）。
- * 権威関数: テンプレの**講師だけ（生徒なし）**の机と同じ番号の盤面の机に**手置き講師**（Q41-1。保留中は下段の手置き講師）が居て別の講師なら、
- * その机のテンプレの講師を同じコマの空き机へずらす。ずらした後のテンプレ机で机ごとの突き合わせを行うので、手置き講師の机は Q21-9 の
- * 「テンプレ机に講師が居ない → ユーザーが置いた講師は残す」になり、手で置いた生徒（振替・講習など）もその講師の担当のまま 1 行で残る（2 行にしない）。
- *  - 置き先の優先: (1) 前回の保存でずらした先＝同じ講師が非 manual の講師だけで居る机（テンプレのその机は空）→ そのまま（再保存で講師が動かない）。
- *    (2) 同じ講師が同じコマの別の机（手置き・授業あり・保留の下段）に既に居る → 置かない（同じ講師を 2 机にしない・INV-01）。
- *    (3) 先頭の空き机（授業・講師・出欠記録・メモ・削除記録・保留が無く、テンプレのその机も空）＝再マージが足場講師を置くのと同じ「先頭の空き机」。
- *    (4) 無ければ置かない（理由の行に出す）。
- *  - 対象外（従来どおり）: QR 自動割振りの講師（例外 1）・講師の削除記録（例外 2）・同じ講師・テンプレ机に生徒が居る（Q41 の 2 行、または置き換え）・
- *    保留中の下段の手置き講師が同じコマの別の机に居る（Q41-8 の「講師なし」分岐で机へ戻せない形）。
- *  - 再マージの不動点: ずらした先の講師だけの机は、再マージの足場講師の据え置き（Issue #76）で同じ講師が管理セルに居る限り残り、
- *    元の机番号の管理机（講師だけ）は盤面の机に授業があれば消費済み、無ければ「同じ講師が既に居る」で置き直されない。
- */
-export function planManualTeacherDeskShifts(params: {
-  desks: readonly DeskCell[]
-  templateDesks: readonly DeskCell[]
-  rawTemplateDesks?: readonly DeskCell[]
-  pendingDesks?: TemplatePendingDeskMap | null
-  cellId: string
-  resolveAliases?: TeacherAliasResolver
-}): ManualTeacherDeskShift[] {
-  const aliases = params.resolveAliases ?? defaultTeacherAliases
-  const pendingOf = (desk: DeskCell) => params.pendingDesks?.[buildTemplatePendingDeskKey(params.cellId, desk.id)]
-  const isTemplateDeskEmpty = (index: number) => {
-    const applied = params.templateDesks[index]
-    const raw = params.rawTemplateDesks?.[index]
-    const empty = (desk: DeskCell | undefined) => !desk || (!desk.teacher.trim() && liveStudents(desk.lesson).length === 0)
-    return empty(applied) && empty(raw)
-  }
-  const hasRecords = (desk: DeskCell) => (desk.statusSlots ?? []).some(Boolean)
-  const hasMemo = (desk: DeskCell) => (desk.memoSlots ?? []).some((memo) => hasMemoText(memo))
-  const taken = new Set<number>()
-  const shifts: ManualTeacherDeskShift[] = []
-  params.desks.forEach((desk, index) => {
-    const templateDesk = params.templateDesks[index]
-    if (!templateDesk || !templateDesk.teacher.trim() || liveStudents(templateDesk.lesson).length > 0) return
-    const pending = pendingOf(desk)
-    const manualTeacher = pending?.lower.teacher ?? (isManualPlacedTeacher(desk) ? desk : null)
-    if (!manualTeacher) return
-    if (isSameTeacherByAliases(manualTeacher.teacher, templateDesk.teacher, aliases)) return
-    if (pending?.lower.teacher && isTeacherElsewhereInCell({ desks: params.desks }, desk.id, manualTeacher, aliases)) return
-    const handPlacedStudentNames = [...liveStudents(desk.lesson).filter(studentHasManualMark), ...liveStudents(pending?.lower.lesson)].map((student) => student.name)
-    const base = { fromIndex: index, manualTeacher: { teacher: manualTeacher.teacher }, templateTeacher: templateDesk.teacher, handPlacedStudentNames }
-    const sameTeacherAt = (other: DeskCell) => other.teacher.trim() !== '' && isSameTeacherByAliases(other.teacher, templateDesk.teacher, aliases)
-    const previousTarget = params.desks.findIndex((other, j) => (
-      j !== index && !taken.has(j) && sameTeacherAt(other) && !other.lesson && !other.manualTeacher && !hasRecords(other) && !pendingOf(other) && isTemplateDeskEmpty(j)
-    ))
-    if (previousTarget >= 0) {
-      taken.add(previousTarget)
-      shifts.push({ ...base, placement: { kind: 'placed', deskIndex: previousTarget } })
-      return
-    }
-    const present = params.desks.findIndex((other, j) => j !== index && (sameTeacherAt(other) || Boolean(pendingOf(other)?.lower.teacher && isSameTeacherByAliases(pendingOf(other)!.lower.teacher!.teacher, templateDesk.teacher, aliases))))
-    if (present >= 0) {
-      shifts.push({ ...base, placement: { kind: 'present', deskIndex: present } })
-      return
-    }
-    const target = params.desks.findIndex((other, j) => (
-      j !== index && !taken.has(j) && !other.lesson && !other.teacher.trim() && !other.manualTeacher && !isTemplateDiffTeacherTombstone(other)
-      && !hasRecords(other) && !hasMemo(other) && !pendingOf(other) && isTemplateDeskEmpty(j)
-    ))
-    if (target >= 0) {
-      taken.add(target)
-      shifts.push({ ...base, placement: { kind: 'placed', deskIndex: target } })
-      return
-    }
-    shifts.push({ ...base, placement: { kind: 'none' } })
-  })
-  return shifts
+  return !isSameTeacherByAliases(params.existingTeacher.teacher, params.templateDesk.teacher, params.resolveAliases)
 }
 
 /**
@@ -1278,16 +1192,20 @@ export type TemplateDiffApplySummary = {
   slotFollowMovedMakeups: number
   /** Q40-9: 同上で、新しい時限が満席のため同じ机番号の下段（保留・緑）へ置いた件数。 */
   slotFollowPendingMakeups: number
-  /** Q41（2026-10-21）: 手置き講師の机に手で置いた生徒が居て、テンプレの別の講師と重ねて保留（緑）にした机の数。 */
+  /**
+   * Q41（2026-10-21）: 手置き講師の机にテンプレの別の講師が入るため、講師ごと保留（緑）にした机の数。
+   * オーナー決定 2026-11-01「緑 2 段へ広げる」で、手で置いた生徒が居ない机・テンプレ机が講師だけの机も数える。
+   */
   manualTeacherPending: number
-  /** Q41-11: 本条の対象外（手で置いた生徒が居ない等）で、手置き講師をテンプレの講師に替えた机の数（文言だけ・従来どおりの置き換え）。 */
+  /**
+   * Q41-11: 手置き講師をテンプレの講師に替えた机の数（文言だけ）。2026-11-01 以降は、保留中の再保存でテンプレの机から講師が消え、
+   * 手置き講師が同じコマの別の机に居て机へ戻せない形（Q41-8）だけで増える（作成時の黙った置き換えは無くなった）。
+   */
   manualTeacherReplaced: number
-  /** Q41-13（2026-10-22）: 手置き講師を残し、テンプレの講師だけの机を同じコマの空き机へずらした（または置かなかった）机の数。 */
-  manualTeacherKept: number
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, qrTeacherRemoved: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0, wholeDayTransferPendingStudents: 0, slotFollowMovedMakeups: 0, slotFollowPendingMakeups: 0, manualTeacherPending: 0, manualTeacherReplaced: 0, manualTeacherKept: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, qrTeacherRemoved: 0, deletedTeacherDeskFilled: 0, deletedTeacherDeskReassigned: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0, sameDayMoveCopiesReverted: 0, manualRegularAdoptedByCellTemplate: 0, orphanedMakeupsRemoved: 0, wholeDayTransferPlacedStudents: 0, wholeDayTransferStockedStudents: 0, wholeDayTransferPendingStudents: 0, slotFollowMovedMakeups: 0, slotFollowPendingMakeups: 0, manualTeacherPending: 0, manualTeacherReplaced: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -1722,10 +1640,15 @@ function applyTemplateDiffToCell(context: {
       suppressedRegularLessonOccurrences: context.suppressedRegularLessonOccurrences,
       templateDeskBeforeSuppression: rawTemplateDesks[index],
     })
-    if (!mark.marked) return { kind: 'replace' }
+    // Q41（オーナー決定 2026-11-01「緑 2 段へ広げる」）: 手置き講師の机にテンプレの別の講師が入る机は、手で置いた生徒の有無・テンプレ机の
+    // 生徒の有無を問わず 'pending' へ回し、講師ごと保留（緑 2 段）にする（旧: 印なし→'replace' で黙って置き換え〔A-6〕／テンプレ机が講師だけ→
+    // Q41-13 で空き机へずらす〔A-7〕）。判定は権威関数 resolveManualTeacherOverlap（QR 講師・削除記録・同じ講師は従来どおり対象外）。
+    const manualTeacherConflict = resolveManualTeacherOverlap({ existingTeacher: desk, templateDesk, resolveAliases: context.teacherAliases })
+    if (!mark.marked) return manualTeacherConflict ? { kind: 'pending' } : { kind: 'replace' }
     const templateHasStudents = liveStudents(templateDesk.lesson).length > 0
     const tombstoneOnly = mark.reasons.every((reason) => reason.kind === 'deleted-teacher')
     if (tombstoneOnly && !templateHasStudents && !templateDesk.teacher.trim()) return { kind: 'tombstone-clear' }
+    if (manualTeacherConflict) return { kind: 'pending' }
     if (!templateHasStudents) return { kind: 'keep' }
     if (isTemplateDeskStudentContentEqual(templateDesk, desk)) return { kind: 'adopt' }
     return { kind: 'pending' }
@@ -1773,11 +1696,12 @@ function applyTemplateDiffToCell(context: {
   // 席ごとの突き合わせで空いた席に残した既存の生徒も 1 行側で生きるので数える（2026-09-30）。
   // Q38 でテンプレの机に任せる手動追加の通常授業は数えない（数えると Q21-11 がテンプレ側を外し、生徒がどこにも無くなる）。
   // Q41（2026-10-21・regression-reviewer M-3）: 手置き講師の机（講師ごと保留）では残した席の生徒も下段へ移るので、1 行で生きる生徒には数えない。
+  // 2026-11-01: テンプレ机が講師だけの机（A-7）も講師ごと保留になり、手で置いた生徒は下段へ移るので同じく数えない。
   const isManualTeacherOverlapDesk = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, plan: TemplateDeskSeatPlan | null) => {
-    if (!plan || plan.overflow || liveStudents(templateDesk.lesson).length === 0) return false
+    if (!plan || plan.overflow) return false
     const existingTeacher = decision.kind === 'pending-rebase' && decision.pending.lower.teacher ? decision.pending.lower.teacher : desk
     if (decision.kind !== 'pending' && !(decision.kind === 'pending-rebase' && decision.pending.lower.teacher)) return false
-    return resolveManualTeacherOverlap({ existingTeacher, templateDesk, handPlacedStudents: [...plan.kept, ...liveStudents({ id: '', studentSlots: plan.lowerSlots })], resolveAliases: context.teacherAliases })
+    return resolveManualTeacherOverlap({ existingTeacher, templateDesk, resolveAliases: context.teacherAliases })
   }
   const oneRowNonTemplateLiveStudents = (desk: DeskCell, decision: DeskDecision, templateDesk: DeskCell, deskIndex: number): StudentEntry[] => {
     if (decision.kind === 'keep') return liveStudents(stripUnmarkedRegularStudents(desk.lesson, desk.id, keepsInOneRow(deskIndex)))
@@ -1806,30 +1730,27 @@ function applyTemplateDiffToCell(context: {
       return filtered.desk
     })
   }
-  // ── 0.5 Q41-13（オーナー指示 2026-10-22）: 手入力講師の机はテンプレで上書きしない。テンプレのその机が講師だけ（生徒なし）で盤面のその机に
-  //   手置き講師（保留中は下段の手置き講師）が居て別の講師なら、テンプレの講師を同じコマの空き机へ詰めてずらす（判定・置き先は権威関数
-  //   planManualTeacherDeskShifts）。以降の突き合わせはずらした後のテンプレ机で行う＝手置き講師の机は「テンプレ机に講師が居ない」になり、
-  //   Q21-9 で手置き講師が残り、手で置いた生徒もその講師の担当のまま 1 行（2 行にしない）。raw も講師だけ同じにずらす（Q35-7 の keepsWholeDayTeacher・
-  //   削除記録の突き合わせが見る。raw の生徒は動かさない＝抑止の帰属は元の机のまま）。
-  const teacherShifts = planManualTeacherDeskShifts({ desks: cell.desks, templateDesks, rawTemplateDesks, pendingDesks: context.pendingDesks, cellId: cell.id, resolveAliases: context.teacherAliases })
-  if (teacherShifts.length > 0) {
-    const shifted = [...templateDesks]
-    const shiftedRaw = [...rawTemplateDesks]
-    for (const shift of teacherShifts) {
-      const from = shifted[shift.fromIndex]
-      const fromRaw = shiftedRaw[shift.fromIndex]
-      shifted[shift.fromIndex] = { ...from, teacher: '', teacherAssignmentTeacherId: undefined }
-      shiftedRaw[shift.fromIndex] = { ...fromRaw, teacher: '', teacherAssignmentTeacherId: undefined }
-      if (shift.placement.kind === 'placed') {
-        const to = shift.placement.deskIndex
-        shifted[to] = { ...shifted[to], teacher: from.teacher, teacherAssignmentTeacherId: from.teacherAssignmentTeacherId }
-        shiftedRaw[to] = { ...shiftedRaw[to], teacher: fromRaw.teacher || from.teacher, teacherAssignmentTeacherId: fromRaw.teacherAssignmentTeacherId ?? from.teacherAssignmentTeacherId }
-      }
-      summary.manualTeacherKept += 1
-      context.teacherNotes.push({ kind: 'teacher-kept', teacherName: shift.manualTeacher.teacher, templateTeacher: shift.templateTeacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber, keptStudentNames: shift.handPlacedStudentNames, placement: shift.placement })
+  // ── 0.5（2026-11-01 に縮小）: 旧 Q41-13（オーナー指示 2026-10-22）は、テンプレ机が講師だけ（生徒なし）で盤面の同じ机に手置き講師が居るとき、
+  //   テンプレの講師を同じコマの空き机へずらしていた（planManualTeacherDeskShifts・v1.5.633〜v1.5.669）。オーナー決定 2026-11-01「緑 2 段へ広げる」
+  //   （自動処理一覧 A-7）でずらしは廃止し、この形も classify → 'pending' で講師ごと保留（緑 2 段）にする。過去の保存でずらした先の印
+  //   （templateTeacherShift）は表示だけ残す（isShiftedTemplateTeacherDesk）。ずらす処理を戻さない（回帰防止）。
+  //   残すのは旧 placement 'present' の 1 形だけ: テンプレの講師だけの机の講師が**同じコマの別の机に既に居る**なら、この机のテンプレ講師は
+  //   無いものとして扱う（上段に置くと同じ講師が 2 机になる＝INV-01）。手置き講師と手で置いた生徒は Q21-9「テンプレ机に講師が居ない」で 1 行のまま残る。
+  //   raw も同じにする（Q35-7 の keepsWholeDayTeacher・削除記録の突き合わせが見る）。
+  {
+    const blanked = new Set<number>()
+    cell.desks.forEach((desk, index) => {
+      const templateDesk = templateDesks[index]
+      if (!templateDesk || !templateDesk.teacher.trim() || liveStudents(templateDesk.lesson).length > 0) return
+      const pending = context.pendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)]
+      const manualTeacher = pending?.lower.teacher ?? (isManualPlacedTeacher(desk) ? desk : null)
+      if (!manualTeacher || isSameTeacherByAliases(manualTeacher.teacher, templateDesk.teacher, context.teacherAliases)) return
+      if (isTeacherElsewhereInCell(cell, desk.id, { teacher: templateDesk.teacher, teacherAssignmentTeacherId: templateDesk.teacherAssignmentTeacherId }, context.teacherAliases)) blanked.add(index)
+    })
+    if (blanked.size > 0) {
+      templateDesks = templateDesks.map((templateDesk, index) => (blanked.has(index) ? { ...templateDesk, teacher: '', teacherAssignmentTeacherId: undefined } : templateDesk))
+      rawTemplateDesks = rawTemplateDesks.map((templateDesk, index) => (blanked.has(index) ? { ...templateDesk, teacher: '', teacherAssignmentTeacherId: undefined } : templateDesk))
     }
-    templateDesks = shifted
-    rawTemplateDesks = shiftedRaw
   }
   // Q38: 手動追加の通常授業をテンプレの机に任せるかは、Q35 を当てた後・Q21-11 の反復の前のテンプレ机で固定する。
   adoptionTemplateDesks = templateDesks
@@ -1952,11 +1873,13 @@ function applyTemplateDiffToCell(context: {
       const plan = planSeatsFor(desk, decision, templateDesk, index)
       if (plan) collectCollidedCopies(desk, undefined, plan)
       const filledDeletedTeacherDeskBySeat = teacher.reason === 'kept-deleted' && Boolean(upperLesson)
-      // Q41（オーナー決定 B・2026-10-21）: 手置き講師の机に手で置いた生徒が居て、テンプレが別の講師＋生徒を置く → 手で置いた生徒を席の空きに関係なく全員と、
-      // 手置き講師を下段に残して保留（緑）にする（Q34-4 の「空いた席なら 1 行のまま」をこの机には当てない＝生徒が黙って別の講師の担当になる形を作らない）。
+      // Q41（オーナー決定 B・2026-10-21 → オーナー決定 2026-11-01「緑 2 段へ広げる」）: 手置き講師の机にテンプレの別の講師が入る → 手で置いた生徒が
+      // 居れば席の空きに関係なく全員と、手置き講師を下段に残して保留（緑）にする（Q34-4 の「空いた席なら 1 行のまま」をこの机には当てない＝生徒が
+      // 黙って別の講師の担当になる形を作らない）。2026-11-01 から、手で置いた生徒が居ない机（plan が null・旧 A-6）と、テンプレ机が講師だけで
+      // upperLesson が無い机（旧 A-7）も同じく講師ごと保留にする（下段は講師だけ、または講師＋手で置いた生徒）。
       const handPlaced = plan && !plan.overflow ? [...plan.kept, ...liveStudents({ id: '', studentSlots: plan.lowerSlots })] : []
-      const manualTeacherOverlap = Boolean(plan) && !plan!.overflow && Boolean(upperLesson)
-        && resolveManualTeacherOverlap({ existingTeacher: desk, templateDesk, handPlacedStudents: handPlaced, resolveAliases: context.teacherAliases })
+      const manualTeacherOverlap = (!plan || !plan.overflow)
+        && resolveManualTeacherOverlap({ existingTeacher: desk, templateDesk, resolveAliases: context.teacherAliases })
       if (!manualTeacherOverlap && plan && !plan.overflow && isEmptyPair(plan.lowerSlots) && upperLesson) {
         const mergedLesson: DeskLesson = { ...upperLesson, studentSlots: plan.upperSlots }
         // 1 行の机なので、出欠記録・メモは「採用」と同じく消さずに空いた席へ残す（入らなければ元の席に残す）。
@@ -1990,19 +1913,24 @@ function applyTemplateDiffToCell(context: {
         keptMemo: [],
       })
       const lower: TemplatePendingLower = {}
-      if (manualTeacherOverlap && plan && desk.lesson) {
-        // 手で置いた生徒を元の席のまま全員下段へ（残した席の生徒も含む）。
-        const overlapSlots: StudentPair = [...plan.lowerSlots] as StudentPair
-        for (const student of plan.kept) {
-          const seat = desk.lesson.studentSlots.findIndex((candidate) => candidate === student)
-          if (seat >= 0 && !overlapSlots[seat]) overlapSlots[seat] = student
-          else placeIntoPair(overlapSlots, Math.max(0, seat), student)
+      if (manualTeacherOverlap) {
+        // 手で置いた生徒を元の席のまま全員下段へ（残した席の生徒も含む）。居なければ下段は講師だけ（2026-11-01・旧 A-6）。
+        if (plan && desk.lesson) {
+          const overlapSlots: StudentPair = [...plan.lowerSlots] as StudentPair
+          for (const student of plan.kept) {
+            const seat = desk.lesson.studentSlots.findIndex((candidate) => candidate === student)
+            if (seat >= 0 && !overlapSlots[seat]) overlapSlots[seat] = student
+            else placeIntoPair(overlapSlots, Math.max(0, seat), student)
+          }
+          if (!isEmptyPair(overlapSlots)) lower.lesson = { ...cloneLesson(desk.lesson), studentSlots: overlapSlots }
         }
-        if (!isEmptyPair(overlapSlots)) lower.lesson = { ...cloneLesson(desk.lesson), studentSlots: overlapSlots }
         lower.teacher = pickTeacherFields(desk)
         summary.manualTeacherPending += 1
         if (manualTeacherReplacedHere) dropReplacedNote()
-        context.teacherNotes.push({ kind: 'teacher-pending', teacherName: desk.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+        context.teacherNotes.push({
+          kind: 'teacher-pending', teacherName: desk.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber,
+          keptStudentNames: handPlaced.map((student) => student.name), templateTeacherOnly: !upperLesson,
+        })
       } else if (plan && !plan.overflow) {
         if (desk.lesson && !isEmptyPair(plan.lowerSlots)) lower.lesson = { ...cloneLesson(desk.lesson), studentSlots: plan.lowerSlots }
       } else if (plan && desk.lesson) {
@@ -2024,6 +1952,13 @@ function applyTemplateDiffToCell(context: {
         const collapsed = computePendingDeskCollapse(upperDesk, { lower })
         if (collapsed.ok) {
           if (filledDeletedTeacherDesk) summary.deletedTeacherDeskFilled += 1
+          // Q41（2026-11-01・旧 A-6）: 手で置いた生徒が居なくても手置き講師の衝突は残す＝記録・メモは席へ戻し、保留は講師だけで作る
+          // （保留中の再保存・tp-64 の「講師だけの保留」と同じ形）。
+          if (lower.teacher) {
+            summary.pending += 1
+            context.nextPendingDesks[pendingKey] = { lower: { teacher: { ...lower.teacher } }, effectiveStartDate: context.effectiveStartDate, createdAt: context.createdAt }
+            return collapsed.nextDesk
+          }
           const hadInputOtherThanTombstone = Boolean(desk.statusSlots?.some(Boolean))
             || (desk.memoSlots ?? []).some((memo) => hasMemoText(memo))
             || resolveDeskManualInputMark(desk, {
@@ -2057,10 +1992,11 @@ function applyTemplateDiffToCell(context: {
       return withTeacher
     }
     const lower = cloneTemplatePendingLower(pending.lower)
-    // Q41-8（保留中の再保存・regression-reviewer H-1/M-1 で改定）: 下段に手置き講師が居る机。判定は作成時と同じ権威関数 resolveManualTeacherOverlap
-    // （手で置いた生徒＝残した席＋下段の生徒。Q34-2 で全員採用されれば居ない）で、新しいテンプレ机の講師により 4 分岐:
+    // Q41-8（保留中の再保存・regression-reviewer H-1/M-1 で改定・オーナー決定 2026-11-01 で 3 分岐に）: 下段に手置き講師が居る机。判定は作成時と同じ
+    // 権威関数 resolveManualTeacherOverlap で、新しいテンプレ机の講師により:
     //   同じ講師→テンプレの講師（下段の講師は消える）／講師なし→手置き講師を机へ（別の机に同じ講師が居れば戻さず置き換え側）／
-    //   別の講師＋生徒で手で置いた生徒が居る→下段の講師ごと維持（残した席の生徒も下段へ＝作成時と同じく Q34-4 を当てない）／それ以外（講師だけのテンプレ机・手で置いた生徒なし）→テンプレの講師（件数に数える）。
+    //   別の講師→下段の講師ごと維持（手で置いた生徒が居れば残した席の生徒も下段へ＝作成時と同じく Q34-4 を当てない。居なければ講師だけの保留。
+    //   テンプレ机が講師だけでも同じ＝旧「それ以外→テンプレの講師に替える」の分岐は 2026-11-01 に廃止）。
     let rebasedWithTeacher = withTeacher
     let overlapRebase = false
     if (pending.lower.teacher) {
@@ -2077,14 +2013,17 @@ function applyTemplateDiffToCell(context: {
         delete lower.teacher
       } else if (isSameTeacherByAliases(lowerTeacher.teacher, templateDesk.teacher, context.teacherAliases)) {
         delete lower.teacher
-      } else if (resolveManualTeacherOverlap({ existingTeacher: lowerTeacher, templateDesk, handPlacedStudents: handPlacedOnRebase, resolveAliases: context.teacherAliases })) {
+      } else if (resolveManualTeacherOverlap({ existingTeacher: lowerTeacher, templateDesk, resolveAliases: context.teacherAliases })) {
         overlapRebase = true
         summary.manualTeacherPending += 1
-        context.teacherNotes.push({ kind: 'teacher-pending', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+        context.teacherNotes.push({
+          kind: 'teacher-pending', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber,
+          keptStudentNames: handPlacedOnRebase.map((student) => student.name), templateTeacherOnly: !upperLesson,
+        })
       } else {
+        // 下段の講師が手置きでない（QR 講師・削除記録。整合の取れた保留では起きない）→ テンプレの講師（件数に数える）。
         delete lower.teacher
         summary.manualTeacherReplaced += 1
-        // 講師だけのテンプレ机（Q41-8 の暫定）: 下段の生徒は机へ戻り新しいテンプレの講師の担当になる。手で置いた生徒が全員採用された形は空。
         context.teacherNotes.push({ kind: 'teacher-replaced', teacherName: lowerTeacher.teacher, templateTeacher: templateDesk.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber, keptStudentNames: handPlacedOnRebase.map((student) => student.name) })
       }
     }
@@ -2172,16 +2111,9 @@ function applyTemplateDiffToCell(context: {
     if (fields.teacher) summary.qrTeacherKept -= 1
   }
 
-  // ── 5. Q41-13 の後処理（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: ずらして置いたテンプレの講師の机に印
-  //   （templateTeacherShift）を付け、この机以外の古い印（講師が替わった・手で置き直した）は外す。表示専用（isShiftedTemplateTeacherDesk）。
-  const shiftedTargets = new Map<number, ManualTeacherDeskShift>()
-  for (const shift of teacherShifts) if (shift.placement.kind === 'placed') shiftedTargets.set(shift.placement.deskIndex, shift)
+  // ── 5. 旧 Q41-13 の印（templateTeacherShift・v1.5.633〜v1.5.669 の保存がずらした先に付けた表示用の印）の後始末: 新しく付けることは
+  //   2026-11-01（ずらしの廃止）で無くなった。残っている古い印は、講師が替わった・手で置き直した机から外す（表示専用・isShiftedTemplateTeacherDesk）。
   nextDesks.forEach((desk, index) => {
-    const shift = shiftedTargets.get(index)
-    if (shift && !desk.manualTeacher && isSameTeacherByAliases(desk.teacher, shift.templateTeacher, context.teacherAliases)) {
-      nextDesks[index] = { ...desk, templateTeacherShift: { teacher: desk.teacher, fromDeskIndex: shift.fromIndex } }
-      return
-    }
     if (desk.templateTeacherShift && !isShiftedTemplateTeacherDesk(desk)) {
       const { templateTeacherShift: _stale, ...rest } = desk
       nextDesks[index] = rest
@@ -2250,7 +2182,7 @@ export type TemplateDiffConfirmContext = {
  * 名前つきで出すことで、黙って消える形（改定前の M-1 の誤認など）が確認の画面の時点で見える。
  */
 export type TemplateDiffStudentNote = {
-  kind: 'duplicate-skipped' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-kept'
+  kind: 'duplicate-skipped' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced'
   /** 生徒の名前（講師の行では講師の名前）。 */
   studentName: string
   /** 科目（講師の行では空）。 */
@@ -2260,31 +2192,32 @@ export type TemplateDiffStudentNote = {
   /** 追加情報（振替先の日付・未消化の理由など）。 */
   detail?: string
   /**
-   * 講師の行（teacher-replaced）だけ: テンプレの講師の担当で机に残る、手で置いた生徒の名前（Q41-11「生徒 A は D の担当になります」）。
-   * 空＝手で置いた生徒が居ない（講師だけ・記録／メモだけ・全員テンプレに採用）。テスト教室 2026-10-22: 講師だけのテンプレ机（Q41-12 (1)）で
-   * 未消化講習を手で置いた机にも「手で置いた生徒が居ないため」と出て、講習が手置きと認識されていないと誤解させた。理由は「テンプレの机が講師だけ」。
+   * 講師の行だけ。teacher-pending: 手置き講師と一緒に下の行へ残す手で置いた生徒の名前（空＝講師だけの保留・2026-11-01）。
+   * teacher-replaced: テンプレの講師の担当で机に残る、手で置いた生徒の名前（Q41-11「生徒 A は D の担当になります」）。
+   * 空＝手で置いた生徒が居ない（講師だけ・記録／メモだけ・全員テンプレに採用）。テスト教室 2026-10-22: 講師だけのテンプレ机で
+   * 未消化講習を手で置いた机にも「手で置いた生徒が居ないため」と出て、講習が手置きと認識されていないと誤解させた。形ごとに文を分ける。
    */
   keptStudentNames?: string[]
-  /** teacher-kept（Q41-13）: ずらしたテンプレの講師の置き先。 */
-  placement?: ManualTeacherDeskShift['placement']
   /**
    * transfer-pending（オーナー決定 2026-11-01「上段＝テンプレ／下段＝手入力の関係を保つ」）: 振替先が満席のとき、席に居た手入力の生徒を
    * 下段（保留）へ残して、その席にテンプレの生徒の振替を置いた形の、下段へ残した生徒の名前。無し＝従来の形（振替そのものを下段へ置いた）。
    */
   displacedName?: string
+  /** teacher-pending（2026-11-01・旧 A-7）: テンプレのこの机が講師だけ（生徒なし）＝上の行の席は空のまま。 */
+  templateTeacherOnly?: boolean
 }
 
 /** Q41: 確認の画面に出す講師ごとの理由。 */
 export type TemplateDiffTeacherNote = {
-  kind: 'teacher-pending' | 'teacher-replaced' | 'teacher-kept'
+  kind: 'teacher-pending' | 'teacher-replaced'
   teacherName: string
   templateTeacher: string
   dateKey: string
   slotNumber: number
-  /** teacher-replaced: テンプレの講師の担当として机に残る手で置いた生徒。teacher-kept: 手置き講師の担当のまま机に残る手で置いた生徒。空なら手で置いた生徒が居ない。 */
+  /** teacher-pending: 手置き講師と一緒に下の行へ残す手で置いた生徒。teacher-replaced: テンプレの講師の担当として机に残る手で置いた生徒。空なら手で置いた生徒が居ない。 */
   keptStudentNames?: string[]
-  /** teacher-kept（Q41-13）: ずらしたテンプレの講師の置き先。 */
-  placement?: ManualTeacherDeskShift['placement']
+  /** teacher-pending（2026-11-01・旧 A-7）: テンプレのこの机が講師だけ（生徒なし）。 */
+  templateTeacherOnly?: boolean
 }
 
 const TEMPLATE_DIFF_STUDENT_NOTE_LIMIT = 12
@@ -2293,17 +2226,14 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
   const where = `${formatMonthDay(note.dateKey)}${note.slotNumber != null ? ` ${note.slotNumber}限` : ''}`
   const who = note.subject ? `${note.studentName}（${note.subject}）` : `講師 ${note.studentName}`
   switch (note.kind) {
-    case 'teacher-pending': return `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、手で置いた生徒と一緒に下の行に残して保留（緑）にします。`
-    case 'teacher-kept': {
-      // Q41-13（オーナー指示 2026-10-22）: 手入力講師の机はテンプレで上書きせず、テンプレの講師（講師だけの机）を同じコマの空き机へずらす。
-      const templateTeacher = note.detail || 'テンプレの講師'
-      const students = note.keptStudentNames && note.keptStudentNames.length > 0 ? `手で置いた ${note.keptStudentNames.join('・')} もこの机に残ります。` : ''
-      const placement = note.placement?.kind === 'placed'
-        ? `テンプレのこの机は講師だけ（生徒なし）なので、${templateTeacher} は同じコマの空いている机 ${note.placement.deskIndex + 1} へずらして置きます。`
-        : note.placement?.kind === 'present'
-          ? `${templateTeacher} は同じコマの机 ${note.placement.deskIndex + 1} に既に居るので、この机には置きません。`
-          : `${templateTeacher} を置く空き机がこのコマに無いため、このコマには置きません。`
-      return `${where} ${who}: 手で置いた講師なので、テンプレの講師（${templateTeacher}）に替えず残します。${students}${placement}`
+    case 'teacher-pending': {
+      // オーナー決定 2026-11-01「緑 2 段へ広げる」: 手で置いた生徒の有無・テンプレ机が講師だけかで文を分ける（「手で置いた生徒が居ないため替わります」は廃止）。
+      const head = `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、`
+      const students = note.keptStudentNames && note.keptStudentNames.length > 0
+        ? `手で置いた ${note.keptStudentNames.join('・')} と一緒に下の行に残して保留（緑）にします。`
+        : '講師だけ下の行に残して保留（緑）にします（手で置いた生徒は居ません）。'
+      const templateOnly = note.templateTeacherOnly ? 'テンプレのこの机は講師だけ（生徒なし）なので、上の行の席は空のままです。' : ''
+      return `${head}${students}${templateOnly}緑の下の行の講師名を押して、どちらの講師にするか選んでください。`
     }
     case 'teacher-replaced': {
       const templateTeacher = note.detail ? `テンプレの講師（${note.detail}）` : 'テンプレの講師'
@@ -2420,7 +2350,6 @@ function buildTemplateDiffConfirmLines(effectiveStartDate: string, summary: Temp
     ...(summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0 ? [`時限を変えた生徒の丸ごと振替の振替${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件を新しい時限へ移します${summary.slotFollowPendingMakeups > 0 ? `（満席の${summary.slotFollowPendingMakeups}件は同じ机の保留〔下段〕へ）` : ''}。`] : []),
     ...(summary.manualTeacherPending > 0 ? [`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: ${summary.manualTeacherPending}机。`] : []),
     ...(summary.manualTeacherReplaced > 0 ? [`手で置いた講師をテンプレの講師に替える机: ${summary.manualTeacherReplaced}机。`] : []),
-    ...(summary.manualTeacherKept > 0 ? [`手で置いた講師を残し、テンプレの講師を同じコマの空き机へずらす机: ${summary.manualTeacherKept}机。`] : []),
     ...(context?.studentNotes && context.studentNotes.length > 0 ? ['', ...buildTemplateDiffStudentNoteLines(context.studentNotes)] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
@@ -2454,6 +2383,5 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0) parts.push(`時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: ${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件${summary.slotFollowPendingMakeups > 0 ? `（満席で保留〔下段〕にした: ${summary.slotFollowPendingMakeups}件）` : ''}。`)
   if (summary.manualTeacherPending > 0) parts.push(`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にした机: ${summary.manualTeacherPending}机。`)
   if (summary.manualTeacherReplaced > 0) parts.push(`手で置いた講師をテンプレの講師に替えた机: ${summary.manualTeacherReplaced}机。`)
-  if (summary.manualTeacherKept > 0) parts.push(`手で置いた講師を残し、テンプレの講師を同じコマの空き机へずらした机: ${summary.manualTeacherKept}机。`)
   return parts.join('')
 }
