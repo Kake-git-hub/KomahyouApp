@@ -7935,6 +7935,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     if (nextManualMakeupAdjustments !== manualMakeupAdjustments) setManualMakeupAdjustments(nextManualMakeupAdjustments)
     const nextWeeks = plan.diff.nextWeeks
+    // テンプレ保存のあとは「元に戻す／やり直し」の履歴を空にする(オーナー指示 2026-11-01「テンプレ保存後の元に戻すの巻き戻し範囲を調べる」)。
+    // テンプレ保存は盤面の履歴(undoStack)に自分の項目を積まないため、保存後に「元に戻す」を押すと**保存の 1 つ前の手操作の項目**が当たり、
+    // テンプレ保存の結果とその手操作がまとめて巻き戻っていた(テスト教室 2026-10-31: 手で置いた講習とテンプレで足した生徒が一度に消えた)。
+    // テンプレ保存はテンプレ定義(通常授業の行)も変えるので盤面だけ戻しても再マージで食い違う。戻したいときはテンプレを直して保存し直す。
+    setUndoStack([])
+    setRedoStack([])
     setWeeks(nextWeeks)
     setTemplatePendingDesks(plan.diff.nextPendingDesks)
     if (nextSuppressedRegularLessonOccurrences !== suppressedRegularLessonOccurrences) {
@@ -8182,6 +8188,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         })
       })
 
+      // テンプレ保存のあとは「元に戻す／やり直し」の履歴を空にする(オーナー指示 2026-11-01「テンプレ保存後の元に戻すの巻き戻し範囲を調べる」)。
+      // テンプレ保存は盤面の履歴(undoStack)に自分の項目を積まないため、保存後に「元に戻す」を押すと**保存の 1 つ前の手操作の項目**が当たり、
+      // テンプレ保存の結果とその手操作がまとめて巻き戻っていた(テスト教室 2026-10-31: 手で置いた講習とテンプレで足した生徒が一度に消えた)。
+      // テンプレ保存はテンプレ定義(通常授業の行)も変えるので盤面だけ戻しても再マージで食い違う。戻したいときはテンプレを直して保存し直す。
+      setUndoStack([])
+      setRedoStack([])
       setWeeks(overlaidWeeks)
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)

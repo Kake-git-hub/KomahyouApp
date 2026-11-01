@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- fix: **テンプレ保存のあとは盤面の「元に戻す／やり直し」の履歴を空にする**(オーナー指示 2026-11-01 項目 5「テンプレ保存後の元に戻すの巻き戻し範囲を調べる」)。調べた結果: テンプレ保存(差分反映・旧方式とも)は盤面の履歴に自分の項目を積まないため、保存後の「元に戻す」は**保存の 1 つ前の手操作の項目**に当たり、テンプレ保存の結果とその手操作がまとめて巻き戻っていた(テスト教室 2026-10-31 の操作痕跡: 18:55 に手で置いた講習と 18:56 のテンプレ保存で足した生徒が、翌 02:32 の「元に戻す」1 回で一度に消えた)。テンプレ保存はテンプレ定義も変えるので盤面だけ戻すと再マージで食い違うため、保存後は履歴を空にし(ボタンは無効になる)、戻したいときはテンプレを直して保存し直す。配線テスト templateSaveHistoryReset.wiring.test.ts で固定。確認リスト tp-67。(src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 ## v1.5.669 (2026-10-30)
 
 - feat: **質問への AI 即時回答を全教室へ展開**(オーナー指示 2026-10-30「AI回答機能を全教室に展開して」)。開発用・テスト教室で先行(v1.5.524〜・確認リスト qa-ai-1〜7 OK・モデル Haiku 確定)していたものを、画面のフラグ `questionAiAnswer` とサーバーの基本スコープ `QUESTION_AI_ANSWER_BASE_SCOPE`(新設)を**同じ push で** `all-classrooms` にした(片側だけだと「その場で回答と出るのに AI を呼ばない」非対称になる。両側の値はパリティテストで突合)。サーバー判定は会社や教室 ID が空なら OFF(fail-closed)・会社既定 `companyFeatureDefaults` で会社ごとに止められるのは従来どおり。spec §G-1・§G-7 を改定し、使い方の説明 §10(AI の回答の根拠)に「使い方の質問はその場で自動の回答が出る」を足して `sync-shared`。進行中テーマ台帳の `question-ai-answer` 行は消した。確認リストに ai-1(開発用教室だけ・版は v1.5.667 据え置き)。⚠️ `functions/**` を変えたので main マージで「Deploy Cloud Functions」が自動で走る(緑を確認。Hosting だけ先に出ると数分間は本番教室で注意文だけ変わり「自動回答を作れませんでした」になる)。(src/utils/featureRollout.ts・functions/src/questionAiAnswer.ts・docs/spec-developer-report.md・docs/user-manual.md・src/utils/{developmentStatusLedger,verificationChecklist}.ts・各テスト)
