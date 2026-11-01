@@ -2329,7 +2329,7 @@ export type TemplateDiffStudentNote = {
    */
   keptStudentNames?: string[]
   /**
-   * transfer-pending（オーナー決定 2026-11-01「上段＝テンプレ／下段＝手入力の関係を保つ」）: 振替先が満席のとき、席に居た手入力の生徒を
+   * transfer-pending／slot-follow-pending（オーナー決定 2026-11-01「上段＝テンプレ／下段＝手入力の関係を保つ」・決定記録 51／59）: 振替先が満席のとき、席に居た手入力の生徒を
    * 下段（保留）へ残して、その席にテンプレの生徒の振替を置いた形の、下段へ残した生徒の名前。無し＝従来の形（振替そのものを下段へ置いた）。
    */
   displacedName?: string
@@ -2381,7 +2381,9 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
       ? `${where} ${who}: 丸ごと振替した日ですが振替先${note.detail ? `（${note.detail}）` : ''}が満席のため、席に居た手入力の ${note.displacedName} を下段（保留・緑）に残し、その席へ振替として置きます。`
       : `${where} ${who}: 丸ごと振替した日ですが振替先${note.detail ? `（${note.detail}）` : ''}が満席のため、同じ机の保留（下段・緑）へ振替として置きます（席の生徒はテンプレの生徒なので下段にできません）。`
     case 'slot-followed': return `${where} ${who}: テンプレで時限を変えたので、丸ごと振替の振替を新しい時限へ移します${note.detail ? `（${note.detail}）` : ''}。`
-    case 'slot-follow-pending': return `${where} ${who}: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます${note.detail ? `（${note.detail}）` : ''}。`
+    case 'slot-follow-pending': return note.displacedName
+      ? `${where} ${who}: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため、席に居た手入力の ${note.displacedName} を下段（保留・緑）に残し、その席へ振替を置きます${note.detail ? `（${note.detail}）` : ''}。`
+      : `${where} ${who}: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（席の生徒はテンプレの生徒なので下段にできません）${note.detail ? `（${note.detail}）` : ''}。`
     case 'transfer-stocked': return `${where} ${who}: 丸ごと振替した日ですが振替先に置けない${note.detail ? `（${note.detail}）` : ''}ため、未消化振替にします。`
     case 'transfer-settled': return `${where} ${who}: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。`
     case 'transfer-count-adjusted': return `${where} ${who}: 丸ごと振替した日なので置かず、希望回数を −1 します。`
@@ -2482,7 +2484,7 @@ function buildTemplateDiffConfirmLines(effectiveStartDate: string, summary: Temp
     ...(summary.manualRegularAdoptedByCellTemplate > 0 ? [`手動追加の通常授業${summary.manualRegularAdoptedByCellTemplate}名はテンプレと同じ内容なのでテンプレの机に合わせます。`] : []),
     ...(summary.orphanedMakeupsRemoved > 0 ? [`テンプレから外した生徒の振替${summary.orphanedMakeupsRemoved}件を消します（振替元の授業が無くなるため）。`] : []),
     ...(summary.wholeDayTransferPlacedStudents + summary.wholeDayTransferStockedStudents + summary.wholeDayTransferPendingStudents > 0 ? [`丸ごと振替した日に足した生徒${summary.wholeDayTransferPlacedStudents}名を振替先へ置きます（${summary.wholeDayTransferPendingStudents > 0 ? `満席の${summary.wholeDayTransferPendingStudents}名は同じ机を保留〔緑の 2 行〕にして置く・` : ''}空きが無い${summary.wholeDayTransferStockedStudents}名は未消化振替へ）。`] : []),
-    ...(summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0 ? [`時限を変えた生徒の丸ごと振替の振替${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件を新しい時限へ移します${summary.slotFollowPendingMakeups > 0 ? `（満席の${summary.slotFollowPendingMakeups}件は同じ机の保留〔下段〕へ）` : ''}。`] : []),
+    ...(summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0 ? [`時限を変えた生徒の丸ごと振替の振替${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件を新しい時限へ移します${summary.slotFollowPendingMakeups > 0 ? `（満席の${summary.slotFollowPendingMakeups}件は同じ机を保留〔緑の 2 行〕にして置く）` : ''}。`] : []),
     ...(summary.manualTeacherPending > 0 ? [`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: ${summary.manualTeacherPending}机。`] : []),
     ...(summary.manualTeacherReplaced > 0 ? [`手で置いた講師を机に戻さずテンプレに合わせる机: ${summary.manualTeacherReplaced}机。`] : []),
     ...(context?.studentNotes && context.studentNotes.length > 0 ? ['', ...buildTemplateDiffStudentNoteLines(context.studentNotes)] : []),
@@ -2515,7 +2517,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.tombstoneCleared > 0) parts.push(`講師の削除記録だけの空き机 ${summary.tombstoneCleared}机は記録を外しました。`)
   if (summary.orphanedMakeupsRemoved > 0) parts.push(`テンプレから外した生徒の振替を消した: ${summary.orphanedMakeupsRemoved}件。`)
   if (summary.wholeDayTransferPlacedStudents + summary.wholeDayTransferStockedStudents + summary.wholeDayTransferPendingStudents > 0) parts.push(`丸ごと振替した日に足した生徒を振替先へ置いた: ${summary.wholeDayTransferPlacedStudents}名（${summary.wholeDayTransferPendingStudents > 0 ? `満席で保留〔緑の 2 行〕にした: ${summary.wholeDayTransferPendingStudents}名・` : ''}未消化振替にした: ${summary.wholeDayTransferStockedStudents}名）。`)
-  if (summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0) parts.push(`時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: ${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件${summary.slotFollowPendingMakeups > 0 ? `（満席で保留〔下段〕にした: ${summary.slotFollowPendingMakeups}件）` : ''}。`)
+  if (summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups > 0) parts.push(`時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: ${summary.slotFollowMovedMakeups + summary.slotFollowPendingMakeups}件${summary.slotFollowPendingMakeups > 0 ? `（満席で保留〔緑の 2 行〕にした: ${summary.slotFollowPendingMakeups}件）` : ''}。`)
   if (summary.manualTeacherPending > 0) parts.push(`手で置いた講師の机をテンプレの講師と重ねて保留（緑）にした机: ${summary.manualTeacherPending}机。`)
   if (summary.manualTeacherReplaced > 0) parts.push(`手で置いた講師を机に戻さずテンプレに合わせた机: ${summary.manualTeacherReplaced}机。`)
   return parts.join('')

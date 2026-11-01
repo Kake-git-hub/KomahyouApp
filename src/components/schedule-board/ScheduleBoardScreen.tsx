@@ -65,7 +65,7 @@ import {
   TEMPLATE_PENDING_MESSAGES,
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
-import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
@@ -2875,7 +2875,7 @@ export function computeTemplateDiffApplyForBoard(input: {
     ...follow.stocked.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-stocked', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: describeWholeDayTransferStockReason(item.reason) })),
     // 時限の追従で動かした生徒は「精算済み」ではなく「新しい時限へ移す」の行で出す（決定記録 46）。
     ...follow.settled.filter((item) => !slotFollowedKeys.has(`${studentSubjectKey(item.student)}__${item.sourceDateKey}__${item.sourceSlotNumber}`)).map((item): TemplateDiffStudentNote => ({ kind: 'transfer-settled', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber })),
-    ...slotFollow.moves.map((move): TemplateDiffStudentNote => ({ kind: move.placement === 'pending' ? 'slot-follow-pending' : 'slot-followed', studentName: noteName(move.student), subject: move.student.subject, dateKey: move.sourceDateKey, slotNumber: move.newSlotNumber, detail: `${move.oldSlotNumber}限 → ${move.newSlotNumber}限・振替先 ${formatTemplateDiffMonthDay(move.targetDateKey)}${move.placement === 'upper' && move.fallbackDesk ? '・同じ机が使えないので別の机' : ''}${move.teacherless ? '・講師のいない机なので講師を付けてください' : ''}` })),
+    ...slotFollow.moves.map((move): TemplateDiffStudentNote => ({ kind: move.placement === 'pending' ? 'slot-follow-pending' : 'slot-followed', studentName: noteName(move.student), subject: move.student.subject, dateKey: move.sourceDateKey, slotNumber: move.newSlotNumber, detail: `${move.oldSlotNumber}限 → ${move.newSlotNumber}限・振替先 ${formatTemplateDiffMonthDay(move.targetDateKey)}${move.placement === 'upper' && move.fallbackDesk ? '・同じ机が使えないので別の机' : ''}${move.teacherless ? '・講師のいない机なので講師を付けてください' : ''}`, ...(move.displacedStudent ? { displacedName: noteName(move.displacedStudent) } : {}) })),
     ...wholeDayTransferCountAdjustments.map((item): TemplateDiffStudentNote => ({ kind: 'transfer-count-adjusted', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.dateKey, slotNumber: null })),
     ...orphaned.removals.map((item): TemplateDiffStudentNote => ({ kind: 'orphan-removed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: `振替先 ${formatTemplateDiffMonthDay(item.targetDateKey)}` })),
     // Q41（2026-10-21）: 手置き講師の扱い（重ねて保留／テンプレの講師に替わる）。
@@ -6657,7 +6657,7 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
     return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower }
   }
   // 2026-11-01: Q40-2 の満席の押し出し（上段＝テンプレの振替）では、下段の席の上段の振替をテンプレ側として取り下げる。
-  const withdrawOptions = { templateMakeupAtLowerSeat: params.entry.origin?.kind === 'transfer-follow-displaced' }
+  const withdrawOptions = { templateMakeupAtLowerSeat: isTemplateFollowDisplacedOrigin(params.entry.origin) }
   const first = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower, withdrawOptions))
   if (first.collapse.ok || first.collapse.reason === 'duplicate-student') return first
   // 席ごと（Q26-10・regression-reviewer M-2）: もう一方の席に下段が残るときは、上段のテンプレ生徒を全部取り下げるフォールバックを使わない
@@ -6791,7 +6791,7 @@ export function computePendingDeskResolution(params: {
     // ★2026-11-01（オーナー決定「上段＝テンプレ／下段＝手入力」・Q40-2 の満席で席の手入力の生徒を下段へ残す形）: 上段には丸ごと振替の追従が置いた
     //   **振替**（lessonType makeup・手動追加でない）が居ることがある。取り下げた振替は黙って消さず（INV-06 在庫の保存則）、振替元の日の origin を
     //   台帳へ積んで未消化振替へ戻し、振替元の日の移動元記録（休)→ 先）も消す（Q40-2 の「置けない」と同じ結果＝stocked と同形）。
-    //   由来が Q40-2 の満席の押し出し（transfer-follow-displaced）なら印つき origin（後のテンプレ保存でその生徒を外したとき同じ保存が取り下げる・M-2）。
+    //   由来が押し出し（transfer-follow-displaced＝Q40-2 の満席・slot-follow-displaced＝時限変更の追従の満席・決定記録 59）なら印つき origin（後のテンプレ保存でその生徒を外したとき同じ保存が取り下げる・M-2）。
     //   通常授業の取り下げ（抑止キー・希望回数 −1）は従来どおり通常授業だけに当てる。
     const withdrawnMakeups = withdrawn.filter((student) => student.lessonType === 'makeup' && student.makeupSourceDate && !student.manualAdded)
     const withdrawnRegulars = withdrawn.filter((student) => !withdrawnMakeups.includes(student))
@@ -6799,7 +6799,7 @@ export function computePendingDeskResolution(params: {
     for (const student of withdrawnMakeups) {
       const stockKey = buildMakeupStockKey(params.resolveStockId(student), student.subject)
       const originSlot = parseOriginSlotNumberFromLabel(student.makeupSourceLabel) ?? cell.slotNumber
-      manualMakeupAdjustments = entry.origin?.kind === 'transfer-follow-displaced'
+      manualMakeupAdjustments = isTemplateFollowDisplacedOrigin(entry.origin)
         ? appendTemplateTransferMakeupOrigin(manualMakeupAdjustments, stockKey, student.makeupSourceDate!, originSlot)
         : appendMakeupOrigin(manualMakeupAdjustments, stockKey, student.makeupSourceDate!, originSlot)
     }

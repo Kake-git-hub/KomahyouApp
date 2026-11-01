@@ -1071,10 +1071,10 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
       { kind: 'slot-followed', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
       { kind: 'slot-follow-pending', studentName: '馬場', subject: '英', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
     ] })
-    expect(detail).toContain('時限を変えた生徒の丸ごと振替の振替2件を新しい時限へ移します（満席の1件は同じ机の保留〔下段〕へ）。')
+    expect(detail).toContain('時限を変えた生徒の丸ごと振替の振替2件を新しい時限へ移します（満席の1件は同じ机を保留〔緑の 2 行〕にして置く）。')
     expect(detail).toContain('青木（数）: テンプレで時限を変えたので、丸ごと振替の振替を新しい時限へ移します（5限 → 3限・振替先 10/8）。')
-    expect(detail).toContain('馬場（英）: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（5限 → 3限・振替先 10/8）。')
-    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary)).toContain('時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: 2件（満席で保留〔下段〕にした: 1件）。')
+    expect(detail).toContain('馬場（英）: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（席の生徒はテンプレの生徒なので下段にできません）（5限 → 3限・振替先 10/8）。')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary)).toContain('時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: 2件（満席で保留〔緑の 2 行〕にした: 1件）。')
     expect(buildTemplateDiffConfirmDetail(EFFECTIVE, createEmptyTemplateDiffApplySummary())).not.toContain('時限を変えた')
   })
 
