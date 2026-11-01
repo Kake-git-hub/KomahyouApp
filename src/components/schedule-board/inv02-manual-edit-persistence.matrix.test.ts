@@ -1829,16 +1829,18 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     })
   })
 
-  describe('講師系の印は削除記録だけ（講師の配置は印に数えない）', () => {
+  describe('講師系の印は削除記録だけ（講師の配置は印に数えない）。ただし手置き講師×テンプレの別の講師は講師ごと保留（オーナー決定 2026-11-01・Q41）', () => {
     it.each([
       ['手置き（manual）', { manualTeacher: true, teacherAssignmentSource: 'manual' as const }],
       ['入替（manual-replaced）', { manualTeacher: true, teacherAssignmentSource: 'manual-replaced' as const }],
-    ])('講師 %s だけの机 → 印なし＝生徒はテンプレで置き換わり、講師はテンプレ机の講師に揃う', (_label, teacherFields) => {
+    ])('講師 %s だけの机 → 生徒はテンプレで置き換わり（印なし）、講師はテンプレ机の講師が上段・手置き講師は下段に講師だけの保留（旧: 黙って揃う）', (_label, teacherFields) => {
       const { desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '佐藤', ...teacherFields })), ROWS_WITH_C)
       expect(liveIds(desk0.lesson)).toEqual(['sC'])
       expect(desk0.teacher).toBe('鈴木')
       expect(desk0.manualTeacher).toBe(false)
-      expect(lower).toBeUndefined()
+      expect(lower?.lesson).toBeUndefined()
+      expect(lower?.teacher?.teacher).toBe('佐藤')
+      expect(lower?.teacher?.teacherAssignmentSource).toBe(teacherFields.teacherAssignmentSource)
     })
 
     it('QR 自動割振り講師だけの机 → 印なし＝生徒は置き換わるが、講師は置き換えず QR 講師（由来・講習期間 ID）のまま（例外 1）', () => {

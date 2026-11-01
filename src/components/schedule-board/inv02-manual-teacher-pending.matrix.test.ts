@@ -4,6 +4,7 @@
 // 出典: テスト教室の確認 tp-56 case3 / tp-57(3)（受付 20261020-092527755-56bbf675）。臨時出勤で手置きした講師 B の机（振替の生徒 A つき）に、
 // テンプレが別の講師 D＋生徒 C を同じ机番号で置くと、Q21-9 のとおり B が D に置き換わっていた（生徒 A は下段に残るが講師 B は消えた）。
 // オーナー決定 B: 手置き講師で、かつ手で置いた生徒が居る机だけ、講師 B も下段に残して「講師の重複」として緑で見せる。
+// → オーナー決定 2026-11-01「緑 2 段へ広げる」（自動処理一覧 A-6・A-7）: 手で置いた生徒が居ない机・テンプレ机が講師だけの机も講師ごと保留にする（Q41-13 のずらしは廃止）。
 //
 // 行（形） × 列（検査）:
 //   形: 振替 A／講習 A／手動追加の通常授業 A × 席がぶつかる／空いている、兄弟（手置き講師だけ・同じ講師・テンプレ机に講師なし・講師だけのテンプレ机・QR 講師・削除記録）
@@ -16,7 +17,7 @@ import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers, type TemplatePendingResolutionMode } from './ScheduleBoardScreen'
-import { buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, planManualTeacherDeskShifts, resolveManualTeacherOverlap } from './templateDiffApply'
+import { buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, resolveManualTeacherOverlap } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, cloneTemplatePendingDeskMap, normalizeTemplatePendingDeskMap, collectTemplatePendingLowerTeacherNames, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildTemplatePendingTeacherChoiceConfirm, computePendingTeacherChoice, isTemplatePendingTeacherOnly, resolveTemplatePendingDateBlockReason, settleTemplatePendingDesk, settleTemplatePendingDesksAfterCommit, TEMPLATE_PENDING_MESSAGES } from './templatePendingResolution'
 import { buildTemplatePendingList, describeTemplatePendingTeacherReason } from './templatePendingList'
@@ -93,21 +94,23 @@ function resolve(mode: TemplatePendingResolutionMode, weeks: SlotCell[][], pendi
   return computePendingDeskResolution({ mode, weeks, cellId: CELL_ID, deskId: desk0(weeks).id, lowerIndex, templatePendingDesks: pending, ledgers: emptyLedgers(), ...CONTEXT })
 }
 
-describe('Q41-2 権威関数 resolveManualTeacherOverlap', () => {
+describe('Q41-2 権威関数 resolveManualTeacherOverlap（オーナー決定 2026-11-01「緑 2 段へ広げる」で旧 (c)(d) を撤廃）', () => {
   const template = { teacher: '田村', lesson: { id: 't', studentSlots: [entry('sC'), null] as [StudentEntry | null, StudentEntry | null] } }
-  it('手置き講師＋テンプレの別の講師＋テンプレに生徒＋手で置いた生徒 → 2 行。由来 manual-replaced・manualTeacher だけでも同じ', () => {
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: template, handPlacedStudents: [MAKEUP_A] })).toBe(true)
-    expect(resolveManualTeacherOverlap({ existingTeacher: { ...MANUAL_TEACHER_B, manualTeacher: false, teacherAssignmentSource: 'manual-replaced' }, templateDesk: template, handPlacedStudents: [MAKEUP_A] })).toBe(true)
-    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '倉島', manualTeacher: true }, templateDesk: template, handPlacedStudents: [MAKEUP_A] })).toBe(true)
+  it('手置き講師＋テンプレの別の講師 → 2 行。由来 manual-replaced・manualTeacher だけでも同じ', () => {
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: template })).toBe(true)
+    expect(resolveManualTeacherOverlap({ existingTeacher: { ...MANUAL_TEACHER_B, manualTeacher: false, teacherAssignmentSource: 'manual-replaced' }, templateDesk: template })).toBe(true)
+    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '倉島', manualTeacher: true }, templateDesk: template })).toBe(true)
   })
-  it('しない側: QR 講師・削除記録・同じ講師（ID／登録名）・テンプレに講師なし・講師だけのテンプレ机・手で置いた生徒が居ない', () => {
-    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 's1' }, templateDesk: template, handPlacedStudents: [MAKEUP_A] })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '', teacherAssignmentSource: 'deleted' }, templateDesk: template, handPlacedStudents: [MAKEUP_A] })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: '倉島' }, handPlacedStudents: [MAKEUP_A] })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: 'tB' }, handPlacedStudents: [MAKEUP_A], resolveAliases: (key) => (key === 'tB' || key === '倉島' ? ['tB', '倉島'] : [key]) })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: '' }, handPlacedStudents: [MAKEUP_A] })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { teacher: '田村' }, handPlacedStudents: [MAKEUP_A] })).toBe(false)
-    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: template, handPlacedStudents: [] })).toBe(false)
+  it('オーナー決定 2026-11-01（戻さない）: 講師だけのテンプレ机（旧 (c)・A-7）も 2 行。手で置いた生徒の有無（旧 (d)・A-6）は判定に入らない', () => {
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { teacher: '田村' } })).toBe(true)
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { teacher: '田村', lesson: undefined } })).toBe(true)
+  })
+  it('しない側（従来どおり）: QR 講師・削除記録・同じ講師（ID／登録名）・テンプレに講師なし', () => {
+    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 's1' }, templateDesk: template })).toBe(false)
+    expect(resolveManualTeacherOverlap({ existingTeacher: { teacher: '', teacherAssignmentSource: 'deleted' }, templateDesk: template })).toBe(false)
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: '倉島' } })).toBe(false)
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: 'tB' }, resolveAliases: (key) => (key === 'tB' || key === '倉島' ? ['tB', '倉島'] : [key]) })).toBe(false)
+    expect(resolveManualTeacherOverlap({ existingTeacher: MANUAL_TEACHER_B, templateDesk: { ...template, teacher: '' } })).toBe(false)
   })
 })
 
@@ -358,7 +361,7 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
     expect(again.nextTemplatePendingDesks).toBe(settled.nextTemplatePendingDesks)
   })
 
-  it('保留中の再保存（Q41-8）: 同じ講師→テンプレの講師で下段の講師は消える／講師なし→B が机へ／講師だけ→テンプレの講師（暫定・件数に出る）／別の講師＋生徒→下段の講師を維持', () => {
+  it('保留中の再保存（Q41-8・2026-11-01 で 3 分岐）: 同じ講師→テンプレの講師で下段の講師は消える／講師なし→B が机へ／別の講師（生徒あり・講師だけ）→下段の講師を維持', () => {
     const week = boardWith(MAKEUP_A)
     const saved = save(week, NEW_ROWS)
     const key = key0(saved.nextWeeks)
@@ -380,18 +383,19 @@ describe('tp-56 case3: 手置き講師 B＋手で置いた生徒 A の机に、�
     expect(noTeacher.nextPendingDesks[key]).toBeUndefined()
     expect(desk0(noTeacher.nextWeeks).teacher).toBe('倉島')
     expect(ids(desk0(noTeacher.nextWeeks))).toEqual(['sA', null])
-    // 講師だけ（田村だけ・生徒なし）: Q41-13（オーナー指示 2026-10-22）＝テンプレの講師を空き机へずらし、下段の生徒は机へ戻って講師は B（手置き）。
-    // 机は 2 つ（机 1 は藤井）なので置き先が無く、田村はこのコマに置かない。件数 manualTeacherKept に出る
-    const teacherOnly = resave([row('r0', 'tD'), row('r1', 'tF')])
-    expect(teacherOnly.summary.manualTeacherKept).toBe(1)
+    // 講師だけ（田村だけ・生徒なし）: オーナー決定 2026-11-01（旧 Q41-13 のずらしは廃止）＝講師の衝突は保留のまま。上段はテンプレの講師 D だけ（席は空）、
+    // 下段は B＋A（残した席の生徒も下段へ）。件数は manualTeacherPending・理由の行に「テンプレのこの机は講師だけ」。
+    const teacherOnlyRows = [row('r0', 'tD'), row('r1', 'tF')]
+    const teacherOnly = resave(teacherOnlyRows)
+    expect(teacherOnly.summary.manualTeacherPending).toBe(1)
     expect(teacherOnly.summary.manualTeacherReplaced).toBe(0)
-    expect(teacherOnly.nextPendingDesks[key]).toBeUndefined()
-    expect(desk0(teacherOnly.nextWeeks).teacher).toBe('倉島')
-    expect(desk0(teacherOnly.nextWeeks).manualTeacher).toBe(true)
-    expect(ids(desk0(teacherOnly.nextWeeks))).toEqual(['sA', null])
-    expect(cellOf(teacherOnly.nextWeeks).desks.map((desk) => desk.teacher)).toEqual(['倉島', '藤井'])
-    expect(teacherOnly.studentNotes.filter((note) => note.kind === 'teacher-kept').map((note) => [note.keptStudentNames, note.placement])).toEqual([[['青木'], { kind: 'none' }]])
-    expectFixpoint(teacherOnly.nextWeeks, teacherOnly.nextPendingDesks, [row('r0', 'tD'), row('r1', 'tF')], [...suppressed, ...teacherOnly.addedSuppressedRegularLessonOccurrences])
+    expect(teacherOnly.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    expect(ids({ id: 'x', teacher: '', lesson: teacherOnly.nextPendingDesks[key]?.lower.lesson })).toEqual(['sA', null])
+    expect([desk0(teacherOnly.nextWeeks).teacher, desk0(teacherOnly.nextWeeks).manualTeacher]).toEqual(['田村', false])
+    expect(ids(desk0(teacherOnly.nextWeeks))).toEqual([])
+    expect(cellOf(teacherOnly.nextWeeks).desks.map((desk) => desk.teacher)).toEqual(['田村', '藤井'])
+    expect(teacherOnly.studentNotes.filter((note) => note.kind === 'teacher-pending').map((note) => [note.keptStudentNames, note.templateTeacherOnly])).toEqual([[['青木'], true]])
+    expectFixpoint(teacherOnly.nextWeeks, teacherOnly.nextPendingDesks, teacherOnlyRows, [...suppressed, ...teacherOnly.addedSuppressedRegularLessonOccurrences])
   })
 })
 
@@ -430,18 +434,20 @@ describe('regression-reviewer 2026-10-21（H-1/H-2/M-1〜M-4）', () => {
     expect(resaved.summary.manualTeacherReplaced).toBe(1)
   })
 
-  it('M-1: 再保存で手で置いた生徒が全員テンプレに採用される（同じ生徒×科目×種別）と、B は外れて manualTeacherReplaced に数える', () => {
+  it('M-1（2026-11-01 改定）: 再保存で手で置いた生徒が全員テンプレに採用される（同じ生徒×科目×種別）と、生徒は 1 行に戻るが講師の衝突は講師だけの保留で残る（旧「B は外れて manualTeacherReplaced」は廃止）', () => {
     const saved = save(boardWith(MANUAL_A, 1), NEW_ROWS)
     const key = key0(saved.nextWeeks)
     expect(saved.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
     // 新テンプレ: 田村＋C＋A（A は手動追加の通常授業と同じ中身＝Q34-2 の採用）
     const adoptingRows = [row('r0', 'tD', 'sC', 'sA'), row('r1', 'tF')]
     const again = save(saved.nextWeeks[0], adoptingRows, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences)
-    expect(again.nextPendingDesks[key]).toBeUndefined()
+    expect(again.nextPendingDesks[key]?.lower).toEqual({ teacher: MANUAL_TEACHER_B })
     expect(desk0(again.nextWeeks).teacher).toBe('田村')
-    expect(again.summary.manualTeacherPending).toBe(0)
-    expect(again.summary.manualTeacherReplaced).toBe(1)
-    expect(again.studentNotes.filter((note) => note.kind.startsWith('teacher-')).map((note) => note.kind)).toEqual(['teacher-replaced'])
+    expect(ids(desk0(again.nextWeeks))).toEqual(['sC', 'sA'])
+    expect(again.summary.manualTeacherPending).toBe(1)
+    expect(again.summary.manualTeacherReplaced).toBe(0)
+    expect(again.studentNotes.filter((note) => note.kind.startsWith('teacher-')).map((note) => note.kind)).toEqual(['teacher-pending'])
+    expectFixpoint(again.nextWeeks, again.nextPendingDesks, adoptingRows, [...saved.addedSuppressedRegularLessonOccurrences, ...again.addedSuppressedRegularLessonOccurrences])
   })
 
   it('M-2: 下段がメモだけの席で席ごとの「既存を採用」をしても、講師は戻さず「戻しました」とも言わない', () => {
@@ -490,19 +496,49 @@ describe('regression-reviewer 2026-10-21（H-1/H-2/M-1〜M-4）', () => {
   })
 })
 
-describe('Q41-9 兄弟（従来どおり）', () => {
-  it('手置き講師だけ（手で置いた生徒なし）: D に替わる（件数 manualTeacherReplaced=1・理由の行）。2 行にしない', () => {
+describe('Q41-9 兄弟（オーナー決定 2026-11-01「緑 2 段へ広げる」: 手置き講師×テンプレの別の講師は形を問わず講師ごと保留）', () => {
+  it('A-6: 手置き講師だけ（手で置いた生徒なし）の机にテンプレが D＋C: 上段＝D＋C・下段＝講師 B だけの保留（緑）。黙って D に替えない・件数 manualTeacherPending=1・理由の行・tp-64 の講師の選択で決着', () => {
     const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...MANUAL_TEACHER_B }))
     const saved = save(week, NEW_ROWS)
-    expect(desk0(saved.nextWeeks).teacher).toBe('田村')
-    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
-    expect(saved.summary.manualTeacherPending).toBe(0)
-    expect(saved.summary.manualTeacherReplaced).toBe(1)
-    expect(saved.studentNotes.map((note) => note.kind)).toEqual(['teacher-replaced'])
-    // 手で置いた生徒が居ない形だけ「手で置いた生徒が居ないため」
-    expect(saved.studentNotes[0].keptStudentNames ?? []).toEqual([])
-    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })).toContain('講師 倉島: 手で置いた講師ですが、手で置いた生徒が居ないためテンプレの講師（田村）に替わります。')
+    const desk = desk0(saved.nextWeeks)
+    expect([desk.teacher, desk.manualTeacher]).toEqual(['田村', false])
+    expect(ids(desk)).toEqual(['sC', null])
+    const key = key0(saved.nextWeeks)
+    const pending = saved.nextPendingDesks[key]
+    expect(pending).toBeDefined()
+    expect(pending!.lower).toEqual({ teacher: MANUAL_TEACHER_B })
+    expect(isTemplatePendingTeacherOnly(pending!.lower)).toBe(true)
+    expect(saved.summary.pending).toBe(1)
+    expect(saved.summary.manualTeacherPending).toBe(1)
+    expect(saved.summary.manualTeacherReplaced).toBe(0)
+    expect(saved.studentNotes.map((note) => note.kind)).toEqual(['teacher-pending'])
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })
+    expect(message).toContain('手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: 1机')
+    expect(message).toContain('講師 倉島: 手で置いた講師の机にテンプレの講師（田村）が入るため、講師だけ下の行に残して保留（緑）にします（手で置いた生徒は居ません）。')
+    expect(message).not.toContain('手で置いた生徒が居ないため')
+    expect(message).not.toContain('替える机')
+    // 講師日程表・PDF に B は出ない（INV-13）
+    expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual([])
+    expect(teacherSheetPeople(saved.nextWeeks, 'tD')).toEqual(['千葉'])
+    // 再マージの不動点・同じテンプレの再保存でも同じ形（保留は残る）
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, NEW_ROWS, saved.addedSuppressedRegularLessonOccurrences)
+    const again = save(saved.nextWeeks[0], NEW_ROWS, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences)
+    expect(cellOf(again.nextWeeks).desks).toEqual(cellOf(saved.nextWeeks).desks)
+    expect(again.nextPendingDesks).toEqual(saved.nextPendingDesks)
+    expect(again.summary.manualTeacherPending).toBe(1)
+    // 講師の選択（tp-64）: 手入力の講師を採用 → B（manual）で 1 行・C は B の担当／テンプレの講師を採用 → D で 1 行
+    const manual = computePendingTeacherChoice({ weeks: saved.nextWeeks, templatePendingDesks: saved.nextPendingDesks, cellId: CELL_ID, deskId: desk.id, choice: 'manual' })
+    if (manual.status !== 'applied') throw new Error(manual.message)
+    expect([desk0(manual.nextWeeks).teacher, desk0(manual.nextWeeks).manualTeacher]).toEqual(['倉島', true])
+    expect(ids(desk0(manual.nextWeeks))).toEqual(['sC', null])
+    expect(manual.nextTemplatePendingDesks[key]).toBeUndefined()
+    const template = computePendingTeacherChoice({ weeks: saved.nextWeeks, templatePendingDesks: saved.nextPendingDesks, cellId: CELL_ID, deskId: desk.id, choice: 'template' })
+    if (template.status !== 'applied') throw new Error(template.message)
+    expect([desk0(template.nextWeeks).teacher, Boolean(desk0(template.nextWeeks).manualTeacher)]).toEqual(['田村', false])
+    expect(ids(desk0(template.nextWeeks))).toEqual(['sC', null])
+    expect(template.nextTemplatePendingDesks[key]).toBeUndefined()
   })
+
   it('同じ講師（テンプレも倉島）: 2 行になっても下段に講師は入らない（従来の保留）', () => {
     const week = boardWith(MAKEUP_A)
     const saved = save(week, [row('r0', 'tB', 'sC'), row('r1', 'tF')])
@@ -518,102 +554,84 @@ describe('Q41-9 兄弟（従来どおり）', () => {
     expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
     expect(saved.summary.manualTeacherPending + saved.summary.manualTeacherReplaced).toBe(0)
   })
-  // Q41-13（オーナー指示 2026-10-22「手入力講師がいる場合、テンプレで上書きされずに、手入力されたそのコマの空き講師枠に詰めてずらす」）:
-  // テスト教室 2026-10-22 の形（11/24(水) 5限 机 13 に講師 A と未消化講習の生徒 B を手で置き、テンプレで同じ机に講師 C だけを登録）。
-  // 旧: C が A を上書きし B は C の担当（Q41-12 (1) 暫定）。新: A と B はそのまま 1 行で残り、C は同じコマの空き机へずらして置く。
+  // A-7（旧 Q41-13 のずらしを廃止・オーナー決定 2026-11-01）: テスト教室 2026-10-22 の形（講師だけのテンプレ机 × 手置き講師＋手で置いた生徒）。
+  // 旧（v1.5.633〜v1.5.669）: テンプレの講師を空き机へずらして B と A は 1 行のまま。新: 講師ごと保留＝上段はテンプレの講師 D（席は空）・下段は B＋A。
+  // ずらさない・ずらした印（templateTeacherShift）も付けない。★ずらす処理を戻さない。
   const TEACHER_ONLY_ROWS = [row('r0', 'tD'), row('r1', 'tF')]
   for (const [label, student] of [['講習', SPECIAL_A], ['振替', MAKEUP_A], ['手動追加の通常授業', MANUAL_A]] as const) {
-    it(`講師だけのテンプレ机 × 手で置いた${label}（机 3 つ）: B と A は 1 行のまま・D は空き机 3 へ・2 行にしない・件数と理由の行・再保存で動かない・再マージの不動点`, () => {
+    it(`A-7: 講師だけのテンプレ机 × 手で置いた${label}（机 3 つ・空き机あり）: ずらさず講師ごと保留。上段＝D（席は空）・下段＝A＋講師 B・件数と理由の行・再保存で同じ・再マージの不動点・講師の選択で決着`, () => {
       const saved = save(boardWith(student, 0, MANUAL_TEACHER_B, 3), TEACHER_ONLY_ROWS, {}, [], 3)
       const desk = desk0(saved.nextWeeks)
-      expect(desk.teacher).toBe('倉島')
-      expect(desk.manualTeacher).toBe(true)
-      expect(desk.teacherAssignmentSource).toBe('manual')
-      expect(ids(desk)).toEqual(['sA', null])
-      expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
+      expect([desk.teacher, desk.manualTeacher]).toEqual(['田村', false])
+      expect(ids(desk)).toEqual([])
+      const key = key0(saved.nextWeeks)
+      const pending = saved.nextPendingDesks[key]
+      expect(pending).toBeDefined()
+      expect(pending!.lower.teacher).toEqual(MANUAL_TEACHER_B)
+      expect(ids({ id: 'x', teacher: '', lesson: pending!.lower.lesson })).toEqual(['sA', null])
       const desks = cellOf(saved.nextWeeks).desks
-      expect(desks.map((item) => item.teacher)).toEqual(['倉島', '藤井', '田村'])
-      expect(desks[2].manualTeacher).toBeFalsy()
-      expect(desks[2].lesson).toBeUndefined()
-      // 「詰めた講師は緑色で分かるように。保留ではない」（オーナー指示 2026-10-22）: ずらした先の机に表示用の印・手置き講師の机には付かない・保留は作らない
-      expect(desks[2].templateTeacherShift).toEqual({ teacher: '田村', fromDeskIndex: 0 })
-      expect(isShiftedTemplateTeacherDesk(desks[2])).toBe(true)
-      expect(desks[0].templateTeacherShift).toBeUndefined()
-      expect(saved.summary.manualTeacherKept).toBe(1)
-      expect(saved.summary.manualTeacherPending).toBe(0)
+      expect(desks.map((item) => item.teacher)).toEqual(['田村', '藤井', ''])
+      expect(desks.every((item) => item.templateTeacherShift === undefined)).toBe(true)
+      expect(isShiftedTemplateTeacherDesk(desks[2])).toBe(false)
+      expect(saved.summary.manualTeacherPending).toBe(1)
       expect(saved.summary.manualTeacherReplaced).toBe(0)
-      const teacherNotes = saved.studentNotes.filter((note) => note.kind.startsWith('teacher-'))
-      expect(teacherNotes.map((note) => [note.kind, note.studentName, note.detail, note.keptStudentNames, note.placement])).toEqual([['teacher-kept', '倉島', '田村', ['青木'], { kind: 'placed', deskIndex: 2 }]])
+      expect(saved.summary.pending).toBe(1)
+      expect(saved.studentNotes.filter((note) => note.kind.startsWith('teacher-')).map((note) => [note.kind, note.studentName, note.detail, note.keptStudentNames, note.templateTeacherOnly])).toEqual([['teacher-pending', '倉島', '田村', ['青木'], true]])
       const message = buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })
-      expect(message).toContain('・10/7 5限 講師 倉島: 手で置いた講師なので、テンプレの講師（田村）に替えず残します。手で置いた 青木 もこの机に残ります。テンプレのこの机は講師だけ（生徒なし）なので、田村 は同じコマの空いている机 3 へずらして置きます。')
-      expect(message).toContain('手で置いた講師を残し、テンプレの講師を同じコマの空き机へずらす机: 1机。')
+      expect(message).toContain('・10/7 5限 講師 倉島: 手で置いた講師の机にテンプレの講師（田村）が入るため、手で置いた 青木 と一緒に下の行に残して保留（緑）にします。テンプレのこの机は講師だけ（生徒なし）なので、上の行の席は空のままです。')
+      expect(message).toContain('手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: 1机')
+      expect(message).not.toContain('ずらす')
       expect(message).not.toContain('手で置いた生徒が居ないため')
-      expect(buildTemplateDiffSavedMessage(EFFECTIVE, saved.summary)).toContain('手で置いた講師を残し、テンプレの講師を同じコマの空き机へずらした机: 1机。')
-      // 再マージ 2 回で不変（ずらした先の田村は足場講師として据え置き・元の机番号の管理机は授業ありで消費済み）
+      // 講師日程表に B は出ない（下段＝INV-13）
+      expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual([])
       expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
-      // 同じテンプレをもう一度保存しても田村は机 3 のまま（前回ずらした先を優先）・盤面は同じ
       const again = save(saved.nextWeeks[0], TEACHER_ONLY_ROWS, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences, 3)
       expect(cellOf(again.nextWeeks).desks).toEqual(desks)
-      expect(again.summary.manualTeacherKept).toBe(1)
-      expect(again.studentNotes.filter((note) => note.kind === 'teacher-kept').map((note) => note.placement)).toEqual([{ kind: 'placed', deskIndex: 2 }])
-      // 手置き講師を外してから（テンプレの机が空く）再保存すると、D は元の机 1 へ戻り、机 3 の D と印は消える（印が残ったまま別の机に付かない）
-      const freed = [mutateDesk(saved.nextWeeks[0], 0, (desk) => ({ ...desk, teacher: '', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: undefined }))]
-      const back = save(freed[0], TEACHER_ONLY_ROWS, saved.nextPendingDesks, saved.addedSuppressedRegularLessonOccurrences, 3)
-      const backDesks = cellOf(back.nextWeeks).desks
-      expect(backDesks.map((item) => item.teacher)).toEqual(['田村', '藤井', ''])
-      expect(backDesks.every((item) => item.templateTeacherShift === undefined)).toBe(true)
-      expect(back.summary.manualTeacherKept).toBe(0)
+      expect(again.nextPendingDesks).toEqual(saved.nextPendingDesks)
+      expect(again.summary.manualTeacherPending).toBe(1)
+      // 講師の選択: 手入力の講師を採用 → B＋A で 1 行（A は上段の空いた席へ戻る）／テンプレの講師を採用 → D＋A で 1 行（A は D の担当）
+      const manual = computePendingTeacherChoice({ weeks: saved.nextWeeks, templatePendingDesks: saved.nextPendingDesks, cellId: CELL_ID, deskId: desk.id, choice: 'manual' })
+      if (manual.status !== 'applied') throw new Error(manual.message)
+      expect([desk0(manual.nextWeeks).teacher, desk0(manual.nextWeeks).manualTeacher]).toEqual(['倉島', true])
+      expect(ids(desk0(manual.nextWeeks))).toEqual(['sA', null])
+      expect(manual.nextTemplatePendingDesks[key]).toBeUndefined()
+      const template = computePendingTeacherChoice({ weeks: saved.nextWeeks, templatePendingDesks: saved.nextPendingDesks, cellId: CELL_ID, deskId: desk.id, choice: 'template' })
+      if (template.status !== 'applied') throw new Error(template.message)
+      expect(desk0(template.nextWeeks).teacher).toBe('田村')
+      expect(ids(desk0(template.nextWeeks))).toEqual(['sA', null])
+      expect(template.nextTemplatePendingDesks[key]).toBeUndefined()
     })
   }
-  it('講師だけのテンプレ机 × 手で置いた振替（机 2 つ・空き机なし）: B と A は残り、D はこのコマに置かない（理由の行に出る）', () => {
+  it('A-7: 講師だけのテンプレ机 × 手で置いた振替（机 2 つ・空き机なし）: 空き机の有無に関係なく講師ごと保留（旧「置く空き机が無いため置きません」は無くなる）', () => {
     const saved = save(boardWith(MAKEUP_A), TEACHER_ONLY_ROWS)
-    expect(desk0(saved.nextWeeks).teacher).toBe('倉島')
-    expect(ids(desk0(saved.nextWeeks))).toEqual(['sA', null])
-    expect(cellOf(saved.nextWeeks).desks.map((item) => item.teacher)).toEqual(['倉島', '藤井'])
-    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
-    expect(saved.summary.manualTeacherKept).toBe(1)
-    expect(saved.summary.manualTeacherReplaced).toBe(0)
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })
-    expect(message).toContain('田村 を置く空き机がこのコマに無いため、このコマには置きません。')
+    expect(desk0(saved.nextWeeks).teacher).toBe('田村')
+    expect(ids(desk0(saved.nextWeeks))).toEqual([])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    expect(saved.summary.manualTeacherPending).toBe(1)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })).not.toContain('このコマには置きません')
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences)
   })
-  it('講師だけのテンプレ机 × 手置き講師だけ（手で置いた生徒なし）: 手入力講師はテンプレで上書きしない＝B は残り D は空き机へ（Q41-9 の 1 行目の講師だけの形は置き換えのまま）', () => {
+  it('A-6×A-7: 講師だけのテンプレ机 × 手置き講師だけ（手で置いた生徒なし）: 講師だけの保留（上段 D・席は空・下段 B）', () => {
     const week = mutateDesk(buildWeek(OLD_ROWS, 3), 0, (desk) => ({ ...desk, ...MANUAL_TEACHER_B }))
     const saved = save(week, TEACHER_ONLY_ROWS, {}, [], 3)
-    expect(cellOf(saved.nextWeeks).desks.map((item) => [item.teacher, Boolean(item.manualTeacher)])).toEqual([['倉島', true], ['藤井', false], ['田村', false]])
-    expect(saved.summary.manualTeacherKept).toBe(1)
+    expect(cellOf(saved.nextWeeks).desks.map((item) => [item.teacher, Boolean(item.manualTeacher)])).toEqual([['田村', false], ['藤井', false], ['', false]])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower).toEqual({ teacher: MANUAL_TEACHER_B })
+    expect(saved.summary.manualTeacherPending).toBe(1)
     expect(saved.summary.manualTeacherReplaced).toBe(0)
-    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-kept').map((note) => note.keptStudentNames ?? [])).toEqual([[]])
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending').map((note) => [note.keptStudentNames ?? [], note.templateTeacherOnly])).toEqual([[[], true]])
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
-    // テンプレが別の講師＋生徒（D＋C）を置く形は従来どおり置き換え（Q41-9 1 行目・オーナー決定 B）
-    const replaced = save(week, NEW_ROWS, {}, [], 3)
-    expect(desk0(replaced.nextWeeks).teacher).toBe('田村')
-    expect(replaced.summary.manualTeacherReplaced).toBe(1)
-    expect(replaced.summary.manualTeacherKept).toBe(0)
   })
-  it('講師だけのテンプレ机で D が同じコマの別の机に手で置かれている: ずらさず「既に居る」（同じ講師を 2 机にしない・INV-01）', () => {
+  it('講師だけのテンプレ机で D が同じコマの別の机に手で置かれている: 2 行にせず D をこの机に置かない（同じ講師を 2 机にしない・INV-01・旧「既に居る」の扱いを維持）', () => {
     const week = mutateDesk(boardWith(MAKEUP_A, 0, MANUAL_TEACHER_B, 3), 2, (desk) => ({ ...desk, teacher: '田村', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 'tD' }))
     const saved = save(week, TEACHER_ONLY_ROWS, {}, [], 3)
     expect(cellOf(saved.nextWeeks).desks.map((item) => item.teacher)).toEqual(['倉島', '藤井', '田村'])
-    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-kept').map((note) => note.placement)).toEqual([{ kind: 'present', deskIndex: 2 }])
-    // 既に居る（手置き）田村には「ずらした講師」の印を付けない
+    expect(ids(desk0(saved.nextWeeks))).toEqual(['sA', null])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]).toBeUndefined()
+    expect(saved.summary.manualTeacherPending).toBe(0)
     expect(cellOf(saved.nextWeeks).desks.every((item) => item.templateTeacherShift === undefined)).toBe(true)
-    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })).toContain('田村 は同じコマの机 3 に既に居るので、この机には置きません。')
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, TEACHER_ONLY_ROWS, saved.addedSuppressedRegularLessonOccurrences, 3)
   })
-  it('権威関数 planManualTeacherDeskShifts: QR 講師・削除記録・同じ講師・テンプレ机に生徒あり・テンプレ机に講師なし は対象外', () => {
-    const template = (teacher: string, withStudent = false): DeskCell => ({ id: 't', teacher, lesson: withStudent ? { id: 'tl', studentSlots: [entry('sC'), null] } : undefined })
-    const empty: DeskCell = { id: 'e', teacher: '' }
-    const manualDesk: DeskCell = { id: 'd0', ...MANUAL_TEACHER_B, lesson: { id: 'l', studentSlots: [MAKEUP_A, null] } }
-    const plan = (desk: DeskCell, templateDesk: DeskCell) => planManualTeacherDeskShifts({ desks: [desk, empty], templateDesks: [templateDesk, empty], cellId: CELL_ID })
-    expect(plan(manualDesk, template('田村')).map((shift) => shift.placement)).toEqual([{ kind: 'placed', deskIndex: 1 }])
-    expect(plan({ ...manualDesk, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 's1' }, template('田村'))).toEqual([])
-    expect(plan({ ...manualDesk, teacher: '', teacherAssignmentSource: 'deleted' }, template('田村'))).toEqual([])
-    expect(plan(manualDesk, template('倉島'))).toEqual([])
-    expect(plan(manualDesk, template('田村', true))).toEqual([])
-    expect(plan(manualDesk, template(''))).toEqual([])
-    expect(plan({ ...manualDesk, manualTeacher: false, teacherAssignmentSource: undefined }, template('田村'))).toEqual([])
-  })
+
   it('QR 自動割振りの講師: 例外 1 のまま（講師は残り、下段に講師は入らない）', () => {
     const week = boardWith(MAKEUP_A, 0, { teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'session_x', teacherAssignmentTeacherId: 'tB' })
     const saved = save(week, NEW_ROWS)
@@ -623,32 +641,35 @@ describe('Q41-9 兄弟（従来どおり）', () => {
   })
 })
 
-// tp-64（オーナー確定 2026-10-27・講師と生徒を別々に採用）の兄弟: 講師だけが残った保留の再保存（Q41-8・Q41-13）。どの形でも講師だけの保留が宙に残らず、
-// 既存の規則（Q41-13 講師だけのテンプレ机／Q41-9 手で置いた生徒なしは置き換え／Q21-9 テンプレ机に講師なし／同じ講師）のどれかで決着する。
+// tp-64（オーナー確定 2026-10-27・講師と生徒を別々に採用）の兄弟: 講師だけが残った保留の再保存（Q41-8）。オーナー決定 2026-11-01 以降、
+// 講師の衝突は生徒の採用では解けず、講師の選択（テンプレの講師を採用／手入力の講師を採用）か、テンプレ側の講師が変わる（同じ講師・講師なし）ときだけ決着する。
 describe('tp-64 兄弟: 講師だけの保留の再保存（Q41-8）', () => {
-  it('生徒を採用した後（机に手で置いた A・C は取り下げ済み）の再保存: テンプレ机は講師だけになるので Q41-13 で B が机に戻り A は B の担当・保留は消える', () => {
+  it('生徒を採用した後（机に手で置いた A・C は取り下げ済み）の再保存: テンプレ机は講師だけになるが講師の衝突は保留のまま（上段 D・席は空／下段 B＋A）', () => {
     const saved = save(boardWith(MAKEUP_A), NEW_ROWS)
     const key = key0(saved.nextWeeks)
     const adopted = resolve('adopt-existing', saved.nextWeeks, saved.nextPendingDesks)
     if (adopted.status !== 'applied') throw new Error('adopt failed')
     const suppressed = [...saved.addedSuppressedRegularLessonOccurrences, ...adopted.ledgers.suppressedRegularLessonOccurrences]
     const again = save(adopted.nextWeeks[0], NEW_ROWS, adopted.nextTemplatePendingDesks, suppressed)
-    expect(again.nextPendingDesks[key]).toBeUndefined()
-    expect([desk0(again.nextWeeks).teacher, desk0(again.nextWeeks).manualTeacher]).toEqual(['倉島', true])
-    expect(ids(desk0(again.nextWeeks))).toEqual(['sA', null])
-    expect(again.summary.manualTeacherKept).toBe(1)
+    expect(again.nextPendingDesks[key]?.lower.teacher).toEqual(MANUAL_TEACHER_B)
+    expect(ids({ id: 'x', teacher: '', lesson: again.nextPendingDesks[key]?.lower.lesson })).toEqual(['sA', null])
+    expect([desk0(again.nextWeeks).teacher, desk0(again.nextWeeks).manualTeacher]).toEqual(['田村', false])
+    expect(ids(desk0(again.nextWeeks))).toEqual([])
+    expect(again.summary.manualTeacherPending).toBe(1)
+    expect(again.summary.manualTeacherReplaced).toBe(0)
     expectFixpoint(again.nextWeeks, again.nextPendingDesks, NEW_ROWS, [...suppressed, ...again.addedSuppressedRegularLessonOccurrences])
   })
-  it('生徒をテンプレで採用した後（机は D＋C・手で置いた生徒なし）の再保存: Q41-9 の 1 行目どおり D に揃い B は外れる（件数 manualTeacherReplaced）', () => {
+  it('生徒をテンプレで採用した後（机は D＋C・手で置いた生徒なし）の再保存: 講師だけの保留のまま（旧「D に揃い B は外れる」は 2026-11-01 で廃止）。テンプレ机が空→B が机へ／同じ講師→解消 は従来どおり', () => {
     const saved = save(boardWith(MAKEUP_A), NEW_ROWS)
     const key = key0(saved.nextWeeks)
     const adopted = resolve('adopt-template', saved.nextWeeks, saved.nextPendingDesks, 0)
     if (adopted.status !== 'applied') throw new Error('adopt failed')
     const again = save(adopted.nextWeeks[0], NEW_ROWS, adopted.nextTemplatePendingDesks, saved.addedSuppressedRegularLessonOccurrences)
-    expect(again.nextPendingDesks[key]).toBeUndefined()
+    expect(again.nextPendingDesks[key]?.lower).toEqual({ teacher: MANUAL_TEACHER_B })
     expect(desk0(again.nextWeeks).teacher).toBe('田村')
     expect(ids(desk0(again.nextWeeks))).toEqual(['sC', null])
-    expect(again.summary.manualTeacherReplaced).toBe(1)
+    expect(again.summary.manualTeacherPending).toBe(1)
+    expect(again.summary.manualTeacherReplaced).toBe(0)
     // テンプレ机が空 → B が机へ（Q21-9）／テンプレも同じ講師 → 講師の重複は解消（保留は消える）
     const empty = save(adopted.nextWeeks[0], [], adopted.nextTemplatePendingDesks, saved.addedSuppressedRegularLessonOccurrences)
     expect(empty.nextPendingDesks[key]).toBeUndefined()
