@@ -39,7 +39,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, isSameDayMovedTemplateCopy, applySameDayMoveCopyNotices, refineSameDayMoveCopyKept, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, studentHasManualMark, applySameDayMoveCopyNotices, refineSameDayMoveCopyKept, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, expandTemplateDiffSlotFilterForSameDayMoves, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -6718,30 +6718,28 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
  *   生徒の側が片づいても講師だけの保留（緑）で残る（withTemplatePendingTeacherChoice）。
  */
 /**
- * 決定記録 57（オーナー決定 2026-11-01・A-10）: 保留の机 D の下段の生徒 S が、同じコマの**別の机 T にテンプレの通常授業**（印なし regular・写しでない）として
- * 生きている形（旧 Q21-11 なら T に置かなかった形）で「手入力データを採用」を押したら、T の S を机から外す（外した S は旧 Q21-11 と同じく
- * 抑止キーだけを積む＝呼び出し側）。T の生徒が全員外れれば再マージの全員抑止の形（buildFullySuppressedManagedDesk）にする。純関数。
+ * 決定記録 57（オーナー決定 2026-11-01・A-10）: 保留の机 D（由来 same-slot-template-duplicate＝保存が D の手入力の授業を下段へ移した形）の下段の生徒 S が、
+ * 同じコマの**別の机 T にテンプレの通常授業**として生きているとき、「手入力データを採用」で T の S を机から外す（外した S は旧 Q21-11 と同じく
+ * 抑止キーだけを積む＝呼び出し側）。外すのは**テンプレ管理の机（isTemplateManagedLesson）の、手入力の印の無い通常授業（regular・studentHasManualMark
+ * が偽＝手動追加・別日／同日移動の写しは外さない）で、下段の S と同じ生徒かつ同じ科目**のものだけ（regression-reviewer 2026-11-01 P-2: 別の日から
+ * 動かした通常授業〔makeupSourceDate つき regular〕や別の科目の同じ生徒まで外していた）。それ以外の形は従来どおり Q26-4／INV-12 の検査で止まる。
+ * 由来の限定（same-slot-template-duplicate 以外の保留では呼ばない）は呼び出し側で行う。T の生徒が全員外れれば再マージの全員抑止の形にする。純関数。
  */
 export function removeTemplateDuplicatesElsewhereInCell(cell: SlotCell, deskId: string, lowerStudents: readonly StudentEntry[]): { cell: SlotCell; removed: Array<{ deskIndex: number; student: StudentEntry }> } {
   const removed: Array<{ deskIndex: number; student: StudentEntry }> = []
   if (lowerStudents.length === 0) return { cell, removed }
   const desks = cell.desks.map((desk, deskIndex) => {
-    if (desk.id === deskId || !desk.lesson) return desk
+    if (desk.id === deskId || !desk.lesson || !isTemplateManagedLesson(desk.lesson)) return desk
     let changed = false
     const slots = desk.lesson.studentSlots.map((student) => {
-      if (!student || student.lessonType !== 'regular' || student.manualAdded || isSameDayMovedTemplateCopy(student, cell.dateKey)) return student
-      if (!lowerStudents.some((lower) => isSameTemplateStudent(lower, student))) return student
+      if (!student || student.lessonType !== 'regular' || studentHasManualMark(student)) return student
+      if (!lowerStudents.some((lower) => isSameTemplateStudent(lower, student) && lower.subject === student.subject)) return student
       removed.push({ deskIndex, student })
       changed = true
       return null
     }) as [StudentEntry | null, StudentEntry | null]
     if (!changed) return desk
-    if (!slots[0] && !slots[1]) {
-      if (isTemplateManagedLesson(desk.lesson)) return buildFullySuppressedManagedDesk(desk)
-      const { lesson: _lesson, ...rest } = desk
-      void _lesson
-      return rest
-    }
+    if (!slots[0] && !slots[1]) return buildFullySuppressedManagedDesk(desk)
     return { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }
   })
   return removed.length === 0 ? { cell, removed } : { cell: { ...cell, desks }, removed }
@@ -6839,8 +6837,11 @@ export function computePendingDeskResolution(params: {
     // 決定記録 57（オーナー決定 2026-11-01・A-10）: 押した席の下段の生徒 S が同じコマの別の机 T にテンプレの通常授業として生きている（旧 Q21-11 で
     // T に置かなかった形＝保存が D の下段へ移した形）なら、T の S を外してから机へ戻す。外した S には旧 Q21-11 と同じ抑止キーだけを積む
     // （希望回数は旧 Q21-11 と同じく触らない: 旧 Q21-11 は「置かなかった」として addedSuppressed だけで希望回数補正を積んでいなかった）。
+    // 由来が same-slot-template-duplicate の保留だけ（他の由来の保留は従来どおり Q26-4 で止める・regression-reviewer 2026-11-01 P-2）。
     const seatScopedLower = params.lowerIndex === undefined ? entry.lower : splitTemplatePendingLowerSeat(entry.lower, params.lowerIndex).seatLower
-    const duplicateRemoval = removeTemplateDuplicatesElsewhereInCell(cell, desk.id, liveTemplatePendingStudents(seatScopedLower.lesson))
+    const duplicateRemoval = entry.origin?.kind === 'same-slot-template-duplicate'
+      ? removeTemplateDuplicatesElsewhereInCell(cell, desk.id, liveTemplatePendingStudents(seatScopedLower.lesson))
+      : { cell, removed: [] as Array<{ deskIndex: number; student: StudentEntry }> }
     const cellForAdopt = duplicateRemoval.cell
     const weeksForAdopt = duplicateRemoval.removed.length > 0 ? params.weeks.map((week) => week.map((current) => (current.id === cell.id ? cellForAdopt : current))) : params.weeks
     const attempt = planTemplatePendingAdoptExisting({ cell: cellForAdopt, desk, entry, seatIndex: params.lowerIndex })
