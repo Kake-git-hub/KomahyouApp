@@ -427,7 +427,7 @@ describe('INV-06 講習在庫 × 決定記録 57（テンプレ机に置くた�
     expect(upperIds(result.nextWeeks, 1)).toEqual([])
   })
 
-  it('手入力データを採用: 講習 M は机 1 の上段へ戻り、机 0 の M の通常授業は外れて抑止キー 1。講習の台帳は触らず残数は 1 のまま', () => {
+  it('手入力データを採用: 講習 M は机 1 の上段へ戻り、机 0 の M の通常授業は外れて抑止キー 1。講習の台帳は触らず残数は 1 のまま・通常授業は −1（決定記録 62）', () => {
     const { diff, deskId, key } = board()
     const result = resolve('adopt-existing', diff.nextWeeks, deskId, diff.nextPendingDesks)
     if (result.status !== 'applied') throw new Error(result.message)
@@ -436,7 +436,8 @@ describe('INV-06 講習在庫 × 決定記録 57（テンプレ机に置くた�
     expect(upperIds(result.nextWeeks, 0)).toEqual([])
     expect(result.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
     expect(result.ledgers.manualLectureStockCounts).toEqual(PLACED.manualLectureStockCounts)
-    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    // 決定記録 62（2026-11-02）: 外した M の通常授業は単発削除と同じ −1（戻した講習は通常授業の代わりに数えない・講習の台帳は不変）。
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([expect.objectContaining({ studentKey: 'sM', countKind: 'regular', delta: -1 })])
     expect(balances(result.ledgers)).toEqual({ sM: 1 })
   })
 })

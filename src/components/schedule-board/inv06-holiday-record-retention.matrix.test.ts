@@ -1006,7 +1006,7 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(twice.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-2')).toHaveLength(0)
   })
 
-  it('★(f-10・決定記録 59) 片づけ: 「手入力データを採用」は振替を席へ戻し、戻した通常授業は取り下げて抑止（希望回数 −1 はしない＝旧形の会計の鏡写し）。「テンプレ授業を採用」は振替を未消化振替へ戻し通常授業は席に残る', () => {
+  it('★(f-10・決定記録 59) 片づけ: 「手入力データを採用」は振替を席へ戻し、戻した通常授業は取り下げて抑止（決定記録 62 で単発削除と揃え希望回数 −1）。「テンプレ授業を採用」は振替を未消化振替へ戻し通常授業は席に残る', () => {
     const { released, key } = releaseDisplacing(occupantMakeup())
     const pending = released.nextTemplatePendingDesks!
     const ledgers = { ...released.ledgers, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [] as string[], scheduleCountAdjustments: [] }
@@ -1017,8 +1017,9 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(findDesk(existing.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk', lessonType: 'makeup' })
     expect(existing.nextTemplatePendingDesks[key]).toBeUndefined()
     expect(existing.ledgers.suppressedRegularLessonOccurrences).toContain(`student-1__数__${RELEASE_DATE}__1`)
-    expect(existing.countAdjustedCount).toBe(0)
-    expect(existing.ledgers.scheduleCountAdjustments).toEqual([])
+    // 決定記録 62（オーナー決定 2026-11-02「2つとも予定数を 1 減らして単発削除と揃えて」）: 戻した通常授業の取り下げは単発削除と同じ −1。
+    expect(existing.countAdjustedCount).toBe(1)
+    expect(existing.ledgers.scheduleCountAdjustments).toEqual([expect.objectContaining({ studentKey: 'student-1', countKind: 'regular', delta: -1, dateKey: RELEASE_DATE })])
     expect(existing.returnedCount).toBe(0)
     expect(existing.ledgers.manualMakeupAdjustments).toEqual(released.ledgers.manualMakeupAdjustments)
 
@@ -1094,7 +1095,7 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(released.ledgers).toEqual(before)
   })
 
-  it('★(f-13・兄弟) 押し出しの形（もう一方の席あり）の片づけ: 「手入力データを採用」は記録の席だけ入れ替え（隣の生徒は不動・−1 なし・返却 0）、「テンプレ授業を採用」は振替を未消化振替へ（隣の生徒は不動）', () => {
+  it('★(f-13・兄弟) 押し出しの形（もう一方の席あり）の片づけ: 「手入力データを採用」は記録の席だけ入れ替え（隣の生徒は不動・決定記録 62 で −1・返却 0）、「テンプレ授業を採用」は振替を未消化振替へ（隣の生徒は不動）', () => {
     const { released, key } = releaseDisplacing(occupantMakeup(), { other: otherSeatManual() })
     const pending = released.nextTemplatePendingDesks!
     const ledgers = { ...released.ledgers, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [] as string[], scheduleCountAdjustments: [] }
@@ -1107,7 +1108,9 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(afterExisting.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp', lessonType: 'special' })
     expect(existing.nextTemplatePendingDesks[key]).toBeUndefined()
     expect(existing.ledgers.suppressedRegularLessonOccurrences).toContain(`student-1__数__${RELEASE_DATE}__1`)
-    expect(existing.countAdjustedCount).toBe(0)
+    // 決定記録 62（2026-11-02）: 単発削除と揃えて −1。
+    expect(existing.countAdjustedCount).toBe(1)
+    expect(existing.ledgers.scheduleCountAdjustments).toEqual([expect.objectContaining({ studentKey: 'student-1', countKind: 'regular', delta: -1 })])
     expect(existing.returnedCount).toBe(0)
     expect(existing.ledgers.manualMakeupAdjustments).toEqual(released.ledgers.manualMakeupAdjustments)
     expect(existing.ledgers.manualLectureStockCounts).toEqual(released.ledgers.manualLectureStockCounts)
