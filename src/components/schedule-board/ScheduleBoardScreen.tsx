@@ -6835,8 +6835,9 @@ export function computePendingDeskResolution(params: {
     // 席ごとに戻せない（旧形式の保留で、下段の通常授業がテンプレの授業に同居できない等）ときは、旧来どおり上段のテンプレの生徒を全部取り下げる。
     // ★2026-10-03（Q26-10）: lowerIndex を渡されたら押した席の下段だけを机へ戻し、もう一方の席の下段は保留のまま残す。
     // 決定記録 57（オーナー決定 2026-11-01・A-10）: 押した席の下段の生徒 S が同じコマの別の机 T にテンプレの通常授業として生きている（旧 Q21-11 で
-    // T に置かなかった形＝保存が D の下段へ移した形）なら、T の S を外してから机へ戻す。外した S には旧 Q21-11 と同じ抑止キーだけを積む
-    // （希望回数は旧 Q21-11 と同じく触らない: 旧 Q21-11 は「置かなかった」として addedSuppressed だけで希望回数補正を積んでいなかった）。
+    // T に置かなかった形＝保存が D の下段へ移した形）なら、T の S を外してから机へ戻す。外した S には抑止キーを積み、
+    // **希望回数は単発削除と同じく −1**（オーナー決定 2026-11-02・決定記録 62「2つとも予定数を 1 減らして単発削除と揃えて」。
+    // 旧 Q21-11 と同じく −1 しなかった 2026-11-01 の形は、回数表で通常授業が 1 回足りないように見えた）。
     // 由来が same-slot-template-duplicate の保留だけ（他の由来の保留は従来どおり Q26-4 で止める・regression-reviewer 2026-11-01 P-2）。
     const seatScopedLower = params.lowerIndex === undefined ? entry.lower : splitTemplatePendingLowerSeat(entry.lower, params.lowerIndex).seatLower
     const duplicateRemoval = entry.origin?.kind === 'same-slot-template-duplicate'
@@ -6882,7 +6883,8 @@ export function computePendingDeskResolution(params: {
 
     let suppressedRegularLessonOccurrences = params.ledgers.suppressedRegularLessonOccurrences
     let suppressedMakeupOrigins = params.ledgers.suppressedMakeupOrigins
-    // 決定記録 57: 別の机 T から外したテンプレの通常授業は、旧 Q21-11 の「置かなかった」と同じ抑止キーだけ（再マージで湧かせない）。
+    // 決定記録 57: 別の机 T から外したテンプレの通常授業は抑止キー（再マージで湧かせない）。決定記録 62（2026-11-02）で単発削除と揃え、
+    // 希望回数 −1 は下の countTargets で積む（上段から取り下げた通常授業と同じ扱い）。
     for (const item of duplicateRemoval.removed) {
       const occurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(item.student, cell.dateKey, cell.slotNumber)
       if (occurrenceKey) suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, occurrenceKey)
@@ -6904,14 +6906,23 @@ export function computePendingDeskResolution(params: {
     }
     // 希望回数（Q26-1・条件 13）: 同じ日の実配置（今戻した下段を含む・他の机の保留中の下段は含まない＝週データだけ）に
     // 同じ生徒×科目が生きていなければ単発削除と同じ −1。
-    // 決定記録 59（2026-11-01・休日解除 (b)-2 の押し出し 'holiday-release-displaced'）: 上段の「戻した通常授業」を取り下げても希望回数は −1 しない。
-    //   旧形（戻した通常授業を下段に置き「テンプレ授業を採用」で捨てる）が手動追加と同じく −1 を積まなかった（Q42-3・オーナー了承 2026-10-25）会計を鏡写しにする。
+    // 決定記録 62（オーナー決定 2026-11-02「2つとも予定数を 1 減らして単発削除と揃えて」）: 休日解除 (b)-2 の押し出し（'holiday-release-displaced'）で
+    //   上段の「戻した通常授業」を取り下げたときも、ほかの取り下げと同じく −1（2026-11-01 は旧形の鏡写しで −1 しなかった＝回数表で 1 回足りないように見えた）。
     //   抑止キー・振替在庫を生まない抑制は上のとおり積む（取り下げた授業を再マージで湧かせない）。
-    const countTargets = resolveAdoptExistingCountAdjustments({
-      withdrawnTemplateStudents: entry.origin?.kind === 'holiday-release-displaced' ? [] : withdrawnRegulars,
-      dateKey: cell.dateKey,
-      placementsAfterAdoption: nextWeeks.flat(),
-    })
+    const countTargets = [
+      ...resolveAdoptExistingCountAdjustments({
+        withdrawnTemplateStudents: withdrawnRegulars,
+        dateKey: cell.dateKey,
+        placementsAfterAdoption: nextWeeks.flat(),
+      }),
+      // 決定記録 62: A-10 で別の机 T から外した通常授業。戻した下段の振替・講習は同じ生徒×科目でも通常授業の代わりではないので「生きている」に数えない。
+      ...resolveAdoptExistingCountAdjustments({
+        withdrawnTemplateStudents: duplicateRemoval.removed.map((item) => item.student),
+        dateKey: cell.dateKey,
+        placementsAfterAdoption: nextWeeks.flat(),
+        isLiving: (student) => student.lessonType === 'regular',
+      }),
+    ]
     let scheduleCountAdjustments = params.ledgers.scheduleCountAdjustments
     for (const target of countTargets) {
       scheduleCountAdjustments = resolveDeletedStudentCountAccounting(scheduleCountAdjustments, target.student, target.dateKey).nextAdjustments

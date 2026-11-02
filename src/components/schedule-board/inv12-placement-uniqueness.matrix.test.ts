@@ -316,7 +316,7 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     return { weeks, pending }
   }
 
-  it('決定記録 57: 由来 same-slot-template-duplicate × T がテンプレ管理の通常授業（同じ生徒・同じ科目）→ 既存を採用で T の A を外し、A は p0 の 1 か所・抑止キー 1', () => {
+  it('決定記録 57: 由来 same-slot-template-duplicate × T がテンプレ管理の通常授業（同じ生徒・同じ科目）→ 既存を採用で T の A を外し、A は p0 の 1 か所・抑止キー 1・希望回数 −1（決定記録 62: 単発削除と揃える）', () => {
     const { weeks, pending } = duplicateFixture()
     const r = resolveMode('adopt-existing', weeks, pending)
     expect(r.status).toBe('applied')
@@ -325,7 +325,9 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     expect(deskById(r.nextWeeks, CELL, 'p0').lesson?.studentSlots[0]?.lessonType).toBe('makeup')
     expect(deskById(r.nextWeeks, CELL, 'p1').lesson?.studentSlots.filter(Boolean) ?? []).toEqual([])
     expect(r.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
-    expect(r.ledgers.scheduleCountAdjustments).toEqual([])
+    // 決定記録 62（オーナー決定 2026-11-02）: T から外した通常授業は単発削除と同じく −1（旧: 旧 Q21-11 と同じく触らない）。
+    expect(r.ledgers.scheduleCountAdjustments).toHaveLength(1)
+    expect(r.ledgers.scheduleCountAdjustments[0]).toMatchObject({ countKind: 'regular', delta: -1 })
     expect(r.nextTemplatePendingDesks[pendingKey]).toBeUndefined()
   })
 
@@ -487,7 +489,10 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(cellOf(result.nextWeeks).desks[0].teacher).toBe('田中')
     expect(result.nextTemplatePendingDesks[DESK2_KEY]).toBeUndefined()
     expect(result.ledgers.suppressedRegularLessonOccurrences).toEqual([...nextSuppressed, buildManagedOccurrenceKey(mkStudent('sA', '青木'), DATE, 5)])
-    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    // 決定記録 62（オーナー決定 2026-11-02「単発削除と揃えて」）: 外した机 0 の A の通常授業は −1（戻した机 2 の振替は通常授業の代わりに数えない）。
+    expect(result.ledgers.scheduleCountAdjustments).toHaveLength(1)
+    expect(result.ledgers.scheduleCountAdjustments[0]).toMatchObject({ countKind: 'regular', delta: -1 })
+    expect(result.countAdjustedCount).toBe(1)
     expect(result.ledgers.manualMakeupAdjustments).toEqual({})
     expect(result.message).toContain('机 1 のテンプレの 青木 を外す')
     expect(liveCount(result.nextWeeks, 'sA')).toBe(1)

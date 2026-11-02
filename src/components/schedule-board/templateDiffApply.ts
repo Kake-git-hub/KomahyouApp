@@ -1201,11 +1201,16 @@ export function resolveAdoptExistingCountAdjustments(params: {
   withdrawnTemplateStudents: readonly StudentEntry[]
   dateKey: string
   placementsAfterAdoption: readonly SlotCell[]
+  /**
+   * 「同じ日に生きている」と数える授業の絞り込み（省略時は種別を問わず全部）。決定記録 57 の片づけ（オーナー決定 2026-11-02「単発削除と揃えて」）は
+   * 通常授業だけを数える: 戻した下段の振替・講習は同じ生徒×科目でも通常授業の代わりではない（数えると −1 が飛ぶ）。
+   */
+  isLiving?: (student: StudentEntry) => boolean
 }): Array<{ student: StudentEntry; dateKey: string }> {
   const livingOnDate: StudentEntry[] = []
   for (const cell of params.placementsAfterAdoption) {
     if (cell.dateKey !== params.dateKey) continue
-    for (const desk of cell.desks) livingOnDate.push(...liveStudents(desk.lesson))
+    for (const desk of cell.desks) livingOnDate.push(...liveStudents(desk.lesson).filter((student) => !params.isLiving || params.isLiving(student)))
   }
   return params.withdrawnTemplateStudents
     .filter((student) => !livingOnDate.some((living) => living.subject === student.subject && isSameTemplateStudent(living, student)))
