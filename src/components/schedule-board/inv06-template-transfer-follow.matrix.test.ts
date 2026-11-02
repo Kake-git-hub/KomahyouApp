@@ -10,9 +10,9 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { ClassroomSettings } from '../../types/appState'
+import type { ClassroomSettings, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeHolidayReleaseRestoration, computePendingDeskResolution, computeStudentMove, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computeHolidayReleaseRestoration, computePendingDeskResolution, computeStudentMove, computeTemplateDiffApplyForBoard, computeWholeDayTransfer, remergeBoardWeeksWithManagedData, resolveDeletedStudentCountAccounting, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
@@ -604,9 +604,9 @@ describe('INV-06 × Q40 regression-reviewer 最終確認（2026-10-15・M-C/L-3�
 describe('Q42 × テンプレ再保存（regression-reviewer 2026-10-25 H-1 / M-2）', () => {
   const emptyLedgers = { manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} }
   const roster = new Map(students.map((student) => [student.name, student]))
-  function audit(weeks: SlotCell[][], rows: RegularLessonRow[], pendingDesks: TemplatePendingDeskMap, suppressed: string[]) {
+  function audit(weeks: SlotCell[][], rows: RegularLessonRow[], pendingDesks: TemplatePendingDeskMap, suppressed: string[], scheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = []) {
     void suppressed
-    return auditTemplateLessonAccounting({ weeks, regularLessons: rows, students, classroomSettings: settings(), scheduleCountAdjustments: [], manualMakeupAdjustments: {}, templatePendingDesks: pendingDesks, fromDate: WED, toDate: WEEK_END })
+    return auditTemplateLessonAccounting({ weeks, regularLessons: rows, students, classroomSettings: settings(), scheduleCountAdjustments, manualMakeupAdjustments: {}, templatePendingDesks: pendingDesks, fromDate: WED, toDate: WEEK_END })
   }
   /** 休日設定の後に、水 5限 机 0 の A の席へ別の生徒 D を手で置いた形（A は holiday 記録）。 */
   function holidayWithSeatTaken() {
@@ -651,8 +651,13 @@ describe('Q42 × テンプレ再保存（regression-reviewer 2026-10-25 H-1 / M-
   it('H-1 続き: 上段の A を（記録を残さず）外して抑止すると Q28 で D が 1 行に戻り、その後の再保存でも D は消えない（手で足し直した通常授業と同じ形）', () => {
     const { released } = holidayWithSeatTaken()
     const pending = released.nextTemplatePendingDesks!
-    // 盤面で A を単発削除した形＝抑止キーが積まれる。
+    // 盤面で A を単発削除した形＝抑止キーが積まれ、本物の単発削除と同じ会計（希望回数 −1・resolveDeletedStudentCountAccounting）を監査へ渡す
+    // （regression-reviewer 2026-11-01 格下げ指摘: 以前は −1 を渡さず sA の違反を検査から外していた）。
     const suppressed = [`sA__数__${WED}__${SLOT}`]
+    const deletedA = cellOf(released.nextWeeks, WED_CELL).desks[0].lesson!.studentSlots[0]!
+    expect(deletedA.managedStudentId).toBe('sA')
+    const { nextAdjustments: countAdjustments } = resolveDeletedStudentCountAccounting([], deletedA, WED)
+    expect(countAdjustments).toHaveLength(1)
     const emptied = released.nextWeeks.map((week) => week.map((cell) => (cell.id !== WED_CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) })))
     const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: emptied, templatePendingDesks: pending })
     expect(settled.nextTemplatePendingDesks).toEqual({})
@@ -660,8 +665,9 @@ describe('Q42 × テンプレ再保存（regression-reviewer 2026-10-25 H-1 / M-
     const saved = save(settled.nextWeeks, OLD_ROWS, suppressed, { templatePendingDesks: {} })
     expect(liveIds(saved.nextWeeks, WED_CELL).sort()).toEqual(['sB', 'sD'])
     expect(liveIds(saved.nextWeeks, WED_CELL).filter((id) => id === 'sD')).toHaveLength(1)
-    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed).filter((violation) => !JSON.stringify(violation).includes('sA'))).toEqual([])
-    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed).filter((violation) => (violation as { studentId?: string }).studentId !== 'sA' && !JSON.stringify(violation).includes('sA'))).toEqual([])
+    // 単発削除の −1 を渡せば sA も含めて違反 0（−1 を渡さないと sA の「無言の消失」が 1 件出る＝fixture の穴の検出）。
+    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed, countAdjustments), describeLessonAccountingViolations(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed, countAdjustments))).toEqual([])
+    expect(audit(saved.nextWeeks, OLD_ROWS, {}, suppressed).map((violation) => `${violation.kind}:${violation.studentId}`)).toEqual(['missing:sA'])
     expectFixpoint(saved, OLD_ROWS, suppressed)
   })
 

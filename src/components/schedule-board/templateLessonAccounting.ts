@@ -11,14 +11,15 @@
 //   statusAll   … その日のその生徒×科目の出欠・移動元・休日の記録（1 記録＝1 授業の行方）
 //   unmatched   … その日を振替元とする振替（盤面のどこにあっても）のうち、振替元の時限に記録が無いもの（記録と対になる振替は statusAll が既に数えている。
 //                 時限不明の振替は対が取れないので unmatched に数える＝説明を多めに見る側）
-//   origins     … 在庫の正本がその日に持つ有効な origin。休みの記録と重なる分と、その日を振替元とする振替の数を引く（max(0, origins − absent − その日の振替すべて)）。
-//                 在庫の消化（consumeMatchingOriginTokens）は時限が合わなくても同じ日付の origin へフォールバックするので、その日を振替元とする振替があれば
-//                 origin は 1 件ずつ食われる＝説明にならない（regression-reviewer O-1・既知の限界 L-5 の検出に必要）
+//   origins     … 在庫の正本がその日に持つ有効な origin。休みの記録と重なる分と、その日を振替元とする振替が**在庫の消化規則で食う分**を引く。
+//                 消化規則は在庫そのもの（consumeMatchingOriginTokens・決定記録 58）: 普通の振替は時限が合わなくても同じ日付の origin へフォールバック、
+//                 移送で置かれた振替（振替元の時限に移動元記録・isMovedDerivedMakeup）は完全一致／時限なし／自動 origin（relaxedOriginTokens）だけを食う。
+//                 origins を数で渡す旧形は従来の「同日の振替すべてが 1 件ずつ食う」（regression-reviewer O-1・既知の限界 L-5 の検出に必要）。
 //   countAdjusted … その日の希望回数の補正の純減（−1 の合計から +1 の戻しを引いた分）
 //   otherLesson … 同じコマに生きている同じ生徒の別種の授業（振替・講習・手動追加＝Q21-11 が通常授業を置かない正当な理由）
 import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { originTokenDateKey, parseOriginSlotNumberFromLabel } from './makeupStock'
+import { consumeMatchingOriginTokens, isMovedDerivedMakeup, originTokenDateKey, parseOriginSlotNumberFromLabel, type MovedSourceRecord, type UsedOriginToken } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 export function buildLessonFactKey(studentId: string, subject: string, dateKey: string) {
@@ -36,6 +37,10 @@ export type LessonExplanationFacts = {
   statusSlots: ReadonlyMap<string, ReadonlySet<number>>
   /** 振替元の鍵 → その日を振替元とする振替の、振替元の時限（不明は null）。 */
   makeupSourceSlots: ReadonlyMap<string, ReadonlyArray<number | null>>
+  /** 振替元の鍵 → その日を振替元とする振替の、振替元の時限と置かれた日（決定記録 58 の消化規則＝移送で置かれた振替の判定に使う）。 */
+  makeupSources: ReadonlyMap<string, ReadonlyArray<{ slotNumber: number | null; placedDateKey: string }>>
+  /** 鍵（生徒×科目×日付）→ その日の移動元記録（記録のセルの時限・行き先の日）。 */
+  movedRecords: ReadonlyMap<string, ReadonlyArray<MovedSourceRecord>>
   /** `${生徒}__${日付}__${時限}` → その生徒の通常授業以外の生きている授業数。 */
   otherLessonBySlot: ReadonlyMap<string, number>
 }
@@ -47,6 +52,8 @@ export function collectLessonExplanationFacts(params: { weeks: SlotCell[][]; pen
   const absent = new Map<string, number>()
   const statusSlots = new Map<string, Set<number>>()
   const makeupSourceSlots = new Map<string, Array<number | null>>()
+  const makeupSources = new Map<string, Array<{ slotNumber: number | null; placedDateKey: string }>>()
+  const movedRecords = new Map<string, MovedSourceRecord[]>()
   const otherLessonBySlot = new Map<string, number>()
   const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
   const scanStudent = (student: StudentEntry, cell: SlotCell) => {
@@ -55,7 +62,9 @@ export function collectLessonExplanationFacts(params: { weeks: SlotCell[][]; pen
     else bump(otherLessonBySlot, `${id}__${cell.dateKey}__${cell.slotNumber}`)
     if (student.lessonType === 'makeup' && student.makeupSourceDate) {
       const key = buildLessonFactKey(id, student.subject, student.makeupSourceDate)
-      makeupSourceSlots.set(key, [...(makeupSourceSlots.get(key) ?? []), parseOriginSlotNumberFromLabel(student.makeupSourceLabel)])
+      const slotNumber = parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+      makeupSourceSlots.set(key, [...(makeupSourceSlots.get(key) ?? []), slotNumber])
+      makeupSources.set(key, [...(makeupSources.get(key) ?? []), { slotNumber, placedDateKey: cell.dateKey }])
     }
   }
   for (const week of params.weeks) for (const cell of week) {
@@ -66,13 +75,14 @@ export function collectLessonExplanationFacts(params: { weeks: SlotCell[][]; pen
         const key = buildLessonFactKey(lessonFactIdentity(entry), entry.subject, cell.dateKey)
         bump(statusAll, key)
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup') bump(absent, key)
+        if (entry.status === 'moved') movedRecords.set(key, [...(movedRecords.get(key) ?? []), { slotNumber: cell.slotNumber, destinationDateKey: entry.moveDestinationDateKey ?? null }])
         statusSlots.set(key, (statusSlots.get(key) ?? new Set<number>()).add(cell.slotNumber))
       }
       const pending = params.pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]
       for (const student of pending?.lower.lesson?.studentSlots ?? []) if (student) scanStudent(student, cell)
     }
   }
-  return { regular, statusAll, absent, statusSlots, makeupSourceSlots, otherLessonBySlot }
+  return { regular, statusAll, absent, statusSlots, makeupSourceSlots, makeupSources, movedRecords, otherLessonBySlot }
 }
 
 /** その日の希望回数の補正の純減（regular）。生徒×科目×日付 → 件数。 */
@@ -102,12 +112,18 @@ export type LessonExplanationBreakdown = {
   otherLessonSameSlot: number
 }
 
+/**
+ * その日の有効な origin の渡し方。数＝旧形（同日の振替すべてが 1 件ずつ食う）。トークン＝在庫と同じ消化規則で、その日を振替元とする振替が食う分を引く
+ * （決定記録 58: 移送で置かれた振替は時限が明示的に食い違う台帳・欠席の origin を食わない。自動 origin は relaxedTokens で従来どおり）。
+ */
+export type LessonOriginsInput = number | { tokens: readonly string[]; relaxedTokens?: ReadonlySet<string> }
+
 /** 生徒×科目×日付 の授業を説明できる件数（内訳つき）。`slotsForOtherLesson` は同じコマの別種の授業を数える時限。 */
 export function countLessonExplanations(facts: LessonExplanationFacts, params: {
   studentId: string
   subject: string
   dateKey: string
-  origins: number
+  origins: LessonOriginsInput
   countAdjusted: number
   slotsForOtherLesson: Iterable<number>
 }): { explained: number; breakdown: LessonExplanationBreakdown } {
@@ -116,13 +132,20 @@ export function countLessonExplanations(facts: LessonExplanationFacts, params: {
   const makeupsFromDate = facts.makeupSourceSlots.get(key) ?? []
   const makeupUnmatched = makeupsFromDate.filter((slot) => slot == null || !statusSlots.has(slot)).length
   const absent = facts.absent.get(key) ?? 0
+  // origin のうち、その日を振替元とする振替が食う分（在庫と同じ規則＝consumeMatchingOriginTokens を共有）。
+  const originsLeftAfterMakeups = typeof params.origins === 'number'
+    ? Math.max(0, params.origins - makeupsFromDate.length)
+    : consumeMatchingOriginTokens([...params.origins.tokens], (facts.makeupSources.get(key) ?? []).map((makeup): UsedOriginToken => {
+      const token = makeup.slotNumber == null ? params.dateKey : `${params.dateKey}#${makeup.slotNumber}`
+      return isMovedDerivedMakeup(facts.movedRecords.get(key), makeup.slotNumber, makeup.placedDateKey) ? { token, strictSlot: true } : { token }
+    }), { relaxedOriginTokens: params.origins.relaxedTokens }).length
   let otherLessonSameSlot = 0
   for (const slotNumber of params.slotsForOtherLesson) otherLessonSameSlot += facts.otherLessonBySlot.get(`${params.studentId}__${params.dateKey}__${slotNumber}`) ?? 0
   const breakdown: LessonExplanationBreakdown = {
     regular: facts.regular.get(key) ?? 0,
     statusRecord: facts.statusAll.get(key) ?? 0,
     makeupUnmatched,
-    origin: Math.max(0, params.origins - absent - makeupsFromDate.length),
+    origin: Math.max(0, originsLeftAfterMakeups - absent),
     countAdjusted: params.countAdjusted,
     otherLessonSameSlot,
   }
