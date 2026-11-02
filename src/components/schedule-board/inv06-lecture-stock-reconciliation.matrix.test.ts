@@ -337,3 +337,106 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     expect(result.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0].lesson?.studentSlots.map((item) => item?.id ?? null)).toEqual([expect.any(String), 'lec_sD'])
   })
 })
+
+// ============================================================================
+// INV-06 × 決定記録 57（オーナー決定 2026-11-01・A-10 緑化）: 同じコマの別の机 D に手で置いた講習 M（在庫由来・台帳 -1 で消化済み）が、
+// テンプレ机 T に M の通常授業を置くために D の下段へ移ったとき。
+//   - 保存は台帳を触らない＝下段へ移っても講習の残数は保存前と同じ（下段の講習は消化済みのまま）。
+//   - D で「テンプレ授業を採用」→ 下段の在庫由来の講習は既存の処分規則で未消化講習へ戻る（残 +1）。
+//   - D で「手入力データを採用」→ 講習は D の上段へ戻り T の通常授業は外れる。講習の台帳は触らない（残数は保存前と同じ）。
+// ============================================================================
+describe('INV-06 講習在庫 × 決定記録 57（テンプレ机に置くために別の机の講習を下段へ）', () => {
+  const AUTUMN_ID = 'sess_autumn'
+  const DATE = '2026-10-07'
+  const SLOT = 5
+  const CELL_ID = `${DATE}_${SLOT}`
+  const diffStudents: StudentRow[] = [student('sA', '青木 一'), student('sM', '三浦 四')]
+  const diffTeachers: TeacherRow[] = [
+    { id: 't1', name: '田中', email: 't1@example.com', entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] },
+    { id: 't2', name: '鈴木', email: 't2@example.com', entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] },
+  ]
+  const autumnSessions: SpecialSessionRow[] = [{
+    id: AUTUMN_ID, label: '2026 秋期講習', startDate: '2026-10-01', endDate: '2026-10-31',
+    teacherInputs: {},
+    studentInputs: { sM: studentInput({ subjectSlots: { 数: 2 } }) },
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+  }]
+  const autumnRawEntries = buildLectureStockEntries({ specialSessions: autumnSessions, students: diffStudents })
+  const SESSION_KEY = buildLectureStockKey('sM', '数', AUTUMN_ID)
+  const rowOf = (id: string, teacherId: string, student1Id: string): RegularLessonRow => ({
+    id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: SLOT,
+  })
+  const settingsOf = (extra: Partial<ClassroomSettings> = {}) => ({ closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2, ...extra }) as ClassroomSettings
+  const lectureM: StudentEntry = { id: 'lec_sM', name: '三浦 四', managedStudentId: 'sM', grade: '中3', subject: '数', lessonType: 'special', teacherType: 'normal', specialStockSource: 'session', specialSessionId: AUTUMN_ID }
+  const balances = (ledgers: Pick<TemplatePendingResolutionLedgers, 'manualLectureStockCounts' | 'manualLectureStockOrigins'>) => {
+    const map = buildLecturePendingItemsByEntryKey({ rawLectureStockEntries: autumnRawEntries, specialSessions: autumnSessions, manualLectureStockCounts: ledgers.manualLectureStockCounts, manualLectureStockOrigins: ledgers.manualLectureStockOrigins, fallbackLectureStockStudents: {} })
+    const result: Record<string, number> = {}
+    for (const entry of map.values()) result[entry.studentId ?? ''] = (result[entry.studentId ?? ''] ?? 0) + entry.pendingItems.length
+    return result
+  }
+  // 在庫から置いた講習 M は -1（消化）。
+  const PLACED: TemplatePendingResolutionLedgers = {
+    manualLectureStockCounts: { [SESSION_KEY]: -1 }, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {},
+    suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [], scheduleCountAdjustments: [],
+  }
+  // 旧テンプレ: 机 0 田中（生徒なし）・机 1 鈴木（生徒なし）。机 1 に M の講習を手で置く。新テンプレ: 机 0 に M の通常授業。
+  function board() {
+    const oldRows = [rowOf('r0', 't1', ''), rowOf('r1', 't2', '')]
+    const newRows = [rowOf('r0', 't1', 'sM'), rowOf('r1', 't2', '')]
+    let week: SlotCell[] = buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '', personId: '' }, fallbackStartDate: '2026-10-05', fallbackEndDate: '2026-10-11',
+      classroomSettings: settingsOf(), teachers: diffTeachers, students: diffStudents, regularLessons: oldRows, boardWeeks: [],
+    })
+    week = week.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: cell.desks.map((desk, index): DeskCell => (index === 1 ? { ...desk, lesson: { id: 'hand_lecture', studentSlots: [lectureM, null] } } : desk)) }))
+    const diff = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
+      weeks: [week], classroomSettings: settingsOf({ templateFreezeBeforeDate: DATE }), teachers: diffTeachers, students: diffStudents, regularLessons: newRows,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
+    })
+    const cell = diff.nextWeeks[0].find((item) => item.id === CELL_ID)!
+    const deskId = cell.desks[1].id
+    return { diff, cell, deskId, key: buildTemplatePendingDeskKey(CELL_ID, deskId) }
+  }
+  const resolve = (mode: 'adopt-template' | 'adopt-existing', weeks: SlotCell[][], deskId: string, pending: ReturnType<typeof board>['diff']['nextPendingDesks']) => computePendingDeskResolution({
+    mode, weeks, cellId: CELL_ID, deskId, lowerIndex: 0, templatePendingDesks: pending, ledgers: PLACED,
+    managedStudentByAnyName: new Map(diffStudents.map((item) => [item.name, item])), resolveDisplayName: (name: string) => name,
+    resolveStockId: (item: StudentEntry) => item.managedStudentId ?? item.name, ledgerOriginDatesByKey: {},
+  })
+  const upperIds = (weeks: SlotCell[][], index: number) => (weeks[0].find((item) => item.id === CELL_ID)!.desks[index].lesson?.studentSlots ?? []).filter(Boolean).map((item) => `${item!.managedStudentId}:${item!.lessonType}`)
+
+  it('保存: 机 0 に M の通常授業・机 1 の講習は下段へ（由来 same-slot-template-duplicate）。講習の残数は保存前と同じ 1（台帳を触らない）', () => {
+    const { diff, key } = board()
+    expect(upperIds(diff.nextWeeks, 0)).toEqual(['sM:regular'])
+    expect(upperIds(diff.nextWeeks, 1)).toEqual([])
+    expect(diff.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.id).toBe('lec_sM')
+    expect(diff.nextPendingDesks[key]?.origin?.kind).toBe('same-slot-template-duplicate')
+    expect(diff.duplicateDemotions.map((item) => item.student.id)).toEqual(['lec_sM'])
+    expect(diff.manualMakeupOriginAdditions).toEqual([])
+    expect(balances(PLACED)).toEqual({ sM: 1 })
+  })
+
+  it('テンプレ授業を採用: 下段の在庫由来の講習 M は未消化講習へ戻る（残 2）。M の通常授業は机 0 に残る', () => {
+    const { diff, deskId, key } = board()
+    const result = resolve('adopt-template', diff.nextWeeks, deskId, diff.nextPendingDesks)
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(result.returnedCount).toBe(1)
+    expect(result.ledgers.manualLectureStockCounts[SESSION_KEY]).toBe(0)
+    expect(balances(result.ledgers)).toEqual({ sM: 2 })
+    expect(upperIds(result.nextWeeks, 0)).toEqual(['sM:regular'])
+    expect(upperIds(result.nextWeeks, 1)).toEqual([])
+  })
+
+  it('手入力データを採用: 講習 M は机 1 の上段へ戻り、机 0 の M の通常授業は外れて抑止キー 1。講習の台帳は触らず残数は 1 のまま', () => {
+    const { diff, deskId, key } = board()
+    const result = resolve('adopt-existing', diff.nextWeeks, deskId, diff.nextPendingDesks)
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(upperIds(result.nextWeeks, 1)).toEqual(['sM:special'])
+    expect(upperIds(result.nextWeeks, 0)).toEqual([])
+    expect(result.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
+    expect(result.ledgers.manualLectureStockCounts).toEqual(PLACED.manualLectureStockCounts)
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(balances(result.ledgers)).toEqual({ sM: 1 })
+  })
+})
