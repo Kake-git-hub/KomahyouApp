@@ -158,6 +158,7 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-full', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席（手入力を下段へ）')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除')
+    expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除（手入力を下段へ）')
     // 理由文が空の origin は既定文に落ちる（見出しは種別のまま）
     const empty = buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: '' } } }, WEEKS)[0]
     expect(empty.kindLabel).toBe('休日解除')
@@ -183,5 +184,24 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
     buildTemplatePendingList(MAP, WEEKS)
     expect(JSON.stringify(MAP)).toBe(mapBefore)
     expect(JSON.stringify(WEEKS)).toBe(weeksBefore)
+  })
+})
+
+// 決定記録 57（オーナー決定 2026-11-01・A-10）: 同じコマの別の机にテンプレの通常授業を置くため下段へ移した手入力の授業（上段のその席は空白）。
+describe('buildTemplatePendingList × 決定記録 57（same-slot-template-duplicate）', () => {
+  it('由来の見出しは「同じコマにテンプレの授業」・理由文は origin の文・上段が空でも下段の生徒が並ぶ', () => {
+    const note = '同じコマの机 7 にテンプレの通常授業（数）を置いたため、手で置いた授業を下の行（保留・緑）に残しました。どちらかを片づけてください（「手入力データを採用」で机 7 のテンプレの授業を外します）。'
+    const weeks: SlotCell[][] = [[cell('2026-10-07', 4, [desk('2026-10-07_4_desk_3')])]]
+    const map: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey('2026-10-07_4', '2026-10-07_4_desk_3')]: {
+        lower: { lesson: { id: 'l-dup', studentSlots: [student('a1', '生徒A', '数', 'makeup'), null] } },
+        effectiveStartDate: '2026-10-07',
+        createdAt: CREATED_AT,
+        origin: { kind: 'same-slot-template-duplicate', note },
+      },
+    }
+    const [rowItem] = buildTemplatePendingList(map, weeks)
+    expect(rowItem).toMatchObject({ kindLabel: '同じコマにテンプレの授業', reason: note, upperLabels: [], lowerLabels: [expect.stringContaining('生徒A')] })
+    expect(buildTemplatePendingList(map, weeks)).toHaveLength(countTemplatePendingDesksOnBoard(map, weeks))
   })
 })

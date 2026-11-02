@@ -936,7 +936,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     expect(countLiveInCell(once, 'sA')).toBe(1)
   })
 
-  it('条件 7（Q21-11 前段）：別の 1 行の机に生きている生徒は上段に置かず、件数と抑止キーが返り、再マージでも湧かない', () => {
+  it('条件 7（Q21-11 前段・決定記録 57 で改定 2026-11-01）：別の 1 行の机に生きている生徒もテンプレ机の上段に置き、その机の手入力の授業は同じ席の下段（保留・緑）へ。抑止キーは積まず再マージでも 1 か所', () => {
     let week = buildWeek(OLD_ROWS)
     // 机2（テンプレは講師だけ）に A の振替を手置き
     week = mutateDesk(week, 2, (desk) => ({ ...desk, lesson: { id: `${desk.id}_makeup`, studentSlots: [entry('sA', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }))
@@ -944,12 +944,18 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     const newRows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
     const result = applyDiff({ week, newRows })
     expect(countLiveInCell(result.nextWeeks, 'sA')).toBe(1)
-    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual(['sA'])
-    expect(result.summary.skippedDuplicateStudents).toBe(1)
-    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)])
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA'])
+    expect(liveNames(deskOf(result.nextWeeks, 2))).toEqual([])
+    const pending = result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, deskOf(result.nextWeeks, 2).id)]
+    expect(pending?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(pending?.origin?.kind).toBe('same-slot-template-duplicate')
+    expect(result.summary.duplicateDemotedStudents).toBe(1)
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([])
     const once = remerge(result.nextWeeks, newRows, result.addedSuppressedRegularLessonOccurrences)
     expect(countLiveInCell(once, 'sA')).toBe(1)
-    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('上段に置かなかった生徒: 1名')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('手で置いた授業を下の行（保留）に残した生徒: 1名')
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary, { studentNotes: result.studentNotes })).toContain('・10/7 5限 青木（数）: 同じコマの机 1 にテンプレの通常授業を置くため、手で置いた授業（振替・講習など）はその机の下の行（保留・緑）に残します。')
   })
 
   it('条件 7（Q21-11 後段）：別の机の下段にだけ生きている生徒は上段に置く', () => {
@@ -1071,17 +1077,17 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
       { kind: 'slot-followed', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
       { kind: 'slot-follow-pending', studentName: '馬場', subject: '英', dateKey: '2026-10-07', slotNumber: 3, detail: '5限 → 3限・振替先 10/8' },
     ] })
-    expect(detail).toContain('時限を変えた生徒の丸ごと振替の振替2件を新しい時限へ移します（満席の1件は同じ机の保留〔下段〕へ）。')
+    expect(detail).toContain('時限を変えた生徒の丸ごと振替の振替2件を新しい時限へ移します（満席の1件は同じ机を保留〔緑の 2 行〕にして置く）。')
     expect(detail).toContain('青木（数）: テンプレで時限を変えたので、丸ごと振替の振替を新しい時限へ移します（5限 → 3限・振替先 10/8）。')
-    expect(detail).toContain('馬場（英）: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（5限 → 3限・振替先 10/8）。')
-    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary)).toContain('時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: 2件（満席で保留〔下段〕にした: 1件）。')
+    expect(detail).toContain('馬場（英）: テンプレで時限を変えたので丸ごと振替の振替を新しい時限へ移しますが、満席のため同じ机の保留（下段・緑）へ置きます（席の生徒はテンプレの生徒なので下段にできません）（5限 → 3限・振替先 10/8）。')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, summary)).toContain('時限を変えた生徒の丸ごと振替の振替を新しい時限へ移した: 2件（満席で保留〔緑の 2 行〕にした: 1件）。')
     expect(buildTemplateDiffConfirmDetail(EFFECTIVE, createEmptyTemplateDiffApplySummary())).not.toContain('時限を変えた')
   })
 
   it('2026-10-21: 確認文に「生徒ごとの理由」を名前つきで出す（件数の行はそのまま・12 行を超えると「ほか n 件」・無ければ見出しも出ない）', () => {
-    const summary = { ...createEmptyTemplateDiffApplySummary(), skippedDuplicateStudents: 1, wholeDayTransferPlacedStudents: 1, wholeDayTransferStockedStudents: 1 }
+    const summary = { ...createEmptyTemplateDiffApplySummary(), duplicateDemotedStudents: 1, wholeDayTransferPlacedStudents: 1, wholeDayTransferStockedStudents: 1 }
     const notes: TemplateDiffStudentNote[] = [
-      { kind: 'duplicate-skipped', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 5 },
+      { kind: 'duplicate-demoted', studentName: '青木', subject: '数', dateKey: '2026-10-07', slotNumber: 5, detail: '7' },
       { kind: 'transfer-placed', studentName: '千葉', subject: '数', dateKey: '2026-10-07', slotNumber: 5, detail: '10/8' },
       { kind: 'transfer-stocked', studentName: '土屋', subject: '英', dateKey: '2026-10-07', slotNumber: 3, detail: describeWholeDayTransferStockReason('no-seat') },
       { kind: 'transfer-settled', studentName: '江藤', subject: '国', dateKey: '2026-10-07', slotNumber: 3 },
@@ -1091,7 +1097,8 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     const message = buildTemplateDiffConfirmMessage(EFFECTIVE, summary, { studentNotes: notes })
     expect(message).toContain('丸ごと振替した日に足した生徒1名を振替先へ置きます（空きが無い1名は未消化振替へ）')
     expect(message).toContain('テンプレの生徒・講師の扱いの理由:')
-    expect(message).toContain('・10/7 5限 青木（数）: 同じコマに同じ生徒の授業（振替・講習など）があるため、テンプレの通常授業は置きません。')
+    expect(message).toContain('・10/7 5限 青木（数）: 同じコマの机 7 にテンプレの通常授業を置くため、手で置いた授業（振替・講習など）はその机の下の行（保留・緑）に残します。どちらかを片づけてください。')
+    expect(message).toContain('手で置いた授業を下の行（保留・緑）に残す生徒: 1名')
     expect(message).toContain('・10/7 5限 千葉（数）: 丸ごと振替した日なので、振替先（10/8）の同じ机へ振替として置きます。')
     expect(message).toContain('・10/7 3限 土屋（英）: 丸ごと振替した日ですが振替先に置けない（振替先のコマが満席）ため、未消化振替にします。')
     expect(message).toContain('・10/7 3限 江藤（国）: 丸ごと振替した日で、この授業の分は前の保存か別の時限からの移送で処理済みのため置きません（精算済み）。')
@@ -2133,7 +2140,7 @@ describe('Q36 監査（2026-10-03）: 写しの誤判定・消失・取りこぼ
 
   // H-2(b): 写しは superseded に見えても、移動先のコマでは Q21-11（同じ生徒の振替が居る）がテンプレの生徒を置かない → 同じ日に 2 か所にならないので
   // 注意の印は付けない（refineSameDayMoveCopyKept）。写しは従来どおり残る。
-  it('H-2(b): テンプレの移動先（4 限）に A の振替が既に居て Q21-11 がテンプレの A を置かないなら、3 限の写しは印なしで残る（通常授業が消えない・注意も出ない）', () => {
+  it('H-2(b)（決定記録 57 で改定 2026-11-01）: テンプレの移動先（4 限）に A の振替が居ても 4 限にテンプレの A を置き（振替は下段）、3 限の写しは superseded の注意つきで残る', () => {
     let week = buildWeek(OLD_ROWS)
     week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: undefined }))
     week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: 'moved_sA_x', studentSlots: [copyOfA(), null] } }), `${DATE}_3`)
@@ -2141,13 +2148,16 @@ describe('Q36 監査（2026-10-03）: 写しの誤判定・消失・取りこぼ
     const newRows = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3'), row('r4b', 't3', '', '', '', '', 3, 4)]
     const suppressed = [KEY_A_SLOT5]
     const result = applyDiff({ week, newRows, suppressed })
-    expect(liveOnDate(result.nextWeeks, 'sA')).toEqual(['3:regular', '4:makeup'])
-    expect(result.summary.sameDayMoveCopiesKept).toBe(0)
+    // 決定記録 57（2026-11-01）: 移動先（4 限）のテンプレの A は置かれ、4 限の振替は机 1 の下段へ。3 限の写しは A-12 の superseded（別のコマに生きている）で注意の印
+    expect(liveOnDate(result.nextWeeks, 'sA')).toEqual(['3:regular', '4:regular'])
+    expect(result.summary.sameDayMoveCopiesKept).toBe(1)
     expect(result.removedSuppressedRegularLessonOccurrences).toEqual([])
-    expect(result.summary.skippedDuplicateStudents).toBe(1)
-    expect(deskOf(result.nextWeeks, 0, `${DATE}_3`).lesson?.studentSlots[0]).not.toHaveProperty('templateCopyNotice')
+    expect(result.summary.skippedDuplicateStudents).toBe(0)
+    expect(result.summary.duplicateDemotedStudents).toBe(1)
+    expect(result.nextPendingDesks[buildTemplatePendingDeskKey(`${DATE}_4`, deskOf(result.nextWeeks, 1, `${DATE}_4`).id)]?.lower.lesson?.studentSlots[0]?.lessonType).toBe('makeup')
+    expect(deskOf(result.nextWeeks, 0, `${DATE}_3`).lesson?.studentSlots[0]).toHaveProperty('templateCopyNotice', 'superseded')
     const { once } = remergeAll(result, newRows, suppressed)
-    expect(liveOnDate(once, 'sA')).toEqual(['3:regular', '4:makeup'])
+    expect(liveOnDate(once, 'sA')).toEqual(['3:regular', '4:regular'])
   })
 
   // M-1（〜2026-10-31）: 外せた写しの分だけキーを外す。2026-11-01 以降、入口は写しを外さず・キーも外さない（純関数 stripSameDayMoveCopies は経緯の記録として残る）。

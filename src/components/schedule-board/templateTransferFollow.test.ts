@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildMovedSourceStatusEntry, prepareStudentForMove } from './ScheduleBoardScreen'
+import { buildMovedSourceStatusEntry, buildStudentEntryFromStatus, prepareStudentForMove } from './ScheduleBoardScreen'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import type { TemplateDiffTemplateCell } from './templateDiffApply'
@@ -14,6 +14,7 @@ import {
   collectOrphanedMakeupSuppressionKeys,
   collectReplacedTransferSeats,
   planWholeDayTransferPlacements,
+  planSlotChangeTransferFollow,
   removeOrphanedMakeups,
   resolveWholeDayTransferDestination,
   extendTemplateDiffSlotFilterWithCells,
@@ -539,5 +540,68 @@ describe('科目変更の置き場の手がかり（collectReplacedTransferSeats
     const suppressed = [`sA__数__${WED}__5`, `sA__数__${WED}__3`, `sA__英__${WED}__5`, `sA__数__${THU}__5`, `sB__数__${WED}__5`, `TEMPLATE_TEACHER__DAY__${WED}__0`, `sA__数__${WED}__5x`]
     expect(collectOrphanedMakeupSuppressionKeys(removals, suppressed)).toEqual([`sA__数__${WED}__5`, `sA__数__${WED}__3`])
     expect(collectOrphanedMakeupSuppressionKeys([], suppressed)).toEqual([])
+  })
+})
+
+// 決定記録 59（2026-11-01・時限変更の追従の満席も押し出し）× 兄弟被覆（regression-reviewer 2026-11-01）: 旧形（両席ともテンプレの通常生徒＝印なし）と
+// 押し出さない相手 2 種（同じ組の振替・出欠記録のある席）。保存から通しでは振替先の日のテンプレ足場が日単位で抑止されるため、印なしの通常生徒は純関数で作る。
+describe('planSlotChangeTransferFollow × 満席の押し出し（決定記録 59）', () => {
+  const ROW_A_5 = { ...rowWithA, slotNumber: 5, dayOfWeek: 3 }
+  const ROW_A_3 = { ...rowWithA, id: 'r3', slotNumber: 3, dayOfWeek: 3 }
+  const aMakeup = makeupOf('sA_mk', '青木', WED, labelWed5, { id: 'sA_mk' })
+  const movedA = status(A, WED, 5, 'moved', { moveDestinationDateKey: THU, moveDestinationSlotNumber: 5, wholeDayTransfer: true })
+  /** 水 5限 に A の移動元記録・木 5限 に A の振替（丸ごと振替の形）・木 3限 机 0 を occupants で埋める。 */
+  const boardWith = (thu3Desk0: DeskCell) => [[
+    cell(WED, 3, [desk('w3d1', '田中'), desk('w3d2', '')]),
+    cell(WED, 5, [desk('w5d1', '', undefined, [movedA, null]), desk('w5d2', '')]),
+    cell(THU, 3, [thu3Desk0, desk('t3d2', '佐藤', [student('sP_t', '藤井'), student('sQ_t', '工藤')])]),
+    cell(THU, 5, [{ ...desk('t5d1', '田中', [aMakeup, null]), lesson: { id: `daymove_${WED}_5_0`, studentSlots: [aMakeup, null] } }, desk('t5d2', '鈴木')]),
+  ]]
+  const run = (weeks: SlotCell[][], pendingDesks = {}) => planSlotChangeTransferFollow({
+    weeks, pendingDesks, previousRegularLessons: [ROW_A_5], regularLessons: [ROW_A_3], settled: [],
+    templateCells: [templateCellOf(WED, 3, [desk('tw3d1', '田中', [student('sA_t', '青木'), null]), desk('tw3d2', '')])],
+    effectiveStartDate: EFFECTIVE, createdAt: '2026-11-01T00:00:00.000Z', formatOriginLabel: (dateKey, slotNumber) => `${dateKey.replace(/-0?/gu, '/')}(水) ${slotNumber}限`,
+    buildMovedSourceStatusEntry, wholeDayTransferDates: new Set([WED, THU]), studentFromStatus: buildStudentEntryFromStatus,
+  })
+  const key = buildTemplatePendingDeskKey(`${THU}_3`, 't3d1')
+
+  it('旧形 slot-follow-full: 新しい時限の机の両席がテンプレの通常生徒（印なし）なら押し出さず、追従の振替を下段へ（理由文で区別・displacedStudent なし）', () => {
+    const plan = run(boardWith(desk('t3d1', '田中', [student('sX_t', '山本'), student('sY_t', '吉田')])))
+    expect(plan.moves).toHaveLength(1)
+    expect(plan.moves[0]).toMatchObject({ placement: 'pending', deskId: 't3d1', fallbackDesk: false })
+    expect(plan.moves[0].displacedStudent).toBeUndefined()
+    expect(plan.nextPendingDesks[key].origin?.kind).toBe('slot-follow-full')
+    expect(plan.nextPendingDesks[key].origin?.note).toContain('席の生徒はテンプレの生徒なので下段にできません')
+    expect(plan.nextPendingDesks[key].lower.lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sA' && entry.lessonType === 'makeup' && /3限/u.test(entry.makeupSourceLabel ?? ''))).toBe(true)
+    const thu3 = plan.weeks[0].find((entry) => entry.id === `${THU}_3`)!
+    expect(thu3.desks[0].lesson?.studentSlots.map((entry) => entry?.managedStudentId)).toEqual(['sX', 'sY'])
+    // 旧時限（木 5限）からは外れている
+    expect(plan.weeks[0].find((entry) => entry.id === `${THU}_5`)!.desks[0].lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sA') ?? false).toBe(false)
+  })
+
+  it('押し出さない相手 (1) 同じ組の振替（makeupSourceDate が振替元の日）: テンプレの席の B は押し出さず、もう一方の手入力 D を下段へ（押し出しの形）', () => {
+    const bCohort = makeupOf('sB_mk', '馬場', WED, labelWed5)
+    const plan = run(boardWith(desk('t3d1', '田中', [bCohort, student('sD_m', '土屋', { manualAdded: true })])))
+    expect(plan.moves[0]).toMatchObject({ placement: 'pending', deskId: 't3d1', seatIndex: 1 })
+    expect(plan.moves[0].displacedStudent?.managedStudentId).toBe('sD')
+    expect(plan.nextPendingDesks[key].origin?.kind).toBe('slot-follow-displaced')
+    const thu3 = plan.weeks[0].find((entry) => entry.id === `${THU}_3`)!
+    expect(thu3.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sB')
+    expect(thu3.desks[0].lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup' })
+    // 両席とも同じ組の振替なら従来の形
+    const both = run(boardWith(desk('t3d1', '田中', [bCohort, makeupOf('sC_mk', '千葉', WED, labelWed5)])))
+    expect(both.moves[0].displacedStudent).toBeUndefined()
+    expect(both.nextPendingDesks[key].origin?.kind).toBe('slot-follow-full')
+  })
+
+  it('押し出さない相手 (2) 出欠記録のある席: 席の手入力の生徒は押し出さず従来の形（記録を下段へ持っていかない）', () => {
+    const withRecord: DeskCell = { ...desk('t3d1', '田中', [student('sD_m', '土屋', { manualAdded: true }), null]), statusSlots: [status(student('sD_m', '土屋'), THU, 3, 'attended'), status(student('sZ', '財前'), THU, 3, 'attended')] }
+    const plan = run(boardWith(withRecord))
+    expect(plan.moves[0]).toMatchObject({ placement: 'pending', deskId: 't3d1' })
+    expect(plan.moves[0].displacedStudent).toBeUndefined()
+    expect(plan.nextPendingDesks[key].origin?.kind).toBe('slot-follow-full')
+    const thu3 = plan.weeks[0].find((entry) => entry.id === `${THU}_3`)!
+    expect(thu3.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sD')
+    expect(thu3.desks[0].statusSlots?.filter(Boolean)).toHaveLength(2)
   })
 })

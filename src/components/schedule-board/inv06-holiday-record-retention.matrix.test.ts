@@ -6,6 +6,7 @@ import {
   carryBoardStatusRecordsOntoClosedDayCell,
   clearStudentStatusFromDesk,
   computeHolidayReleaseRestoration,
+  computePendingDeskResolution,
   computeStudentMove,
   convertHolidayDeskEntriesToRecords,
   isStaleSeatMarkerStatus,
@@ -861,6 +862,9 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(lower.lower.lesson?.studentSlots[1]).toBeNull()
     expect(lower.origin).toMatchObject({ kind: 'holiday-release-seat-taken' })
     expect(lower.origin?.note).toContain('休日設定の解除')
+    // 決定記録 59（2026-11-01）: 席の生徒がテンプレの通常生徒（印なし）のときだけ旧形（戻す授業が下段）。理由文で区別する。
+    expect(lower.origin?.note).toContain('戻す授業を下段にしました')
+    expect(released.displacedOccupantNames).toEqual([])
     expect(lower.effectiveStartDate).toBe(RELEASE_DATE)
     expect(lower.createdAt).toBe('2026-10-25T09:00:00.000Z')
     // 抑止キーは外さない（外すと再マージがテンプレの授業を別の机へ置き、下段と 2 か所になる＝INV-12）
@@ -902,6 +906,249 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(settled.collapsedKeys).toHaveLength(1)
     expect(settled.nextTemplatePendingDesks).toEqual({})
     expect(findDesk(settled.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
+  })
+
+  // ============================================================================
+  // 決定記録 59（オーナー決定 2026-11-01「広げる」・(b)-2・spec-template-behavior §H Q42 表 #3）: 緑 2 行の「上段＝テンプレ／下段＝手入力」を休日解除にも。
+  // 戻す席に**手入力の印の生徒**（振替・講習・手動追加など）が居れば、戻す通常授業を席（上段）へ置き、席に居た生徒を同じ机・同じ席の下段へ残す。
+  // 席の生徒がテンプレの通常生徒（印なし）か机が既に保留のときだけ従来の形（戻す授業が下段・(f-2)〜(f-4)）。
+  // ============================================================================
+  function occupantMakeup() {
+    return student({ id: 'other_mk', name: '別の子', managedStudentId: 'student-2', lessonType: 'makeup', makeupSourceDate: '2026-09-20', makeupSourceLabel: '2026/9/20(日) 3限' })
+  }
+  function releaseDisplacing(occupant: StudentEntry, extra: { pending?: Record<string, unknown>; other?: StudentEntry | null } = {}) {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [makeupOnAltDate(), null] }
+    findDesk(set.weeks, RELEASE_DATE).lesson = { id: 'other-lesson', studentSlots: [occupant, extra.other ?? null] }
+    const released = computeHolidayReleaseRestoration({
+      weeks: set.weeks, dateKey: RELEASE_DATE, ledgers: set.ledgers, managedStudentByAnyName: roster, resolveDisplayName, resolveStockId,
+      templatePendingDesks: (extra.pending ?? {}) as Parameters<typeof computeHolidayReleaseRestoration>[0]['templatePendingDesks'], createdAt: '2026-11-01T09:00:00.000Z',
+    })
+    return { before, set, released, key: buildTemplatePendingDeskKey(`${RELEASE_DATE}_1`, 'desk-1') }
+  }
+
+  it('★(f-5・決定記録 59) 席に手で置いた振替が居れば、戻す通常授業が席（上段）へ戻り、振替は同じ机・同じ席の下段へ（記録は消え・台帳は往復で完全一致・抑止キーは外す）', () => {
+    const { before, released, key } = releaseDisplacing(occupantMakeup())
+    expect(released.skipped).toEqual([])
+    expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
+    expect(released.displacedOccupantNames).toEqual(['別の子'])
+    expect(released.pendingRestoredStudentNames).toEqual([])
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    // 上段＝戻した通常授業（印なし・テンプレの出現）。もう一方の席が空なので lesson は記録の元の id で作り直す（再マージの畳み込み・INV-12）。
+    expect(desk.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', subject: '数', lessonType: 'regular' })
+    expect(desk.lesson?.studentSlots[0]?.manualAdded).toBeFalsy()
+    expect(desk.lesson?.id).toBe(MANAGED_LESSON_ID)
+    expect(desk.statusSlots).toBeUndefined()
+    // 別日のコマは消え、台帳は休日設定前と完全一致（在庫の巻き戻しは席へ戻したときと同じ）
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined()
+    expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'makeup' }])
+    expect(released.ledgers).toEqual(before)
+    // 下段＝席に居た手入力の振替（中身はそのまま・由来は押し出し）
+    expect(Object.keys(released.nextTemplatePendingDesks ?? {})).toEqual([key])
+    const lower = released.nextTemplatePendingDesks![key]
+    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk', managedStudentId: 'student-2', lessonType: 'makeup', makeupSourceDate: '2026-09-20' })
+    expect(lower.lower.lesson?.studentSlots[1]).toBeNull()
+    expect(lower.origin).toMatchObject({ kind: 'holiday-release-displaced' })
+    expect(lower.origin?.note).toContain('休みの間に手で置いた授業を下段（保留）に残しました')
+    expect(lower.effectiveStartDate).toBe(RELEASE_DATE)
+    expect(lower.createdAt).toBe('2026-11-01T09:00:00.000Z')
+    // 席へ戻したので抑止キーは外す（下段に戻した旧形だけが外さない）
+    expect(released.restoredOccurrenceKeys).toEqual([`student-1__数__${RELEASE_DATE}__1`])
+  })
+
+  it('★(f-6・決定記録 59) 席に手で置いた講習（session）が居ても同じ: 講習は下段へ・講習の台帳は触らない', () => {
+    const lecture = student({ id: 'other_lec', name: '別の子', managedStudentId: 'student-2', lessonType: 'special', specialStockSource: 'session', specialSessionId: 'sess-9' })
+    const { before, released, key } = releaseDisplacing(lecture)
+    expect(released.displacedOccupantNames).toEqual(['別の子'])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
+    expect(released.nextTemplatePendingDesks![key].lower.lesson?.studentSlots[0]).toMatchObject({ id: 'other_lec', lessonType: 'special', specialSessionId: 'sess-9' })
+    expect(released.ledgers.manualLectureStockCounts).toEqual(before.manualLectureStockCounts)
+    expect(released.ledgers.manualLectureStockOrigins).toEqual(before.manualLectureStockOrigins)
+    expect(released.ledgers).toEqual(before)
+  })
+
+  it('★(f-7・決定記録 59) 机が既に保留なら押し出さず従来の形（戻す通常授業がその保留の下段へ相乗り・由来は上書きしない）', () => {
+    const pending = { [buildTemplatePendingDeskKey(`${RELEASE_DATE}_1`, 'desk-1')]: { lower: { lesson: { id: 'lower-1', studentSlots: [null, student({ id: 'l2', name: '下段2', managedStudentId: 'student-3' })] } }, effectiveStartDate: RELEASE_DATE, createdAt: '2026-10-01T00:00:00.000Z', origin: { kind: 'whole-day-transfer-displaced', note: '前の保留' } } }
+    const { released, key } = releaseDisplacing(occupantMakeup(), { pending })
+    expect(released.displacedOccupantNames).toEqual([])
+    expect(released.pendingRestoredStudentNames).toEqual(['大槻 太郎'])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk' })
+    const lower = released.nextTemplatePendingDesks![key]
+    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', manualAdded: true })
+    expect(lower.origin).toMatchObject({ kind: 'whole-day-transfer-displaced' })
+    expect(released.restoredOccurrenceKeys).toEqual([])
+  })
+
+  it('★(f-8・決定記録 59) 上段・下段とも生きている間は Q28 で自動で 1 行にならず、上段の通常授業を（記録を残さず）外すと下段の振替が席へ戻る', () => {
+    const { released, key } = releaseDisplacing(occupantMakeup())
+    const pending = released.nextTemplatePendingDesks!
+    const unchanged = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: released.nextWeeks, templatePendingDesks: pending })
+    expect(unchanged.collapsedKeys).toHaveLength(0)
+    expect(unchanged.nextTemplatePendingDesks[key]).toBe(pending[key])
+    const emptied = released.nextWeeks.map((week) => week.map((cell) => (cell.dateKey !== RELEASE_DATE ? cell : { ...cell, desks: cell.desks.map((desk) => ({ ...desk, lesson: undefined })) })))
+    const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: released.nextWeeks, previousTemplatePendingDesks: pending, weeks: emptied, templatePendingDesks: pending })
+    expect(settled.collapsedKeys).toEqual([key])
+    expect(settled.nextTemplatePendingDesks).toEqual({})
+    expect(findDesk(settled.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk', lessonType: 'makeup', managedStudentId: 'student-2' })
+  })
+
+  it('★(f-9・決定記録 59) 押し出した形の解除 → 再マージ 2 回でも戻した席は 1 つだけ（INV-03 / INV-12）', () => {
+    const { released } = releaseDisplacing(occupantMakeup())
+    const managedCell = cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])
+    const boardCell = released.nextWeeks.flat().find((cell) => cell.dateKey === RELEASE_DATE)
+    if (!boardCell) throw new Error('board cell not found')
+    const once = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [])[0]
+    const twice = overlayBoardWeeksOnScheduleCells([managedCell], [[once]], [])[0]
+    const placements = twice.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-1')
+    expect(placements).toHaveLength(1)
+    expect(twice.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-2')).toHaveLength(0)
+  })
+
+  it('★(f-10・決定記録 59) 片づけ: 「手入力データを採用」は振替を席へ戻し、戻した通常授業は取り下げて抑止（希望回数 −1 はしない＝旧形の会計の鏡写し）。「テンプレ授業を採用」は振替を未消化振替へ戻し通常授業は席に残る', () => {
+    const { released, key } = releaseDisplacing(occupantMakeup())
+    const pending = released.nextTemplatePendingDesks!
+    const ledgers = { ...released.ledgers, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [] as string[], scheduleCountAdjustments: [] }
+    const context = { managedStudentByAnyName: roster, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey: {} }
+    const existing = computePendingDeskResolution({ mode: 'adopt-existing', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(existing.status).toBe('applied')
+    if (existing.status !== 'applied') throw new Error('unreachable')
+    expect(findDesk(existing.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk', lessonType: 'makeup' })
+    expect(existing.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(existing.ledgers.suppressedRegularLessonOccurrences).toContain(`student-1__数__${RELEASE_DATE}__1`)
+    expect(existing.countAdjustedCount).toBe(0)
+    expect(existing.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(existing.returnedCount).toBe(0)
+    expect(existing.ledgers.manualMakeupAdjustments).toEqual(released.ledgers.manualMakeupAdjustments)
+
+    const template = computePendingDeskResolution({ mode: 'adopt-template', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(template.status).toBe('applied')
+    if (template.status !== 'applied') throw new Error('unreachable')
+    expect(findDesk(template.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
+    expect(template.nextTemplatePendingDesks[key]).toBeUndefined()
+    // 捨てた下段の振替は未消化振替へ戻る（台帳に振替元 9/20 の origin）
+    const returned = template.ledgers.manualMakeupAdjustments[buildMakeupStockKey('student-2', '数')] ?? []
+    expect(returned.some((origin) => origin.dateKey === '2026-09-20')).toBe(true)
+  })
+
+  // ── 兄弟被覆（regression-reviewer 第 2 回監査 2026-11-01）: もう一方の席に生徒が生きている形・記録の席が印なしでもう一方が手入力の形 ──
+  function otherSeatManual() {
+    return student({ id: 'other_sp', name: '隣の子', managedStudentId: 'student-4', subject: '英', lessonType: 'special', specialStockSource: 'session', specialSessionId: 'sess-7' })
+  }
+  function otherSeatTemplate() {
+    return student({ id: 'other_tpl', name: '隣の子', managedStudentId: 'student-3', subject: '英' })
+  }
+  function remergeTwice(released: ReturnType<typeof computeHolidayReleaseRestoration>, managedSlots: [StudentEntry | null, StudentEntry | null]) {
+    const managedCell = cellOn(RELEASE_DATE, 1, [managedDesk(managedSlots)])
+    const boardCell = released.nextWeeks.flat().find((cell) => cell.dateKey === RELEASE_DATE)
+    if (!boardCell) throw new Error('board cell not found')
+    const once = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [])[0]
+    const twice = overlayBoardWeeksOnScheduleCells([managedCell], [[once]], [])[0]
+    return { once, twice }
+  }
+  const idsOf = (cell: SlotCell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).map((entry) => entry?.managedStudentId ?? null)
+
+  it('★(f-11・兄弟) もう一方の席に生徒が生きている形: 上段＝戻した通常授業＋もう一方の生徒（lesson は元のまま）・下段＝押し出した生徒。再マージ 2 回で生存数 1・形不変（INV-03 / INV-12）', () => {
+    const { before, released, key } = releaseDisplacing(occupantMakeup(), { other: otherSeatManual() })
+    expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
+    expect(released.displacedOccupantNames).toEqual(['別の子'])
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    // もう一方の席が生きているので lesson は作り直さず（id は元のまま）、記録の席だけ戻した通常授業に差し替わる。
+    expect(desk.lesson?.id).toBe('other-lesson')
+    expect(desk.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
+    expect(desk.lesson?.studentSlots[0]?.manualAdded).toBeFalsy()
+    expect(desk.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp', lessonType: 'special' })
+    expect(desk.statusSlots).toBeUndefined()
+    const lower = released.nextTemplatePendingDesks![key]
+    expect(lower.lower.lesson?.studentSlots).toMatchObject([{ id: 'other_mk' }, null])
+    expect(lower.origin).toMatchObject({ kind: 'holiday-release-displaced' })
+    expect(released.restoredOccurrenceKeys).toEqual([`student-1__数__${RELEASE_DATE}__1`])
+    expect(released.ledgers).toEqual(before)
+    // 再マージ 2 回（テンプレの管理セルは A だけ）: A は 1 つ・隣の講習は残る・押し出した振替は上段に湧かない・形が変わらない
+    const { once, twice } = remergeTwice(released, [regularStudent(), null])
+    expect(idsOf(twice).filter((id) => id === 'student-1')).toHaveLength(1)
+    expect(idsOf(twice)).toEqual(['student-1', 'student-4'])
+    expect(idsOf(twice)).toEqual(idsOf(once))
+    expect(twice.desks[0].lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp' })
+    expect(twice.desks.flatMap((entry) => entry.statusSlots ?? []).filter(Boolean)).toEqual([])
+  })
+
+  it('★(f-12・兄弟) 記録の席の生徒が印なし（テンプレの通常生徒）で、もう一方の席が手入力のとき: 押し出さず旧形（戻す通常授業を下段へ・holiday-release-seat-taken）。もう一方の席は動かない', () => {
+    const { before, released, key } = releaseDisplacing(otherSeatTemplate(), { other: otherSeatManual() })
+    expect(released.displacedOccupantNames).toEqual([])
+    expect(released.pendingRestoredStudentNames).toEqual(['大槻 太郎'])
+    expect(released.restoredStudentNames).toEqual([])
+    expect(released.skipped).toEqual([])
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    expect(desk.lesson?.studentSlots[0]).toMatchObject({ id: 'other_tpl', managedStudentId: 'student-3' })
+    expect(desk.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp', lessonType: 'special' })
+    expect(desk.statusSlots).toBeUndefined()
+    const lower = released.nextTemplatePendingDesks![key]
+    expect(lower.lower.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular', manualAdded: true })
+    expect(lower.lower.lesson?.studentSlots[1]).toBeNull()
+    expect(lower.origin).toMatchObject({ kind: 'holiday-release-seat-taken' })
+    expect(lower.origin?.note).toContain('戻す授業を下段にしました')
+    // 旧形: 抑止キーは外さない（上段に別の生徒が居る）・台帳は往復で一致
+    expect(released.restoredOccurrenceKeys).toEqual([])
+    expect(released.ledgers).toEqual(before)
+  })
+
+  it('★(f-13・兄弟) 押し出しの形（もう一方の席あり）の片づけ: 「手入力データを採用」は記録の席だけ入れ替え（隣の生徒は不動・−1 なし・返却 0）、「テンプレ授業を採用」は振替を未消化振替へ（隣の生徒は不動）', () => {
+    const { released, key } = releaseDisplacing(occupantMakeup(), { other: otherSeatManual() })
+    const pending = released.nextTemplatePendingDesks!
+    const ledgers = { ...released.ledgers, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [] as string[], scheduleCountAdjustments: [] }
+    const context = { managedStudentByAnyName: roster, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey: {} }
+    const existing = computePendingDeskResolution({ mode: 'adopt-existing', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(existing.status).toBe('applied')
+    if (existing.status !== 'applied') throw new Error('unreachable')
+    const afterExisting = findDesk(existing.nextWeeks, RELEASE_DATE)
+    expect(afterExisting.lesson?.studentSlots[0]).toMatchObject({ id: 'other_mk', lessonType: 'makeup' })
+    expect(afterExisting.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp', lessonType: 'special' })
+    expect(existing.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(existing.ledgers.suppressedRegularLessonOccurrences).toContain(`student-1__数__${RELEASE_DATE}__1`)
+    expect(existing.countAdjustedCount).toBe(0)
+    expect(existing.returnedCount).toBe(0)
+    expect(existing.ledgers.manualMakeupAdjustments).toEqual(released.ledgers.manualMakeupAdjustments)
+    expect(existing.ledgers.manualLectureStockCounts).toEqual(released.ledgers.manualLectureStockCounts)
+
+    const template = computePendingDeskResolution({ mode: 'adopt-template', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(template.status).toBe('applied')
+    if (template.status !== 'applied') throw new Error('unreachable')
+    const afterTemplate = findDesk(template.nextWeeks, RELEASE_DATE)
+    expect(afterTemplate.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular' })
+    expect(afterTemplate.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp' })
+    expect(template.nextTemplatePendingDesks[key]).toBeUndefined()
+    const returned = template.ledgers.manualMakeupAdjustments[buildMakeupStockKey('student-2', '数')] ?? []
+    expect(returned.some((origin) => origin.dateKey === '2026-09-20')).toBe(true)
+    expect(template.ledgers.manualLectureStockCounts).toEqual(released.ledgers.manualLectureStockCounts)
+    expect(template.ledgers.scheduleCountAdjustments).toEqual([])
+  })
+
+  it('★(f-14・兄弟) 旧形（記録の席が印なし・もう一方が手入力）の片づけ: 「テンプレ授業を採用」は下段の通常授業（印つき）を捨てても −1 も返却もしない（従来の行と同じ会計）。「手入力データを採用」は上段のテンプレ生徒を取り下げて抑止＋単発削除と同じ −1', () => {
+    const { released, key } = releaseDisplacing(otherSeatTemplate(), { other: otherSeatManual() })
+    const pending = released.nextTemplatePendingDesks!
+    const ledgers = { ...released.ledgers, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: [`student-1__数__${RELEASE_DATE}__1`], scheduleCountAdjustments: [] }
+    const context = { managedStudentByAnyName: roster, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey: {} }
+    const template = computePendingDeskResolution({ mode: 'adopt-template', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(template.status).toBe('applied')
+    if (template.status !== 'applied') throw new Error('unreachable')
+    expect(findDesk(template.nextWeeks, RELEASE_DATE).lesson?.studentSlots.map((entry) => entry?.id ?? null)).toEqual(['other_tpl', 'other_sp'])
+    expect(template.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(template.returnedCount).toBe(0)
+    expect(template.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(template.ledgers.manualMakeupAdjustments).toEqual(released.ledgers.manualMakeupAdjustments)
+
+    const existing = computePendingDeskResolution({ mode: 'adopt-existing', weeks: released.nextWeeks, cellId: `${RELEASE_DATE}_1`, deskId: 'desk-1', lowerIndex: 0, templatePendingDesks: pending, ledgers, ...context })
+    expect(existing.status).toBe('applied')
+    if (existing.status !== 'applied') throw new Error('unreachable')
+    const after = findDesk(existing.nextWeeks, RELEASE_DATE)
+    expect(after.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'regular', manualAdded: true })
+    expect(after.lesson?.studentSlots[1]).toMatchObject({ id: 'other_sp' })
+    expect(existing.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(existing.ledgers.suppressedRegularLessonOccurrences).toContain(`student-3__英__${RELEASE_DATE}__1`)
+    expect(existing.countAdjustedCount).toBe(1)
+    expect(existing.returnedCount).toBe(0)
   })
 
   it('★(g) 解除 → 再マージ 2 回でも席は 1 つだけ・台帳も不変(INV-03 / INV-12)', () => {

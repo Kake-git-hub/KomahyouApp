@@ -5,6 +5,8 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, buildTemplateTeacherSuppressionKey, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { settleTemplatePendingDesk } from './templatePendingResolution'
+import { buildSameSlotTemplateDuplicateNote } from './templateDiffApply'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 
@@ -289,6 +291,60 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     expect(r.status).toBe('blocked')
     if (r.status === 'blocked') expect(r.message).toContain('移動できません')
   })
+
+  // ── 決定記録 57（2026-11-01・A-10）と regression-reviewer 2026-11-01 P-2: 「手入力データを採用」が別の机 T のテンプレの通常授業を外すのは、
+  //    由来 same-slot-template-duplicate の保留で、T がテンプレ管理の机・T の生徒が手入力の印の無い通常授業・下段の生徒と同じ生徒かつ同じ科目のときだけ。
+  //    それ以外は従来どおり Q26-4／INV-12 で止める（2 か所で生きる形を作らない）。
+  const DUPLICATE_ORIGIN = { kind: 'same-slot-template-duplicate' as const, note: '同じコマの机 2 にテンプレの通常授業（数）を置いたため、手で置いた授業を下の行（保留・緑）に残しました。' }
+  function duplicateFixture(options: { templateStudent?: Partial<StudentEntry>; templateLessonId?: string; origin?: typeof DUPLICATE_ORIGIN | null } = {}) {
+    const weeks: SlotCell[][] = [[
+      mkCell(CELL, DATE, 5, [
+        { id: 'p0', teacher: '鈴木', lesson: undefined },
+        { id: 'p1', teacher: '田中', lesson: mkLesson(options.templateLessonId ?? 'managed_r1', [mkStudent('a-template', '青木', { managedStudentId: 'mA', ...options.templateStudent }), null]) },
+        { id: 'p2', teacher: '佐藤', lesson: undefined },
+      ]),
+    ]]
+    const origin = options.origin === undefined ? DUPLICATE_ORIGIN : options.origin
+    const pending: TemplatePendingDeskMap = {
+      [pendingKey]: {
+        lower: { lesson: mkLesson('lower', [mkStudent('a-lower', '青木', { managedStudentId: 'mA', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null]) },
+        effectiveStartDate: DATE,
+        createdAt: '2026-09-29T10:00:00.000Z',
+        ...(origin ? { origin } : {}),
+      },
+    }
+    return { weeks, pending }
+  }
+
+  it('決定記録 57: 由来 same-slot-template-duplicate × T がテンプレ管理の通常授業（同じ生徒・同じ科目）→ 既存を採用で T の A を外し、A は p0 の 1 か所・抑止キー 1', () => {
+    const { weeks, pending } = duplicateFixture()
+    const r = resolveMode('adopt-existing', weeks, pending)
+    expect(r.status).toBe('applied')
+    if (r.status !== 'applied') return
+    expect(liveCount(r.nextWeeks, 'mA')).toBe(1)
+    expect(deskById(r.nextWeeks, CELL, 'p0').lesson?.studentSlots[0]?.lessonType).toBe('makeup')
+    expect(deskById(r.nextWeeks, CELL, 'p1').lesson?.studentSlots.filter(Boolean) ?? []).toEqual([])
+    expect(r.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
+    expect(r.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(r.nextTemplatePendingDesks[pendingKey]).toBeUndefined()
+  })
+
+  it.each([
+    ['T の A が別の日から手で動かした通常授業（makeupSourceDate つき・手入力の印）', { templateStudent: { makeupSourceDate: '2026-10-01', makeupSourceLabel: '10/1(木) 5限' } }],
+    ['T の A が同じ日の別の時限から動かした写し（sameDayMoveSourceDate）', { templateStudent: { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '3限' } }],
+    ['T の A が手動追加の通常授業', { templateStudent: { manualAdded: true } }],
+    ['T の A が別の科目（英）', { templateStudent: { subject: '英' as const } }],
+    ['T がテンプレ管理でない机（手置きの授業）', { templateLessonId: 'hand_lesson' }],
+    ['由来が無い（テンプレ保存の保留）', { origin: null }],
+  ] as const)('P-2（regression-reviewer 2026-11-01）: %s → 外さず従来どおり止める（盤面・保留・台帳を変えない）', (_label, options) => {
+    const { weeks, pending } = duplicateFixture(options as Parameters<typeof duplicateFixture>[0])
+    const snapshot = JSON.stringify({ weeks, pending })
+    const r = resolveMode('adopt-existing', weeks, pending)
+    expect(r.status).toBe('blocked')
+    if (r.status !== 'blocked') return
+    expect(r.message).toContain('2 か所')
+    expect(JSON.stringify({ weeks, pending })).toBe(snapshot)
+  })
 })
 
 // ============================================================================
@@ -375,15 +431,115 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
   const liveIdsAt = (weeks: SlotCell[][], deskIndex: number) => (weeks.flat().find((cell) => cell.id === CELL)!.desks[deskIndex].lesson?.studentSlots ?? [])
     .filter(Boolean).map((student) => student!.managedStudentId)
 
-  it('前段: 別の 1 行の机（机 2）に A の振替が生きていれば、机 0 の上段に A を置かない。再マージ 1 回の後も A は 1 か所', () => {
-    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))
-    const { saved, remerged } = saveThenRemerge(week)
+  // ── 決定記録 57（オーナー決定 2026-11-01・自動処理一覧 A-10「緑化」・原文「机 3 の方を下段表示にして机 7 は他と同じようにテンプレなので上段。
+  //    机 3 が空きでも一行目を空白にして 2 段表示」）: 旧 Q21-11 前段（別の 1 行の机に生きていれば上段に置かず抑止キー）を置き換え。
+  //    T（机 0）には A をテンプレどおり置く。D（机 2）の A の振替は同じ席の下段へ（上段は空白のまま 2 段）。抑止キーは積まない。
+  //    ★旧「T に置かない」を既定に戻さない（この行が検出する）。
+  const DESK0_KEY = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+  const DESK2_KEY = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_3`)
+  const resolutionLedgers = (suppressed: string[]): TemplatePendingResolutionLedgers => ({
+    manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {},
+    suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: suppressed, scheduleCountAdjustments: [],
+  })
+  const resolveAt = (mode: 'adopt-existing' | 'adopt-template', weeks: SlotCell[][], pending: TemplatePendingDeskMap, deskId: string, lowerIndex: number, suppressed: string[]) => computePendingDeskResolution({
+    mode, weeks, cellId: CELL, deskId, lowerIndex, templatePendingDesks: pending, ledgers: resolutionLedgers(suppressed),
+    managedStudentByAnyName: new Map(), resolveDisplayName: (name: string) => name, resolveStockId: (student: StudentEntry) => student.managedStudentId ?? student.name, ledgerOriginDatesByKey: {},
+  })
+  const remergeWith = (weeks: SlotCell[][], suppressed: string[]) => remergeBoardWeeksWithManagedData(weeks, {
+    classroomSettings: settings({ templateFreezeBeforeDate: DATE }), teachers: teacherRows, students: studentRows, regularLessons: NEW_ROWS, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29',
+  })
+  const boardWithMakeupAAt2 = () => board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))
+
+  it('決定記録 57: 別の 1 行の机（机 2）に A の振替が生きていても、机 0 の上段に A をテンプレどおり置き、机 2 の振替は同じ席の下段（保留・緑）へ。机 2 の上段は空白・抑止キー 0・生存数 1・再マージ 1 回と同じテンプレの再保存で形が変わらない', () => {
+    const { saved, remerged, nextSuppressed } = saveThenRemerge(boardWithMakeupAAt2())
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveIdsAt(saved.nextWeeks, 2)).toEqual([])
+    expect(cellOf(saved.nextWeeks).desks[2].lesson).toBeUndefined()
+    expect(cellOf(saved.nextWeeks).desks[2].teacher).toBe('佐藤')
+    const pending = saved.nextPendingDesks[DESK2_KEY]
+    expect(pending?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', null])
+    expect(pending?.lower.lesson?.studentSlots[0]?.lessonType).toBe('makeup')
+    expect(pending?.origin).toEqual({ kind: 'same-slot-template-duplicate', note: buildSameSlotTemplateDuplicateNote(1, '数') })
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(saved.summary.pending).toBe(1)
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(saved.studentNotes.filter((note) => note.kind === 'duplicate-demoted').map((note) => [note.studentName, note.detail])).toEqual([['青木', '1']])
     expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
-    expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sA'])
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(saved.addedSuppressedRegularLessonOccurrences).toHaveLength(1)
+    expect(liveCount(remerged, 'sA')).toBe(1)
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+    // 同じテンプレの再保存: 下段の A は forcedLower で上段へ上がらない（席が空いていても）・形が変わらない
+    const again = saveThenRemerge(saved.nextWeeks[0], { suppressed: nextSuppressed, pendingDesks: saved.nextPendingDesks })
+    expect(cellOf(again.saved.nextWeeks)).toEqual(cellOf(saved.nextWeeks))
+    expect(again.saved.nextPendingDesks).toEqual(saved.nextPendingDesks)
+    expect(again.saved.summary.duplicateDemotedStudents).toBe(0)
+    expect(cellOf(again.remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  it('決定記録 57 の片づけ「手入力データを採用」: A の振替が机 2 の上段へ戻り、机 0 のテンプレの A は外れて旧 Q21-11 と同じ抑止キーだけ積む（希望回数・在庫は触らない）。再マージしても A は机 2 の 1 か所', () => {
+    const { saved, nextSuppressed } = saveThenRemerge(boardWithMakeupAAt2())
+    const result = resolveAt('adopt-existing', saved.nextWeeks, saved.nextPendingDesks, `${CELL}_desk_3`, 0, nextSuppressed)
+    expect(result.status).toBe('applied')
+    if (result.status !== 'applied') return
+    expect(liveIdsAt(result.nextWeeks, 2)).toEqual(['sA'])
+    expect(cellOf(result.nextWeeks).desks[2].lesson?.studentSlots[0]?.lessonType).toBe('makeup')
+    expect(liveIdsAt(result.nextWeeks, 0)).toEqual([])
+    expect(cellOf(result.nextWeeks).desks[0].teacher).toBe('田中')
+    expect(result.nextTemplatePendingDesks[DESK2_KEY]).toBeUndefined()
+    expect(result.ledgers.suppressedRegularLessonOccurrences).toEqual([...nextSuppressed, buildManagedOccurrenceKey(mkStudent('sA', '青木'), DATE, 5)])
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(result.ledgers.manualMakeupAdjustments).toEqual({})
+    expect(result.message).toContain('机 1 のテンプレの 青木 を外す')
+    expect(liveCount(result.nextWeeks, 'sA')).toBe(1)
+    const remerged = remergeWith(result.nextWeeks, result.ledgers.suppressedRegularLessonOccurrences)
     expect(liveCount(remerged, 'sA')).toBe(1)
     expect(liveIdsAt(remerged, 2)).toEqual(['sA'])
+    expect(liveIdsAt(remerged, 0)).toEqual([])
+  })
+
+  it('決定記録 57 の片づけ「テンプレ授業を採用」: 机 2 の下段の振替は既存の処分規則で外れて未消化振替へ戻り（INV-06）、A は机 0 のテンプレだけ', () => {
+    const { saved, nextSuppressed } = saveThenRemerge(boardWithMakeupAAt2())
+    const result = resolveAt('adopt-template', saved.nextWeeks, saved.nextPendingDesks, `${CELL}_desk_3`, 0, nextSuppressed)
+    expect(result.status).toBe('applied')
+    if (result.status !== 'applied') return
+    expect(liveIdsAt(result.nextWeeks, 2)).toEqual([])
+    expect(liveIdsAt(result.nextWeeks, 0)).toEqual(['sA'])
+    expect(result.nextTemplatePendingDesks[DESK2_KEY]).toBeUndefined()
+    expect(Object.keys(result.ledgers.manualMakeupAdjustments)).toHaveLength(1)
+    expect(result.ledgers.suppressedRegularLessonOccurrences).toEqual(nextSuppressed)
+    expect(liveCount(result.nextWeeks, 'sA')).toBe(1)
+  })
+
+  it('決定記録 57 × Q28: A が机 0 のテンプレに生きている間は下段の A を自動で上げない（duplicate-student）。机 0 の A を外すと自動で 1 行へ戻る', () => {
+    const { saved } = saveThenRemerge(boardWithMakeupAAt2())
+    const held = settleTemplatePendingDesk({ weeks: saved.nextWeeks, templatePendingDesks: saved.nextPendingDesks, key: DESK2_KEY })
+    expect(held).toEqual({ status: 'kept', reason: 'duplicate-student' })
+    const freed = saved.nextWeeks.map((week) => week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) })))
+    const released = settleTemplatePendingDesk({ weeks: freed, templatePendingDesks: saved.nextPendingDesks, key: DESK2_KEY })
+    expect(released.status).toBe('collapsed')
+    if (released.status !== 'collapsed') return
+    expect(liveIdsAt(released.nextWeeks, 2)).toEqual(['sA'])
+    expect(released.nextTemplatePendingDesks[DESK2_KEY]).toBeUndefined()
+  })
+
+  it('決定記録 57 の予備経路: D（机 2）の保留の下段が 2 席とも埋まっていて A の振替を移せないときだけ、旧 Q21-11（机 0 に A を置かず抑止キー・duplicate-skipped）。A の生存数 1・再マージの不動点', () => {
+    const makeupC = mkStudent('c-makeup', '千葉', { managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    const makeupD = mkStudent('d-makeup', '土屋', { managedStudentId: 'sD', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    const week = boardWithMakeupAAt2()
+    const pending: TemplatePendingDeskMap = {
+      [DESK2_KEY]: { lower: { lesson: mkLesson('lower-full', [makeupC, makeupD]) }, effectiveStartDate: DATE, createdAt: '2026-09-29T10:00:00.000Z' },
+    }
+    const { saved, remerged, nextSuppressed } = saveThenRemerge(week, { pendingDesks: pending })
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual([])
+    expect(liveIdsAt(saved.nextWeeks, 2)).toContain('sA')
+    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.summary.duplicateDemotedStudents).toBe(0)
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(mkStudent('sA', '青木'), DATE, 5)])
+    expect(saved.studentNotes.filter((note) => note.kind === 'duplicate-skipped').map((note) => note.studentName)).toEqual(['青木'])
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
+    expect(liveCount(remerged, 'sA')).toBe(1)
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+    void nextSuppressed
   })
 
   it('席ごと（2026-09-30）: 同じ机の生徒 2 の席に A の振替があり、テンプレの生徒 1 が A（通常）なら、生徒 2 の席が空いていても A の振替は 1 行に残さず下段へ。再マージ 1 回の後も A は 1 か所', () => {
@@ -396,16 +552,20 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveCount(remerged, 'sA')).toBe(1)
   })
 
-  it('席ごと（2026-09-30）: 机 0 の生徒 2 の席に 1 行で残した B の振替が、別の机（机 1）のテンプレの B と重なるなら、机 1 の B を上段に置かず抑止キーを 1 件積む。再マージ 1 回の後も B は 1 か所', () => {
+  it('決定記録 57（席ごと・2026-11-01 改定）: 机 0 の生徒 2 の席に 1 行で残した B の振替が別の机（机 1）のテンプレの B と重なるなら、机 1 に B をテンプレどおり置き、机 0 は上段 A＋空席・下段に B の振替（保留）。抑止キー 0・B の生存数 1', () => {
     const makeupB = mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
     const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupB] } } : desk)))
     const { saved, remerged } = saveThenRemerge(week)
-    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA', 'sB'])
-    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual([])
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(saved.addedSuppressedRegularLessonOccurrences).toHaveLength(1)
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
+    expect(saved.nextPendingDesks[DESK0_KEY]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sB'])
+    expect(saved.nextPendingDesks[DESK0_KEY]?.origin?.kind).toBe('same-slot-template-duplicate')
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
     expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
     expect(liveCount(remerged, 'sB')).toBe(1)
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
   // Q38（オーナー指示 2026-10-13）: 手動追加の通常授業は、同じコマの別の机にテンプレが同じ生徒×科目を置くならテンプレを自動採用（手動追加を外す）。
@@ -436,18 +596,19 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
   // 保存結果も同じ形でなければ再マージの不動点にならない（INV-02 / INV-03）。生徒 ID の比較だけでは見えないため、セル丸ごと比べる。
   const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
 
-  it('不動点（L-7）: Q21-11 で机 1 のテンプレの B を外して講師だけの机になっても、保存 → 再マージ 1 回でセルは丸ごと変わらない（置き換えの経路）', () => {
+  it('不動点（L-7・2026-11-01 改定）: 机 0 の B の振替を下段へ移し、机 1 にテンプレの B を置いても、保存 → 再マージ 1 回でセルは丸ごと変わらない（置き換えの経路）', () => {
     const makeupB = mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
     const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupB] } } : desk)))
     const { saved, remerged } = saveThenRemerge(week)
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
     const savedDesk1 = cellOf(saved.nextWeeks).desks[1]
-    expect(savedDesk1.lesson).toBeUndefined()
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
     expect(savedDesk1.teacher).toBe('鈴木')
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
-  it('不動点（L-7）: 兄弟＝残す（keep）の経路。メモの印がある机 1 のテンプレの B を Q21-11 で外しても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+  it('不動点（L-7・2026-11-01 改定）: 兄弟＝メモの印がある机 1 にテンプレの B を置き、机 0 の B の振替を下段へ移しても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     const makeupB = mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
     const week = board((desks) => desks.map((desk, index) => {
       if (index === 0) return { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupB] } }
@@ -455,12 +616,14 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
       return desk
     }))
     const { saved, remerged } = saveThenRemerge(week)
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(saved.summary.kept).toBe(1)
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
     const savedDesk1 = cellOf(saved.nextWeeks).desks[1]
-    expect(savedDesk1.lesson).toBeUndefined()
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
     expect(savedDesk1.teacher).toBe('鈴木')
-    expect(savedDesk1.memoSlots).toEqual(['連絡あり', null])
+    // メモは生徒 1 の席にテンプレの B が入るので空いた生徒 2 の席へ（Q24 のメモの引き継ぎ・消えない）
+    expect(savedDesk1.memoSlots).toEqual([null, '連絡あり'])
+    // 件数（薄化しない・regression-reviewer 2026-11-01）: 机 1 は中身が同じ B なので「残す」ではなく採用（印のメモは残る・1 行）、机 0 が保留 1。
+    expect([saved.summary.kept, saved.summary.adopted, saved.summary.collapsedOnCreate, saved.summary.pending]).toEqual([0, 1, 0, 1])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
@@ -604,21 +767,25 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
   // 後ろの講師だけの机（佐藤）は前へずれず元の机に残る。期待の並びをその形へ改めた（不動点の assert は不変・オーナー承認 2026-10-15「修正に進めて」）。
   const teachersAt = (weeks: SlotCell[][]) => cellOf(weeks).desks.map((desk) => desk.teacher)
 
-  it('不動点（L-7 兄弟 2）: 講師のいない行が 2 本あり、Q21-11 で片方の机が空いても、保存の時点で再マージと同じ机に講師が並ぶ（保存 → 再マージ 1 回でセルは丸ごと変わらない）', () => {
+  it('不動点（L-7 兄弟 2・2026-11-01 改定）: 講師のいない行が 2 本あっても、机 1 にテンプレの B が残り（机 0 の B の振替は下段）、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     const rows = [row('r0', 't1', 'sA'), row('r1', '', 'sB'), row('r2', '', 'sD'), row('r3', 't3')]
     const { saved, remerged } = saveThenRemerge(board(makeupBAt0, rows, 4), { rows, deskCount: 4 })
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
     expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
     expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sD'])
-    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '', '講師未割当', '佐藤'])
+    // 講師の並び全体（薄化しない）: 机 1 は B が残るので講師のいない行＝「講師未割当」、机 2 も同じ、佐藤は元の机 3。
+    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '講師未割当', '講師未割当', '佐藤'])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
-  it('不動点（L-7 兄弟 2）: 同じ講師が 2 机を持ち、Q21-11 で片方の机が空いても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+  it('不動点（L-7 兄弟 2・2026-11-01 改定）: 同じ講師が 2 机を持っても、机 1 にテンプレの B が残り、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     const rows = [row('r0', 't1', 'sA'), row('r1', 't1', 'sB'), row('r2', 't3')]
     const { saved, remerged } = saveThenRemerge(board(makeupBAt0, rows, 4), { rows, deskCount: 4 })
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '', '佐藤', ''])
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
+    // 講師の並び全体（薄化しない）: 同じ講師が 2 机のまま・佐藤は元の机 3・机 4 は空。
+    expect(teachersAt(saved.nextWeeks)).toEqual(['田中', '田中', '佐藤', ''])
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
@@ -631,18 +798,21 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 
-  it('不動点（L-7 兄弟 3）: 保留中の再保存（Q29）で Q21-11 によりテンプレ机が空になり下段が 1 行に戻っても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+  it('不動点（L-7 兄弟 3・2026-11-01 改定）: 保留中の再保存（Q29）で机 0 に B の振替を置いても、机 1 のテンプレの B は残り（下段の C はそのまま保留）、B の振替は机 0 の下段へ。保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
     // 1 回目の保存: 机 1 に C の振替を手置き → 新テンプレの机 1 は B なので保留（上段 B・下段 C）。
     const makeupC = mkStudent('c-makeup', '千葉', { managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
     const first = saveThenRemerge(board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, lesson: mkLesson('hand-c', [makeupC, null]) } : desk))))
     const pendingKey = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_2`)
     expect(first.saved.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
-    // 2 回目の保存の前に、机 0 の生徒 2 の席へ B の振替を手置き → Q21-11 で机 1 のテンプレの B が外れ、机 1 の上段が空く。
+    // 2 回目の保存の前に、机 0 の生徒 2 の席へ B の振替を手置き → 旧: 机 1 のテンプレの B が外れて C が上がる／新: B は机 1 に残り、振替は机 0 の下段へ。
     const week = first.remerged[0].map((cell) => (cell.id === CELL ? { ...cell, desks: makeupBAt0(cell.desks) } : cell))
     const { saved, remerged } = saveThenRemerge(week, { suppressed: first.nextSuppressed, pendingDesks: first.saved.nextPendingDesks })
-    expect(saved.summary.skippedDuplicateStudents).toBe(1)
-    expect(saved.nextPendingDesks[pendingKey]).toBeUndefined()
-    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sC'])
+    expect(saved.summary.duplicateDemotedStudents).toBe(1)
+    expect(saved.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
+    expect(saved.nextPendingDesks[DESK0_KEY]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sB'])
+    expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
+    expect(liveCount(saved.nextWeeks, 'sC')).toBe(0)
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
   })
 

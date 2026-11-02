@@ -32,6 +32,9 @@ describe('buildHolidayReleaseResultMessage', () => {
       .toBe('2026-10-07 の休日を解除しました（元の席へ 2件・別日のコマ 1件を削除・戻せない 1件: 席が埋まっている）。')
     expect(buildHolidayReleaseResultMessage({ dateKey: '2026-10-07', isClosedWeekday: true, restoredCount: 0, removedMakeupCount: 0, skippedCount: 0, skippedSummary: '' }))
       .toBe('2026-10-07 の休校を解除しました。')
+    // 決定記録 59（2026-11-01）: 席に居た手入力の生徒を下の行へ残して戻した件数（旧形の「保留(下段)に」とは別に出す）
+    expect(buildHolidayReleaseResultMessage({ dateKey: '2026-10-07', isClosedWeekday: false, restoredCount: 1, displacedCount: 1, pendingRestoredCount: 1, removedMakeupCount: 0, skippedCount: 0, skippedSummary: '' }))
+      .toBe('2026-10-07 の休日を解除しました（元の席へ 1件・席の手入力の生徒を下の行へ 1件・保留(下段)に 1件）。')
   })
 })
 

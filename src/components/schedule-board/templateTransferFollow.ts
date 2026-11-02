@@ -121,7 +121,7 @@ export type OrphanedMakeupCollection = {
 
 /**
  * 根拠を失った振替を集める（Q40-1）。対象は上段の生きている振替で、管理生徒 ID を持つものだけ（保留の下段・出欠記録・手動追加・名前だけの振替は見ない）。
- * 根拠は**日単位・生徒×科目**で見る（在庫の消化が同じ日付へフォールバックする `consumeOriginDates` と揃える。時限だけ変えたテンプレで振替を消さない＝監査 H-1/H-3）:
+ * 根拠は**日単位・生徒×科目**で見る（在庫の消化が同じ日付へフォールバックする `consumeOriginDates` と揃える〔決定記録 58 以降、移送で置かれた振替は時限が明示的に食い違う台帳・欠席の origin を食わないが、根拠の判定は日単位のまま＝消さない側に倒す〕。時限だけ変えたテンプレで振替を消さない＝監査 H-1/H-3）:
  *   (a) 新テンプレがその日（同じ曜日）にその生徒×科目の通常授業を持つ（管理セルの raw か、テンプレ行〔休日のコマは管理セルが空になるので行でも見る〕）
  *   (b) 在庫の正本がその生徒×科目の**その日の有効な origin** を持つ（台帳の origin〔通常授業の休みはここに積まれる〕・振替の休みの記録から立つ origin〔振替元の日〕・
  *       テンプレ行×休日の自動発生・保留の下段の記録。`collectMakeupOriginDatesByKey` を取り下げ後の台帳と保存後の盤面で呼ぶ＝判定を在庫と分けない・監査 H-2/H-A）
@@ -634,6 +634,11 @@ export function buildTransferFollowPendingNote(sourceDateKey: string, targetDate
   return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました（席の生徒はテンプレの生徒なので下段にできません）。室長が動かすか採用で片づけてください。`
 }
 
+/** 下段の理由文（時限変更の追従の満席・決定記録 59・2026-11-01）: 席に居た手入力の生徒を下段へ残し、その席に追従の振替を置いた形。 */
+export function buildSlotFollowDisplacedNote(oldSlot: number, newSlot: number) {
+  return `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため、この席に居た手入力の生徒を下段（保留）に残し、上段に振替を置きました。室長が採用か移動で片づけてください。`
+}
+
 /** 下段の理由文（Q40-2 の満席・オーナー決定 2026-11-01）: 席に居た手入力の生徒を下段へ残し、その席にテンプレの生徒の振替を置いた形。 */
 export function buildTransferFollowDisplacedNote(sourceDateKey: string, targetDateKey: string) {
   return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、この席に居た手入力の生徒を下段（保留）に残し、上段にテンプレの生徒の振替を置きました。室長が採用か移動で片づけてください。`
@@ -747,11 +752,14 @@ export type SlotChangeFollowMove = {
   deskId: string
   deskIndex: number
   seatIndex: number
+  /** upper＝上段の空席へ／pending＝保留の机にした（下段へ置いた従来の形、または displacedStudent 付き＝押し出しで上段へ置いた形）。 */
   placement: 'upper' | 'pending'
   /** テンプレの机番号が使えず別の机へ置いた／下段が次の机。 */
   fallbackDesk: boolean
   /** 上段に置いた机に講師が居ない。 */
   teacherless: boolean
+  /** 決定記録 59（2026-11-01）: 満席の席に居た手入力の生徒を下段へ残し、その席（上段）へ追従の振替を置いた（origin 'slot-follow-displaced'）。 */
+  displacedStudent?: StudentEntry
 }
 
 export type SlotChangeFollowPlan = {
@@ -958,12 +966,27 @@ export function planSlotChangeTransferFollow(params: {
         break
       }
     }
-    let lowerPlacement: ReturnType<typeof placeIntoPendingLower> = null
+    // 決定記録 59（オーナー決定 2026-11-01「時限変更の追従 (b)-3 にも上段＝テンプレ／下段＝手入力を広げる」）: 満席なら Q40-2 と同じ押し出し
+    // （planFullDeskDisplacement）。席に手入力の印の生徒が居ればその生徒を同じ机・同じ席の下段へ残し、追従の振替を上段へ。押し出さない相手も同じ
+    // （同じ組の振替・出欠記録のある席）。両席ともテンプレの通常生徒／机が既に保留なら従来どおり振替を下段へ（理由文で区別）。
+    let displacement: ReturnType<typeof planFullDeskDisplacement> = null
+    let displacedLower: ReturnType<typeof placeIntoPendingLower> = null
     if (placedDeskIndex < 0) {
+      displacement = planFullDeskDisplacement(newTargetCell, nextPendingDesks, item.deskIndex, item.seatIndex, sourceDateKey)
+      if (displacement) {
+        displacedLower = placeIntoPendingLower({
+          cell: newTargetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: displacement.seatIndex, student: displacement.occupant,
+          effectiveStartDate: targetDateKey, createdAt: params.createdAt, kind: 'slot-follow-displaced', note: buildSlotFollowDisplacedNote(oldSlot, newSlot),
+        })
+        if (!displacedLower || displacedLower.deskIndex !== item.deskIndex || displacedLower.seatIndex !== displacement.seatIndex) { displacement = null; displacedLower = null }
+      }
+    }
+    let lowerPlacement: ReturnType<typeof placeIntoPendingLower> = null
+    if (placedDeskIndex < 0 && !displacement) {
       lowerPlacement = placeIntoPendingLower({
         cell: newTargetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved,
         effectiveStartDate: targetDateKey, createdAt: params.createdAt, kind: 'slot-follow-full',
-        note: `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため保留（下段）に置きました。室長が動かすか採用で片づけてください。`,
+        note: `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため保留（下段）に置きました（席の生徒はテンプレの生徒なので下段にできません）。室長が動かすか採用で片づけてください。`,
       })
       if (!lowerPlacement) continue
     }
@@ -982,6 +1005,14 @@ export function planSlotChangeTransferFollow(params: {
     let teacherless = false
     if (lowerPlacement) {
       nextPendingDesks = lowerPlacement.nextPendingDesks
+    } else if (displacement && displacedLower) {
+      // 押し出し: 席の手入力の生徒は下段（保留）へ、追従の振替をその席（上段）へ。
+      nextPendingDesks = displacedLower.nextPendingDesks
+      const desk = freshNewTargetCell.desks[item.deskIndex]
+      const slots = [...(desk.lesson?.studentSlots ?? [null, null])] as StudentPair
+      slots[displacement.seatIndex] = moved
+      teacherless = !desk.teacher.trim()
+      replaceDesk(freshNewTargetCell, item.deskIndex, { ...desk, lesson: { ...(desk.lesson ?? { id: `daymove_${sourceDateKey}_${newSlot}_${item.deskIndex}` }), studentSlots: slots } })
     } else {
       const desk = freshNewTargetCell.desks[placedDeskIndex]
       const slots = [...(desk.lesson?.studentSlots ?? [null, null])] as StudentPair
@@ -1028,15 +1059,21 @@ export function planSlotChangeTransferFollow(params: {
       replaceDesk(freshSourceNew, recordTarget.deskIndex, { ...sourceNewDesk, statusSlots })
     }
 
-    moves.push({
-      student: item.student, sourceDateKey, oldSlotNumber: oldSlot, newSlotNumber: newSlot, targetDateKey, targetCellId: newTargetCell.id,
-      deskId: lowerPlacement ? lowerPlacement.deskId : freshNewTargetCell.desks[placedDeskIndex].id,
-      deskIndex: lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex,
-      seatIndex: lowerPlacement ? lowerPlacement.seatIndex : placedSeat,
-      placement: lowerPlacement ? 'pending' : 'upper',
-      fallbackDesk: (lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex) !== item.deskIndex,
-      teacherless,
-    })
+    moves.push(displacement && displacedLower
+      ? {
+        student: item.student, sourceDateKey, oldSlotNumber: oldSlot, newSlotNumber: newSlot, targetDateKey, targetCellId: newTargetCell.id,
+        deskId: displacement.desk.id, deskIndex: item.deskIndex, seatIndex: displacement.seatIndex,
+        placement: 'pending', fallbackDesk: false, teacherless, displacedStudent: displacement.occupant,
+      }
+      : {
+        student: item.student, sourceDateKey, oldSlotNumber: oldSlot, newSlotNumber: newSlot, targetDateKey, targetCellId: newTargetCell.id,
+        deskId: lowerPlacement ? lowerPlacement.deskId : freshNewTargetCell.desks[placedDeskIndex].id,
+        deskIndex: lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex,
+        seatIndex: lowerPlacement ? lowerPlacement.seatIndex : placedSeat,
+        placement: lowerPlacement ? 'pending' : 'upper',
+        fallbackDesk: (lowerPlacement ? lowerPlacement.deskIndex : placedDeskIndex) !== item.deskIndex,
+        teacherless,
+      })
   }
 
   if (touchedCellIds.size === 0) return { weeks: params.weeks, nextPendingDesks, moves, touchedCellIds }

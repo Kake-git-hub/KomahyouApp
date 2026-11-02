@@ -348,6 +348,19 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
       </header>
 
       <div className="verification-checklist-body">
+        {/* フリーメモ(2026-11-01 オーナー指示「フリーメモ欄を確認リストに追加」): 旧「その他の気づき」(末尾)を先頭へ移し、
+            項目に関係ない気づき・判断項目への意見・質問を自由に書ける欄にした。送信本文では従来どおり「その他」として届く。 */}
+        <div className="verification-checklist-group verification-checklist-free-memo">
+          <div className="verification-checklist-area">フリーメモ</div>
+          <textarea
+            className="verification-checklist-memo"
+            value={draft.otherNotes}
+            rows={3}
+            placeholder="項目に関係ない気づき・意見・質問を自由に(送信本文には「その他」として載ります)"
+            onChange={(event) => updateDraft(setVerificationChecklistOtherNotes(draft, event.target.value))}
+            data-testid="verification-checklist-other-notes"
+          />
+        </div>
         {groups.map(([area, items]) => (
           <div key={area} className="verification-checklist-group">
             <div className="verification-checklist-area">{area}</div>
@@ -360,6 +373,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                     <span className="verification-checklist-item-id">{item.id}</span>
                     {text(item.title)}
                   </div>
+                  {/* オーナーが新たに決めたこと(2026-11-01 オーナー指示「私が行った新たな判断があるものは、確認リストの説明に新たに定義したことを記載しテスト担当者が分かるように」)。 */}
+                  {item.ownerDecision ? <p className="verification-checklist-owner-decision" data-testid={`verification-checklist-owner-decision-${item.id}`}><span className="verification-checklist-label">オーナーの決定</span>{text(item.ownerDecision)}</p> : null}
                   {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p> : null}
                   <div className="verification-checklist-label">やること</div>
                   <ol className="verification-checklist-steps">
@@ -441,17 +456,6 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
           </div>
         ))}
 
-        <div className="verification-checklist-group">
-          <div className="verification-checklist-area">その他の気づき</div>
-          <textarea
-            className="verification-checklist-memo"
-            value={draft.otherNotes}
-            rows={3}
-            placeholder="リストに無い気づき・要望"
-            onChange={(event) => updateDraft(setVerificationChecklistOtherNotes(draft, event.target.value))}
-            data-testid="verification-checklist-other-notes"
-          />
-        </div>
       </div>
 
       <footer className="verification-checklist-footer">

@@ -547,8 +547,10 @@ export function computeOutstandingAbsenceOrigins(params: {
   resolveStudentKey: (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => string
 }): Record<string, string[]> {
   const owed: OriginMap = {}
-  const settled: OriginMap = {}
+  const settled: UsedOriginMap = {}
   const isCountedLessonType = (lessonType?: string | null) => lessonType !== 'special' && lessonType !== 'trial'
+  // 決定記録 58: 移送で置かれた振替は、時限が明示的に食い違う origin を同日フォールバックで食わない（在庫の残数計算と同じ規則）。
+  const movedIndex = buildMovedSourceIndex(params.weeks, params.resolveStudentKey as (student: StudentEntry) => string)
 
   for (const week of params.weeks) {
     for (const cell of week) {
@@ -556,7 +558,7 @@ export function computeOutstandingAbsenceOrigins(params: {
         for (const student of desk.lesson?.studentSlots ?? []) {
           if (!student || !isCountedLessonType(student.lessonType) || !student.makeupSourceDate) continue
           const key = buildMakeupStockKey(params.resolveStudentKey(student), student.subject)
-          pushOrigin(settled, key, buildOriginToken(student.makeupSourceDate, parseOriginSlotNumberFromLabel(student.makeupSourceLabel)))
+          pushUsedOrigin(settled, key, toUsedOriginToken(movedIndex, key, student.makeupSourceDate, student.makeupSourceLabel, cell.dateKey))
         }
 
         for (const statusEntry of desk.statusSlots ?? []) {
@@ -569,7 +571,7 @@ export function computeOutstandingAbsenceOrigins(params: {
           //   義務と消化の両方へ積まれて相殺し、休んだ1コマが静かに消える
           //   （INV-06 の v1.5.459「moved-makeup-absence-loss」と同型の消滅）。
           if (statusEntry.makeupSourceDate && statusEntry.status !== 'absent') {
-            pushOrigin(settled, key, buildOriginToken(statusEntry.makeupSourceDate, parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel)))
+            pushUsedOrigin(settled, key, toUsedOriginToken(movedIndex, key, statusEntry.makeupSourceDate, statusEntry.makeupSourceLabel, cell.dateKey))
           }
 
           if (statusEntry.status !== 'absent') continue
@@ -749,9 +751,85 @@ export function resolveMakeupScanWeeks(weeks: SlotCell[][], templatePendingDesks
   return lowerScanWeeks.length > 0 ? [...weeks, ...lowerScanWeeks] : weeks
 }
 
+type UsedOriginMap = Record<string, UsedOriginToken[]>
+
+function pushUsedOrigin(map: UsedOriginMap, key: string, used: UsedOriginToken) {
+  const next = [...(map[key] ?? []), used]
+  next.sort((left, right) => left.token.localeCompare(right.token))
+  map[key] = next
+}
+
+/**
+ * 移送で置かれた振替の判定材料（決定記録 58）: 盤面の移動元記録（status 'moved'）を 在庫キー×日付 で引けるようにする。
+ * 記録のあるセルの時限と行き先の日を持つ（1 コマの別日移動・丸ごと振替・Q40-2／Q40-9 の追従がすべて付ける形）。
+ */
+type MovedSourceIndex = Map<string, MovedSourceRecord[]>
+
+function buildMovedSourceIndex(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string): MovedSourceIndex {
+  const index: MovedSourceIndex = new Map()
+  for (const week of weeks) {
+    for (const cell of week) {
+      for (const desk of cell.desks) {
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry || statusEntry.status !== 'moved') continue
+          const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
+          const key = `${buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)}@${cell.dateKey}`
+          const list = index.get(key) ?? []
+          list.push({ slotNumber: cell.slotNumber, destinationDateKey: statusEntry.moveDestinationDateKey ?? null })
+          index.set(key, list)
+        }
+      }
+    }
+  }
+  return index
+}
+
+export type MovedSourceRecord = { slotNumber: number; destinationDateKey: string | null }
+
+/**
+ * 「移送で置かれた振替」の判定（決定記録 58・権威関数）: 振替元の日の同じ在庫キーの移動元記録（records）のどれかが、振替の時限〔分かるとき〕と
+ * 行き先の日〔記録にあるとき〕で合えば移送で置かれた振替。在庫の残数計算・欠席由来の算出・テストのオラクル（templateLessonAccounting）が共有する。
+ */
+export function isMovedDerivedMakeup(records: ReadonlyArray<MovedSourceRecord> | undefined, sourceSlotNumber: number | null, placedDateKey: string) {
+  if (!records || records.length === 0) return false
+  return records.some((record) => (sourceSlotNumber == null || record.slotNumber === sourceSlotNumber) && (!record.destinationDateKey || record.destinationDateKey === placedDateKey))
+}
+
+/** その振替コマが「移送で置かれた振替」か（在庫キー×振替元の日の索引で isMovedDerivedMakeup を引く）。 */
+function isMovedDerivedMakeupUse(index: MovedSourceIndex, stockKey: string, sourceDateKey: string, sourceSlotNumber: number | null, placedDateKey: string) {
+  return isMovedDerivedMakeup(index.get(`${stockKey}@${sourceDateKey}`), sourceSlotNumber, placedDateKey)
+}
+
+function toUsedOriginToken(index: MovedSourceIndex, stockKey: string, sourceDateKey: string, sourceLabel: string | undefined, placedDateKey: string): UsedOriginToken {
+  const slotNumber = parseOriginSlotNumberFromLabel(sourceLabel)
+  const token = buildOriginToken(sourceDateKey, slotNumber)
+  return isMovedDerivedMakeupUse(index, stockKey, sourceDateKey, slotNumber, placedDateKey) ? { token, strictSlot: true } : { token }
+}
+
+function normalizeUsedOriginMapKeys(source: UsedOriginMap, managedStudentIds: Set<string>) {
+  return Object.entries(source).reduce<UsedOriginMap>((accumulator, [key, values]) => {
+    const normalizedKey = normalizeManagedMakeupStockKeyByIdSet(key, managedStudentIds)
+    const merged = [...(accumulator[normalizedKey] ?? []), ...values]
+    // 従来（normalizeStringArrayMapKeys）と同じく同一のトークンは 1 件に畳む（印は無視・regression-reviewer 2026-11-01 P-6）。畳んだ分の使用数は
+    // consumeOriginDates の「対応の取れない使用数を古い順に消す」が従来どおり拾う。印は、同じトークンの使用が**すべて**移送で置かれた振替のときだけ付ける
+    // （1 件でも普通の振替が混ざれば従来どおり同日フォールバックで食う＝消さない側に倒さない）。
+    const byToken = new Map<string, { token: string; strict: boolean }>()
+    for (const used of merged) {
+      const current = byToken.get(used.token)
+      if (!current) byToken.set(used.token, { token: used.token, strict: Boolean(used.strictSlot) })
+      else current.strict = current.strict && Boolean(used.strictSlot)
+    }
+    const deduped = [...byToken.values()].map((entry): UsedOriginToken => (entry.strict ? { token: entry.token, strictSlot: true } : { token: entry.token }))
+    deduped.sort((left, right) => left.token.localeCompare(right.token))
+    accumulator[normalizedKey] = deduped
+    return accumulator
+  }, {})
+}
+
 function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string) {
   const counts: Record<string, number> = {}
-  const usedOriginDates: OriginMap = {}
+  const usedOriginDates: UsedOriginMap = {}
+  const movedIndex = buildMovedSourceIndex(weeks, resolveStudentKey)
 
   for (const week of weeks) {
     for (const cell of week) {
@@ -764,7 +842,7 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
             counts[key] = (counts[key] ?? 0) + 1
           }
           if (student.makeupSourceDate) {
-            pushOrigin(usedOriginDates, key, buildOriginToken(student.makeupSourceDate, parseOriginSlotNumberFromLabel(student.makeupSourceLabel)))
+            pushUsedOrigin(usedOriginDates, key, toUsedOriginToken(movedIndex, key, student.makeupSourceDate, student.makeupSourceLabel, cell.dateKey))
           }
         }
         for (const statusEntry of desk.statusSlots ?? []) {
@@ -777,7 +855,7 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
           const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
           counts[key] = (counts[key] ?? 0) + 1
           if (statusEntry.makeupSourceDate) {
-            pushOrigin(usedOriginDates, key, buildOriginToken(statusEntry.makeupSourceDate, parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel)))
+            pushUsedOrigin(usedOriginDates, key, toUsedOriginToken(movedIndex, key, statusEntry.makeupSourceDate, statusEntry.makeupSourceLabel, cell.dateKey))
           }
         }
       }
@@ -941,31 +1019,62 @@ function computeScheduleConflictOrigins(
   return { origins: conflicts }
 }
 
+/**
+ * 消化に使う 1 件（配置済みの振替コマ）。文字列はトークン（日付＋時限）だけの従来の形。
+ * strictSlot（オーナー決定 2026-11-01・決定記録 58・旧 既知の限界 L-6 の解消）＝**移送で置かれた振替**（振替元に移動元記録〔moved・行き先がそのコマの日〕が
+ * ある＝丸ごと振替・1 コマの別日移動・Q40-2／Q40-9 の追従で置かれ、台帳に自分の origin を持たない在庫中立の振替）。この振替は、時限が明示的に
+ * 食い違う origin を同日フォールバックで食わない（完全一致 → 時限の無い origin → それ以外は消化しない）。自分の時限が分からない振替は従来どおり。
+ */
+export type UsedOriginToken = { token: string; strictSlot?: boolean }
+
+function usedTokenString(used: string | UsedOriginToken) {
+  return typeof used === 'string' ? used : used.token
+}
+
 // 消化の突き合わせ（トークン単位）。★消してはならないガード
 // 完全一致（日付＋時限）を最優先し、一致しなければ**同じ日付の最初の origin** を消化する。
 // 後者は「配置コマの振替元ラベルから時限が取れない（旧データ）」「時限が食い違う」ケースの受け皿で、
 // これが無いと消化済みの振替が未消化として再出現する（誤増）。
 // ★1件の使用が1件の origin だけを消す（多重集合の1対1消化）。ここを「同日ぜんぶ消す」に変えると、
 //   同じ日に同じ科目が2コマある構成で1件の振替が2件を消し、未消化が過少になる。
-export function consumeMatchingOriginTokens(originTokens: string[], usedTokens: string[]) {
+// ★決定記録 58（2026-11-01・旧 L-6）: strictSlot の使用（移送で置かれた振替・自分の時限が分かる）だけは、同日フォールバックで
+//   **時限の無い origin か自動 origin（休日・衝突＝relaxedOriginTokens）** しか食わない（時限が明示的に食い違う台帳・欠席の origin は別の授業＝食うと「無言の消失」）。
+//   文字列の使用・時限不明の使用は従来どおり。突き合わせは 3 段階（全使用の完全一致 → strict のフォールバック → 通常のフォールバック）で順番に依らない。
+export type ConsumeOriginOptions = {
+  /**
+   * 決定記録 58 の受け皿（regression-reviewer 2026-11-01 P-4）: 休日の不足分（`computeAutomaticShortageOrigins`）と時間割の衝突分
+   * （`computeScheduleConflictOrigins`）の origin は時限を**今のテンプレ行**から取るので、移動元記録の時限（同じ日の中で時限を動かした後に
+   * 別日へ移した授業など）と食い違いうる。strictSlot の使用でも、ここに入る同じ日の origin へは従来どおりフォールバックする
+   * （時限で厳格に扱うのは台帳の印つき origin と欠席由来の origin＝盤面・台帳が持つ実際の時限）。
+   */
+  relaxedOriginTokens?: ReadonlySet<string>
+}
+
+export function consumeMatchingOriginTokens(originTokens: string[], usedTokens: ReadonlyArray<string | UsedOriginToken>, options: ConsumeOriginOptions = {}) {
   const remaining = [...originTokens]
-
-  for (const usedToken of usedTokens) {
-    let index = remaining.indexOf(usedToken)
-    if (index < 0) {
-      const usedDateKey = originTokenDateKey(usedToken)
-      index = remaining.findIndex((token) => originTokenDateKey(token) === usedDateKey)
-    }
-    if (index >= 0) {
-      remaining.splice(index, 1)
-    }
+  const take = (index: number) => { if (index >= 0) remaining.splice(index, 1); return index >= 0 }
+  type Pending = { token: string; dateKey: string; strict: boolean }
+  // 段階 1（regression-reviewer 2026-11-01 P-3・順番非依存）: 全ての使用の完全一致を先に消す。
+  const unmatched: Pending[] = []
+  for (const used of usedTokens) {
+    const token = usedTokenString(used)
+    const strict = typeof used !== 'string' && Boolean(used.strictSlot) && parseOriginToken(token).slotNumber != null
+    if (!take(remaining.indexOf(token))) unmatched.push({ token, dateKey: originTokenDateKey(token), strict })
   }
-
+  // 段階 2: strictSlot の使用は、同じ日の「時限の無い origin」か「自動 origin（休日・衝突）」だけへフォールバック。
+  const relaxed = options.relaxedOriginTokens
+  for (const pending of unmatched.filter((entry) => entry.strict)) {
+    take(remaining.findIndex((token) => originTokenDateKey(token) === pending.dateKey && (parseOriginToken(token).slotNumber == null || Boolean(relaxed?.has(token)))))
+  }
+  // 段階 3: 通常の使用（文字列・時限不明）は従来どおり同じ日の最初の origin へフォールバック。
+  for (const pending of unmatched.filter((entry) => !entry.strict)) {
+    take(remaining.findIndex((token) => originTokenDateKey(token) === pending.dateKey))
+  }
   return remaining
 }
 
-function consumeOriginDates(originDates: string[], usedOriginDates: string[], usedCount: number) {
-  const remaining = consumeMatchingOriginTokens(originDates, usedOriginDates)
+function consumeOriginDates(originDates: string[], usedOriginDates: ReadonlyArray<string | UsedOriginToken>, usedCount: number, options: ConsumeOriginOptions = {}) {
+  const remaining = consumeMatchingOriginTokens(originDates, usedOriginDates, options)
 
   // ★v1.5.78(`6829dd1`) のガード: origin と対応が取れない使用数のぶんを古い順に消す。
   // 消すと「配置済みなのに未消化として再出現する」二重計上が復活する。★消してはならない。
@@ -981,6 +1090,46 @@ function consumeOriginDates(originDates: string[], usedOriginDates: string[], us
 // ある振替コマが「台帳に origin を持つ在庫由来」か「移動しただけで台帳未登録」かを、盤面の操作側から
 // 判定するための有効 origin 一覧（key → 日付配列）。buildMakeupStockEntries と同じ発生源・同じ
 // 権威関数(resolveEffectiveMakeupOriginDates)を使う＝判定が二重定義にならないようにする。
+/**
+ * `collectMakeupOriginDatesByKey` と同じ有効 origin に加え、そのうち**自動 origin**（休日の不足分・衝突分＝時限を今のテンプレ行から取るもの）の
+ * トークンも返す（決定記録 58 P-4・テストのオラクルが在庫と同じ消化規則〔relaxedOriginTokens〕を使うため）。
+ */
+export function collectMakeupOriginCategoriesByKey(params: Parameters<typeof collectMakeupOriginDatesByKey>[0]): { effective: Record<string, string[]>; relaxed: Record<string, string[]> } {
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true, templatePendingDesks } = params
+  const managedStudentIds = new Set(students.map((student) => student.id))
+  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
+  const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
+  const absentMakeupOrigins = includeAbsentMakeupOrigins
+    ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(resolveMakeupScanWeeks(weeks, templatePendingDesks), resolveStudentKey), managedStudentIds)
+    : {}
+  const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
+  const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
+
+  const keys = new Set([
+    ...Object.keys(automaticShortages),
+    ...Object.keys(conflictOrigins),
+    ...Object.keys(absentMakeupOrigins),
+    ...Object.keys(normalizedManualAdjustments),
+  ])
+
+  const effective: Record<string, string[]> = {}
+  const relaxed: Record<string, string[]> = {}
+  for (const key of keys) {
+    const autoOriginDates = automaticShortages[key] ?? []
+    const conflictOriginDates = conflictOrigins[key] ?? []
+    effective[key] = resolveEffectiveMakeupOriginDates({
+      autoOriginDates,
+      conflictOriginDates,
+      manualOriginDates: toOriginTokens(normalizedManualAdjustments[key] ?? []),
+      absentMakeupOriginDates: absentMakeupOrigins[key] ?? [],
+      suppressedOriginDates: toOriginTokens(normalizedSuppressedOrigins[key] ?? []),
+    })
+    const relaxedSet = new Set([...autoOriginDates, ...conflictOriginDates])
+    relaxed[key] = effective[key].filter((token) => relaxedSet.has(token))
+  }
+  return { effective, relaxed }
+}
+
 export function collectMakeupOriginDatesByKey(params: {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
@@ -1000,33 +1149,7 @@ export function collectMakeupOriginDatesByKey(params: {
   /** テンプレ差分反映の保留マップ。下段の欠席記録も欠席由来の origin に数える（resolveMakeupScanWeeks・INV-06）。 */
   templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
-  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true, templatePendingDesks } = params
-  const managedStudentIds = new Set(students.map((student) => student.id))
-  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
-  const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
-  const absentMakeupOrigins = includeAbsentMakeupOrigins
-    ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(resolveMakeupScanWeeks(weeks, templatePendingDesks), resolveStudentKey), managedStudentIds)
-    : {}
-  const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
-  const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
-
-  const keys = new Set([
-    ...Object.keys(automaticShortages),
-    ...Object.keys(conflictOrigins),
-    ...Object.keys(absentMakeupOrigins),
-    ...Object.keys(normalizedManualAdjustments),
-  ])
-
-  return Array.from(keys).reduce<Record<string, string[]>>((accumulator, key) => {
-    accumulator[key] = resolveEffectiveMakeupOriginDates({
-      autoOriginDates: automaticShortages[key] ?? [],
-      conflictOriginDates: conflictOrigins[key] ?? [],
-      manualOriginDates: toOriginTokens(normalizedManualAdjustments[key] ?? []),
-      absentMakeupOriginDates: absentMakeupOrigins[key] ?? [],
-      suppressedOriginDates: toOriginTokens(normalizedSuppressedOrigins[key] ?? []),
-    })
-    return accumulator
-  }, {})
+  return collectMakeupOriginCategoriesByKey(params).effective
 }
 
 // INV-06: 盤面から授業を外す操作（「未消化振替へ戻す」= 格納）で、台帳へ origin を積むべきか。
@@ -1127,7 +1250,7 @@ export function buildMakeupStockEntries(params: {
     return accumulator
   }, {})
   const plannedMakeups = normalizeNumberMapKeys(makeupUsage.counts, managedStudentIds)
-  const usedOriginDatesByKey = normalizeStringArrayMapKeys(makeupUsage.usedOriginDates, managedStudentIds)
+  const usedOriginDatesByKey = normalizeUsedOriginMapKeys(makeupUsage.usedOriginDates, managedStudentIds)
   const absentMakeupOrigins = normalizeStringArrayMapKeys(absentMakeupResultOrigins, managedStudentIds)
   const assignedRegularLessons = normalizeNumberMapKeys(countAssignedRegularLessonsByKey(weeks, resolveStudentKey, regularLessons), managedStudentIds)
   const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
@@ -1169,7 +1292,8 @@ export function buildMakeupStockEntries(params: {
       : 0
     // トークン（日付＋時限）で消化し、外向きには日付と時限を別々の配列で返す。
     // `remainingOriginDates` は配置時に makeupSourceDate へそのまま渡るので**日付のみ**でなければならない。
-    const remainingOriginTokens = consumeOriginDates(allOriginDates, usedOriginDates, plannedCount)
+    // 決定記録 58 P-4: 休日の不足分・衝突分（時限は今のテンプレ行）は strictSlot の使用でも同じ日へフォールバックして食ってよい。
+    const remainingOriginTokens = consumeOriginDates(allOriginDates, usedOriginDates, plannedCount, { relaxedOriginTokens: new Set([...autoOriginDates, ...conflictOriginDates]) })
     const remainingOriginDates = remainingOriginTokens.map(originTokenDateKey)
     const remainingOriginSlots = remainingOriginTokens.map((token) => parseOriginToken(token).slotNumber)
     const remainingOriginLabels = buildOriginLabels(remainingOriginTokens, key, regularLessons)

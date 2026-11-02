@@ -21,7 +21,7 @@ import type { ClassroomSettings, ScheduleCountAdjustmentEntry } from '../../type
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
-import { collectMakeupOriginDatesByKey, isClosedDate, type ManualMakeupOrigin } from './makeupStock'
+import { collectMakeupOriginCategoriesByKey, isClosedDate, originTokenDateKey, type ManualMakeupOrigin } from './makeupStock'
 import { resolveDayOfWeekFromDateKey } from './templateDefinitionDiff'
 import type { TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate, lessonFactIdentity, type LessonExplanationBreakdown } from './templateLessonAccounting'
@@ -88,18 +88,27 @@ export function collectExpectedTemplateLessons(params: Pick<LessonAccountingAudi
 export function auditTemplateLessonAccounting(params: LessonAccountingAuditParams): LessonAccountingViolation[] {
   const { expected, slotsByKey } = collectExpectedTemplateLessons(params)
   const resolveStudentKey = (student: StudentEntry) => lessonFactIdentity(student)
-  const originDatesByKey = collectMakeupOriginDatesByKey({
+  // 決定記録 58（2026-11-01）: 在庫と同じ消化規則で数えるため、有効 origin のトークンと自動 origin（休日・衝突＝時限は今のテンプレ行）を分けて受ける。
+  const originCategories = collectMakeupOriginCategoriesByKey({
     students: params.students, regularLessons: [...params.regularLessons], classroomSettings: params.classroomSettings, weeks: params.weeks,
     manualAdjustments: params.manualMakeupAdjustments, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey,
     today: params.today ?? new Date(`${params.fromDate}T00:00:00`), includeAbsentMakeupOrigins: true, templatePendingDesks: params.templatePendingDesks,
   })
+  const originDatesByKey = originCategories.effective
+  const originsOn = (studentId: string, subject: string, dateKey: string) => {
+    const stockKey = `${studentId}__${subject}`
+    return {
+      tokens: (originDatesByKey[stockKey] ?? []).filter((token) => originTokenDateKey(token) === dateKey),
+      relaxedTokens: new Set((originCategories.relaxed[stockKey] ?? []).filter((token) => originTokenDateKey(token) === dateKey)),
+    }
+  }
   const facts = collectLessonExplanationFacts({ weeks: params.weeks, pendingDesks: params.templatePendingDesks })
   const adjustments = collectCountAdjustmentsByKey(params.scheduleCountAdjustments)
   const violations: LessonAccountingViolation[] = []
   for (const [key, want] of expected) {
     const [studentId, subject, dateKey] = key.split('__')
     const { explained, breakdown } = countLessonExplanations(facts, {
-      studentId, subject, dateKey, origins: countOriginsOnDate(originDatesByKey, studentId, subject, dateKey), countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: slotsByKey.get(key) ?? [],
+      studentId, subject, dateKey, origins: originsOn(studentId, subject, dateKey), countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: slotsByKey.get(key) ?? [],
     })
     if (explained < want) violations.push({ kind: 'missing', studentId, subject, dateKey, expected: want, explained, breakdown })
   }
@@ -115,7 +124,7 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
     const want = expected.get(key) ?? 0
     if (want > 0 || origins > 0 || (facts.absent.get(key) ?? 0) > 0) return
     seenSurplus.add(key)
-    const { explained, breakdown } = countLessonExplanations(facts, { studentId: student.managedStudentId, subject: student.subject, dateKey: sourceDateKey, origins, countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: [] })
+    const { explained, breakdown } = countLessonExplanations(facts, { studentId: student.managedStudentId, subject: student.subject, dateKey: sourceDateKey, origins: originsOn(student.managedStudentId, student.subject, sourceDateKey), countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: [] })
     violations.push({ kind: 'surplus-makeup', studentId: student.managedStudentId, subject: student.subject, dateKey: sourceDateKey, expected: want, explained, breakdown })
   }
   for (const week of params.weeks) for (const cell of week) for (const desk of cell.desks) {
