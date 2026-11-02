@@ -1566,6 +1566,21 @@ describe('consumeMatchingOriginTokens（決定記録 58・strictSlot）', () => 
     expect(consumeMatchingOriginTokens(['2026-10-07', '2026-10-07'], ['2026-10-07#4'])).toEqual(['2026-10-07'])
   })
 
+  it('P-3（regression-reviewer 2026-11-01）: 3 段階（全使用の完全一致 → strict のフォールバック → 通常のフォールバック）なので使用の順番で結果が変わらない', () => {
+    expect(consumeMatchingOriginTokens(['D#5', 'D#6'], ['D#4', { token: 'D#5', strictSlot: true }])).toEqual([])
+    expect(consumeMatchingOriginTokens(['D#5', 'D#6'], [{ token: 'D#5', strictSlot: true }, 'D#4'])).toEqual([])
+    // 通常の使用が先に完全一致を取られても、strict の使用が食えない origin（D#6）は通常の使用へ回る
+    expect(consumeMatchingOriginTokens(['D#5', 'D#6'], ['D#5', { token: 'D#4', strictSlot: true }])).toEqual(['D#6'])
+    expect(consumeMatchingOriginTokens(['D#5', 'D#6'], [{ token: 'D#4', strictSlot: true }, 'D#5'])).toEqual(['D#6'])
+  })
+
+  it('P-4（regression-reviewer 2026-11-01）: strict の使用でも、自動 origin（休日の不足分・衝突分＝relaxedOriginTokens）へは同じ日でフォールバックする', () => {
+    expect(consumeMatchingOriginTokens(['2026-10-07#3'], [{ token: '2026-10-07#5', strictSlot: true }], { relaxedOriginTokens: new Set(['2026-10-07#3']) })).toEqual([])
+    // 台帳・欠席の origin（relaxed に無い）は従来どおり食わない。自動 origin と台帳 origin が同じ日に並べば自動の方だけ食う
+    expect(consumeMatchingOriginTokens(['2026-10-07#3'], [{ token: '2026-10-07#5', strictSlot: true }], { relaxedOriginTokens: new Set() })).toEqual(['2026-10-07#3'])
+    expect(consumeMatchingOriginTokens(['2026-10-07#3', '2026-10-07#4'], [{ token: '2026-10-07#5', strictSlot: true }], { relaxedOriginTokens: new Set(['2026-10-07#4']) })).toEqual(['2026-10-07#3'])
+  })
+
   it('strictSlot の使用（移送で置かれた振替）: 完全一致は消す・時限の無い origin は同日で消す・時限が明示的に食い違う origin は食わない', () => {
     expect(consumeMatchingOriginTokens(['2026-10-07#5'], [{ token: '2026-10-07#5', strictSlot: true }])).toEqual([])
     expect(consumeMatchingOriginTokens(['2026-10-07'], [{ token: '2026-10-07#4', strictSlot: true }])).toEqual([])
@@ -1610,5 +1625,30 @@ describe('computeOutstandingAbsenceOrigins × 移送で置かれた振替（決�
     // 行き先が別の日（金）の記録しか無ければ、木の振替は移送で置かれたとみなさず従来どおり食う
     const movedToFri = cell('2026-10-07', 4, { statusSlots: [status('2026-10-07', 4, { status: 'moved', moveDestinationDateKey: '2026-10-09', moveDestinationSlotNumber: 4 }), null] })
     expect(computeOutstandingAbsenceOrigins({ weeks: [[movedToFri, absent5, makeupFrom4('2026-10-08')]], resolveStudentKey })).toEqual({})
+  })
+})
+
+// P-4（regression-reviewer 2026-11-01）: 同じ日の中で時限を動かし（3限 → 5限）、その後 別日へ移した授業（移動元記録は 5限・テンプレの時限は 3限）。
+// 元の日を休日にすると休日の不足分 origin は今のテンプレ行の 3限（D#3）で立つ。移送で置かれた振替（5限・strict）はこの自動 origin を食えなければ +1 誤増。
+describe('buildMakeupStockEntries × 移送で置かれた振替 × 休日の自動 origin（決定記録 58 P-4）', () => {
+  const WED = '2026-10-07'
+  const THU = '2026-10-08'
+  const student = createStudent({ id: 'sX', name: '生徒A', displayName: '生徒A' })
+  const teacher = createTeacher({ id: 't1' })
+  const row: RegularLessonRow = { id: 'r1', schoolYear: 2026, teacherId: 't1', student1Id: 'sX', subject1: '数', startDate: '', endDate: '', student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 3 }
+  const movedRecord: StudentStatusEntry = { id: 'st_moved', studentId: 'e', sourceManagedLesson: true, name: '生徒A', managedStudentId: 'sX', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', dateKey: WED, slotNumber: 5, status: 'moved', moveDestinationDateKey: THU, moveDestinationSlotNumber: 5 } as StudentStatusEntry
+  const makeup = createStudentEntry({ id: 'mk', name: '生徒A', managedStudentId: 'sX', lessonType: 'makeup', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限' })
+  const weeks = [[
+    createCell({ id: `${WED}_5`, dateKey: WED, slotNumber: 5, dayLabel: '水', dateLabel: '10/7', desks: [{ id: 'w5d1', teacher: '', statusSlots: [movedRecord, null] }] }),
+    createCell({ id: `${THU}_5`, dateKey: THU, slotNumber: 5, dayLabel: '木', dateLabel: '10/8', desks: [{ id: 't5d1', teacher: '田中講師', lesson: { id: 'l', studentSlots: [makeup, null] } }] }),
+  ]]
+  const balanceOf = (holidayDates: string[]) => {
+    const entries = buildMakeupStockEntries({ students: [student], teachers: [teacher], regularLessons: [row], classroomSettings: createSettings({ holidayDates }), weeks, manualAdjustments: {}, resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id, today: new Date('2026-10-01T00:00:00') })
+    return entries.find((entry) => entry.key === 'sX__数')?.balance ?? 0
+  }
+
+  it('元の日を休日にしても残数は変わらない（移送で置かれた振替が休日の自動 origin D#3 を食う）', () => {
+    expect(balanceOf([])).toBe(0)
+    expect(balanceOf([WED])).toBe(0)
   })
 })
