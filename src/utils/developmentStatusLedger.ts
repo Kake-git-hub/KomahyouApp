@@ -131,17 +131,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-11-03',
   },
   {
-    id: 'issue-close-token',
-    title: 'ダッシュボードで Issue を閉じるための鍵を登録する',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '開発ダッシュボードの「#N を閉じる」は、GitHub の鍵(トークン)をサーバーに登録するまで「未設定」と出て動かない。',
-    nextAction: 'オーナーが GitHub でトークンを作り、リポジトリの secret「ISSUE_CLOSE_TOKEN」に登録して「Deploy Cloud Functions」を実行する。済んだらこの行を消す。',
-    notes: '2026-11-03 オーナー指示「ダッシュボード上で Close できるようにしたい」(確認リスト v1.5.672 d-5・オーナー選択「GitHub の Issue を閉じる」)。トークンは fine-grained personal access token で、Repository access = Kake-git-hub/KomahyouApp だけ、Permissions = Issues: Read and write だけ。GitHub は secret 名の先頭に GITHUB_ を使えないので ISSUE_CLOSE_TOKEN。deploy-functions.yml が runtime env へ書き込み、callable closeGitHubIssue(functions/src/githubIssueClose.ts・開発者だけ・PR は断る)が使う。登録後に確認リスト d-7 で確かめる。',
-    references: ['functions/src/githubIssueClose.ts', '.github/workflows/deploy-functions.yml', 'docs/spec-developer-report.md §E-3'],
-    updatedOn: '2026-11-03',
-  },
-  {
     id: 'template-duplicate-save-guard',
     title: '日大前校のテンプレで同じ生徒が 2 か所にいる(金曜 3限)',
     stage: 'awaiting-owner',
@@ -200,14 +189,14 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   // ── やること(Claude) ────────────────────────────────────────────────────────
   {
     id: 'auto-backup-per-classroom',
-    title: '自動バックアップ切り替え後の後片付け',
+    title: '自動バックアップの取り残しを自動で消すか決める',
     stage: 'awaiting-owner',
-    who: 'claude',
-    summary: '15 分ごとの自動バックアップを教室ごとのファイルに切り替えた(10/30・確認もすべて OK)。古い形式の取り残しを消す処理は、まだ「試しに数えるだけ」の設定。',
-    nextAction: '明日以降に Claude が取り残しを数え、問題なければオーナーに設定の切り替えを頼む(急がない)。',
-    notes: '取り残し(要約の無い時点フォルダ)を Storage の一覧で数え、無ければ secret PROD_FUNCTIONS_ENV に WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0(オーナー)。教室が増える前の重さの実測は backup-per-workspace の行。⚠️ Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。仕様 docs/spec-save-restore.md §10。',
+    who: 'owner',
+    summary: '教室ごとのバックアップへの切り替え(10/30)後、書きかけで残ったフォルダは 0 件だった(11/3 に Claude が数えた)。今は取り残しを「数えるだけ」の設定。',
+    nextAction: '今後に備えて自動で消す設定にするかをオーナーが決める(するなら Claude が手順を案内する・急がない)。',
+    notes: '2026-11-03 読み取り専用で実測: main は時点フォルダ 113・要約 176・要約の無いフォルダ 0(1 日以上前も新しいものも 0)。有効にするなら secret PROD_FUNCTIONS_ENV に WORKSPACE_BACKUP_ORPHAN_PRUNE_DRY_RUN=0 を足して Deploy Cloud Functions(オーナー作業)。secret 全文の貼り直しを避けたいなら、コードの既定を 0 に変える案もある(Claude・safe-release)。教室が増える前の重さの実測は backup-per-workspace の行。⚠️ Functions を v1.5.662 より前へ戻さない(rollback.md B-6)。仕様 docs/spec-save-restore.md §10。',
     references: ['docs/spec-save-restore.md §10', 'docs/plan-2026-10-28-per-classroom-auto-backup-handoff.md', 'functions/src/workspaceBackupLayoutConfig.ts', 'functions/src/index.ts pruneOrphanedWorkspaceBackupFolders'],
-    updatedOn: '2026-10-30',
+    updatedOn: '2026-11-03',
   },
 
   // ── まだ作っていないもの(計画あり) ──────────────────────────────────────────

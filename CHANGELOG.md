@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.679 (2026-11-03)
+
+- docs: 開発ダッシュボードの台帳(developmentStatusLedger)を更新。「Issue を閉じるための鍵を登録する」はオーナーが登録・Deploy Cloud Functions で反映済み(ログに Appended ISSUE_CLOSE_TOKEN・closeGitHubIssue 更新)→ 行を消した。自動バックアップの取り残しを読み取り専用で実測(main: 時点フォルダ 113・要約の無いフォルダ 0)→ Claude のやることから「自動で消す設定にするかオーナーが決める」へ書き換え (src/utils/developmentStatusLedger.ts)
+
 ## v1.5.678 (2026-11-03)
 
 - fix: **室長の「登録」「登録解除」も提出用QRの文書を部分更新で書くようにした**(オーナー指示 2026-11-03「2箇所も今直して」・INV-07)。`markLectureSubmissionDocAsSubmitted` は読んだ文書を `setDoc({ ...data })` で丸ごと書き戻していたため、読み(未提出)→書きの間に保護者が提出すると、その不可コマ・希望科目数を読んだ時点の空の内容で消していた。status・提出日時・渡された集団参加/オプションだけの差分 `buildSubmissionLockPatch` を `updateDoc` で書く。`resetLectureSubmissionDoc` も提出内容を空へ戻す項目と status だけの差分 `buildSubmissionResetPatch` を `updateDoc` で書く(配布情報・黄色コマは書かない＝残る・2026-07-18 確定仕様のまま)。別教室ガード(`isForeignClassroomSubmissionDoc`)は従来どおり。テスト: lectureSubmission(部分更新・提出内容を含めない・別教室ガード) / lectureSubmissionWrites.wiring(5 関数とも setDoc と ...data を使わない)。確認リスト qs-2。
