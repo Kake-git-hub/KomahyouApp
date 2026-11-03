@@ -4,7 +4,8 @@
 // - 行ボタンの表示可否: 在籍中(isActiveOnDate=盤面・サーバーと同じ判定)の生徒にだけ出す。
 //   基本データのタブ判定 resolveManagedRosterStatus(入塾日不問)は使わない(§F: 判定の分散を作らない)。
 // - 発行元教室の一致判定は developmentClassroom.ts の権威関数に委ね、ここで再実装しない(§B-3)。
-// - 印刷は 1 生徒 1 枚(生徒名・教室名・QR・短い案内文)。盤面/日程表の印刷レイアウトには触れない。
+// - 印刷は 1 生徒 1 枚。A4 の左上に名刺サイズ(91×55mm)で、右に QR・左にロゴ・連絡先・生徒名・発行日・注意書き
+//   (2026-11-03 フリーメモ 20261103-152520476-06446053)。盤面/日程表の印刷レイアウトには触れない。
 //   URL 文字列は紙に印字しない(QR だけで足りる・2026-10-10 文言整理)。画面のモーダルには引き続き URL を出す。
 
 import { isActiveOnDate, type StudentRow } from './basicDataModel'
@@ -83,41 +84,116 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-// 1 生徒 1 枚の印刷 HTML(groupAttendanceHtml と同じ「印刷ボタン＋@media print で非表示」方式)。
-// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。名前はエスケープする。
+// 名刺の左側に載せるロゴと連絡先(フリーメモ 20261103-152520476-06446053「生徒日程表で保存したロゴ、連絡先」)。
+// 生徒日程表(scheduleHtml.ts)はロゴと「校舎名・TEL等」欄を、開いた元のコマ表タブの localStorage へ
+// `schedule-shared:<教室ID>:global:logo` / `...:global:school-info` で保存する(STORAGE_SCOPE = encodeURIComponent(教室ID))。
+// 同じ鍵を読むだけで、ここからは書かない。ロゴが無ければ会社の既定ロゴ(生徒日程表と同じ補完)、連絡先が空なら教室名。
+export function buildScheduleSharedGlobalStorageKey(classroomId: string | null | undefined, sharedKey: 'logo' | 'school-info'): string {
+  return `schedule-shared:${encodeURIComponent(String(classroomId || 'default'))}:global:${sharedKey}`
+}
+
+export function readParentPortalCardBranding(params: {
+  storage: Pick<Storage, 'getItem'> | null | undefined
+  classroomId: string | null | undefined
+  defaultLogoUrl?: string
+}): { logoSrc: string; contactText: string } {
+  const read = (sharedKey: 'logo' | 'school-info') => {
+    try {
+      return params.storage?.getItem(buildScheduleSharedGlobalStorageKey(params.classroomId, sharedKey)) ?? ''
+    } catch {
+      return ''
+    }
+  }
+  return {
+    logoSrc: read('logo') || params.defaultLogoUrl || '',
+    contactText: read('school-info'),
+  }
+}
+
+// 画像として埋め込んでよい src だけを通す(生徒日程表で選んだ画像の data URL・会社の既定ロゴの URL)。
+function sanitizeLogoSrc(value: string | undefined): string {
+  const src = (value ?? '').trim()
+  if (/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/iu.test(src)) return src
+  if (/^(https:\/\/|\/)[^\s"'<>]*$/u.test(src)) return src
+  return ''
+}
+
+// 発行日(印刷した日)を「2026年11月3日」の形で出す。dateKey は YYYY-MM-DD。
+export function formatParentPortalCardIssuedDate(dateKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(dateKey.trim())
+  if (!match) return ''
+  return `${Number(match[1])}年${Number(match[2])}月${Number(match[3])}日`
+}
+
+export const PARENT_PORTAL_CARD_SIZE_MM = { width: 91, height: 55 } as const
+
+// 印刷 HTML(groupAttendanceHtml と同じ「印刷ボタン＋@media print で非表示」方式)。
+// ★ 2026-11-03 フリーメモ 20261103-152520476-06446053: A4 の中に名刺サイズ(91×55mm・点線で切り取る)で 1 生徒 1 枚。
+//   QR は右、左にロゴ・連絡先・生徒名・発行日・注意書き(案内文＋注意文)。
+// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。名前・連絡先はエスケープする。
 // url は呼び出し側の互換のため受け取るが、紙には印字しない(QR だけで足りる・2026-10-10 文言整理)。
-export function buildParentPortalQrPrintHtml(params: { classroomName: string; studentName: string; url: string; svg: string }): string {
+export function buildParentPortalQrPrintHtml(params: {
+  classroomName: string
+  studentName: string
+  url: string
+  svg: string
+  logoSrc?: string
+  contactText?: string
+  issuedDateKey?: string
+}): string {
   const classroomName = escapeHtml(params.classroomName.trim() || '教室')
   const studentName = escapeHtml(params.studentName.trim() || '生徒')
+  const contactLines = (params.contactText ?? '').split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)
+  const contactHtml = contactLines.length > 0 ? contactLines.map(escapeHtml).join('<br>') : classroomName
+  const logoSrc = sanitizeLogoSrc(params.logoSrc)
+  const logoHtml = logoSrc ? `<div class="logo"><img src="${escapeHtml(logoSrc)}" alt=""></div>` : ''
+  const issuedDate = formatParentPortalCardIssuedDate(params.issuedDateKey ?? '')
+  const issuedHtml = issuedDate ? `<div class="issued">発行日 ${escapeHtml(issuedDate)}</div>` : ''
+  const { width, height } = PARENT_PORTAL_CARD_SIZE_MM
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <title>${PARENT_PORTAL_QR_TEXT.title} ${studentName}</title>
 <style>
-  @page { size: A4 portrait; margin: 18mm; }
-  body { font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; margin: 0; padding: 24px; }
-  .card { max-width: 420px; margin: 0 auto; border: 1px solid #999; border-radius: 12px; padding: 24px; text-align: center; }
-  .classroom { font-size: 16px; font-weight: 700; color: #1f5d96; margin-bottom: 6px; }
-  .title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-  .student { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
-  .qr { display: inline-block; padding: 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
-  .qr svg { display: block; width: 220px; height: 220px; }
-  .guidance { margin-top: 16px; font-size: 13px; line-height: 1.6; text-align: left; }
-  .caution { margin-top: 8px; font-size: 12px; color: #7a2e2e; line-height: 1.6; text-align: left; }
-  .print-button { display: block; margin: 0 auto 16px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
-  @media print { .print-button { display: none; } body { padding: 0; } .card { border-color: #666; } }
+  @page { size: A4 portrait; margin: 15mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; margin: 0; padding: 16px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .card { width: ${width}mm; height: ${height}mm; border: 0.3mm dashed #888; padding: 3.5mm; display: flex; gap: 3mm; overflow: hidden; background: #fff; }
+  .info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1mm; }
+  .logo img { display: block; max-width: 40mm; max-height: 9mm; object-fit: contain; }
+  .contact { font-size: 6.5pt; line-height: 1.35; color: #333; }
+  .student { font-size: 11pt; font-weight: 700; margin-top: 0.5mm; }
+  .issued { font-size: 6pt; color: #555; }
+  .notes { margin-top: auto; font-size: 5.5pt; line-height: 1.4; color: #333; }
+  .notes p { margin: 0; }
+  .notes .caution { color: #7a2e2e; }
+  .qr-side { flex: 0 0 31mm; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1mm; }
+  .qr svg { display: block; width: 31mm; height: 31mm; }
+  .qr-label { font-size: 6pt; font-weight: 700; color: #1f5d96; }
+  .print-button { display: block; margin: 0 0 8px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  .print-hint { margin: 0 0 12px; font-size: 13px; color: #555; }
+  @media print { .print-button, .print-hint { display: none; } body { padding: 0; } }
 </style>
 </head>
 <body>
 <button class="print-button" onclick="window.print()">印刷</button>
+<p class="print-hint">A4 用紙の左上に名刺サイズ(${width}×${height}mm)で印刷します。点線で切り取ってください。印刷の設定は「倍率 100%(実際のサイズ)」にしてください。</p>
 <div class="card">
-  <div class="classroom">${classroomName}</div>
-  <div class="title">${PARENT_PORTAL_QR_TEXT.title}</div>
-  <div class="student">${studentName} さん</div>
-  <div class="qr">${params.svg}</div>
-  <p class="guidance">${escapeHtml(PARENT_PORTAL_QR_TEXT.guidance)}</p>
-  <p class="caution">${escapeHtml(PARENT_PORTAL_QR_TEXT.caution)}</p>
+  <div class="info">
+    ${logoHtml}
+    <div class="contact">${contactHtml}</div>
+    <div class="student">${studentName} さん</div>
+    ${issuedHtml}
+    <div class="notes">
+      <p class="guidance">${escapeHtml(PARENT_PORTAL_QR_TEXT.guidance)}</p>
+      <p class="caution">${escapeHtml(PARENT_PORTAL_QR_TEXT.caution)}</p>
+    </div>
+  </div>
+  <div class="qr-side">
+    <div class="qr">${params.svg}</div>
+    <div class="qr-label">${PARENT_PORTAL_QR_TEXT.title}</div>
+  </div>
 </div>
 </body>
 </html>`

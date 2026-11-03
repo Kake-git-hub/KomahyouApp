@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.686 (2026-11-03)
+
+- feat: **保護者用QRの印刷を A4 の中の名刺サイズ(91×55mm・点線で切り取る)にした**(確認リストのフリーメモ 20261103-152520476-06446053)。右に QR、左に生徒日程表で保存したロゴ・連絡先(「校舎名・TEL等」欄)・「〇〇 さん」・発行日(印刷した日)・注意書き(案内文と注意文)。ロゴと連絡先は生徒日程表と同じ localStorage の鍵を読むだけ(`readParentPortalCardBranding`・ロゴが無ければ会社の既定ロゴ・連絡先が空なら教室名)。画像でない src はロゴに使わない。`buildParentPortalQrPrintHtml`(`src/components/basic-data/parentPortalQr.ts`)・`BasicDataScreen.tsx`。仕様 `docs/spec-parent-portal.md` §K-6。テスト 6 件(鍵の形が生徒日程表と揃っていることも固定)。保護者QRは開発用/テスト教室＋staging だけの機能のまま。
+- docs: 確認リスト第108版(版 v1.5.672 据え置き)。OK の pq-1・to-1・to-2 を外し、pc-1(名刺サイズの印刷)を足した。フリーメモ 20261103-152644666-20ccdda0(保護者QRで自動出席できるか)はチャットで回答し、対応済みの受付に足した(コードの変更なし)。
+
 ## v1.5.685 (2026-11-03)
 
 - feat: 特別講習に「講師専用」を追加(確認リストのフリーメモ 20261103-105053536-c0f31680・オーナー確定 2026-11-03「生徒側から全部隠す」・機能フラグ `teacherOnlySpecialSession`＝開発用/テスト教室＋staging)。作成欄のチェックで `SpecialSessionRow.teacherOnly: true` を付け(作成時だけ・あとから付け外し不可・期間の重なりは今どおり禁止)、生徒日程表と印刷用生徒日程表(`toStudentFacingScheduleParams`)・生徒の提出用QRの発行(`ensureScheduleSubmissionTokens`・`ensureSubmissionTokens`)・盤面で生徒を講習として足す選択肢・未消化講習(`buildLectureStockEntries`)・保護者QR(`parentSchedule.ts` `readLectureSessions`＋functions の写し)・Excel 取り込みから外す。講師日程表・講師の提出用QRは従来どおり。一覧に「講師専用」の札、保護者への公開トグルは出さない。判定は `isTeacherOnlySpecialSession` / `selectStudentFacingSpecialSessions` に一本化し、隠す処理はデータで決まる(フラグに依らない)。仕様 `docs/spec-special-session-submission.md` §B-3・`docs/spec-parent-portal.md` §0-8 の 8。テスト `teacherOnlySpecialSession.test.ts`(19 件・修正なしで 10 件落ちる)。確認リスト to-1・to-2(版は v1.5.672 据え置き)・台帳の行を development-only へ。

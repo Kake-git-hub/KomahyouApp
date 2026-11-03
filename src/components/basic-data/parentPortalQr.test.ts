@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from './basicDataModel'
-import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, resolveParentPortalQrRowState, resolveSavedStudentIds } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, buildScheduleSharedGlobalStorageKey, formatParentPortalCardIssuedDate, readParentPortalCardBranding, resolveParentPortalQrRowState, resolveSavedStudentIds } from './parentPortalQr'
 
 const DEV_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 const REFERENCE_DATE = '2026-09-13'
@@ -123,7 +123,7 @@ describe('buildParentPortalQrPrintHtml', () => {
     expect(html).toContain(PARENT_PORTAL_QR_TEXT.guidance)
     expect(html).toContain(PARENT_PORTAL_QR_TEXT.caution)
     expect(html).toContain('onclick="window.print()"')
-    expect(html).toContain('@media print { .print-button { display: none; }')
+    expect(html).toContain('@media print { .print-button, .print-hint { display: none; }')
   })
 
   // 2026-09-18: 自由記述の連絡は廃止(spec-parent-portal §0-5)。紙の案内文が「教室へ何でも連絡できる」と読める文言に戻らないこと。
@@ -152,5 +152,73 @@ describe('buildParentPortalQrPrintHtml', () => {
     expect(html).toContain('教室')
     expect(html).toContain('生徒 さん')
     expect(html).not.toContain('s001')
+  })
+})
+
+// 2026-11-03 フリーメモ 20261103-152520476-06446053: A4 の中に名刺サイズで印刷。QR は右、左にロゴ・連絡先・生徒名・発行日・注意書き。
+describe('保護者用QRの名刺サイズ印刷', () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220"><path d="M0,0h1v1h-1z" fill="#000"/></svg>'
+  const logo = 'data:image/png;base64,iVBORw0KGgo='
+
+  it('名刺サイズ(91×55mm)の枠で、左にロゴ・連絡先・生徒名・発行日・注意書き、右に QR を並べる', () => {
+    const html = buildParentPortalQrPrintHtml({ classroomName: '開発用教室', studentName: '青木', url: 'https://x/p/t', svg, logoSrc: logo, contactText: 'スクール 開発校\nTEL 000-0000-0000', issuedDateKey: '2026-11-03' })
+    expect(html).toContain('@page { size: A4 portrait;')
+    expect(html).toContain('width: 91mm; height: 55mm;')
+    const info = html.indexOf('class="info"')
+    const qrSide = html.indexOf('class="qr-side"')
+    expect(info).toBeGreaterThan(0)
+    expect(qrSide).toBeGreaterThan(info) // 左=情報、右=QR
+    const infoHtml = html.slice(info, qrSide)
+    expect(infoHtml).toContain(`<img src="${logo}"`)
+    expect(infoHtml).toContain('スクール 開発校<br>TEL 000-0000-0000')
+    expect(infoHtml).toContain('青木 さん')
+    expect(infoHtml).toContain('発行日 2026年11月3日')
+    expect(infoHtml).toContain(PARENT_PORTAL_QR_TEXT.guidance)
+    expect(infoHtml).toContain(PARENT_PORTAL_QR_TEXT.caution)
+    expect(html.slice(qrSide)).toContain(svg)
+  })
+
+  it('連絡先が空なら教室名を出し、ロゴが無ければロゴの枠を出さない', () => {
+    const html = buildParentPortalQrPrintHtml({ classroomName: '開発用教室', studentName: '青木', url: 'u', svg, contactText: '  ', issuedDateKey: '2026-11-03' })
+    expect(html).toContain('<div class="contact">開発用教室</div>')
+    expect(html).not.toContain('class="logo"')
+  })
+
+  it('連絡先はエスケープし、画像でない src(javascript: など)はロゴに使わない', () => {
+    const html = buildParentPortalQrPrintHtml({ classroomName: 'x', studentName: 'y', url: 'u', svg, logoSrc: 'javascript:alert(1)', contactText: '<b>校舎</b>' })
+    expect(html).not.toContain('javascript:')
+    expect(html).not.toContain('<b>校舎</b>')
+    expect(html).toContain('&lt;b&gt;校舎&lt;/b&gt;')
+    const quoted = buildParentPortalQrPrintHtml({ classroomName: 'x', studentName: 'y', url: 'u', svg, logoSrc: 'https://e.example/a"onerror="x.png' })
+    expect(quoted).not.toContain('onerror')
+  })
+
+  it('発行日は YYYY-MM-DD だけを「年月日」にし、それ以外は出さない', () => {
+    expect(formatParentPortalCardIssuedDate('2026-01-05')).toBe('2026年1月5日')
+    expect(formatParentPortalCardIssuedDate('')).toBe('')
+    expect(buildParentPortalQrPrintHtml({ classroomName: 'x', studentName: 'y', url: 'u', svg })).not.toContain('発行日')
+  })
+
+  it('ロゴと連絡先は生徒日程表と同じ鍵(schedule-shared:<教室ID>:global:…)から読む・ロゴが無ければ会社の既定ロゴ', () => {
+    expect(buildScheduleSharedGlobalStorageKey('v8OZ7zH8vONNHjjYVcR1', 'logo')).toBe('schedule-shared:v8OZ7zH8vONNHjjYVcR1:global:logo')
+    expect(buildScheduleSharedGlobalStorageKey(null, 'school-info')).toBe('schedule-shared:default:global:school-info')
+    const values: Record<string, string> = {
+      'schedule-shared:room1:global:logo': logo,
+      'schedule-shared:room1:global:school-info': '開発校\nTEL',
+    }
+    const storage = { getItem: (key: string) => values[key] ?? null }
+    expect(readParentPortalCardBranding({ storage, classroomId: 'room1' })).toEqual({ logoSrc: logo, contactText: '開発校\nTEL' })
+    expect(readParentPortalCardBranding({ storage, classroomId: 'room2', defaultLogoUrl: '/company-logo.png' })).toEqual({ logoSrc: '/company-logo.png', contactText: '' })
+    const throwing = { getItem: () => { throw new Error('blocked') } }
+    expect(readParentPortalCardBranding({ storage: throwing, classroomId: 'room1' })).toEqual({ logoSrc: '', contactText: '' })
+  })
+
+  it('生徒日程表の保存鍵と同じ形を使っている(scheduleHtml の STORAGE_SCOPE・sharedGlobalStoragePrefix)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('../../utils/scheduleHtml.ts', import.meta.url), 'utf8')
+    expect(source).toContain("const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'));")
+    expect(source).toContain("const sharedGlobalStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':global:';")
+    expect(source).toContain("storage.getItem(sharedGlobalStoragePrefix + 'logo')")
+    expect(source).toContain("if (sharedKey === 'school-info') return sharedGlobalStoragePrefix + sharedKey;")
   })
 })

@@ -33,7 +33,8 @@ import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
 import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
-import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, openParentPortalQrPrint, resolveParentPortalQrRowState } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, openParentPortalQrPrint, readParentPortalCardBranding, resolveParentPortalQrRowState } from './parentPortalQr'
+import { resolveCompanyReportHooks } from '@company/profile'
 import { ParentPortalQrModal } from './ParentPortalQrModal'
 
 type BasicDataScreenProps = {
@@ -1133,11 +1134,18 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     const modal = parentQrModal
     if (!modal || !modal.svg || !modal.url) return
     const student = students.find((row) => row.id === modal.studentId)
+    // 名刺の左側: 生徒日程表で保存したロゴと「校舎名・TEL等」(このタブの localStorage・フリーメモ 20261103-152520476-06446053)。
+    let storage: Storage | null = null
+    try { storage = window.localStorage } catch { storage = null }
+    const branding = readParentPortalCardBranding({ storage, classroomId, defaultLogoUrl: resolveCompanyReportHooks().logoDefaultUrl })
     const html = buildParentPortalQrPrintHtml({
       classroomName,
       studentName: student ? getStudentDisplayName(student) : '',
       url: modal.url,
       svg: modal.svg,
+      logoSrc: branding.logoSrc,
+      contactText: branding.contactText,
+      issuedDateKey: getReferenceDateKey(new Date()),
     })
     if (!openParentPortalQrPrint(html)) setStatusMessage(PARENT_PORTAL_QR_TEXT.printBlocked)
   }

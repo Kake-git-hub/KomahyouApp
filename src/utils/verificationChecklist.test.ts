@@ -189,7 +189,8 @@ describe('確認リストの項目定義', () => {
     // 第105版(2026-11-03): vc-1・d-6・d-7・sc-4・bk-1 は OK で外し、開発用教室だけの qr-1・sc-5・fm-1・d-8・dv-1 を足した。
     // 第106版(2026-11-03): qr-1・sc-5・fm-1・d-8・dv-1・tb-2 も OK で外した(残る開発用教室だけの項目は qs-2・lp-6)。
     // 第107版(2026-11-03): qs-2・lp-6 は OK で外した。保護者QRの黄色い枠の確認 pq-1 と講師専用の講習の確認 to-1・to-2 は開発用教室だけ。
-    const developmentOnly: string[] = ['pq-1', 'to-1', 'to-2']
+    // 第108版(2026-11-03): pq-1・to-1・to-2 は OK で外した。保護者用QRの名刺サイズ印刷の確認 pc-1 は開発用教室だけ。
+    const developmentOnly: string[] = ['pc-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
@@ -230,7 +231,8 @@ describe('確認リストの項目定義', () => {
     // 第106版(2026-11-03): 11/3 夜の送信で OK の 11 件を外し、qs-2 を書き換え(iOS Safari)、lp-6(講習の休みの説明)を足した。
     // 第107版(2026-11-03): qs-2・lp-6・jd-3・jd-4 は OK、tp-74 はオーナー指示(休日には置けないので確認不要)で外し、pq-1 を先頭に足した。
     // 同じ第107版で、講師専用の講習の確認 to-1・to-2 を pq-1 の後に足した(開発用教室だけ・v1.5.685)。
-    expect(ids).toEqual(['pq-1', 'to-1', 'to-2', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'tp-73', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    // 第108版(2026-11-03): pq-1・to-1・to-2 は OK で外し、pc-1(保護者用QRの名刺サイズ印刷)を先頭に足した。
+    expect(ids).toEqual(['pc-1', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'tp-73', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -883,15 +885,11 @@ describe('書き換えた項目の下書きを消す(clearReworkedVerificationCh
 })
 
 describe('第107版: 講師専用の特別講習(フリーメモ 20261103-105053536-c0f31680)', () => {
-  it('to-1・to-2 は開発用教室だけに出し、v1.5.685 で足した項目。版は据え置き', () => {
-    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
-    for (const id of ['to-1', 'to-2']) {
-      expect(byId.get(id)?.introducedIn, id).toBe('v1.5.685')
-      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
-    }
-    expect(byId.get('to-1')?.ownerDecision).toContain('生徒側から全部隠し')
+  it('講師専用のフリーメモは対応済み(to-1・to-2 は第108版で OK になり外した)', () => {
     expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).toContain('20261103-105053536-c0f31680')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
+    const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
+    expect(ids).not.toContain('to-1')
+    expect(ids).not.toContain('to-2')
   })
 })
 
@@ -905,15 +903,29 @@ describe('第107版(2026-11-03・v1.5.672 据え置き): 11/3 深夜の送信を
     }
   })
 
-  it('pq-1(保護者QRの黄色い枠)は開発用教室だけで、文言 3 つと 3 行を見る。フリーメモは対応済み', () => {
-    const pq1 = byId.get('pq-1')!
-    expect(pq1.introducedIn).toBe('v1.5.684')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('pq-1')
-    const checkText = pq1.check!.join('\n')
-    expect(checkText).toContain('日程の一覧の下')
-    expect(checkText).toContain('アプリからの欠席連絡は、授業の前日まで可能です。')
-    expect(checkText).toContain('3 行')
+  it('保護者QRの黄色い枠のフリーメモは対応済み(pq-1 は第108版で OK になり外した)', () => {
+    expect(byId.has('pq-1')).toBe(false)
     expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).toContain('20261103-142142896-15b7a2a8')
+  })
+})
+
+describe('第108版(2026-11-03・v1.5.672 据え置き): 保護者用QRの名刺サイズ印刷', () => {
+  const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+
+  it('OK の pq-1・to-1・to-2 を外した', () => {
+    for (const id of ['pq-1', 'to-1', 'to-2']) expect(byId.has(id), id).toBe(false)
+  })
+
+  it('pc-1 は開発用教室だけで、名刺サイズ・右に QR・左にロゴ/連絡先/生徒名/発行日/注意書きを見る。フリーメモ 2 件は対応済み', () => {
+    const pc1 = byId.get('pc-1')!
+    expect(pc1.introducedIn).toBe('v1.5.686')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('pc-1')
+    const checkText = pc1.check!.join('\n')
+    expect(checkText).toContain('名刺')
+    expect(checkText).toContain('QR が右側')
+    expect(checkText).toContain('発行日')
+    expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).toContain('20261103-152520476-06446053')
+    expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).toContain('20261103-152644666-20ccdda0')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
 })
