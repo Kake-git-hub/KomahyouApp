@@ -65,13 +65,31 @@ export type ParentScheduleBounds = { minFrom: string; maxTo: string }
 // 「教室で保存された時点の予定です」と「授業の行をタップ…」は廃止(タップの案内は連絡できる行があるときだけ
 // 一覧の上に PARENT_ABSENCE_LIST_HINT で出る)。
 // 2026-10-23 オーナー指示(spec §0-7): 休み連絡の締切(前日の夜 0時00分)と「当日は電話」の案内を 2 行足した。
-export const PARENT_ABSENCE_DEADLINE_NOTE = 'お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。'
+// 2026-11-03 オーナー指示(確認リストのフリーメモ 20261103-142142896-15b7a2a8): 黄色い枠は日程の下へ移し、
+// 締切の行は「アプリからの欠席連絡は、授業の前日まで可能です。」に。どのスマホでも 3 行(1 文 1 行)で出す
+// (文字の大きさは PARENT_PORTAL_NOTES_FONT_SIZE_CSS が一番長い行から決める)。締切そのもの(前日の夜 0時00分)は変えない。
+export const PARENT_ABSENCE_DEADLINE_NOTE = 'アプリからの欠席連絡は、授業の前日まで可能です。'
 export const PARENT_ABSENCE_SAME_DAY_PHONE_NOTE = '当日の欠席連絡は教室にお電話いただきますようお願いします。'
 export const PARENT_PORTAL_NOTES: readonly string[] = [
   '予定は変更になることがあります。',
   PARENT_ABSENCE_DEADLINE_NOTE,
   PARENT_ABSENCE_SAME_DAY_PHONE_NOTE,
 ]
+
+// 黄色い枠の左右の幅の合計(px)。ParentPortalPage の .pp-notes の margin 8px×2 + padding 10px×2 + 枠線 1px×2 = 38 に余裕 2。
+export const PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX = 40
+// 枠の文字の上限(px)。広い画面ではこれ以上大きくしない。
+export const PARENT_PORTAL_NOTES_MAX_FONT_PX = 15
+
+/**
+ * 黄色い枠の文字の大きさ(CSS の値)。注記は全角だけなので 1 文字 ≒ 1em。一番長い行が画面幅(ページの最大 640px まで)に
+ * 収まる大きさにして、どのスマホでも 1 文 1 行＝3 行で出す(折り返しは CSS の nowrap でも止める)。
+ * 行の文字数に 0.5 文字の余裕を足して割る(句読点の詰め・端数の丸めで最後の 1 文字がはみ出さないように)。
+ */
+export function resolveParentPortalNotesFontSizeCss(notes: readonly string[] = PARENT_PORTAL_NOTES): string {
+  const longest = Math.max(1, ...notes.map((note) => Array.from(note).length))
+  return `min(${PARENT_PORTAL_NOTES_MAX_FONT_PX}px, calc((min(100vw, 640px) - ${PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX}px) / ${longest + 0.5}))`
+}
 
 // 見出し(「◯◯ さん 授業予定」・2026-10-10 文言整理)。
 export function formatParentPortalTitle(studentName: string): string {

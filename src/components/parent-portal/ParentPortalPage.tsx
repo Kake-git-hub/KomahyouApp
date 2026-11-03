@@ -27,6 +27,7 @@ import {
   readParentAbsenceNotices,
   resolveParentAbsenceSendError,
   resolveParentPortalLoadError,
+  resolveParentPortalNotesFontSizeCss,
   resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
   shouldReloadParentScheduleAfterSendError,
@@ -226,10 +227,6 @@ export default function ParentPortalPage({ token }: { token: string }) {
         <h1 className="pp-header-title">{formatParentPortalTitle(schedule.studentName)}</h1>
       </header>
 
-      <ul className="pp-notes">
-        {PARENT_PORTAL_NOTES.map((note) => <li key={note}>{note}</li>)}
-      </ul>
-
       {sentMessage ? (
         <div className="pp-sent-banner" role="status">
           <span className="pp-sent-icon" aria-hidden="true">✓</span>
@@ -270,6 +267,11 @@ export default function ParentPortalPage({ token }: { token: string }) {
         ) : null}
         {monthNotice ? <p className="pp-muted pp-days-empty">{monthNotice}</p> : null}
       </section>
+
+      {/* 黄色い枠の注記は日程の下(2026-11-03 オーナー指示・フリーメモ 20261103-142142896-15b7a2a8)。1 文 1 行で 3 行。 */}
+      <ul className="pp-notes">
+        {PARENT_PORTAL_NOTES.map((note) => <li key={note}>{note}</li>)}
+      </ul>
 
       <footer className="pp-footer">
         <p className="pp-muted">{PARENT_PORTAL_FOOTER_NOTE}</p>
@@ -387,8 +389,10 @@ const baseStyles = `
   .pp-header-classroom { font-size: 14px; color: #1f5d96; font-weight: 700; margin-bottom: 4px; }
   .pp-header-title { font-size: 22px; font-weight: 700; line-height: 1.3; }
 
-  .pp-notes { list-style: none; margin: 10px 12px 0; padding: 10px 12px; background: #fff8e1; border: 1px solid #f1e2a8; border-radius: 8px; font-size: 13px; color: #5a4a00; display: grid; gap: 4px; }
-  .pp-notes li::before { content: '・'; }
+  /* 日程の下の黄色い枠。どのスマホでも 1 文 1 行(3 行): 文字の大きさは一番長い行が幅に収まる値(resolveParentPortalNotesFontSizeCss)。
+     左右の幅(margin 8px×2・padding 10px×2・枠線)は PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX と合わせる。行頭の「・」は 1 文字ぶん狭くなるので付けない。 */
+  .pp-notes { list-style: none; margin: 14px 8px 0; padding: 10px 10px; background: #fff8e1; border: 1px solid #f1e2a8; border-radius: 8px; font-size: ${resolveParentPortalNotesFontSizeCss()}; color: #5a4a00; display: grid; gap: 4px; }
+  .pp-notes li { white-space: nowrap; overflow: hidden; letter-spacing: 0; }
 
   .pp-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #fee; color: #c00; font-size: 14px; border-radius: 8px; }
   .pp-sent-banner { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #e8f5e8; border: 1px solid #cfe6cf; color: #1f5d1f; font-size: 15px; font-weight: 700; border-radius: 8px; }

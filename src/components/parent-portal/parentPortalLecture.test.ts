@@ -75,10 +75,11 @@ describe('室長側: 講習コマの休み連絡', () => {
     }
   })
 
-  it('講習の「休み」の説明は手動で置いた講習も戻ると書く(盤面の休みは手動追加も未消化講習へ戻す・lp-4 メモ 2026-11-03)', () => {
+  it('講習の「休み」の説明は「休みにして未消化講習へ戻す」だけ(「戻らない」と書かない・lp-4 メモ／括弧書きは不要・lp-6 メモ 2026-11-03)', () => {
     const absent = PARENT_LECTURE_ABSENCE_CHOICES.find((choice) => choice.resolution === 'absent')
-    expect(absent?.description).toBe('休みにして未消化講習へ戻す(手動で置いた講習も戻る)')
+    expect(absent?.description).toBe('休みにして未消化講習へ戻す')
     expect(absent?.description).not.toContain('戻らない')
+    expect(absent?.description).not.toContain('手動で置いた講習も戻る')
     // 説明の根拠: 休みで講習を戻すかの権威関数は specialStockSource(session / manual)を見ない
     expect(shouldReturnLectureStockOnAbsence({ lessonType: 'special', specialSessionId: 'session-1', specialStockSource: 'manual' })).toBe(true)
   })

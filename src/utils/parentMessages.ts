@@ -168,8 +168,9 @@ export const PARENT_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
 // 「振替先を今決める」は出さない(講習の休みは講習の未消化へ戻り、振替の在庫を作らないので配置モードへ入れない)。
 // ★「休み」は手動で置いた講習も未消化講習へ戻す(盤面の「休み」と同じ 1 本 shouldReturnLectureStockOnAbsence・spec-makeup-stock §B-3・
 //   2026-07-31 オーナー確定)。以前の説明「手動で追加した講習は戻らない」は動きと食い違う誤記だった(確認リスト lp-4 メモ 2026-11-03)。
+//   説明の「(手動で置いた講習も戻る)」は不要(確認リスト lp-6 メモ 2026-11-03)なので出さない。「戻らない」とも書かない。
 export const PARENT_LECTURE_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
-  { resolution: 'absent', label: '休み', description: '休みにして未消化講習へ戻す(手動で置いた講習も戻る)' },
+  { resolution: 'absent', label: '休み', description: '休みにして未消化講習へ戻す' },
   { resolution: 'absent-no-makeup', label: '振無休', description: '振替なしの休みにする(講習は消化扱い)' },
   { resolution: 'manual', label: '何もしない', description: '盤面は変えない(手動で処理する)' },
 ]
