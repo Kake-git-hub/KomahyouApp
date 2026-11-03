@@ -19,6 +19,9 @@ import {
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
   PARENT_PORTAL_LOADING_MESSAGE,
   PARENT_PORTAL_NOTES,
+  PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX,
+  PARENT_PORTAL_NOTES_MAX_FONT_PX,
+  resolveParentPortalNotesFontSizeCss,
   PARENT_PORTAL_UNAVAILABLE_MESSAGE,
   PARENT_SCHEDULE_CLOSED_MESSAGE,
   PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
@@ -518,16 +521,55 @@ describe('PARENT_PORTAL_NOTES', () => {
   // 2026-10-10 文言整理(オーナー確認済み): 3 行 → 1 行。「保存された時点」と「行をタップ」の 2 行は廃止。
   // タップの案内は連絡できる行があるときだけ一覧の上(PARENT_ABSENCE_LIST_HINT)に出る。
   // 2026-10-23 オーナー指示(spec §0-7): 休み連絡の締切(前日の夜 0時00分)と「当日は電話」の 2 行を足して 3 行。
+  // 2026-11-03 オーナー指示(フリーメモ 20261103-142142896-15b7a2a8): 2 行目を「アプリからの欠席連絡は、授業の前日まで可能です。」に。
   it('常時表示の注記は「予定は変更に…」＋締切＋「当日は電話」の 3 行', () => {
     expect(PARENT_PORTAL_NOTES).toEqual([
       '予定は変更になることがあります。',
-      'お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。',
+      'アプリからの欠席連絡は、授業の前日まで可能です。',
       '当日の欠席連絡は教室にお電話いただきますようお願いします。',
     ])
-    expect(PARENT_ABSENCE_DEADLINE_NOTE).toBe('お休みのご連絡は、授業の前日の夜0時00分まで受け付けます。')
+    expect(PARENT_ABSENCE_DEADLINE_NOTE).toBe('アプリからの欠席連絡は、授業の前日まで可能です。')
     expect(PARENT_ABSENCE_SAME_DAY_PHONE_NOTE).toBe('当日の欠席連絡は教室にお電話いただきますようお願いします。')
     expect(PARENT_PORTAL_NOTES.join('')).not.toContain('保存された時点')
     expect(PARENT_PORTAL_NOTES.join('')).not.toContain('ページ下部')
+  })
+})
+
+// 2026-11-03 オーナー指示(フリーメモ 20261103-142142896-15b7a2a8): 黄色い枠は日程の下・どのスマホでも 3 行。
+describe('黄色い枠の注記(日程の下・1 文 1 行)', () => {
+  const PAGE = readFileSync(fileURLToPath(new URL('./ParentPortalPage.tsx', import.meta.url)), 'utf8')
+
+  it('枠は日程の一覧(pp-days)の後・フッターの前に出す(見出しの直下には出さない)', () => {
+    const daysEnd = PAGE.indexOf('</section>', PAGE.indexOf('<section className="pp-days"'))
+    const notes = PAGE.indexOf('<ul className="pp-notes">')
+    const footer = PAGE.indexOf('<footer className="pp-footer">')
+    expect(daysEnd).toBeGreaterThan(0)
+    expect(notes).toBeGreaterThan(daysEnd)
+    expect(footer).toBeGreaterThan(notes)
+    expect(PAGE.indexOf('<ul className="pp-notes">', notes + 1)).toBe(-1)
+  })
+
+  it('行は折り返さず、文字の大きさは一番長い行から決める(行頭の「・」は付けない)', () => {
+    expect(PAGE).toContain('.pp-notes li { white-space: nowrap;')
+    expect(PAGE).toContain('font-size: ${resolveParentPortalNotesFontSizeCss()};')
+    expect(PAGE).not.toContain(".pp-notes li::before { content: '・'; }")
+    // CSS の左右の幅(margin 8px×2・padding 10px×2・枠線 1px×2 = 38)が定数(余裕込み)を超えない
+    expect(PAGE).toContain('.pp-notes { list-style: none; margin: 14px 8px 0; padding: 10px 10px;')
+    expect(8 * 2 + 10 * 2 + 1 * 2).toBeLessThanOrEqual(PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX)
+  })
+
+  it('一番長い行(29 文字)＋余裕 0.5 で幅を割る。上限は 15px', () => {
+    expect(resolveParentPortalNotesFontSizeCss()).toBe('min(15px, calc((min(100vw, 640px) - 40px) / 29.5))')
+    expect(resolveParentPortalNotesFontSizeCss(['あいう', 'あ'])).toBe('min(15px, calc((min(100vw, 640px) - 40px) / 3.5))')
+  })
+
+  it('320px〜430px のスマホ幅で、一番長い行が枠の中に収まる(1 文字 1em として計算)', () => {
+    const longest = Math.max(...PARENT_PORTAL_NOTES.map((note) => Array.from(note).length))
+    for (const viewport of [320, 360, 375, 390, 414, 430, 640, 1024]) {
+      const fontPx = Math.min(PARENT_PORTAL_NOTES_MAX_FONT_PX, (Math.min(viewport, 640) - PARENT_PORTAL_NOTES_HORIZONTAL_CHROME_PX) / (longest + 0.5))
+      const innerWidth = Math.min(viewport, 640) - (8 * 2 + 10 * 2 + 1 * 2)
+      expect(longest * fontPx, `${viewport}px`).toBeLessThan(innerWidth)
+    }
   })
 })
 
