@@ -201,6 +201,17 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
 
   // ── まだ作っていないもの(計画あり) ──────────────────────────────────────────
   {
+    id: 'teacher-only-special-session',
+    title: '講師だけが予定を出す特別講習',
+    stage: 'planned',
+    who: 'claude',
+    summary: '特別講習に「講師専用」の印を付け、生徒日程表・生徒の提出用QR・保護者QR・講習回数には出さず、講師日程表と講師の提出用QRだけに出す。まだ作っていない。',
+    nextAction: 'Claude が別のセッションで作る。期間の重なりなど 3 点を着手前にオーナーへ確認する。',
+    notes: 'オーナー決定 2026-11-03「生徒側から全部隠す」・開発用教室で先行(機能フラグ staging-environment)。確認リストのフリーメモ 20261103-105053536-c0f31680。引き継ぎ書に隠す場所の一覧と完了の定義。',
+    references: ['docs/plan-2026-11-03-teacher-only-special-session-handoff.md'],
+    updatedOn: '2026-11-03',
+  },
+  {
     id: 'issue-backlog-2026-07',
     title: '小さな改善の積み残し(8 件)',
     stage: 'planned',
