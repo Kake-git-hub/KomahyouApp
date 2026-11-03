@@ -70,6 +70,7 @@ import type { NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { isDeveloperMember, sortBillingWorkspaces, summarizeBillingWorkspace, type BillingWorkspaceSummary } from './billingWorkspaces'
 import { buildDeveloperReportAttachmentStoragePath, buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isAutoErrorReportNote, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, normalizeDeveloperReportAttachments, resolveDeveloperReportAttachmentLimit, resolveDeveloperReportMailSkipReason, selectDeveloperReportMailAttachment, shouldSendDeveloperReportMailOnWrite, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
+import { buildCloseIssueRequest, buildGetIssueRequest, GITHUB_ISSUE_CLOSE_TOKEN_MISSING_MESSAGE, interpretCloseIssueResponse, interpretGetIssueResponse, normalizeCloseGitHubIssueRequest, readGitHubIssueCloseToken } from './githubIssueClose'
 import { buildPendingReportAnswerDoc, buildReportAnswerAiUpdate, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { buildOtherClassroomNameWords, describeQuestionAiError, estimateQuestionAiCostYen, generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildQuestionAiStudentDigest } from './questionAiStudentDigest'
@@ -3199,6 +3200,37 @@ export const resolveDeveloperReport = onCall({ invoker: 'public', timeoutSeconds
     const message = error instanceof Error ? error.message : String(error)
     logger.error(`[DeveloperReport] resolveDeveloperReport failed report=${reportId}: ${message}`)
     throw new HttpsError('internal', `解決済みの印を保存できませんでした: ${message.slice(0, 300)}`)
+  }
+})
+
+/**
+ * 開発ダッシュボードの「Issue を閉じる」(2026-11-03 オーナー指示・確認リスト v1.5.672 d-5)。開発者だけ。
+ * このアプリのリポジトリの Issue を GitHub API で閉じる(PR は断る)。Firestore には書かない。トークンは runtime env の ISSUE_CLOSE_TOKEN。
+ */
+export const closeGitHubIssue = onCall({ invoker: 'public', timeoutSeconds: 30 }, async (request) => {
+  const parsed = normalizeCloseGitHubIssueRequest(request.data)
+  if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+  const { workspaceKey, issueNumber, reason } = parsed.value
+  const memberRef = await requireDeveloperMember(request.auth?.uid, workspaceKey)
+  const token = readGitHubIssueCloseToken(process.env)
+  if (!token) throw new HttpsError('failed-precondition', GITHUB_ISSUE_CLOSE_TOKEN_MISSING_MESSAGE, { reason: 'token-missing' })
+  try {
+    const getRequest = buildGetIssueRequest(token, issueNumber)
+    const getResponse = await fetch(getRequest.url, getRequest.init)
+    const check = interpretGetIssueResponse(getResponse.status, await getResponse.json().catch(() => null))
+    if (check.action === 'reject') throw new HttpsError(check.code, check.message)
+    if (check.action === 'already-closed') return { issueNumber, closed: true, alreadyClosed: true, closedAt: '' }
+    const closeRequest = buildCloseIssueRequest(token, issueNumber, reason)
+    const closeResponse = await fetch(closeRequest.url, closeRequest.init)
+    const result = interpretCloseIssueResponse(closeResponse.status, await closeResponse.json().catch(() => null))
+    if (!result.ok) throw new HttpsError(result.code, result.message)
+    logger.info(`[DeveloperDashboard] Closed issue #${issueNumber} reason=${reason} by=${memberRef.id}`)
+    return { issueNumber, closed: true, alreadyClosed: false, closedAt: result.closedAt }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[DeveloperDashboard] closeGitHubIssue failed issue=#${issueNumber}: ${message}`)
+    throw new HttpsError('internal', `Issue を閉じられませんでした: ${message.slice(0, 300)}`)
   }
 })
 

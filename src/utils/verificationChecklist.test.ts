@@ -182,7 +182,9 @@ describe('確認リストの項目定義', () => {
     // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。第95版(同日): AI 回答の全教室展開の確認 ai-1 も開発用教室だけ。
     // vc-1(2026-11-03・項目ごとの送信と両教室の送信済み表示)も開発用教室だけ。
     // 第98版(2026-11-03): 講習の日程公開の確認 lp-1〜lp-4 も開発用教室だけ(保護者QRは開発用教室と staging だけの機能)。
-    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1' && id !== 'vc-1' && !id.startsWith('lp-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 第104版(2026-11-03): d-5・ai-1 を外し、開発用教室だけの d-6・d-7・sc-4・bk-1 を足した。
+    const developmentOnly = ['vc-1', 'd-6', 'd-7', 'sc-4', 'bk-1']
+    for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
@@ -215,7 +217,8 @@ describe('確認リストの項目定義', () => {
     // 第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1 を先頭に足した(開発用教室だけ)。
     // 第96版(2026-11-01・v1.5.670): テスト教室の tp-59/tp-64「手置き講師が抹消される」のオーナー確認 tp-66 と、テンプレ保存後の「元に戻す」の tp-67 を足した。
     // 第98版(2026-11-03・v1.5.672 据え置き): 講習の日程公開の確認 lp-1〜lp-4 を先頭に足した(開発用教室だけ)。
-    expect(ids).toEqual(['lp-1', 'lp-2', 'lp-3', 'lp-4', 'vc-1', 'ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    // 第104版(2026-11-03・v1.5.672 据え置き): ai-1 は OK・d-5 は要改善への対応の d-6・d-7 へ差し替え、sc-4・bk-1 を足した。
+    expect(ids).toEqual(['lp-1', 'lp-2', 'lp-3', 'lp-4', 'vc-1', 'd-6', 'd-7', 'sc-4', 'bk-1', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -649,25 +652,30 @@ describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示�
   })
 })
 
-describe('第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5', () => {
-  it('d-5 は開発用教室だけ(テスト教室には出さない)・v1.5.668 で追加・3 つの欄と確認リストを出さないことを見る', () => {
-    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'd-5')!
-    expect(item.introducedIn).toBe('v1.5.668')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('d-5')
-    expect(item.check!.join('\n')).toContain('確認リストの項目')
-    expect(item.title).toContain('まだ作っていないもの')
+describe('第104版(2026-11-03・v1.5.672 据え置き): 受付 20261103-093117499-4152798b を受けた項目', () => {
+  const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+
+  it('ai-1 は OK で外し、d-5(要改善)は d-6(重複を出さない)・d-7(Issue を閉じる)へ差し替えた。どれも開発用教室だけ', () => {
+    const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
+    expect(ids).not.toContain('ai-1')
+    expect(ids).not.toContain('d-5')
+    for (const id of ['d-6', 'd-7', 'sc-4', 'bk-1']) {
+      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.676')
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
+    }
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
-})
 
-describe('第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1', () => {
-  it('ai-1 は開発用教室だけ・v1.5.669 で追加・本番教室では送らずに注意文だけを見る', () => {
-    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'ai-1')!
-    expect(item.introducedIn).toBe('v1.5.669')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('ai-1')
-    expect(item.steps.join('\n')).toContain('送らずに閉じる')
-    expect(item.check!.join('\n')).toContain('その場で自動の回答が出ます')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
+  it('d-6 は「質問への回答」と見比べ、d-7 はトークンの準備と確認の画面・未設定の理由まで見る', () => {
+    expect(byId.get('d-6')!.check!.join('\n')).toContain('室長からの報告')
+    expect(byId.get('d-7')!.prep).toContain('ISSUE_CLOSE_TOKEN')
+    expect(byId.get('d-7')!.check!.join('\n')).toContain('GitHub のトークンが未設定')
+  })
+
+  it('sc-4 はタブを選んで撮る・キャンセルでエラーが出ないこと、bk-1 は初期設定フローが出ないことを見る', () => {
+    expect(byId.get('sc-4')!.steps.join('\n')).toContain('タブを選んで撮る')
+    expect(byId.get('sc-4')!.check!.join('\n')).toContain('エラーの文が出ず')
+    expect(byId.get('bk-1')!.check!.join('\n')).toContain('初期設定フロー')
   })
 })
 

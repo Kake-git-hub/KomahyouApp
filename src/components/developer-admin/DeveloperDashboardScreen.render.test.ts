@@ -8,10 +8,10 @@ import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { DeveloperDashboardScreen, type DeveloperDashboardScreenProps } from './DeveloperDashboardScreen'
+import { DashboardCardView, DeveloperDashboardScreen, type DeveloperDashboardScreenProps } from './DeveloperDashboardScreen'
 import { VERIFICATION_CHECKLIST } from '../../utils/verificationChecklist'
 import { DEVELOPMENT_STATUS_LEDGER } from '../../utils/developmentStatusLedger'
-import { CLAUDE_CODE_NEW_SESSION_URL, resolveLedgerSection } from '../../utils/developerDashboardActions'
+import { CLAUDE_CODE_NEW_SESSION_URL, buildCloseIssueConfirmMessage, resolveLedgerSection, type DashboardCard } from '../../utils/developerDashboardActions'
 import { FEATURE_SCOPE_LABELS } from '../../utils/developerDashboard'
 import { featureRolloutRegistry } from '../../utils/featureRollout'
 
@@ -101,6 +101,44 @@ describe('DeveloperDashboardScreen の描画', () => {
     const detail = renderToString(createElement(DeveloperDashboardScreen, { ...localProps, initialView: 'detail' }))
     expect(detail).toContain('ローカルモードでは報告を読み込めません')
     expect(detail).not.toContain('報告を読み込んでいます')
+  })
+})
+
+describe('「Issue を閉じる」(2026-11-03 オーナー指示・確認リスト v1.5.672 d-5)', () => {
+  const card: DashboardCard = {
+    id: 'issue-77',
+    section: 'not-built',
+    who: 'claude',
+    badge: 'GitHub の課題',
+    title: '#77 バックアップの分割',
+    summary: 'GitHub に開いたままの課題。',
+    nextAction: '急ぐならオーナーが任せる。',
+    details: [],
+    links: [{ label: '#77', href: 'https://github.com/Kake-git-hub/KomahyouApp/issues/77', issueNumber: 77 }],
+    prompt: null,
+    priority: 60,
+  }
+  const base = { card, expanded: false, copied: false, onToggleExpanded: () => {}, onCopyPrompt: () => {} }
+
+  it('開いている Issue のリンクの横に「#N を閉じる」が出る。閉じている最中は押せない', () => {
+    const html = renderToString(createElement(DashboardCardView, { ...base, onCloseIssue: () => {} }))
+    expect(html).toContain('data-testid="developer-dashboard-close-issue-77"')
+    expect(html).toContain('#77 を閉じる')
+    const closing = renderToString(createElement(DashboardCardView, { ...base, onCloseIssue: () => {}, closingIssueNumber: 77 }))
+    expect(closing).toContain('閉じています…')
+    expect(closing).toMatch(/data-testid="developer-dashboard-close-issue-77"[^>]*disabled|disabled[^>]*data-testid="developer-dashboard-close-issue-77"/u)
+  })
+
+  it('ローカルモード(onCloseIssue なし)と Issue 番号の無いリンクには出さない', () => {
+    expect(renderToString(createElement(DashboardCardView, base))).not.toContain('を閉じる')
+    const noNumber = { ...card, links: [{ label: '#77', href: 'https://github.com/Kake-git-hub/KomahyouApp/issues/77' }] }
+    expect(renderToString(createElement(DashboardCardView, { ...base, card: noNumber, onCloseIssue: () => {} }))).not.toContain('を閉じる')
+  })
+
+  it('確認の画面の文は GitHub 上で閉じることと、開き直せることを書く', () => {
+    const message = buildCloseIssueConfirmMessage(77)
+    expect(message).toContain('GitHub の Issue #77 を閉じます')
+    expect(message).toContain('開き直せます')
   })
 })
 

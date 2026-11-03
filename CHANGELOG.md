@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.676 (2026-11-03)
+
+- feat: 受付 20261103-093117499-4152798b(確認リスト v1.5.672)への対応。(1) **開発ダッシュボードから利用者報告の Issue を外した**(「質問への回答」・確認リストと同じ報告が 2 か所に並んでいた・要改善 d-5)。(2) **「#N を閉じる」で GitHub の Issue をその場で閉じる**(オーナー選択)。新しい callable `closeGitHubIssue`(開発者だけ・このリポジトリの Issue だけ・PR は断る・Firestore には書かない)と、トークンを runtime env へ入れる `deploy-functions.yml` の手順(secret `ISSUE_CLOSE_TOKEN`・オーナーが登録するまで「未設定」と出る)。(3) **「質問・要望」に「タブを選んで撮る」**(ブラウザのタブ選択画面で生徒日程表などを選んで 1 枚撮る・オーナー選択)。(4) **バックアップ画面の「初期設定フロー」を非表示**(使っていない・机数は管理データで編集できる)。確認リストは ai-1(OK)・d-5 を外し d-6・d-7・sc-4・bk-1 を足した(版は v1.5.672 据え置き=項目ごとの送信済み表示を版で絞って読むため)。台帳に「Issue を閉じるための鍵を登録する」(オーナー)。テスト: developerDashboardActions/DeveloperDashboardScreen(render・wiring)/githubIssueClose/screenCapture/DeveloperReportModal/developerReport/verificationChecklist (src/utils/developerDashboardActions.ts・src/components/developer-admin/DeveloperDashboardScreen.tsx・functions/src/githubIssueClose.ts・functions/src/index.ts・src/integrations/firebase/githubIssueCloseStore.ts・src/components/developer-report/screenCapture.ts・DeveloperReportModal.tsx・src/App.tsx・src/components/backup-restore/BackupRestoreScreen.tsx・.github/workflows/deploy-functions.yml)
+
 ## v1.5.675 (2026-11-03)
 
 - feat: **講習の日程公開トグル**(オーナー確定 2026-11-03「室長のコマ組みが完了するまで保護者に講習の日程を見せたくない」・機能フラグ `lectureSchedulePublishToggle`＝開発用/テスト教室＋staging・保護者QRと同じ範囲)。特別講習データの各講習に「日程: 非公開／公開中」を出し、新しく作る講習は非公開で始める(前からある講習は未設定＝公開)。非公開の間は提出用QR(生徒・講師)に講習コマを書かず(`buildSubmissionOccupiedSlotMaps`・公開時は切り出し前と同じ結果)、提出後の画面は組まれたコマを出さず「講習の日程は準備中です」を出す(`resolveSubmittedViewOccupiedSlots`・提出 API が `schedulePublished` を返す＝Functions のデプロイあり)。保護者QRは公開した講習の期間の日だけ講習コマを出し(`kind: 'lecture'`・講習の出欠は `isLecture`)、講習コマも休み連絡でき(室長の選択肢は 休み/振無休/何もしない)、公開中の講習の終了月まで「次の月」で進める(`resolveParentPublishedLectureEndDateKey`)。振替元の補完が同じ限・科目の講習の行を拾わないガード付き。仕様 `docs/spec-special-session-submission.md` §B-2・`docs/spec-parent-portal.md` §0-8。確認リスト lp-1〜lp-4・進行中テーマ台帳に 1 行。テスト: schedulePublish / submissionOccupiedSlots / submissionScheduleVisibility / parentPortalLecture / parentSchedule(日程公開) / parentPortal(functions)。

@@ -3,6 +3,7 @@
 // ⚠️ 本番データ保護: ダッシュボードは**読むだけ**の画面。取得は developerReportsStore(getDocs)と GitHub 公開 API の GET に
 // 限り、画面から Firestore・callable・GitHub へ書く導線を作らない。集計は utils の純関数へ委譲する。
 // Claude Code へ渡すのは URL(claude.ai/code?prompt=…)とクリップボードだけ。
+// 例外は 2026-11-03 の「Issue を閉じる」1 つだけ(GitHub の Issue の状態だけを callable closeGitHubIssue 経由で変える・Firestore には書かない)。
 // 描画テスト環境が無いのでソース走査で担保する(作法は VerificationChecklistPanel.wiring.test.ts と同じ)。
 
 import { readFileSync } from 'node:fs'
@@ -14,6 +15,7 @@ const ADMIN_TSX = readFileSync(fileURLToPath(new URL('./DeveloperAdminScreen.tsx
 const DASHBOARD_TSX = readFileSync(fileURLToPath(new URL('./DeveloperDashboardScreen.tsx', import.meta.url)), 'utf8')
 const DETAIL_TSX = readFileSync(fileURLToPath(new URL('./DeveloperDashboardDetail.tsx', import.meta.url)), 'utf8')
 const ACTIONS_TS = readFileSync(fileURLToPath(new URL('../../utils/developerDashboardActions.ts', import.meta.url)), 'utf8')
+const CLOSE_STORE_TS = readFileSync(fileURLToPath(new URL('../../integrations/firebase/githubIssueCloseStore.ts', import.meta.url)), 'utf8')
 const APP_TSX = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
 const SCREEN_SOURCES = [DASHBOARD_TSX, DETAIL_TSX]
 
@@ -45,6 +47,22 @@ describe('開発ダッシュボード本体(いまの状況＋報告と Issue �
     // 詳細面は取得しない(親から受け取るだけ)。
     expect(DETAIL_TSX).not.toContain('developerReportsStore')
     expect(DETAIL_TSX).not.toContain("integrations/github")
+  })
+
+  it('書く操作は「Issue を閉じる」だけ: callable closeGitHubIssue だけを呼び、Firestore へは書かない。確認の画面のあとでだけ呼ぶ(2026-11-03)', () => {
+    expect(DASHBOARD_TSX).toContain("from '../../integrations/firebase/githubIssueCloseStore'")
+    expect(CLOSE_STORE_TS).toContain("httpsCallable<{ workspaceKey: string; issueNumber: number; reason: CloseGitHubIssueReason }, unknown>(functions, 'closeGitHubIssue'")
+    expect(CLOSE_STORE_TS).not.toMatch(/from 'firebase\/firestore'|setDoc|updateDoc|deleteDoc|writeBatch|addDoc|\bfetch\(/u)
+    // ブラウザは GitHub のトークンを持たない。
+    expect(CLOSE_STORE_TS).not.toMatch(/token/iu)
+    const start = DASHBOARD_TSX.indexOf('const requestCloseIssue = useCallback(')
+    const body = DASHBOARD_TSX.slice(start, DASHBOARD_TSX.indexOf('}, [closeIssue, closingIssueNumber, confirmAction])', start))
+    expect(start).toBeGreaterThan(0)
+    expect(body.indexOf('confirmAction(buildCloseIssueConfirmMessage(issueNumber))')).toBeGreaterThan(0)
+    expect(body.indexOf('confirmAction(')).toBeLessThan(body.indexOf('closeIssue({'))
+    // ローカルモードでは出さない。
+    expect(DASHBOARD_TSX).toContain("const canCloseIssues = authMode === 'firebase'")
+    expect(DASHBOARD_TSX).toContain('onCloseIssue={canCloseIssues ? requestCloseIssue : undefined}')
   })
 
   it('集計は utils の純関数へ委譲する', () => {

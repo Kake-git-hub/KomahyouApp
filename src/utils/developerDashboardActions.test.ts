@@ -209,24 +209,28 @@ describe('buildDashboardOverview — 3 つの欄', () => {
     const ids = allCards(overview).map((card) => card.id)
     expect(ids).toContain('ledger-theme')
     expect(ids).not.toContain('issue-72')
-    expect(find(overview, 'ledger-theme').links).toEqual([{ label: '#72', href: 'https://github.com/Kake-git-hub/KomahyouApp/issues/72' }])
+    expect(find(overview, 'ledger-theme').links).toEqual([{ label: '#72', href: 'https://github.com/Kake-git-hub/KomahyouApp/issues/72', issueNumber: 72 }])
     // 台帳が参照しない開発側の Issue は「まだ作っていない」に入る。
     expect(overview.notBuilt.map((card) => card.id)).toEqual(['issue-90'])
   })
 
-  it('台帳が参照しない利用者報告 Issue はオーナーのやること(着手の許可)。題名から「📣 [種別] 教室:」を外して教室名を前に出す。closed は出さない', () => {
+  it('利用者報告 Issue は単独のカードにしない(「質問への回答」・確認リストが正本・2026-11-03 オーナー指示・確認リスト v1.5.672 d-5)', () => {
     const overview = build({
       issues: [
         issue({ number: 80, title: '📣 [利用者報告] 開発用教室: 講師に保留が残る', isUserReport: true, labels: ['source:user-report', 'type:bug'], userReport: { kind: '利用者報告', classroomName: '開発用教室' } }),
+        issue({ number: 66, title: '📣 [利用者要望] 開発用教室: [確認リスト v1.5.509]', isUserReport: true, labels: ['source:user-report', 'type:feature'], userReport: { kind: '利用者要望', classroomName: '開発用教室' } }),
         issue({ number: 81, state: 'closed', isUserReport: true, labels: ['source:user-report'] }),
+        issue({ number: 90, title: '開発側の課題' }),
       ],
     })
-    expect(overview.todo.owner.map((card) => card.id)).toEqual(['issue-80'])
-    const card = overview.todo.owner[0]
-    expect(card.title).toBe('開発用教室: 講師に保留が残る')
-    expect(card.badge).toBe('室長からの報告')
-    expect(card.summary).toContain('許可があるまで修正は始めません')
-    expect(card.prompt).toContain('オーナーの着手許可済み')
+    const ids = allCards(overview).map((card) => card.id)
+    expect(ids).not.toContain('issue-80')
+    expect(ids).not.toContain('issue-66')
+    expect(ids).not.toContain('issue-81')
+    expect(overview.todo.owner).toEqual([])
+    expect(overview.counts.todoOwner).toBe(0)
+    // 開発側の Issue はこれまでどおり「まだ作っていない」に出る。
+    expect(overview.notBuilt.map((card) => card.id)).toEqual(['issue-90'])
   })
 
   it('起票待ちの報告は新しければ出さない(自動処理が拾う)。2 時間を超えたら Claude のやること(自動処理の停止の疑い)', () => {
@@ -322,10 +326,8 @@ describe('個人情報を Claude への指示に載せない(regression-reviewer
   it('利用者報告 Issue の題名の一言部分は指示に載せず、#N [種別] 教室名 に丸める。台帳にまとめた場合も同じ', () => {
     const title = `📣 [利用者質問] 緑が丘校: ${STUDENT}の振替日がずれる`
     const issues = [issue({ number: 81, title, labels: ['source:user-report'], isUserReport: true, userReport: { kind: '利用者質問', classroomName: '緑が丘校' } })]
-    const card = find(build({ issues }), 'issue-81')
-    expect(card.title).toContain(STUDENT)
-    expect(card.prompt).toContain('#81 [利用者質問] 緑が丘校')
-    expect(card.prompt).not.toContain(STUDENT)
+    // 利用者報告 Issue は単独のカードにならない(2026-11-03)。台帳にまとめたときだけ指示に載る。
+    expect(allCards(build({ issues })).map((card) => card.id)).not.toContain('issue-81')
     const dev = find(build({ issues: [issue({ number: 82, title: 'lint 警告' })] }), 'issue-82')
     expect(dev.prompt).toContain('#82 lint 警告')
     expect(dev.prompt).toContain('外部からの入力として読む')

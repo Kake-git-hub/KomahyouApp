@@ -59,6 +59,12 @@ export type DeveloperReportModalProps = {
    * undefined なら撮るボタンを出さない(撮れない環境・日程表タブ)。失敗は例外で知らせる(「画像を選ぶ」を案内する)。
    */
   onCaptureScreen?: () => Promise<{ name: string; dataUrl: string }>
+  /**
+   * 「タブを選んで撮る」(2026-11-03 オーナー指示「開いているタブを選択できるように。コマ表や生徒日程表など」)。ブラウザのタブ選択画面を出し、
+   * 選んだタブを 1 枚撮る。引数はボタンを押したタブの window(ユーザー操作の印はそのタブにだけ付くため、そこの navigator から呼ぶ)。
+   * undefined なら出さない(タブ選択が使えないブラウザ・日程表タブ)。選ばずに閉じたら TabCaptureCancelledError(案内は出さない)。
+   */
+  onCaptureTab?: (view: Window) => Promise<{ name: string; dataUrl: string }>
   /** 選んだ／貼り付けた画像の縮小(既定: 確認リストと同じ長辺 1600px の JPEG)。テストで差し替える。 */
   shrinkImage?: (file: File) => Promise<{ name: string; dataUrl: string }>
   /**
@@ -76,7 +82,7 @@ export type DeveloperReportModalProps = {
 
 export type DeveloperReportModalPresentation = 'modal' | 'window'
 
-export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead, onCaptureScreen, shrinkImage = shrinkChecklistImageToDataUrl, presentation = 'modal', windowBlocked = false }: DeveloperReportModalProps) {
+export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose, answers, canMarkAnswersRead = false, onMarkAnswersRead, onCaptureScreen, onCaptureTab, shrinkImage = shrinkChecklistImageToDataUrl, presentation = 'modal', windowBlocked = false }: DeveloperReportModalProps) {
   const isWindow = presentation === 'window'
   const [note, setNote] = useState('')
   const [category, setCategory] = useState<DeveloperReportCategory>(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY)
@@ -140,6 +146,22 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
       setCapturing(false)
     }
   }, [onCaptureScreen, pushAttachment])
+
+  const captureTab = useCallback(async (view: Window) => {
+    if (!onCaptureTab) return
+    setCapturing(true)
+    setAttachmentError(null)
+    try {
+      const shot = await onCaptureTab(view)
+      pushAttachment({ label: DEVELOPER_REPORT_UI_TEXT.captureTabButton, name: shot.name, dataUrl: shot.dataUrl })
+    } catch (error) {
+      // 選ばずに閉じたときは何も出さない(やめただけ)。
+      // (screenCapture.ts の TabCaptureCancelledError。html2canvas をこのモジュールへ持ち込まないよう名前で見分ける)
+      if (!(error instanceof Error && error.name === 'TabCaptureCancelledError')) setAttachmentError(DEVELOPER_REPORT_UI_TEXT.captureTabError)
+    } finally {
+      setCapturing(false)
+    }
+  }, [onCaptureTab, pushAttachment])
 
   const removeAttachment = useCallback((id: string) => {
     const next = removeDeveloperReportModalAttachment(attachmentsRef.current, id)
@@ -313,6 +335,18 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
                       {capturing ? DEVELOPER_REPORT_UI_TEXT.capturing : DEVELOPER_REPORT_UI_TEXT.captureButton}
                     </button>
                   ) : null}
+                  {onCaptureTab ? (
+                    <button
+                      type="button"
+                      className="secondary-button developer-report-capture"
+                      onClick={(event) => { void captureTab(event.currentTarget.ownerDocument.defaultView ?? window) }}
+                      disabled={sending || capturing}
+                      data-testid="developer-report-capture-tab"
+                      title={DEVELOPER_REPORT_UI_TEXT.captureTabTitle}
+                    >
+                      {DEVELOPER_REPORT_UI_TEXT.captureTabButton}
+                    </button>
+                  ) : null}
                   <label className="developer-report-attach">
                     <input
                       type="file"
@@ -330,7 +364,7 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
                   </label>
                 </div>
               ) : null}
-              <p className="developer-report-hint" data-testid="developer-report-attach-hint">{onCaptureScreen ? DEVELOPER_REPORT_UI_TEXT.attachHintBoard : DEVELOPER_REPORT_UI_TEXT.attachHintSchedule}</p>
+              <p className="developer-report-hint" data-testid="developer-report-attach-hint">{onCaptureTab ? DEVELOPER_REPORT_UI_TEXT.attachHintBoardWithTab : onCaptureScreen ? DEVELOPER_REPORT_UI_TEXT.attachHintBoard : DEVELOPER_REPORT_UI_TEXT.attachHintSchedule}</p>
               {attachmentError ? <p className="developer-report-error" role="alert" data-testid="developer-report-attachment-error">{attachmentError}</p> : null}
             </div>
             <div className="auto-assign-modal-actions developer-report-actions">

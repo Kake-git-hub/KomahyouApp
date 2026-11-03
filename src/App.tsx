@@ -51,7 +51,7 @@ import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomI
 import { clearOperationTraceMemory, collectOperationTraceSinceLastSave, markOperationTraceSaved, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
 import { buildUnsentCloudSaveOpenPrompt, buildUnsentCloudSaveRecord, buildUnsentCloudSaveReportBody, clearUnsentCloudSaveIfSameSession, deleteUnsentCloudSave, deleteUnsentCloudSaveIfUnchanged, isUnsentCloudSaveExpired, readUnsentCloudSave, resolveSaveFailureDialog, shouldPromptUnsentCloudSaveOnOpen, writeUnsentCloudSave, type UnsentCloudSaveRecord } from './utils/unsentCloudSave'
 import { handleCapturedClientError, installClientErrorCapture, setClientErrorAutoReporter } from './utils/clientErrorCapture'
-import { captureScreenToDataUrl } from './components/developer-report/screenCapture'
+import { canCaptureBrowserTab, captureBrowserTabFromView, captureScreenToDataUrl } from './components/developer-report/screenCapture'
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportAttachment, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportStudentLedger, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { useDeveloperReportWindow } from './components/developer-report/useDeveloperReportWindow'
@@ -6003,6 +6003,7 @@ function AuthenticatedApp() {
       onSubmit={(note, category, attachments) => { void handleDeveloperReportSubmit(note, category, attachments) }}
       onClose={developerReport.close}
       onCaptureScreen={captureScreenToDataUrl}
+      onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}
       answers={isRemoteBackendEnabled ? reportAnswers : undefined}
       canMarkAnswersRead={canMarkReportAnswersRead}
       onMarkAnswersRead={handleMarkReportAnswersRead}
