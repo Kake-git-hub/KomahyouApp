@@ -394,6 +394,62 @@ export function buildDashboardOverview(input: BuildDashboardOverviewInput): Dash
   }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Issue の無いカードを消す(2026-11-03 オーナー指示・確認リスト d-7 メモ「Issue のないものも削除したいものがあるので、削除する仕組みを追加して」)。
+//  - この画面は何も書き込まない(Firestore・GitHub とも)ので、消したカードはこの端末(ブラウザの保存領域)にだけ覚える。
+//  - 覚えるのは「カードの id＋題名と要約」。中身が変わったら(件数が増えた・台帳の文が変わった)また出す。
+//  - Issue の付いたカードは「#N を閉じる」で GitHub 側を閉じる(端末だけで隠さない)。
+// ───────────────────────────────────────────────────────────────────────────
+
+export const DEVELOPER_DASHBOARD_DISMISSED_STORAGE_KEY = 'komahyou:developer-dashboard:dismissed-cards'
+
+/** 消せるカードか(Issue へのリンクを 1 つも持たないカード)。 */
+export function isDashboardCardDismissible(card: Pick<DashboardCard, 'links'>): boolean {
+  return card.links.every((link) => link.issueNumber === undefined)
+}
+
+/** 消したことを覚えるときの鍵。id と題名・要約(中身が変わったら別の鍵になる)。 */
+export function buildDashboardCardDismissKey(card: Pick<DashboardCard, 'id' | 'title' | 'summary'>): string {
+  return `${card.id}::${card.title}::${card.summary}`
+}
+
+/** 消したカードを除いた一覧と件数。消せないカード(Issue 付き)は鍵があっても残す。 */
+export function applyDashboardCardDismissals(overview: DashboardOverview, dismissedKeys: ReadonlySet<string>): DashboardOverview & { hiddenCount: number } {
+  let hiddenCount = 0
+  const keep = (cards: DashboardCard[]) => cards.filter((card) => {
+    const hidden = isDashboardCardDismissible(card) && dismissedKeys.has(buildDashboardCardDismissKey(card))
+    if (hidden) hiddenCount += 1
+    return !hidden
+  })
+  const owner = keep(overview.todo.owner)
+  const claude = keep(overview.todo.claude)
+  const trial = keep(overview.trial)
+  const notBuilt = keep(overview.notBuilt)
+  return {
+    todo: { owner, claude },
+    trial,
+    notBuilt,
+    counts: { todo: owner.length + claude.length, todoOwner: owner.length, todoClaude: claude.length, trial: trial.length, notBuilt: notBuilt.length },
+    hiddenCount,
+  }
+}
+
+/** ブラウザに保存した値(JSON の文字列配列)を読む。壊れていれば空。 */
+export function parseDashboardDismissedKeys(raw: string | null | undefined): Set<string> {
+  if (!raw) return new Set()
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+/** カードを消す確認の画面の文。 */
+export function buildDismissDashboardCardConfirmMessage(card: Pick<DashboardCard, 'title'>): string {
+  return `「${card.title}」をこの一覧から消します。\nこの端末でだけ消えます(中身が変わったらまた出ます)。「消したカードを戻す」で戻せます。よろしいですか？`
+}
+
 /** 「Issue を閉じる」の確認の画面の文(GitHub 上で本当に閉じることをはっきり書く)。 */
 export function buildCloseIssueConfirmMessage(issueNumber: number): string {
   return `GitHub の Issue #${issueNumber} を閉じます(対応済みとして閉じます)。\n閉じた Issue は GitHub の画面から開き直せます。よろしいですか？`

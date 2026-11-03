@@ -41,7 +41,10 @@ describe('開発ダッシュボード本体(いまの状況＋報告と Issue �
       expect(source).not.toContain("from 'firebase/")
       expect(source).not.toMatch(/httpsCallable|setDoc|updateDoc|deleteDoc|writeBatch|addDoc/u)
       expect(source).not.toMatch(/\bfetch\(/u)
-      expect(source).not.toContain('localStorage')
+      // localStorage は「消したカード」(この端末だけ・2026-11-03 オーナー指示 d-7 メモ)の 1 つの鍵だけに使ってよい。ほかの用途は増やさない。
+      const storageUses = source.match(/localStorage\.[a-zA-Z]+\([^)]*\)/gu) ?? []
+      for (const use of storageUses) expect(use).toMatch(/^localStorage\.(getItem|setItem)\(DEVELOPER_DASHBOARD_DISMISSED_STORAGE_KEY[,)]/u)
+      expect((source.match(/localStorage/gu) ?? []).length).toBe(storageUses.length)
       expect(source).not.toMatch(/window\.open\(/u)
     }
     // 詳細面は取得しない(親から受け取るだけ)。

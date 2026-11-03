@@ -125,6 +125,9 @@ describe('「タブを選んで撮る」(2026-11-03 オーナー指示・ブラ�
     const controller = {}
     expect(buildTabCaptureOptions(controller)).toMatchObject({ video: { displaySurface: 'browser' }, audio: false, selfBrowserSurface: 'exclude', preferCurrentTab: false, controller })
     expect('controller' in buildTabCaptureOptions(null)).toBe(false)
+    // ボタンがコマ表のタブそのものにあるときは自分のタブも候補に入れる(コマ表を撮れるように・2026-11-03)。
+    expect(buildTabCaptureOptions(null, { includeSelf: true })).toMatchObject({ selfBrowserSurface: 'include' })
+    expect(buildTabCaptureOptions(null, { includeSelf: false })).toMatchObject({ selfBrowserSurface: 'exclude' })
   })
 
   it('選んだタブを 1 枚撮り、長辺 1600px の JPEG にして、共有をすぐ止める。画面は「質問・要望」のタブのまま', async () => {

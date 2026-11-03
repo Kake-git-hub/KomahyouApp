@@ -254,6 +254,52 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
     expect(writtenDoc).not.toHaveProperty('occupiedSlots') // 配布情報は維持(書かない)
   })
 
+  // 確認リスト qs-2(オーナー指示 2026-11-03):「提出用QRも解除後は解除前の登録した内容は残った状態で、未送信状態にして
+  // (日程表と同じ内容にしたい)」。生徒の登録解除は日程表の今の内容を書いて pending に戻す(空にしない)。
+  it('生徒の登録解除は日程表の内容を残したまま pending に戻す(黄色・配布情報は書かない)', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      classroomId: 'dev-classroom',
+      unavailableSlots: ['2026-07-25_3'],
+      reopenedSlots: ['2026-07-26_1'],
+      subjectSlots: { 数: 4 },
+      occupiedSlots: { '2026-07-21_1': '数' },
+    })
+    const guard = createRecentlyResetGuard(2500, { set: () => 0, clear: () => {} })
+
+    await guardAndResetLectureSubmissionDoc(guard, 'student-token', 'dev-classroom', {
+      unavailableSlots: ['2026-07-25_3', '2026-07-27_2'],
+      subjectSlots: { 数: 3, 英: 2 },
+      subjectDurations: { 数: 60 },
+      groupClassParticipation: { 集団理科: true },
+      optionChecks: { opt1: true },
+      regularOnly: false,
+    })
+
+    expect(setDoc).not.toHaveBeenCalled()
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written.status).toBe('pending')
+    expect(written.submittedAt).toBeNull()
+    expect(written.unavailableSlots).toEqual(['2026-07-25_3', '2026-07-27_2'])
+    expect(written.subjectSlots).toEqual({ 数: 3, 英: 2 })
+    expect(written.subjectDurations).toEqual({ 数: 60 })
+    expect(written.groupClassParticipation).toEqual({ 集団理科: true })
+    expect(written.optionChecks).toEqual({ opt1: true })
+    expect(written).not.toHaveProperty('reopenedSlots')
+    expect(written).not.toHaveProperty('occupiedSlots')
+  })
+
+  it('App の生徒・講師の登録解除は日程表の内容を guardAndReset へ渡す(講師もオーナー確定 2026-11-03)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const app = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+    expect(app).toContain('guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId, {')
+    expect(app).toContain('guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId, {')
+    expect(app).toContain('unavailableSlots: teacherTargetInput?.unavailableSlots ?? [],')
+    // 空へ戻す呼び方(内容を渡さない guardAndReset)はもう無い。
+    expect(app).not.toMatch(/guardAndResetLectureSubmissionDoc\([^)]*actingClassroomId\)\.catch/u)
+  })
+
   it('updateSubmissionOccupiedSlots の後追い反映は reopenedSlots を指定時のみ更新する', async () => {
     existingData.mockReturnValue({
       status: 'submitted',

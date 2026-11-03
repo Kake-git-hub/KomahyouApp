@@ -101,3 +101,16 @@ describe('確認リストパネル本体', () => {
     expect(PANEL_TSX).toContain('updateDraft(setVerificationChecklistMemo(draft, item.id, event.target.value))')
   })
 })
+
+// 2026-11-03 オーナー指示(確認リスト その他欄)「画像を追加(スクショ)しかなくなり、タブを選んで撮影ができなくなっている」。
+describe('確認リストの「画面を撮る」(タブを選んで撮る)', () => {
+  it('App はタブを選べるブラウザのときだけ captureBrowserTabFromView を渡す', () => {
+    expect(APP_TSX).toContain("onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}\r\n      />\r\n    ) : null")
+  })
+
+  it('項目ごとに「画面を撮る」を出し、押したタブ(ownerDocument.defaultView)から撮って項目へ付ける', () => {
+    expect(PANEL_TSX).toContain('onClick={(event) => { void captureTabForItem(item.id, event.currentTarget.ownerDocument.defaultView ?? window) }}')
+    expect(PANEL_TSX).toContain("{capturingItemId === item.id ? '撮影中…' : '画面を撮る'}")
+    expect(PANEL_TSX).toContain('addVerificationChecklistAttachment(current, { itemId, name: shot.name, dataUrl: shot.dataUrl }, createChecklistAttachmentId())')
+  })
+})

@@ -129,7 +129,9 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
   })
 
   it('トグル列はフラグ ON のときだけ出る', () => {
-    expect(SCREEN).toContain("{schedulePublishToggleEnabled ? <th>日程</th> : null}")
+    expect(SCREEN).toContain("{schedulePublishToggleEnabled ? <th>保護者への公開</th> : null}")
+    // オーナー指示 2026-11-03(確認リスト lp-1 メモ):「日程」ではなく「保護者への公開」という名前にする。
+    expect(SCREEN).not.toContain("<th>日程</th>")
   })
 
   it('Excel 取り込みにもフラグを渡す(M1)・公開状態が変わった講習は講習自身の期間で提出用QRを書き直す(M2)', () => {

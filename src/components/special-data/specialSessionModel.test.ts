@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, resolveReopenedUnavailableSlots, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './specialSessionModel'
+import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, resolveReopenedUnavailableSlots, resolveSavedGroupClassParticipation, sortSpecialSessionsForList, type SpecialSessionRow } from './specialSessionModel'
 
 describe('specialSessionModel', () => {
   it('starts with no default special sessions', () => {
@@ -149,5 +149,34 @@ describe('appendReopenedSlots (黄色化のラチェット追記)', () => {
     const next = appendReopenedSlots([buildSession()], [{ personType: 'teacher', personId: 't1', slotKey: '2026-07-25_3' }], '2026-07-18T10:00:00.000Z')
     expect(next[0].teacherInputs.t1.reopenedSlots).toEqual(['2026-07-25_3'])
     expect(next[0].studentInputs.s1.reopenedSlots).toBeUndefined() // 生徒側は不変
+  })
+})
+// オーナー指示 2026-11-03「特別講習一覧が並び替わらないように、講習期間が新しいものを上からソートで固定して」。
+// 〜v1.5.679 は更新日時(updatedAt)順で、日程公開の切り替えや編集のたびに行が上へ跳んでいた。
+describe('sortSpecialSessionsForList', () => {
+  const row = (id: string, startDate: string, endDate: string, updatedAt: string, createdAt = '2026-01-01 00:00') => ({ id, startDate, endDate, updatedAt, createdAt })
+
+  it('講習期間の新しい順に並べ、更新日時では並べ替えない', () => {
+    const sorted = sortSpecialSessionsForList([
+      row('summer', '2026-07-21', '2026-08-31', '2026-11-03 10:00'),
+      row('winter', '2026-12-14', '2027-01-09', '2026-10-01 10:00'),
+      row('winter2', '2027-01-11', '2027-01-31', '2026-09-01 10:00'),
+    ])
+    expect(sorted.map((session) => session.id)).toEqual(['winter2', 'winter', 'summer'])
+  })
+
+  it('期間が未設定(作りかけ)の講習は先頭・同じ開始日は終了日の新しい順', () => {
+    const sorted = sortSpecialSessionsForList([
+      row('a', '2026-12-01', '2026-12-10', ''),
+      row('draft', '', '', ''),
+      row('b', '2026-12-01', '2026-12-20', ''),
+    ])
+    expect(sorted.map((session) => session.id)).toEqual(['draft', 'b', 'a'])
+  })
+
+  it('元の配列は変えない', () => {
+    const input = [row('old', '2026-01-01', '2026-01-02', ''), row('new', '2026-02-01', '2026-02-02', '')]
+    sortSpecialSessionsForList(input)
+    expect(input.map((session) => session.id)).toEqual(['old', 'new'])
   })
 })

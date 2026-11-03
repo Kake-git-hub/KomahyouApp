@@ -115,13 +115,17 @@ export function canCaptureBrowserTab(mediaDevices: TabCaptureMediaDevices | unde
   return Boolean(mediaDevices && typeof mediaDevices.getDisplayMedia === 'function')
 }
 
-/** getDisplayMedia へ渡す指定。タブの一覧を先に出し、音は取らず、自分のタブは出さない。 */
-export function buildTabCaptureOptions(controller: unknown | null): Record<string, unknown> {
+/**
+ * getDisplayMedia へ渡す指定。タブの一覧を先に出し、音は取らない。
+ * 自分のタブは、ボタンが別タブ(「質問・要望」・確認リスト)にあるときは出さない。ボタンがコマ表のタブそのものにあるとき
+ * (別タブを開けずに盤面の上で開いた・確認リストを盤面に出したまま)は、コマ表を撮れるよう候補に入れる(includeSelf・2026-11-03)。
+ */
+export function buildTabCaptureOptions(controller: unknown | null, options: { includeSelf?: boolean } = {}): Record<string, unknown> {
   return {
     video: { displaySurface: 'browser' },
     audio: false,
     preferCurrentTab: false,
-    selfBrowserSurface: 'exclude',
+    selfBrowserSurface: options.includeSelf ? 'include' : 'exclude',
     surfaceSwitching: 'exclude',
     systemAudio: 'exclude',
     ...(controller ? { controller } : {}),
@@ -147,6 +151,8 @@ export type TabCaptureDeps = {
   mediaDevices: TabCaptureMediaDevices
   /** CaptureController(撮ったあと focus を移さないため)。使えないブラウザでは null。 */
   createController: () => { setFocusBehavior?: (behavior: string) => void } | null
+  /** 自分のタブも候補に入れるか(ボタンがコマ表のタブそのものにあるとき true)。既定は外す。 */
+  includeSelf?: boolean
   /** 映像から 1 枚取り出す(既定: video 要素に流して待ってから)。 */
   grabFrame: (stream: MediaStream) => Promise<FrameSource>
   createCanvas: (width: number, height: number) => HTMLCanvasElement
@@ -167,7 +173,7 @@ export async function captureBrowserTabToDataUrl(deps: TabCaptureDeps): Promise<
   const controller = deps.createController()
   let stream: MediaStream
   try {
-    stream = await (deps.mediaDevices.getDisplayMedia as NonNullable<TabCaptureMediaDevices['getDisplayMedia']>)(buildTabCaptureOptions(controller))
+    stream = await (deps.mediaDevices.getDisplayMedia as NonNullable<TabCaptureMediaDevices['getDisplayMedia']>)(buildTabCaptureOptions(controller, { includeSelf: deps.includeSelf }))
   } catch (error) {
     if (isTabCaptureCancelled(error)) throw new TabCaptureCancelledError()
     throw error
@@ -229,9 +235,19 @@ function grabFrameWithVideo(doc: Document, view: Window, stream: MediaStream): P
   })
 }
 
-/** 「質問・要望」のボタンが置かれたタブ(view)から、ブラウザのタブ選択画面を出して撮る。 */
+/**
+ * ボタンが置かれたタブ(view)から、ブラウザのタブ選択画面を出して撮る。
+ * view が別タブ(window.open で開いた「質問・要望」・確認リスト = opener あり)なら自分のタブを候補から外し、
+ * コマ表のタブそのもの(opener なし)なら自分のタブも候補に入れる。
+ */
 export function captureBrowserTabFromView(view: Window): Promise<{ name: string; dataUrl: string; width: number; height: number }> {
   const doc = view.document
+  let isDetached = false
+  try {
+    isDetached = Boolean(view.opener)
+  } catch {
+    isDetached = true
+  }
   const ControllerCtor = (view as unknown as { CaptureController?: new () => { setFocusBehavior?: (behavior: string) => void } }).CaptureController
   return captureBrowserTabToDataUrl({
     mediaDevices: (view.navigator.mediaDevices ?? {}) as TabCaptureMediaDevices,
@@ -242,6 +258,7 @@ export function captureBrowserTabFromView(view: Window): Promise<{ name: string;
         return null
       }
     },
+    includeSelf: !isDetached,
     grabFrame: (stream) => grabFrameWithVideo(doc, view, stream),
     createCanvas: (width, height) => {
       const canvas = doc.createElement('canvas')

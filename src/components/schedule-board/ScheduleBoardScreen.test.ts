@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { getTeacherDisplayName, initialStudents, initialTeachers, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
@@ -6,7 +8,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, resolveMeasuredPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveDeleteSubjectDelta, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, resolveMeasuredPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, enqueueStudentScheduleRequest, consumeStudentScheduleRequestQueue, resolveUnassignRequestMissingAction, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveDeleteSubjectDelta, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -5937,6 +5939,73 @@ describe('登録解除リクエストの一過性消費(Issue #46 回帰防止)'
 
   it('修正あり(処理後に消費)なら再マウントを挟んでも 1 回だけ処理される', () => {
     expect(simulateBoardLifecycle({ consumeOnProcess: true })).toBe(1)
+  })
+
+  // 確認リスト qs-2(2026-11-03・開発用教室で実測): 盤面が開いていない間に「登録解除」(unassign)→ 日程表でコマ移動(move)の順に
+  // 届くと、1 枠の state では move が unassign を上書きし、講習コマが登録解除後も盤面に残った。列にして順番に処理する。
+  describe('順番待ちの列(enqueueStudentScheduleRequest / consumeStudentScheduleRequestQueue)', () => {
+    const makeMove = (requestId: number) => ({
+      requestId,
+      mode: 'move' as const,
+      source: { dateKey: '2026-10-23', slotNumber: 3, studentKey: 's095', lessonType: 'special' },
+      seat: { targetDateKey: '2026-10-24', targetSlotNumber: 4 },
+    }) as unknown as QueuedRequest
+    type QueuedRequest = NonNullable<Parameters<typeof shouldProcessStudentScheduleRequest>[0]>
+
+    it('盤面が開いていない間に届いた unassign → move は両方残り、先頭から順に 1 件ずつ処理される', () => {
+      let queue = enqueueStudentScheduleRequest<QueuedRequest>([], makeRequest(1))
+      queue = enqueueStudentScheduleRequest(queue, makeMove(2))
+      expect(queue.map((request) => request.mode)).toEqual(['unassign', 'move'])
+
+      // 盤面がマウントされた: 先頭(unassign)だけを処理して消費する
+      const processed: string[] = []
+      let processedRef: number | null = null
+      for (let guard = 0; guard < 5 && queue.length > 0; guard += 1) {
+        const head = queue[0]
+        if (!shouldProcessStudentScheduleRequest(head, processedRef)) break
+        processedRef = head.requestId
+        processed.push(head.mode)
+        queue = consumeStudentScheduleRequestQueue(queue, head.requestId)
+      }
+      expect(processed).toEqual(['unassign', 'move'])
+      expect(queue).toEqual([])
+    })
+
+    // regression-reviewer 指摘(2026-11-03): 先頭の unassign の講習・生徒が読み込み後も見つからないと、列の後ろが全部止まる。
+    it('登録解除の講習・生徒が見つからない: 読み込み前は待ち、読み込み後は理由を出して消費する', () => {
+      expect(resolveUnassignRequestMissingAction({ hasSession: true, hasStudent: true, isDataLoaded: false })).toBe('process')
+      expect(resolveUnassignRequestMissingAction({ hasSession: false, hasStudent: true, isDataLoaded: false })).toBe('wait')
+      expect(resolveUnassignRequestMissingAction({ hasSession: true, hasStudent: false, isDataLoaded: true })).toBe('discard')
+      // 消費すれば次の move が先頭に来て処理される。
+      let queue = enqueueStudentScheduleRequest(enqueueStudentScheduleRequest<QueuedRequest>([], makeRequest(1)), makeMove(2))
+      queue = consumeStudentScheduleRequestQueue(queue, 1)
+      expect(queue.map((request) => request.mode)).toEqual(['move'])
+    })
+
+    it('App は教室を開く・読み込む・ログアウトの 3 経路で列を捨てる(前の教室の依頼を次の教室で実行しない・INV-08)', () => {
+      const app = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+      expect(app.split('setStudentScheduleRequestQueue([])').length - 1).toBe(3)
+      expect(app.split('setTeacherAutoAssignRequestQueue([])').length - 1).toBe(3)
+    })
+
+    it('処理した requestId だけを外す(列に無い id なら同じ配列を返す)', () => {
+      const queue = [makeRequest(1), makeRequest(2)]
+      expect(consumeStudentScheduleRequestQueue(queue, 1).map((request) => request.requestId)).toEqual([2])
+      expect(consumeStudentScheduleRequestQueue(queue, 9)).toBe(queue)
+    })
+
+    it('App は列で持ち、盤面には先頭だけを渡す(1 枠の setStudentScheduleRequest へ戻さない)', () => {
+      const app = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+      expect(app).toContain('studentScheduleRequest={studentScheduleRequestQueue[0] ?? null}')
+      expect(app).toContain('setStudentScheduleRequestQueue((current) => enqueueStudentScheduleRequest(current, unassignRequest))')
+      expect(app).toContain('setStudentScheduleRequestQueue((current) => enqueueStudentScheduleRequest(current, moveRequest))')
+      expect(app).not.toMatch(/setStudentScheduleRequest\(\{/)
+      // 兄弟監査(2026-11-03): 講師の自動配置/解除も列で持つ(1 枠の setTeacherAutoAssignRequest へ戻さない)。
+      expect(app).toContain('teacherAutoAssignRequest={teacherAutoAssignRequestQueue[0] ?? null}')
+      expect(app).toContain('setTeacherAutoAssignRequestQueue((current) => enqueueStudentScheduleRequest(current, teacherRequest))')
+      expect(app).toContain('setTeacherAutoAssignRequestQueue((current) => enqueueStudentScheduleRequest(current, submissionTeacherRequest))')
+      expect(app).not.toMatch(/setTeacherAutoAssignRequest\(\{/)
+    })
   })
 })
 

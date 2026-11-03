@@ -3282,19 +3282,26 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return qrHtml + submittedBadgeHtml;
       }
 
+      // 前の表示で作った QR 画像を使い回す。★人の id だけでなく提出用トークンも一致するときだけ(2026-11-03 オーナー報告
+      // 「指定した講習期間を開いて最新にした提出用QRを読み込むと別の期間の講習が開かれる」)。id だけで写すと、講習期間を
+      // 切り替えてトークンが変わっても前の期間の QR 画像が残り、読むと前の講習が開いた。
+      function buildQrCacheKey(person) {
+        return String(person.id || '') + '|' + String(person.submissionToken || '');
+      }
+
       function mergeCachedQrSvg(nextPayload) {
         if (!nextPayload || !DATA) return;
-        const currentStudentQrById = new Map((DATA.students || []).map((student) => [student.id, student.qrSvg || '']));
-        const currentTeacherQrById = new Map((DATA.teachers || []).map((teacher) => [teacher.id, teacher.qrSvg || '']));
+        const currentStudentQrByKey = new Map((DATA.students || []).map((student) => [buildQrCacheKey(student), student.qrSvg || '']));
+        const currentTeacherQrByKey = new Map((DATA.teachers || []).map((teacher) => [buildQrCacheKey(teacher), teacher.qrSvg || '']));
         (nextPayload.students || []).forEach((student) => {
-          if (!student.qrSvg) {
-            const cached = currentStudentQrById.get(student.id);
+          if (!student.qrSvg && student.submissionToken) {
+            const cached = currentStudentQrByKey.get(buildQrCacheKey(student));
             if (cached) student.qrSvg = cached;
           }
         });
         (nextPayload.teachers || []).forEach((teacher) => {
-          if (!teacher.qrSvg) {
-            const cached = currentTeacherQrById.get(teacher.id);
+          if (!teacher.qrSvg && teacher.submissionToken) {
+            const cached = currentTeacherQrByKey.get(buildQrCacheKey(teacher));
             if (cached) teacher.qrSvg = cached;
           }
         });

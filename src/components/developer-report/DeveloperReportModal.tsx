@@ -153,7 +153,7 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
     setAttachmentError(null)
     try {
       const shot = await onCaptureTab(view)
-      pushAttachment({ label: DEVELOPER_REPORT_UI_TEXT.captureTabButton, name: shot.name, dataUrl: shot.dataUrl })
+      pushAttachment({ label: DEVELOPER_REPORT_UI_TEXT.captureButton, name: shot.name, dataUrl: shot.dataUrl })
     } catch (error) {
       // 選ばずに閉じたときは何も出さない(やめただけ)。
       // (screenCapture.ts の TabCaptureCancelledError。html2canvas をこのモジュールへ持ち込まないよう名前で見分ける)
@@ -330,21 +330,21 @@ export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, s
               ) : null}
               {attachments.length < DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT ? (
                 <div className="developer-report-attach-actions">
-                  {onCaptureScreen ? (
-                    <button type="button" className="secondary-button developer-report-capture" onClick={() => { void captureScreen() }} disabled={sending || capturing} data-testid="developer-report-capture">
-                      {capturing ? DEVELOPER_REPORT_UI_TEXT.capturing : DEVELOPER_REPORT_UI_TEXT.captureButton}
-                    </button>
-                  ) : null}
-                  {onCaptureTab ? (
+                  {/* 「画面を撮る」は 1 つだけ(2026-11-03 オーナー指示「画面を撮る / タブを選んで撮る のボタンは一つに統合して」)。
+                      タブを選んで撮れるブラウザではタブ選択画面を出し(コマ表・生徒日程表など)、使えないブラウザではいまの画面を撮る。 */}
+                  {onCaptureTab || onCaptureScreen ? (
                     <button
                       type="button"
                       className="secondary-button developer-report-capture"
-                      onClick={(event) => { void captureTab(event.currentTarget.ownerDocument.defaultView ?? window) }}
+                      onClick={(event) => {
+                        if (onCaptureTab) void captureTab(event.currentTarget.ownerDocument.defaultView ?? window)
+                        else void captureScreen()
+                      }}
                       disabled={sending || capturing}
-                      data-testid="developer-report-capture-tab"
-                      title={DEVELOPER_REPORT_UI_TEXT.captureTabTitle}
+                      data-testid="developer-report-capture"
+                      title={onCaptureTab ? DEVELOPER_REPORT_UI_TEXT.captureTabTitle : undefined}
                     >
-                      {DEVELOPER_REPORT_UI_TEXT.captureTabButton}
+                      {capturing ? DEVELOPER_REPORT_UI_TEXT.capturing : DEVELOPER_REPORT_UI_TEXT.captureButton}
                     </button>
                   ) : null}
                   <label className="developer-report-attach">

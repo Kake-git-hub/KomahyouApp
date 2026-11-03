@@ -1,7 +1,7 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import { isSpecialSessionSchedulePublished, resolveNewSpecialSessionScheduleFields, setSpecialSessionSchedulePublished, type SpecialSessionRow } from './specialSessionModel'
+import { isSpecialSessionSchedulePublished, resolveNewSpecialSessionScheduleFields, setSpecialSessionSchedulePublished, sortSpecialSessionsForList, type SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
@@ -577,7 +577,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
   const [editingSessionSnapshots, setEditingSessionSnapshots] = useState<Record<string, Pick<SpecialSessionRow, 'label' | 'startDate' | 'endDate'>>>({})
   const [draftVisibleStartMonth, setDraftVisibleStartMonth] = useState(() => toMonthKey(createDraft().startDate))
   const [editingVisibleStartMonths, setEditingVisibleStartMonths] = useState<Record<string, string>>({})
-  const sortedSessions = useMemo(() => sessions.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [sessions])
+  const sortedSessions = useMemo(() => sortSpecialSessionsForList(sessions), [sessions])
 
   const updateSession = (id: string, patch: Partial<SpecialSessionRow>) => {
     onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, ...patch, updatedAt: editingSessionId === id ? row.updatedAt : updateTimestamp() } : row)))
@@ -822,7 +822,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
             ) : null}
 
             <table className="basic-data-table" data-testid="special-data-sessions-table">
-              <thead><tr><th>講習名</th><th>講習期間</th>{schedulePublishToggleEnabled ? <th>日程</th> : null}<th>更新</th><th>操作</th></tr></thead>
+              <thead><tr><th>講習名</th><th>講習期間</th>{schedulePublishToggleEnabled ? <th>保護者への公開</th> : null}<th>更新</th><th>操作</th></tr></thead>
               <tbody>
                 {sortedSessions.flatMap((row) => {
                   const visibleStartMonth = editingVisibleStartMonths[row.id] ?? toMonthKey(row.startDate || toDateString(new Date()))

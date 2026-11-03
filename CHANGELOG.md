@@ -14,6 +14,23 @@
 
 ## 未リリース
 
+## v1.5.680 (2026-11-03)
+
+- fix(INV-07): **確認リスト qs-2(要改善)「登録解除で割り振った講習が残る／QR は内容を残して未提出に」**。(1) 日程表からの一過性リクエスト(登録解除 unassign・コマ組み move)を App で 1 枠の state から**順番待ちの列**へ(`enqueueStudentScheduleRequest` / `consumeStudentScheduleRequestQueue`)。開発用教室の実データで、特別講習データ画面のまま登録解除 → 日程表でコマ移動の順に届き、後の move が unassign を上書きして 10/23 の講習コマが残ったのを確認(週の部品 v862→v876 の間に登録解除の除去が無い)。盤面は先頭だけを見て requestId 一致で消費(Issue #46 の規律は不変)。(2) 生徒の登録解除は提出用QRの文書を空にせず、日程表の今の内容(✕・希望科目数・授業時間・集団・オプション)を残して pending に戻す(`buildSubmissionResetPatch(keepContents)`・部分更新のまま・黄色と配布情報は書かない)。講師の登録解除は従来どおり空へ戻す。
+- fix: **講習期間を切り替えて「最新表示」した提出用QRが前の期間の講習を開く**(フリーメモ 20261103-104831918)。日程表の埋め込み `mergeCachedQrSvg` が QR 画像を人の id だけで使い回していた → id と提出用トークンが一致するときだけ使い回す(`scheduleQrCache.test.ts` で埋め込み関数を実行して固定)。
+- fix: **提出用QRの提出で、開いたままの生徒日程表がすぐ提出済みになる**(qs-1 メモ)。(1) 盤面の再マウントで日程表タブのハンドルを null から始めていたため、開いている日程表を 800ms の監視が「閉じた」と判定して共有ハンドルまで消していた → `resolveOpenSchedulePopupWindow` で引き継ぐ。(2) 購読で新しい提出を反映したら開いている生徒・講師の日程表を force 同期(`shouldSyncSchedulePopupsForSubmissions`・`submissionScheduleSyncTick`)。
+- feat: 「質問・要望」の撮るボタンを「画面を撮る」1 つに統合(タブを選べるブラウザではタブ選択画面・使えなければ今の画面・sc-4 メモ)。確認リストの各項目にも「画面を撮る」(フリーメモ 20261103-110100847)。ボタンがコマ表のタブそのものにあるときは自分のタブも候補に入れる(`buildTabCaptureOptions(…, { includeSelf })`)。
+- feat: 確認リストに**送ったフリーメモの履歴**(Claude が対応するまで残る・`selectPendingChecklistOtherNotes`・対応済みの受付は `VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS` に Claude が足す・フリーメモ 20261103-105533448)。
+- feat: 開発ダッシュボードで **Issue の無いカードを「消す」**(この端末だけ・題名か要約が変わったらまた出る・「消したカードを戻す」・d-7 メモ)。ダッシュボードの配線ガードは localStorage をこの 1 つの鍵だけ許すよう狭めた(Firestore・callable・GitHub への書き込み禁止は不変)。
+- fix: **開発用教室から開発者画面へ戻るときの保存失敗を出さない・知らせない**(フリーメモ 20261103-103958640・`shouldSilenceSaveFailureOnDeveloperReturn`)。ダイアログ・控え(未送信の保存)・版数衝突の停止を出さない。本番教室から戻るとき・室長のログアウトは従来どおり。
+- feat: 特別講習一覧を**講習期間の新しい順に固定**(更新日時順で公開切り替えのたびに跳んでいた・`sortSpecialSessionsForList`・フリーメモ 20261103-105458807)。列名「日程」→「保護者への公開」(lp-1 メモ)。
+- fix(INV-03/INV-08): 兄弟監査で講師の自動配置/解除(`teacherAutoAssignRequest`)も同じ 1 枠の上書きの形だったので同じ列にした。regression-reviewer 指摘への対応: 先頭の登録解除の講習・生徒が教室データを読み終えても見つからないときは理由を出して消費する(`resolveUnassignRequestMissingAction`・列を止めない)、列は教室を開く・ワークスペースを読み込む・ログアウトの 3 経路で捨てる(前の教室の依頼を次の教室で実行しない)。仕様 `docs/spec-special-session-submission.md` §E-2・§E-2b を改定。
+- feat: **講師の登録解除も提出用QRに日程表の✕を残して未提出へ戻す**(オーナー確定 2026-11-03「講師も同じにする」)。
+- feat: **コマ表のタブを閉じる・再読み込みすると、開いた生徒日程表・講師日程表のタブも閉じる**(フリーメモ 20261103-104733454・オーナー確定「再読み込みでも閉じる」・`closeOpenSchedulePopupWindows` を pagehide で呼ぶ。質問・要望／確認リストの別タブは従来どおり watchDetachedWindow が閉じる)。
+- docs: lp-3(要改善「先の講習の月まで保護者QRで見える」)はオーナー判断「今の仕様のまま」(前からある講習は公開中扱い・見せたくなければ室長が非公開にする)→ 確認手順を「冬期講習・冬期講習2 を非公開にしてから」に書き換え(外した lp-2 への参照も消した)。
+- docs: 確認リストを更新(版 v1.5.672 据え置き)。OK の qs-1・lp-1・lp-2・vc-1・d-6・d-7・sc-4・bk-1 を外し、qs-2 を書き換え、qs-3・qr-1・lp-5・sc-5・fm-1・d-8・dv-1・qs-4・tb-2 を足した。フリーメモ「講師専用の特別講習」(20261103-105053536)はオーナー確定「生徒側から全部隠す」で次の版で作る(対応済みに入れず確認リストに残す)。
+
+
 ## v1.5.679 (2026-11-03)
 
 - docs: 開発ダッシュボードの台帳(developmentStatusLedger)を更新。「Issue を閉じるための鍵を登録する」はオーナーが登録・Deploy Cloud Functions で反映済み(ログに Appended ISSUE_CLOSE_TOKEN・closeGitHubIssue 更新)→ 行を消した。自動バックアップの取り残しを読み取り専用で実測(main: 時点フォルダ 113・要約の無いフォルダ 0)→ Claude のやることから「自動で消す設定にするかオーナーが決める」へ書き換え (src/utils/developmentStatusLedger.ts)

@@ -24,8 +24,10 @@ import { createPortal } from 'react-dom'
 import type { DeveloperReportAttachment, DeveloperReportSubmitResult } from '../../utils/developerReport'
 import {
   formatChecklistRecordedAt,
+  selectPendingChecklistOtherNotes,
   summarizeChecklistResultsByClassroom,
   type ChecklistItemClassroomResults,
+  type ChecklistPendingOtherNote,
   type ChecklistSharedReport,
 } from '../../utils/verificationChecklistResults'
 import {
@@ -33,6 +35,7 @@ import {
   selectVerificationChecklistItems,
   type VerificationChecklistAudience,
   VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM,
+  VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS,
   VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY,
   addVerificationChecklistAttachment,
   collectStaleVerificationChecklistDraftKeys,
@@ -89,6 +92,12 @@ export type VerificationChecklistPanelProps = {
    * App が開いている教室(開発用教室)の生徒データから引く。送信本文(id と結果だけ)には使わない。
    */
   resolveStudentName?: (studentId: string) => string | null | undefined
+  /**
+   * 「画面を撮る」(2026-11-03 オーナー指示「画像を追加(スクショ)しかなくなり、タブを選んで撮影ができなくなっている」)。
+   * ボタンを置いたタブ(view)からブラウザのタブ選択画面を出し、コマ表・生徒日程表などを 1 枚撮る(screenCapture.captureBrowserTabFromView)。
+   * タブを選べないブラウザでは App が渡さない(ボタンを出さず、ファイル選択と貼り付けだけ)。
+   */
+  onCaptureTab?: (view: Window) => Promise<{ name: string; dataUrl: string }>
 }
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: VerificationChecklistStatus; label: string }> = [
@@ -134,10 +143,10 @@ const OTHER_NOTES_SEND_KEY = '__other-notes__'
 
 type SharedResultsState =
   | { status: 'idle' | 'loading' }
-  | { status: 'ready'; results: ChecklistItemClassroomResults }
-  | { status: 'error'; message: string; results: ChecklistItemClassroomResults }
+  | { status: 'ready'; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
+  | { status: 'error'; message: string; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
 
-export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
@@ -205,6 +214,34 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
       else setResultMessage(null)
     }
   }, [classroomId, shrinkImage])
+
+  // 撮った画像は縮小済みの JPEG(screenCapture が CHECKLIST_IMAGE_MAX_EDGE へ縮める)なので、そのまま項目へ付ける。
+  const [capturingItemId, setCapturingItemId] = useState<string | null>(null)
+  const captureTabForItem = useCallback(async (itemId: string, view: Window) => {
+    if (!onCaptureTab) return
+    setCapturingItemId(itemId)
+    try {
+      const shot = await onCaptureTab(view)
+      let failure: string | null = null
+      let stored = true
+      setDraft((current) => {
+        const result = addVerificationChecklistAttachment(current, { itemId, name: shot.name, dataUrl: shot.dataUrl }, createChecklistAttachmentId())
+        failure = result.error
+        if (!result.error) stored = writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(result.draft))
+        return result.draft
+      })
+      if (failure) setResultMessage(`画像を付けられませんでした(${itemId}): ${failure}`)
+      else if (!stored) setResultMessage('画像は付きましたが、この端末の保存領域がいっぱいで下書きに残せません(再読み込みすると消えます)。先に送信するか、ほかの画像を外してください。')
+      else setResultMessage(null)
+    } catch (error) {
+      // 選ばずに閉じたときは何も出さない(screenCapture.ts の TabCaptureCancelledError)。
+      if (!(error instanceof Error && error.name === 'TabCaptureCancelledError')) {
+        setResultMessage('選んだタブを撮れませんでした。スクリーンショットを撮って「画像を追加」から付けるか、Ctrl+V で貼り付けてください。')
+      }
+    } finally {
+      setCapturingItemId(null)
+    }
+  }, [classroomId, onCaptureTab])
 
   const removeImage = useCallback((attachmentId: string) => {
     setDraft((current) => {
@@ -298,12 +335,17 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     setShared((current) => (current.status === 'ready' || current.status === 'error' ? current : { status: 'loading' }))
     try {
       const reports = await load()
-      setShared({ status: 'ready', results: summarizeChecklistResultsByClassroom(reports, { currentClassroomId: classroomId }) })
+      setShared({
+        status: 'ready',
+        results: summarizeChecklistResultsByClassroom(reports, { currentClassroomId: classroomId }),
+        pendingOtherNotes: selectPendingChecklistOtherNotes(reports, { currentClassroomId: classroomId, processedReportIds: VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS }),
+      })
     } catch (error) {
       setShared((current) => ({
         status: 'error',
         message: error instanceof Error ? error.message : String(error),
         results: current.status === 'ready' || current.status === 'error' ? current.results : {},
+        pendingOtherNotes: current.status === 'ready' || current.status === 'error' ? current.pendingOtherNotes : [],
       }))
     }
   }, [classroomId])
@@ -311,6 +353,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   useEffect(() => {
     if (hasSharedResults) void refreshShared()
   }, [hasSharedResults, refreshShared])
+  const pendingOtherNotes = shared.status === 'ready' || shared.status === 'error' ? shared.pendingOtherNotes : []
 
   const setItemMessage = useCallback((key: string, message: string | null) => {
     setItemMessages((current) => {
@@ -368,7 +411,9 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
       return next
     })
     setItemMessage(OTHER_NOTES_SEND_KEY, `送りました(受付番号 ${result.reportId})。`)
-  }, [classroomId, draft, onSubmitNote, sendingKey, setItemMessage])
+    // 送ったメモを下の「対応待ちのフリーメモ」に出す(2026-11-03)。
+    void refreshShared()
+  }, [classroomId, draft, onSubmitNote, refreshShared, sendingKey, setItemMessage])
 
   const handleCopy = useCallback(async () => {
     const markdown = buildVerificationChecklistMarkdown(draft, items)
@@ -465,6 +510,21 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
             </button>
             {itemMessages[OTHER_NOTES_SEND_KEY] ? <span className="verification-checklist-send-state">{itemMessages[OTHER_NOTES_SEND_KEY]}</span> : null}
           </div>
+          {/* 送ったフリーメモの履歴(2026-11-03 オーナー指示「Claude で処理されるまでは送信内容が確認リストに履歴が残るように」)。
+              Claude が対応済みにした受付(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS)は出さない。 */}
+          {pendingOtherNotes.length > 0 ? (
+            <div className="verification-checklist-pending-notes" data-testid="verification-checklist-pending-notes">
+              <div className="verification-checklist-pending-notes-title">送ったフリーメモ(Claude が対応するまで残ります)</div>
+              <ul>
+                {pendingOtherNotes.map((row) => (
+                  <li key={row.reportId} data-testid={`verification-checklist-pending-note-${row.reportId}`}>
+                    <span className="verification-checklist-pending-notes-meta">{formatChecklistRecordedAt(row.recordedAt)}・{row.classroomLabel}</span>
+                    <span className="verification-checklist-pending-notes-text">{row.note}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
         {groups.map(([area, items]) => (
           <div key={area} className="verification-checklist-group">
@@ -556,6 +616,18 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                         </figcaption>
                       </figure>
                     ))}
+                    {attachments.length < VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM && onCaptureTab ? (
+                      <button
+                        type="button"
+                        className="verification-checklist-attach"
+                        onClick={(event) => { void captureTabForItem(item.id, event.currentTarget.ownerDocument.defaultView ?? window) }}
+                        disabled={capturingItemId !== null}
+                        title="コマ表・生徒日程表など、開いているタブを選んで 1 枚撮ります(ブラウザのタブ選択画面が出ます)"
+                        data-testid={`verification-checklist-capture-${item.id}`}
+                      >
+                        {capturingItemId === item.id ? '撮影中…' : '画面を撮る'}
+                      </button>
+                    ) : null}
                     {attachments.length < VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM ? (
                       <label className="verification-checklist-attach">
                         <input
@@ -569,7 +641,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                           }}
                           data-testid={`verification-checklist-attach-${item.id}`}
                         />
-                        画像を追加(スクショ)
+                        画像を追加
                       </label>
                     ) : null}
                   </div>
