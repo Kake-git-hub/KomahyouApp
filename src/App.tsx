@@ -9,7 +9,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { appendReopenedSlots, buildSchedulePublishedMap, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, removedDefaultSpecialSessionIds, selectSchedulePublishChangedSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { appendReopenedSlots, buildSchedulePublishedMap, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, isTeacherOnlySpecialSession, removedDefaultSpecialSessionIds, selectSchedulePublishChangedSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { buildSubmissionOccupiedSlotMaps } from './utils/submissionOccupiedSlots'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, closeOpenSchedulePopupWindows, consumeStudentScheduleRequestQueue, enqueueStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
@@ -3886,7 +3886,8 @@ function AuthenticatedApp() {
     const session = resolveDisplayedOverlappingSession(specialSessions, scheduleStartDate, scheduleEndDate)
     if (!session) return
     // 生徒は退塾日の当日から非在籍(2026-09-15 改定)なので、講習開始日が退塾日以降なら対象外(>)。講師は当日在籍のまま(>=)。
-    const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate > session.startDate))
+    // 講師専用の講習(2026-11-03)は生徒の提出用QRを作らず、生徒の文書も書き直さない(生徒は 0 人として扱う・講師は従来どおり)。
+    const activeStudents = isTeacherOnlySpecialSession(session) ? [] : students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate > session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
     // 混入防止(2026-07-09): 検証用教室(開発用教室・テスト教室)では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを
@@ -6350,6 +6351,7 @@ function AuthenticatedApp() {
         onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
         onLogout={logout}
         schedulePublishToggleEnabled={isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom)}
+        teacherOnlyEnabled={isFeatureEnabledForClassroom('teacherOnlySpecialSession', actingClassroom)}
       />
     )
   }

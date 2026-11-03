@@ -1,7 +1,7 @@
 import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
-import type { SpecialSessionRow } from '../../components/special-data/specialSessionModel'
+import { isTeacherOnlySpecialSession, type SpecialSessionRow } from '../../components/special-data/specialSessionModel'
 
 function generateSubmissionToken() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -122,7 +122,8 @@ export async function ensureSubmissionTokens(
     })
   }
 
-  for (const student of students) {
+  // 講師専用の講習(2026-11-03)は生徒の提出用QRを作らない(呼び出し側 App.tsx でも生徒を 0 人にしている・二重の守り)。
+  for (const student of isTeacherOnlySpecialSession(session) ? [] : students) {
     const existing = updatedStudentInputs[student.id]
     if (existing?.submissionToken) continue
     const token = generateSubmissionToken()

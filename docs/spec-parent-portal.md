@@ -236,6 +236,8 @@ Functions が緑になってから実機確認する。Firestore ルールの変
    GET の範囲と POST の受付上限は同じ値から作る。延ばした月はテンプレ補完の通常授業にも休み連絡が付く（月をまたぐ講習の休み連絡を受けるため・オーナー確定）。
 6. `hasLectureLessons`（講習だけの月の注記）は**出していない**講習コマだけ数える。
 7. 非公開の間の講習コマの休みは電話・LINE で受ける（オーナー確定 2026-11-03）。
+8. **講師専用の講習**（`specialSessions[].teacherOnly === true`・`docs/spec-special-session-submission.md` §B-3・2026-11-03）は**講習期間として扱わない**
+   （`readLectureSessions` が捨てる）。その期間の講習コマは出さず、「次の月」の上限も延ばさない。公開の値（`schedulePublished`）は見ない。
 
 ### 0-3. デプロイ順の注意（2026-09-13 に実際に踏んだ）
 

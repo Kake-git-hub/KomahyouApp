@@ -3670,6 +3670,42 @@ tr.sa-group-row td {
   border-color: #2f8f4e;
 }
 
+/* 講師専用の特別講習(2026-11-03)。一覧の札と作成欄のチェック。 */
+.special-session-teacher-only-badge {
+  justify-self: start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7a3e00;
+  background: #ffe8c7;
+  border: 1px solid #f0b46a;
+}
+
+.special-session-teacher-only-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #f0b46a;
+  border-radius: 8px;
+  background: #fff7ec;
+  cursor: pointer;
+}
+
+.special-session-teacher-only-field input {
+  margin-top: 4px;
+}
+
+.special-session-teacher-only-field span {
+  display: grid;
+  gap: 2px;
+}
+
+.special-session-teacher-only-field small {
+  color: #5b6573;
+}
+
 .special-session-editor-panel {
   display: grid;
   gap: 14px;

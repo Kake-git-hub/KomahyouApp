@@ -7,7 +7,7 @@ import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, res
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
 import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specialSessionModel'
-import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, selectStudentFacingSpecialSessions } from '../special-data/specialSessionModel'
 import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { startLongPressDragSession, type LongPressDragSession } from './longPressDrag'
@@ -10304,8 +10304,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const addableSpecialSessions = useMemo(() => {
     if (!emptyMenuContext) return []
-    return specialSessions
-      .slice()
+    // 講師専用の講習(2026-11-03)は生徒を講習として足すときの選択肢に出さない(生徒の講習コマは作らない)。
+    return selectStudentFacingSpecialSessions(specialSessions)
       .sort((left, right) => {
         const distanceCompare = computeSpecialSessionDateDistance(left, emptyMenuContext.cell.dateKey) - computeSpecialSessionDateDistance(right, emptyMenuContext.cell.dateKey)
         if (distanceCompare !== 0) return distanceCompare

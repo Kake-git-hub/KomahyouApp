@@ -576,6 +576,9 @@ function readWeeks(value: unknown): ParentBoardCell[][] {
 }
 
 // specialSessions → 講習期間。開始日・終了日が読めない講習は捨てる(どの日も講習期間にしない)。
+// ★講師専用の講習(teacherOnly === true・src/components/special-data/specialSessionModel.ts isTeacherOnlySpecialSession の写し・2026-11-03)も捨てる。
+//   保護者には講習期間として出さない(講習コマの表示にも「次の月」の上限延長にも使わない)。この講習の ID を持つコマは
+//   isLectureEntrySessionPublished で見つからず日付の判定だけになるが、その日は講習期間でないので講習コマは出ない。
 // ★published は SpecialSessionRow.schedulePublished の `!== false`(src/components/special-data/specialSessionModel.ts
 //   isSpecialSessionSchedulePublished の写し)。未設定=この項目ができる前に作った講習で、公開扱い(オーナー確定 2026-11-03)。
 function readLectureSessions(value: unknown): ParentLectureSession[] {
@@ -584,6 +587,7 @@ function readLectureSessions(value: unknown): ParentLectureSession[] {
     const startDate = readString(raw.startDate)
     const endDate = readString(raw.endDate)
     if (!isValidDateKey(startDate) || !isValidDateKey(endDate) || endDate < startDate) return []
+    if (raw.teacherOnly === true) return []
     return [{ id: readString(raw.id), startDate, endDate, published: raw.schedulePublished !== false }]
   })
 }

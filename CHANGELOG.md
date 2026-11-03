@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.684 (2026-11-03)
+
+- feat: 特別講習に「講師専用」を追加(確認リストのフリーメモ 20261103-105053536-c0f31680・オーナー確定 2026-11-03「生徒側から全部隠す」・機能フラグ `teacherOnlySpecialSession`＝開発用/テスト教室＋staging)。作成欄のチェックで `SpecialSessionRow.teacherOnly: true` を付け(作成時だけ・あとから付け外し不可・期間の重なりは今どおり禁止)、生徒日程表と印刷用生徒日程表(`toStudentFacingScheduleParams`)・生徒の提出用QRの発行(`ensureScheduleSubmissionTokens`・`ensureSubmissionTokens`)・盤面で生徒を講習として足す選択肢・未消化講習(`buildLectureStockEntries`)・保護者QR(`parentSchedule.ts` `readLectureSessions`＋functions の写し)・Excel 取り込みから外す。講師日程表・講師の提出用QRは従来どおり。一覧に「講師専用」の札、保護者への公開トグルは出さない。判定は `isTeacherOnlySpecialSession` / `selectStudentFacingSpecialSessions` に一本化し、隠す処理はデータで決まる(フラグに依らない)。仕様 `docs/spec-special-session-submission.md` §B-3・`docs/spec-parent-portal.md` §0-8 の 8。テスト `teacherOnlySpecialSession.test.ts`(19 件・修正なしで 10 件落ちる)。確認リスト to-1・to-2(版は v1.5.672 据え置き)・台帳の行を development-only へ。
+
 ## v1.5.683 (2026-11-03)
 
 - docs: 特別講習「講師専用」(オーナー決定 2026-11-03「生徒側から全部隠す」)を別セッションで進めるための引き継ぎ書 `docs/plan-2026-11-03-teacher-only-special-session-handoff.md` を新設。進行中テーマ台帳に行 `teacher-only-special-session`(未着手・Claude)を足し、memory にも記録。
