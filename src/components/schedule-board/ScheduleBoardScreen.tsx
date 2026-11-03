@@ -1065,10 +1065,44 @@ function getSchedulePopupRuntimeWindow() {
 }
 
 function hasOpenSchedulePopup(viewType: 'student' | 'teacher') {
-  if (typeof window === 'undefined') return false
+  return resolveOpenSchedulePopupWindow(viewType) !== null
+}
+
+/**
+ * いま開いている日程表タブ(App 全体で共有するハンドル)。閉じていれば null。
+ * ★盤面の再マウント(教室ロード・画面遷移で boardMountKey が変わる)のとき、日程表タブのハンドル(studentScheduleWindowRef 等)を
+ *   **これで初期化する**(確認リスト qs-1・2026-11-03)。〜v1.5.679 は null で始めていたため、開いている日程表タブを
+ *   800ms の監視が「閉じた」と判定して共有ハンドルまで消し、以後は提出や盤面の変更が日程表へ自動で届かず
+ *   「開き直すまで提出状況が更新されない」になっていた。
+ */
+export function resolveOpenSchedulePopupWindow(viewType: 'student' | 'teacher'): Window | null {
+  if (typeof window === 'undefined') return null
   const runtimeWindow = getSchedulePopupRuntimeWindow()
   const targetWindow = viewType === 'student' ? runtimeWindow.__lessonScheduleStudentWindow : runtimeWindow.__lessonScheduleTeacherWindow
-  return Boolean(targetWindow && !targetWindow.closed)
+  return targetWindow && !targetWindow.closed ? targetWindow : null
+}
+
+/**
+ * 開いている日程表タブ(生徒・講師)を閉じて共有ハンドルを空にする。閉じた数を返す。
+ * コマ表のタブを閉じる・再読み込みする(pagehide)ときに App が呼ぶ(2026-11-03 オーナー確定「コマ表アプリのタブを閉じたとき、
+ * 関連するタブも自動ですべて閉じて」・ブラウザは閉じると再読み込みを区別できないので再読み込みでも閉じる)。
+ * 「質問・要望」「確認リスト」の別タブは watchDetachedWindow が同じ pagehide で閉じる。
+ */
+export function closeOpenSchedulePopupWindows(runtimeWindow: { __lessonScheduleStudentWindow?: Window | null; __lessonScheduleTeacherWindow?: Window | null } = getSchedulePopupRuntimeWindow()): number {
+  let closedCount = 0
+  for (const key of ['__lessonScheduleStudentWindow', '__lessonScheduleTeacherWindow'] as const) {
+    const target = runtimeWindow[key]
+    if (target && !target.closed) {
+      try {
+        target.close()
+        closedCount += 1
+      } catch {
+        // 閉じられないタブは残す(次に開いたコマ表からは使わない)。
+      }
+    }
+    runtimeWindow[key] = null
+  }
+  return closedCount
 }
 
 function requestSchedulePopupInteractionYield() {
@@ -5299,6 +5333,32 @@ export function consumeStudentScheduleRequest(
   return current
 }
 
+// 日程表(別タブ)からの一過性リクエストは App 側で**順番待ちの列**に積む(確認リスト qs-2・2026-11-03)。
+// 〜v1.5.679 は 1 枠の state で、盤面が開いていない間(特別講習データ画面など)に「登録解除」(unassign)を押したあと
+// 日程表でコマを動かす(move)と、後の move が unassign を上書きして消し、講習コマが盤面に残ったままになった
+// (開発用教室で実測: 10/23 の講習が登録解除後も残り、その後の移動だけが処理された)。
+// 盤面は列の先頭だけを見て、処理したら requestId 一致の 1 件だけを列から外す(Issue #46 の消費規律はそのまま)。
+/**
+ * 登録解除(unassign)の講習・生徒が見つからないときの扱い(regression-reviewer 指摘 2026-11-03)。
+ * 両方あれば 'process'。教室のデータを読み終える前は 'wait'(到着前の取りこぼし防止・従来どおり)。
+ * 読み終えても見つからなければ 'discard'(列の先頭に残り続けて後ろの依頼を止めない)。
+ */
+export function resolveUnassignRequestMissingAction(input: { hasSession: boolean; hasStudent: boolean; isDataLoaded: boolean }): 'process' | 'wait' | 'discard' {
+  if (input.hasSession && input.hasStudent) return 'process'
+  return input.isDataLoaded ? 'discard' : 'wait'
+}
+
+// 講師の自動配置/解除(teacherAutoAssignRequest)も同じ列で持つ(兄弟監査 2026-11-03: 盤面が開いていない間に講師の登録解除 → 別の講師の登録が
+// 届くと、1 枠では後の assign が unassign を上書きし、解除した講師が盤面に残る同じ形だった)。
+export function enqueueStudentScheduleRequest<T extends { requestId: number }>(queue: readonly T[], request: T): T[] {
+  return [...queue, request]
+}
+
+export function consumeStudentScheduleRequestQueue<T extends { requestId: number }>(queue: T[], processedRequestId: number): T[] {
+  if (!queue.some((request) => request.requestId === processedRequestId)) return queue
+  return queue.filter((request) => request.requestId !== processedRequestId)
+}
+
 // テスト用に export(挙動変更なし・オーナー確定 2026-07-06 の現状仕様固定のため)。
 // この関数の挙動は「登録解除で special の配置だけ外し、makeup は残す」等の確定仕様。
 // ScheduleBoardScreen.test.ts の回帰テストが本体ロジックを固定している。export を外さない。
@@ -7614,8 +7674,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
   const boardExportRef = useRef<HTMLDivElement | null>(null)
-  const studentScheduleWindowRef = useRef<Window | null>(null)
-  const teacherScheduleWindowRef = useRef<Window | null>(null)
+  // 再マウント後も開いている日程表タブを見失わない(resolveOpenSchedulePopupWindow のコメント参照・null へ戻すと qs-1 が再発)。
+  const studentScheduleWindowRef = useRef<Window | null>(resolveOpenSchedulePopupWindow('student'))
+  const teacherScheduleWindowRef = useRef<Window | null>(resolveOpenSchedulePopupWindow('teacher'))
   const classroomSettingsRef = useRef(classroomSettings)
   const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
   if (!initialBoardSnapshotRef.current) {
@@ -8471,7 +8532,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const student = students.find((entry) => entry.id === request.studentId)
     // セッション/生徒が未ロードの間は消費せず、同マウント内での再評価(deps 変化)に委ねる。
     // ここで消費すると、データ到着前に来た unassign を取りこぼす。
-    if (!session || !student) return
+    // ★ただし教室のデータを読み終えても見つからない(講習・生徒が消された)なら、理由を出して消費する
+    //   (regression-reviewer 指摘 2026-11-03: 列の先頭が永久に残ると、後ろのコマ組み・登録解除が全部止まる)。
+    const missingAction = resolveUnassignRequestMissingAction({ hasSession: Boolean(session), hasStudent: Boolean(student), isDataLoaded: isEditingStateLoadedForActingClassroom })
+    if (missingAction === 'wait') return
+    if (missingAction === 'discard' || !session || !student) {
+      processedStudentScheduleRequestIdRef.current = request.requestId
+      onStudentScheduleRequestProcessed?.(request.requestId)
+      setStatusMessage('登録解除した講習か生徒が見つからなかったため、コマ表の講習授業は外していません。')
+      return
+    }
 
     // 処理に着手した時点で重複ガードを立て、App 側の一過性 state も消費済み(null)にさせる。
     // これにより盤面 key 再マウント(processedRef リセット)後も同じリクエストが再発火しない(Issue #46)。
@@ -8509,7 +8579,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // ★2 操作ログ(自動処理): 日程表からの登録解除リクエストで講習コマを自動除去した。
     recordOperationEvent('auto-student-unassign', { source: 'schedule-request', sessionLabel: session.label, studentName: result.studentName, clearedCellCount: result.clearedCellCount })
     setStatusMessage(`${session.label} で ${result.studentName} の講習授業を ${result.clearedCellCount} コマ解除しました。`)
-  }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, onStudentScheduleRequestProcessed, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
+  }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, isEditingStateLoadedForActingClassroom, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, onStudentScheduleRequestProcessed, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
 
   useEffect(() => {
     // Only clean up student+session pairs that are newly unsubmitted (not previously known).

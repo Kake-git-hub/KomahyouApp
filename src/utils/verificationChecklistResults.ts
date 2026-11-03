@@ -329,3 +329,41 @@ export function formatChecklistRecordedAt(iso: string | null | undefined): strin
   const minutes = String(jst.getUTCMinutes()).padStart(2, '0')
   return `${jst.getUTCMonth() + 1}/${jst.getUTCDate()} ${jst.getUTCHours()}:${minutes}`
 }
+
+// ---- 送ったフリーメモの履歴(2026-11-03 オーナー指示「フリーメモは送信して Claude で処理されるまでは送信内容が確認リストに履歴が残るようにして」) ----
+//
+// listVerificationChecklistResults が返す今の版の送信から、フリーメモ(本文の「その他」)を受付ごとに取り出し、
+// Claude が対応済みにした受付(verificationChecklist.ts の VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS)を除いて並べる。
+
+export type ChecklistPendingOtherNote = {
+  reportId: string
+  classroomLabel: string
+  isCurrentClassroom: boolean
+  recordedAt: string
+  note: string
+}
+
+/** 対応待ちのフリーメモ(受付が新しい順)。受付番号の無い送信・Claude が対応済みにした受付は出さない。 */
+export function selectPendingChecklistOtherNotes(
+  reports: readonly ChecklistSharedReport[],
+  options: { currentClassroomId: string | null | undefined; processedReportIds: ReadonlySet<string> | readonly string[] },
+): ChecklistPendingOtherNote[] {
+  const processed = options.processedReportIds instanceof Set ? options.processedReportIds : new Set(options.processedReportIds as readonly string[])
+  const pending: ChecklistPendingOtherNote[] = []
+  for (const report of reports) {
+    const reportId = String(report?.reportId ?? '')
+    if (!reportId || processed.has(reportId)) continue
+    const part = toChecklistReport(report)
+    if (!part) continue
+    const { otherNotes } = parseChecklistBody(part.body)
+    if (!otherNotes.trim()) continue
+    pending.push({
+      reportId,
+      classroomLabel: report.classroomKind === 'development' ? '開発用教室' : 'テスト教室',
+      isCurrentClassroom: Boolean(options.currentClassroomId) && report.classroomId === options.currentClassroomId,
+      recordedAt: part.recordedAt,
+      note: otherNotes.trim(),
+    })
+  }
+  return pending.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))
+}

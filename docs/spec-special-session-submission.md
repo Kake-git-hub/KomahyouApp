@@ -33,7 +33,7 @@
     書くのは `buildSubmissionDistributionPatch` の項目だけで、提出内容（status・不可コマ・希望科目数・集団参加・オプション・提出日時）は書かない。
     また操作中の教室 ID を渡し、別教室の文書には書かない（`isForeignClassroomSubmissionDoc`。登録・登録解除と同じガード）。
   - ★**室長の「登録」「登録解除」も部分更新**（2026-11-03・INV-07）: `markLectureSubmissionDocAsSubmitted` は status・提出日時と渡された
-    集団参加/オプションだけ（`buildSubmissionLockPatch`）、`resetLectureSubmissionDoc` は提出内容を空へ戻す項目と status だけ（`buildSubmissionResetPatch`）を書く。
+    集団参加/オプションだけ（`buildSubmissionLockPatch`）、`resetLectureSubmissionDoc` は提出内容（日程表の今の内容・§E-2）と status だけ（`buildSubmissionResetPatch`）を書く。
     読み→書きの間に保護者が提出しても、その不可コマ・希望科目数を古い内容で消さない。配布情報（黄色コマ含む）は書かないので残る。
 - ★**日程表の表示範囲に講習期間が複数重なるときの QR/バッジの講習選択**（2026-08-29・手動テスト No.201）:
   **表示開始日を含む講習を優先**し、無ければ表示範囲内で最初に始まる講習を選ぶ
@@ -151,11 +151,15 @@
   **冪等に再配置**して埋める。**過去の本番スタック（v1.5.357・提出したのに名前が出ない）への意図的ガードで消してはならない。**
 - ただし**講師配置のみ自己修復があり、生徒の講習ストック消費デルタには自己修復が無い**（領域5 と連動）。
 
-### E-2. 登録解除（リセット）のクリア粒度（監査 B9・オーナー確定 2026-07-04）
+### E-2. 登録解除（リセット）で QR 文書に書く内容（監査 B9・オーナー確定 2026-07-04 → **2026-11-03 改定**）
 
-- 登録解除（`resetLectureSubmissionDoc`）でクリアするのは**提出内容6フィールド**（`unavailableSlots` / `subjectSlots` /
-  `subjectDurations` / `groupClassParticipation` / `optionChecks` / `regularOnly`）と**提出時刻（`submittedAt`）のみ**。
-  status は `pending` に戻す。
+- ★**2026-11-03 改定（オーナー指示・確認リスト qs-2「提出用QRも解除後は解除前の登録した内容は残った状態で、未送信状態にして
+  (日程表と同じ内容にしたい)」・講師も同じ＝オーナー確定）**: 登録解除（`resetLectureSubmissionDoc(token, classroomId, keepContents)`）は
+  提出内容6フィールド（`unavailableSlots` / `subjectSlots` / `subjectDurations` / `groupClassParticipation` / `optionChecks` / `regularOnly`）を
+  **空にせず、日程表の今の内容を書く**（講師は `unavailableSlots` だけ・ほかは空）。`submittedAt` は null、status は `pending` に戻す。
+  保護者・講師は前の内容が入った提出前の画面から直して出し直せる。pending の文書は購読（`status == 'submitted'` だけ）に拾われないので、
+  書いた内容がアプリへ反映し直されることはない。
+  - 旧仕様（2026-07-04〜2026-11-02）: 6 フィールドを空へ戻していた。
 - **配布情報は維持**する: 本人名・期間・盤面配置（occupiedSlots）・休日（holidayDates）・限数（slotNumbers）・
   集団科目の選択肢（availableGroupClassSubjects）・オプション文言（optionLabels）・
   **「後から出席可能に変更」（reopenedSlots・§C-1b。解除しても黄色はキープが確定仕様 2026-07-18）**。
@@ -188,6 +192,11 @@ E-2 は QR 提出 doc（`resetLectureSubmissionDoc`）側のクリア粒度を�
 「現状のまま＝正」と確定した仕様。回帰テスト
 `ScheduleBoardScreen.test.ts › removeStudentAssignmentsFromSpecialSession` が本体ロジックを固定している。
 
+- ★**登録解除の盤面除去は取りこぼさない（2026-11-03・確認リスト qs-2）**: 日程表からの一過性の依頼（登録解除 unassign・コマ組み move・
+  講師の自動配置/解除）は App で**順番待ちの列**に積み、盤面は先頭から requestId 一致で 1 件ずつ消費する（Issue #46 の規律）。
+  1 枠の state だった頃は、コマ表を開いていない間（特別講習データ画面など）に登録解除 → 日程表でコマ移動の順に届くと、後の move が
+  unassign を上書きして講習コマが残った。講習・生徒が教室データを読み終えても見つからない unassign は理由を出して消費する（先頭で止めない）。
+  列は教室を開く・ワークスペースを読み込む・ログアウトの 3 経路で捨てる（INV-08）。
 - **① 講習だけ外し、振替は盤面に残す（振替は登録解除に連動しない・確定）**:
   登録解除（＝提出済み→未提出への実遷移）で盤面から自動除去するのは**講習（`lessonType='special'`）の配置のみ**。
   同じ生徒に自動割当されていた**振替（`lessonType='makeup'`）は盤面に残し、未消化振替（在庫）へは戻さない**。
@@ -198,8 +207,8 @@ E-2 は QR 提出 doc（`resetLectureSubmissionDoc`）側のクリア粒度を�
 
 - **③ 希望数（`subjectSlots`）は in-app では保持（再登録で復活）**:
   登録解除しても**アプリ内の希望数は消さない**。再登録すると解除前の希望数がそのまま復活する。
-  QR 提出 doc 側の `subjectSlots` クリアは E-2 のとおり（doc は6フィールドをクリア）。
-  ＝「doc はクリア／in-app は保持」の**二層構造**であり、両者は別物として確定。
+  QR 提出 doc 側も 2026-11-03 から日程表と同じ内容を残す（E-2）。＝「doc も in-app も保持（status だけ未提出へ）」。
+  - 旧（〜2026-11-02）: 「doc はクリア／in-app は保持」の二層構造だった。
 
 - **⑤ ストック調整は「台帳クリア方式」が正（+1戻しはしない）**:
   講習を盤面から外す際のストック復元は、**その生徒×セッションの台帳エントリを一括クリアする方式**が正

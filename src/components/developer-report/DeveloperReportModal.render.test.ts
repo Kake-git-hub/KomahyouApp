@@ -118,15 +118,22 @@ describe('DeveloperReportModal の描画(添付画像・2026-10-22 オーナー�
     expect(html).not.toContain('data-testid="developer-report-attachment"')
   })
 
-  it('タブを撮る関数を渡すと「タブを選んで撮る」も出て、案内に生徒日程表などのタブを選べることが入る(2026-11-03)', () => {
+  // 2026-11-03 オーナー指示(確認リスト sc-4 メモ)「画面を撮る / タブを選んで撮る のボタンは一つに統合して」。
+  it('タブを撮る関数を渡しても撮るボタンは「画面を撮る」1 つだけで、案内にコマ表・生徒日程表などのタブを選べることが入る', () => {
     const shot = async () => ({ name: 'x', dataUrl: 'data:image/jpeg;base64,AAAA' })
     const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: shot, onCaptureTab: shot }))
-    expect(html).toContain('data-testid="developer-report-capture"')
-    expect(html).toContain('data-testid="developer-report-capture-tab"')
-    expect(html).toContain('>タブを選んで撮る<')
-    expect(html).toContain('生徒日程表など開いているタブを選んで付けられます')
-    // 渡さなければ出さない(タブ選択が使えないブラウザ)。
-    expect(renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: shot }))).not.toContain('developer-report-capture-tab')
+    expect(html.split('data-testid="developer-report-capture"').length - 1).toBe(1)
+    expect(html).toContain('>画面を撮る<')
+    expect(html).not.toContain('タブを選んで撮る<')
+    expect(html).not.toContain('developer-report-capture-tab')
+    expect(html).toContain('コマ表や生徒日程表など開いているタブを選んで付けられます')
+  })
+
+  it('タブを選べないブラウザ(onCaptureTab なし)でも「画面を撮る」1 つ(いまの画面を撮る)', () => {
+    const shot = async () => ({ name: 'x', dataUrl: 'data:image/jpeg;base64,AAAA' })
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: shot }))
+    expect(html.split('data-testid="developer-report-capture"').length - 1).toBe(1)
+    expect(html).toContain('いまのコマ表の画面がそのまま付きます')
   })
 
   it('撮る関数が無ければ「画像を選ぶ」だけと、スクリーンショットを選ぶ案内', () => {

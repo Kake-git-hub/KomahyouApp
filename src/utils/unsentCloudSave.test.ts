@@ -184,7 +184,8 @@ describe('App.tsx の配線(ソース走査)', () => {
     expect(app).toContain('const failureDialog = resolveSaveFailureDialog({')
     expect(app).toContain("if (window.confirm(failureDialog.text)) void sendUnsentCloudSaveRef.current?.(unsentRecord, 'on-failure')")
     expect(app).toContain('window.alert(failureDialog.text)')
-    expect(app).toContain('if (!isStaleSnapshotConflictError(error)) {')
+    // 2026-11-03: 開発用教室から開発者画面へ戻るときの黙った保存(silentFailure)も控えない(オーナー指示「表示、通知しないように」)。
+    expect(app).toContain('if (!isStaleSnapshotConflictError(error) && !nextItem.silentFailure) {')
     // 控えを書くのは保存の失敗点の 1 か所だけ
     expect(app.split('writeUnsentCloudSave(').length - 1).toBe(1)
   })

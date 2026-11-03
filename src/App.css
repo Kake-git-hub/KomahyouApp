@@ -6373,12 +6373,59 @@ body.verification-checklist-window {
   cursor: pointer;
 }
 
+.verification-checklist-attach + .verification-checklist-attach {
+  margin-left: 8px;
+}
+
+button.verification-checklist-attach {
+  background: #fff;
+}
+
+button.verification-checklist-attach:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .verification-checklist-attach:hover {
   background: #eef4ff;
 }
 
 .verification-checklist-attach input[type='file'] {
   display: none;
+}
+
+.verification-checklist-pending-notes {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #c7d7f2;
+  border-radius: 6px;
+  background: #f5f8ff;
+}
+
+.verification-checklist-pending-notes-title {
+  font-weight: 700;
+  color: #1d4ed8;
+  margin-bottom: 6px;
+}
+
+.verification-checklist-pending-notes ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.verification-checklist-pending-notes li + li {
+  margin-top: 6px;
+}
+
+.verification-checklist-pending-notes-meta {
+  display: block;
+  color: #5b6b82;
+  font-size: 0.85em;
+}
+
+.verification-checklist-pending-notes-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .verification-checklist-footer {

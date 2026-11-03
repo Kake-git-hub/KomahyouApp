@@ -38,8 +38,14 @@ import {
   DASHBOARD_SECTION_DESCRIPTIONS,
   DASHBOARD_SECTION_LABELS,
   DASHBOARD_WHO_LABELS,
+  DEVELOPER_DASHBOARD_DISMISSED_STORAGE_KEY,
+  applyDashboardCardDismissals,
   buildCloseIssueConfirmMessage,
+  buildDashboardCardDismissKey,
   buildDashboardOverview,
+  buildDismissDashboardCardConfirmMessage,
+  isDashboardCardDismissible,
+  parseDashboardDismissedKeys,
   resolveClaudeCodeSessionUrl,
   type DashboardCard,
   type DashboardSection,
@@ -154,7 +160,32 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const loadedAt = [reportsCurrent?.loadedAt ?? '', issuesCurrent?.loadedAt ?? ''].sort().reverse()[0] ?? ''
 
   const issueStates = useMemo(() => buildIssueStateMap(issues), [issues])
-  const overview = useMemo(() => buildDashboardOverview({ reports, issues, issueStates }), [reports, issues, issueStates])
+  const [dismissedCardKeys, setDismissedCardKeys] = useState<Set<string>>(() => {
+    try {
+      return parseDashboardDismissedKeys(typeof window === 'undefined' ? null : window.localStorage.getItem(DEVELOPER_DASHBOARD_DISMISSED_STORAGE_KEY))
+    } catch {
+      return new Set()
+    }
+  })
+  const saveDismissedCardKeys = useCallback((next: Set<string>) => {
+    setDismissedCardKeys(next)
+    try {
+      window.localStorage.setItem(DEVELOPER_DASHBOARD_DISMISSED_STORAGE_KEY, JSON.stringify([...next]))
+    } catch {
+      // 保存できない環境では、この画面を開いている間だけ消える。
+    }
+  }, [])
+  const overview = useMemo(
+    () => applyDashboardCardDismissals(buildDashboardOverview({ reports, issues, issueStates }), dismissedCardKeys),
+    [reports, issues, issueStates, dismissedCardKeys],
+  )
+  // Issue の無いカードを消す(2026-11-03 オーナー指示・d-7 メモ)。この端末にだけ覚える(何も書き込まない画面のまま)。
+  const requestDismissCard = useCallback((card: DashboardCard) => {
+    if (!isDashboardCardDismissible(card)) return
+    if (!confirmAction(buildDismissDashboardCardConfirmMessage(card))) return
+    saveDismissedCardKeys(new Set(dismissedCardKeys).add(buildDashboardCardDismissKey(card)))
+  }, [confirmAction, dismissedCardKeys, saveDismissedCardKeys])
+  const restoreDismissedCards = useCallback(() => saveDismissedCardKeys(new Set()), [saveDismissedCardKeys])
 
   const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((current) => {
@@ -198,7 +229,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
     ) : (
       <div className="dev-dash-cards">
         {cards.map((card) => (
-          <DashboardCardView key={card.id} card={card} expanded={expandedIds.has(card.id)} copied={copiedCardId === card.id} onToggleExpanded={toggleExpanded} onCopyPrompt={copyCardPrompt} onCloseIssue={canCloseIssues ? requestCloseIssue : undefined} closingIssueNumber={closingIssueNumber} />
+          <DashboardCardView key={card.id} card={card} expanded={expandedIds.has(card.id)} copied={copiedCardId === card.id} onToggleExpanded={toggleExpanded} onCopyPrompt={copyCardPrompt} onCloseIssue={canCloseIssues ? requestCloseIssue : undefined} closingIssueNumber={closingIssueNumber} onDismiss={isDashboardCardDismissible(card) ? requestDismissCard : undefined} />
         ))}
       </div>
     )
@@ -267,6 +298,13 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
               ))}
             </nav>
 
+            {overview.hiddenCount > 0 ? (
+              <p className="dev-dash-close-note" data-testid="developer-dashboard-hidden-note">
+                消したカードが {overview.hiddenCount} 件あります(この端末だけ)。
+                <button type="button" className="link-button" onClick={restoreDismissedCards} data-testid="developer-dashboard-restore-dismissed">消したカードを戻す</button>
+              </p>
+            ) : null}
+
             {closeIssueNote ? (
               <p className={closeIssueNote.tone === 'error' ? 'developer-report-error dev-dash-close-note' : 'dev-dash-close-note'} role="status" data-testid="developer-dashboard-close-note">{closeIssueNote.text}</p>
             ) : null}
@@ -327,6 +365,7 @@ export function DashboardCardView({
   onCopyPrompt,
   onCloseIssue,
   closingIssueNumber = null,
+  onDismiss,
 }: {
   card: DashboardCard
   expanded: boolean
@@ -337,6 +376,8 @@ export function DashboardCardView({
   onCloseIssue?: (issueNumber: number) => void
   /** いま閉じている最中の Issue(その間はどの「閉じる」も押せない)。 */
   closingIssueNumber?: number | null
+  /** Issue の無いカードを一覧から消す(undefined なら出さない・2026-11-03)。 */
+  onDismiss?: (card: DashboardCard) => void
 }) {
   const claudeUrl = card.prompt === null ? null : resolveClaudeCodeSessionUrl(card.prompt)
   return (
@@ -381,6 +422,11 @@ export function DashboardCardView({
         <button type="button" className="dev-dash-more" onClick={() => onToggleExpanded(card.id)} aria-expanded={expanded}>
           {expanded ? 'とじる' : 'くわしく'}
         </button>
+        {onDismiss ? (
+          <button type="button" className="dev-dash-close-issue" onClick={() => onDismiss(card)} data-testid={`developer-dashboard-dismiss-${card.id}`} title="この一覧から消します(この端末だけ・確認の画面が出ます)">
+            消す
+          </button>
+        ) : null}
       </div>
       {expanded ? (
         <ul className="dev-dash-card-details" data-details-for={card.id}>

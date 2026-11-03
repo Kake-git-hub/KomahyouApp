@@ -288,7 +288,34 @@ function isForeignClassroomSubmissionDoc(
  * ★配布情報(occupiedSlots / availableSubjects / slotNumbers / holidayDates / reopenedSlots / schedulePublished など)は
  *   **含めない**＝部分更新で既存値が残る(登録解除しても黄色はキープ・2026-07-18 確定仕様)。
  */
-export function buildSubmissionResetPatch(): Record<string, unknown> {
+export type SubmissionResetContents = {
+  unavailableSlots: string[]
+  subjectSlots: Record<string, number>
+  subjectDurations: Record<string, number>
+  groupClassParticipation: Record<string, boolean>
+  optionChecks: Record<string, boolean>
+  regularOnly: boolean
+}
+
+/**
+ * keepContents を渡すと(生徒の登録解除・確認リスト qs-2・オーナー指示 2026-11-03「提出用QRも解除後は解除前の登録した内容は
+ * 残った状態で、未送信状態にして(日程表と同じ内容にしたい)」)、提出内容を空にせず**日程表の今の内容**を書いて pending に戻す
+ * (保護者は前の内容から直して出し直せる)。講師の登録解除も同じく日程表の✕を渡す(オーナー確定 2026-11-03)。渡さないときは空へ戻す。
+ * pending の文書は購読(status == submitted だけを見る)に拾われないので、書いた内容がアプリ側へ反映し直されることはない。
+ */
+export function buildSubmissionResetPatch(keepContents?: SubmissionResetContents): Record<string, unknown> {
+  if (keepContents) {
+    return {
+      status: 'pending',
+      unavailableSlots: [...keepContents.unavailableSlots],
+      subjectSlots: { ...keepContents.subjectSlots },
+      subjectDurations: { ...keepContents.subjectDurations },
+      groupClassParticipation: { ...keepContents.groupClassParticipation },
+      optionChecks: { ...keepContents.optionChecks },
+      regularOnly: keepContents.regularOnly,
+      submittedAt: null,
+    }
+  }
   return {
     status: 'pending',
     unavailableSlots: [],
@@ -301,7 +328,7 @@ export function buildSubmissionResetPatch(): Record<string, unknown> {
   }
 }
 
-export async function resetLectureSubmissionDoc(token: string, expectedClassroomId?: string | null) {
+export async function resetLectureSubmissionDoc(token: string, expectedClassroomId?: string | null, keepContents?: SubmissionResetContents) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
 
@@ -313,7 +340,7 @@ export async function resetLectureSubmissionDoc(token: string, expectedClassroom
 
   // ★部分更新(2026-11-03・INV-07): 読んだ doc を丸ごと書き戻すと、読み→書きの間に別の書き込み(配布情報の後追い反映など)が
   //   入ったとき古い data で巻き戻す。書くのは登録解除で空へ戻す項目だけ。
-  await updateDoc(docRef, buildSubmissionResetPatch())
+  await updateDoc(docRef, buildSubmissionResetPatch(keepContents))
 }
 
 /**
@@ -329,10 +356,11 @@ export function guardAndResetLectureSubmissionDoc(
   guard: RecentlyResetGuard,
   token: string | null | undefined,
   expectedClassroomId?: string | null,
+  keepContents?: SubmissionResetContents,
 ) {
   if (!token) return Promise.resolve()
   guard.add(token)
-  return resetLectureSubmissionDoc(token, expectedClassroomId)
+  return resetLectureSubmissionDoc(token, expectedClassroomId, keepContents)
 }
 
 /**

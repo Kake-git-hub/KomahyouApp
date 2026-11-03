@@ -11,7 +11,7 @@ import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLes
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { appendReopenedSlots, buildSchedulePublishedMap, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, removedDefaultSpecialSessionIds, selectSchedulePublishChangedSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { buildSubmissionOccupiedSlotMaps } from './utils/submissionOccupiedSlots'
-import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, closeOpenSchedulePopupWindows, consumeStudentScheduleRequestQueue, enqueueStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 import { buildMakeupStockEntries, createBoardStudentStockIdResolver, toOutstandingMakeupOriginEntries } from './components/schedule-board/makeupStock'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
@@ -225,6 +225,14 @@ export function buildSubmissionAcknowledgementEntries(
       : (teacherNameById.get(entry.personId) ?? entry.personId),
     classroomName: params.classroomName?.trim() || '教室',
   }))
+}
+
+/**
+ * 提出用QRの提出を購読で新しく反映したとき、開いている日程表タブを作り直すか(確認リスト qs-1・2026-11-03)。
+ * 反映が 1 件でもあれば真。0 件(変化なし・保護者所有フィールドだけの反映)では作り直さない(全再生成の連発を避ける)。
+ */
+export function shouldSyncSchedulePopupsForSubmissions(newlyAppliedCount: number): boolean {
+  return newlyAppliedCount > 0
 }
 
 /**
@@ -977,6 +985,19 @@ export function shouldReturnDeveloperOnLogout(
   return role === 'developer' && screen !== 'developer'
 }
 
+/**
+ * 開発用教室(とテスト教室)から開発者画面へ戻るときの保存は、失敗しても画面に出さず通知もしない
+ * (2026-11-03 オーナー指示「開発用教室から開発用画面に戻るときは保存失敗してても良いので表示、通知しないようにして」)。
+ * 本番教室から戻るとき・室長のログアウトは従来どおり知らせる(本番データの保存失敗は必ず知らせる)。
+ */
+export function shouldSilenceSaveFailureOnDeveloperReturn(input: {
+  screen: AppScreen
+  role: WorkspaceUser['role'] | null | undefined
+  isDevelopmentClassroom: boolean
+}): boolean {
+  return input.isDevelopmentClassroom && shouldReturnDeveloperOnLogout(input.screen, input.role)
+}
+
 export function shouldSyncCurrentClassroomBeforeOpen(
   currentScreen: AppScreen,
   role: WorkspaceUser['role'] | null | undefined,
@@ -1504,18 +1525,23 @@ function AuthenticatedApp() {
   const [boardMountKey, setBoardMountKey] = useState(0)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
-  const [teacherAutoAssignRequest, setTeacherAutoAssignRequest] = useState<TeacherAutoAssignRequest | null>(null)
-  const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
+  // 兄弟監査(2026-11-03・qs-2 と同じ形): 1 枠だと盤面が開いていない間に後の assign が講師の unassign を上書きしたため、順番待ちの列にする。
+  const [teacherAutoAssignRequestQueue, setTeacherAutoAssignRequestQueue] = useState<TeacherAutoAssignRequest[]>([])
+  // 確認リスト qs-2(2026-11-03): 1 枠だと盤面が開いていない間に後の move が unassign を上書きして消したため、順番待ちの列にする。
+  // 盤面には先頭の 1 件だけを渡す(studentScheduleRequestQueue[0])。
+  const [studentScheduleRequestQueue, setStudentScheduleRequestQueue] = useState<StudentScheduleRequest[]>([])
+  // 確認リスト qs-1: 提出用QRの提出を反映したら開いている日程表タブを作り直す合図(数字が増えたら同期する)。
+  const [submissionScheduleSyncTick, setSubmissionScheduleSyncTick] = useState(0)
   // Issue #46: 盤面が unassign リクエストを処理し終えたら、この一過性 state を消費済み(null)にする。
   // これをしないと盤面 key 再マウントで古いリクエストが再発火し、組み直した講習コマが消える。
   const handleStudentScheduleRequestProcessed = useCallback((requestId: number) => {
-    setStudentScheduleRequest((current) => consumeStudentScheduleRequest(current, requestId))
+    setStudentScheduleRequestQueue((current) => consumeStudentScheduleRequestQueue(current, requestId))
   }, [])
   // Issue #46 同型(2026-07-09): 盤面が講師の自動配置/解除リクエストを処理し終えたら一過性 state を
   // 消費(null)にする。消さないと盤面 key 再マウントで processedRef が消え、古い unassign(登録解除)が
   // 再発火して講師が盤面から勝手に消える(8/4 講習で門田/角田が削除操作なしに消える報告)。
   const handleTeacherAutoAssignRequestProcessed = useCallback((requestId: number) => {
-    setTeacherAutoAssignRequest((current) => consumeTeacherAutoAssignRequest(current, requestId))
+    setTeacherAutoAssignRequestQueue((current) => consumeStudentScheduleRequestQueue(current, requestId))
   }, [])
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   // lastSavedAt はワークスペース snapshot の保存時刻。QR提出通知(モーダル)の起動時ウォーターマークに使うため
@@ -1534,6 +1560,8 @@ function AuthenticatedApp() {
     targetClassroomIds?: string[]
     showSlowMessage?: boolean
     downloadBackupOnFailure?: boolean
+    /** 失敗しても画面・ダイアログ・控え(未送信の保存)を出さない(開発用教室から開発者画面へ戻るときだけ・2026-11-03)。 */
+    silentFailure?: boolean
     onSuccess?: () => void
     onFailure?: (error: unknown) => void
   } | null>(null)
@@ -1971,6 +1999,7 @@ function AuthenticatedApp() {
         onSubmitNote={submitVerificationChecklistNote}
         loadSharedResults={loadVerificationChecklistSharedResults}
         resolveStudentName={resolveVerificationChecklistStudentName}
+        onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}
       />
     ) : null
 
@@ -2345,6 +2374,7 @@ function AuthenticatedApp() {
 
   const queueFirebaseWorkspaceSync = useCallback((snapshot: WorkspaceSnapshot, showSlowMessage = false, showProgress = false, targetClassroomIds?: string[], callbacks?: {
     downloadBackupOnFailure?: boolean
+    silentFailure?: boolean
     onSuccess?: () => void
     onFailure?: (error: unknown) => void
   }) => {
@@ -2359,6 +2389,8 @@ function AuthenticatedApp() {
       targetClassroomIds,
       showSlowMessage: showSlowMessage || existingQueuedItem?.showSlowMessage,
       downloadBackupOnFailure: Boolean(callbacks?.downloadBackupOnFailure || existingQueuedItem?.downloadBackupOnFailure),
+      // 黙るのは、まとめた保存がすべて「黙ってよい」ときだけ(先に積まれた通常の保存の失敗は知らせる)。
+      silentFailure: Boolean(callbacks?.silentFailure && (!existingQueuedItem || existingQueuedItem.silentFailure)),
       onSuccess: () => {
         existingQueuedItem?.onSuccess?.()
         callbacks?.onSuccess?.()
@@ -2500,7 +2532,7 @@ function AuthenticatedApp() {
             recordOperationTrace('save', `保存失敗: ${error instanceof Error ? error.message : String(error)}`)
             // 送れなかった教室データを上書きされない控えとして端末に残す(自動保存の失敗でも・2026-10-27)。書き戻しには使わない。
             // 版数衝突(別の端末が先に保存)は控えない: その経路は JSON の書き出しと再読み込みの案内を別に出す(二重に案内しない)。
-            if (!isStaleSnapshotConflictError(error)) {
+            if (!isStaleSnapshotConflictError(error) && !nextItem.silentFailure) {
               try {
                 consecutiveCloudSaveFailuresRef.current.set(targetClassroom.id, (consecutiveCloudSaveFailuresRef.current.get(targetClassroom.id) ?? 0) + 1)
                 failedUnsentRecord = buildUnsentCloudSaveRecord({
@@ -2543,6 +2575,17 @@ function AuthenticatedApp() {
         }
       } catch (error) {
         failed = true
+        // 開発用教室から開発者画面へ戻るときの保存の失敗は、出さない・知らせない(2026-11-03 オーナー指示)。
+        // 版数衝突の停止フラグも立てない(立てると次に開く教室の保存まで止まる)。キューに残りがあれば finally が続ける。
+        if (nextItem.silentFailure) {
+          recordOperationTrace('save', `保存失敗(開発用教室から開発者画面へ戻る・通知なし): ${error instanceof Error ? error.message : String(error)}`)
+          updateRemoteSyncPending(Boolean(queuedRemoteSnapshotRef.current))
+          setRemoteSyncProgress(null)
+          clearRemoteSyncProgressTimer()
+          setPersistenceMessage('開発者画面に戻りました。')
+          nextItem.onFailure?.(error)
+          return
+        }
         // A1: 版数衝突(別端末が先に更新)は通常の同期失敗と分けて扱う。
         // 同じ古いベースで再送し続けても必ず失敗するため、再送ループを止めて再読み込みを促す。
         if (isStaleSnapshotConflictError(error)) {
@@ -2795,6 +2838,10 @@ function AuthenticatedApp() {
     setUndoSnapshot(null)
     // 同じ理由で、確認待ちの復元データ(前の教室のバックアップ)も破棄する。
     setManagerSelfRestorePending(null)
+    // INV-08(regression-reviewer 指摘 2026-11-03): 日程表から積んだ一過性の依頼(登録解除・コマ組み・講師の自動配置)の列も、
+    // 前の教室・前のセッションのものを次の教室で実行しないよう同じ 3 経路で捨てる。画面の行き来(navigateClassroomScreen)では捨てない(qs-2)。
+    setStudentScheduleRequestQueue([])
+    setTeacherAutoAssignRequestQueue([])
     applyClassroomPayloadToState(nextClassroom.data, {
       setScreen: () => setScreen(resolvedNextScreen),
       setManagers,
@@ -2838,6 +2885,10 @@ function AuthenticatedApp() {
     setUndoSnapshot(null)
     // 確認待ちの復元データ(室長の自教室復元)も同じ経路で必ず捨てる(openClassroom / applyWorkspaceSnapshot / logout の 3 兄弟)。
     setManagerSelfRestorePending(null)
+    // INV-08(regression-reviewer 指摘 2026-11-03): 日程表から積んだ一過性の依頼(登録解除・コマ組み・講師の自動配置)の列も、
+    // 前の教室・前のセッションのものを次の教室で実行しないよう同じ 3 経路で捨てる。画面の行き来(navigateClassroomScreen)では捨てない(qs-2)。
+    setStudentScheduleRequestQueue([])
+    setTeacherAutoAssignRequestQueue([])
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
     setWorkspaceClassrooms(trimmedClassrooms)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
@@ -2919,7 +2970,7 @@ function AuthenticatedApp() {
     setRemoteAuthMessage('')
   }, [actingClassroomId, applyWorkspaceSnapshot, remoteSessionUserId])
 
-  const queueCurrentWorkspaceSnapshotPersistence = useCallback(() => {
+  const queueCurrentWorkspaceSnapshotPersistence = useCallback((options?: { silentFailure?: boolean }) => {
     if (!isSnapshotPersistenceRuntimeEnabled()) return null
     clearDelayedAutoRemoteSyncTimer()
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -2932,7 +2983,7 @@ function AuthenticatedApp() {
       .catch(() => {})
 
     if (isRemoteBackendEnabled && remoteSessionUserId) {
-      queueFirebaseWorkspaceSync(snapshot, false, false, targetClassroomIds)
+      queueFirebaseWorkspaceSync(snapshot, false, false, targetClassroomIds, options?.silentFailure ? { silentFailure: true } : undefined)
     }
 
     return snapshot
@@ -3677,7 +3728,8 @@ function AuthenticatedApp() {
 
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
-    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
+    const silentFailure = shouldSilenceSaveFailureOnDeveloperReturn({ screen: screenRef.current, role: currentUser?.role, isDevelopmentClassroom: isActingDevelopmentClassroomRef.current })
+    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence({ silentFailure })
     setSubmissionAcknowledgements([])
     resetParentAbsenceNoticeState()
     // 【本番データ混入防止】アカウント切替で前セッションの「直前に戻す(undo)」が残ると、
@@ -3687,6 +3739,9 @@ function AuthenticatedApp() {
     // 確認待ちの復元データ(室長の自教室復元)も同じ経路で必ず捨てる(openClassroom / applyWorkspaceSnapshot / logout の 3 兄弟)。
     setManagerSelfRestorePending(null)
     setDeveloperRestoreModalState(null)
+    // 日程表から積んだ一過性の依頼の列も捨てる(openClassroom / applyWorkspaceSnapshot と同じ・INV-08)。
+    setStudentScheduleRequestQueue([])
+    setTeacherAutoAssignRequestQueue([])
     // 操作ログの未送信バッファも破棄する。残すと、保存失敗で戻された前ユーザーの操作が
     // 次にログインした別ユーザーの保存に相乗りし、実行者(updatedBy)を誤記録する(INV 監査 2026-09-04 指摘)。
     clearOperationEvents()
@@ -4385,12 +4440,13 @@ function AuthenticatedApp() {
         const parsedMove = parseScheduleViewMoveMessage(message)
         if (!parsedMove) return
         studentScheduleRequestIdRef.current += 1
-        setStudentScheduleRequest({
+        const moveRequest: StudentScheduleRequest = {
           requestId: studentScheduleRequestIdRef.current,
           mode: 'move',
           source: parsedMove.source,
           seat: parsedMove.seat,
-        })
+        }
+        setStudentScheduleRequestQueue((current) => enqueueStudentScheduleRequest(current, moveRequest))
         return
       }
 
@@ -4508,12 +4564,13 @@ function AuthenticatedApp() {
 
         if (!countSubmitted) {
           studentScheduleRequestIdRef.current += 1
-          setStudentScheduleRequest({
+          const unassignRequest: StudentScheduleRequest = {
             requestId: studentScheduleRequestIdRef.current,
             sessionId: message.sessionId,
             studentId: message.personId,
             mode: 'unassign',
-          })
+          }
+          setStudentScheduleRequestQueue((current) => enqueueStudentScheduleRequest(current, unassignRequest))
         }
 
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
@@ -4541,7 +4598,15 @@ function AuthenticatedApp() {
             // 生徒・講師で同じガード規律を共通ヘルパへ集約(INV-07)。
             // No.210(2026-08-29): reset の失敗を握り潰すと「登録解除できたのに再提出できない」が無言で起きる。
       // 失敗したら知らせて再操作を促す(ガード自体は積んであるので復活はしない)。
-      guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId).catch(() => {
+      // 確認リスト qs-2(オーナー指示 2026-11-03): 提出用QRは空にせず、日程表の今の内容(✕・希望科目数など)を残して未提出へ戻す。
+      guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId, {
+        unavailableSlots: targetInput?.unavailableSlots ?? [],
+        subjectSlots: regularOnly ? {} : subjectSlots,
+        subjectDurations: regularOnly ? {} : (targetInput?.subjectDurations ?? {}),
+        groupClassParticipation: targetInput?.groupClassParticipation ?? {},
+        optionChecks: targetInput?.optionChecks ?? {},
+        regularOnly,
+      }).catch(() => {
         window.alert('登録解除できませんでした。通信状態を確認して、もう一度お試しください。')
       })
           }
@@ -4648,14 +4713,15 @@ function AuthenticatedApp() {
         }))
 
         teacherAutoAssignRequestIdRef.current += 1
-        setTeacherAutoAssignRequest({
+        const teacherRequest: TeacherAutoAssignRequest = {
           requestId: teacherAutoAssignRequestIdRef.current,
           items: [{
             sessionId: message.sessionId,
             teacherId: message.personId,
             mode: countSubmitted ? 'assign' : 'unassign',
           }],
-        })
+        }
+        setTeacherAutoAssignRequestQueue((current) => enqueueStudentScheduleRequest(current, teacherRequest))
 
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const teacherTargetInput = targetTeacherSession?.teacherInputs[message.personId]
@@ -4668,7 +4734,15 @@ function AuthenticatedApp() {
           // INV-07: 講師の登録解除も reset 前に必ずガードへ add する(生徒経路と対称・v1.5.392 の講師版)。
           // 欠けていると解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活する。
           // No.210: 生徒側と同じく reset 失敗を可視化する。
-      else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId).catch(() => {
+      // オーナー確定 2026-11-03(qs-2 と同じ): 講師も提出用QRの✕を空にせず、日程表の今の内容を残して未提出に戻す。
+      else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId, {
+        unavailableSlots: teacherTargetInput?.unavailableSlots ?? [],
+        subjectSlots: {},
+        subjectDurations: {},
+        groupClassParticipation: {},
+        optionChecks: {},
+        regularOnly: false,
+      }).catch(() => {
         window.alert('登録解除できませんでした。通信状態を確認して、もう一度お試しください。')
       })
         }
@@ -4749,6 +4823,29 @@ function AuthenticatedApp() {
     }, 400)
     return () => window.clearTimeout(timerId)
   }, [actingClassroomId, ensureScheduleSubmissionTokens, specialSessions, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+
+  // コマ表のタブを閉じる・再読み込みするときは、ここから開いた日程表タブ(生徒・講師)も閉じる(2026-11-03 オーナー確定)。
+  // 再読み込みでも閉じる(ブラウザは区別できない・残しても新しいコマ表とはつながらない)。質問・要望／確認リストの別タブは watchDetachedWindow が閉じる。
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handlePageHide = () => {
+      closeOpenSchedulePopupWindows()
+    }
+    window.addEventListener('pagehide', handlePageHide)
+    return () => window.removeEventListener('pagehide', handlePageHide)
+  }, [])
+
+  // 確認リスト qs-1(オーナー指示 2026-11-03「提出時に生徒日程表も同時に更新されるようにしたい。開き直すまで提出状況更新されない」):
+  // 提出用QRの提出を購読で反映したら、開いている日程表タブ(生徒・講師)をすぐ作り直す(force)。
+  // 上の講習変更時の同期は force なしで何もしない(編集ごとの全再生成を止めた 2026-07 の方針)ので、提出だけはここで明示的に届ける。
+  useEffect(() => {
+    if (submissionScheduleSyncTick === 0) return
+    const timerId = window.setTimeout(() => {
+      syncStudentSchedulePopup(true)
+      syncTeacherSchedulePopup(true)
+    }, 300)
+    return () => window.clearTimeout(timerId)
+  }, [submissionScheduleSyncTick, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
@@ -4867,16 +4964,22 @@ function AuthenticatedApp() {
         return newlyAppliedEntries.length > 0 || reflectedParentFields ? updated : current
       })
 
+      // 確認リスト qs-1: 新しく反映した提出があれば、開いている日程表タブへすぐ届ける(下の effect が force 同期する)。
+      if (shouldSyncSchedulePopupsForSubmissions(newlyAppliedEntries.length)) {
+        setSubmissionScheduleSyncTick((current) => current + 1)
+      }
+
       // Trigger board placement for newly submitted teachers (same as schedule-teacher-count-save handler)
       // ⚠️ 回帰防止(2026-06-30): 反映した講師全員を1リクエストの items にまとめる。1人ずつ
       // setTeacherAutoAssignRequest を呼ぶと単一 state が上書きされ最後の1人しか配置されない。
       const teacherAutoAssignItems = buildTeacherAutoAssignItems(newlyAppliedEntries)
       if (teacherAutoAssignItems.length > 0) {
         teacherAutoAssignRequestIdRef.current += 1
-        setTeacherAutoAssignRequest({
+        const submissionTeacherRequest: TeacherAutoAssignRequest = {
           requestId: teacherAutoAssignRequestIdRef.current,
           items: teacherAutoAssignItems,
-        })
+        }
+        setTeacherAutoAssignRequestQueue((current) => enqueueStudentScheduleRequest(current, submissionTeacherRequest))
       }
 
       // QR提出通知(モーダル): PCを閉じている間に届いた提出も、次回起動時の最初に通知する。
@@ -6340,9 +6443,9 @@ function AuthenticatedApp() {
       specialSessions={specialSessions}
       autoAssignRules={autoAssignRules}
       pairConstraints={pairConstraints}
-      teacherAutoAssignRequest={teacherAutoAssignRequest}
+      teacherAutoAssignRequest={teacherAutoAssignRequestQueue[0] ?? null}
       onTeacherAutoAssignRequestProcessed={handleTeacherAutoAssignRequestProcessed}
-      studentScheduleRequest={studentScheduleRequest}
+      studentScheduleRequest={studentScheduleRequestQueue[0] ?? null}
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       parentAbsenceRequest={parentAbsenceRequest}
       onParentAbsenceRequestProcessed={handleParentAbsenceRequestProcessed}

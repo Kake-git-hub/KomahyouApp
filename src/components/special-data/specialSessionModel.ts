@@ -239,6 +239,23 @@ export function setSpecialSessionSchedulePublished(sessions: SpecialSessionRow[]
   return changed ? next : sessions
 }
 
+/**
+ * 特別講習一覧の並び順(オーナー指示 2026-11-03「特別講習一覧が並び替わらないように、講習期間が新しいものを上からソートで固定して」)。
+ * 期間が未設定の講習(作りかけ)を先頭、そのあとは開始日の新しい順 → 終了日の新しい順 → 作成日時 → id。
+ * ★更新日時(updatedAt)では並べない: 日程公開の切り替えや編集のたびに行が上へ跳んでいた(〜v1.5.679)。
+ */
+export function sortSpecialSessionsForList<T extends Pick<SpecialSessionRow, 'id' | 'startDate' | 'endDate' | 'createdAt'>>(sessions: readonly T[]): T[] {
+  return sessions.slice().sort((left, right) => {
+    const leftUnset = left.startDate ? 1 : 0
+    const rightUnset = right.startDate ? 1 : 0
+    if (leftUnset !== rightUnset) return leftUnset - rightUnset
+    return right.startDate.localeCompare(left.startDate)
+      || right.endDate.localeCompare(left.endDate)
+      || (right.createdAt ?? '').localeCompare(left.createdAt ?? '')
+      || left.id.localeCompare(right.id)
+  })
+}
+
 export const removedDefaultSpecialSessionIds = [
   'session_2026_summer',
   'session_2026_spring',

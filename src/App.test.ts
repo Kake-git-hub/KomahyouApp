@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildWorkspaceSnapshotMergeFromSelection, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldRecordSubmissionNotified, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildWorkspaceSnapshotMergeFromSelection, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldRecordSubmissionNotified, shouldReturnDeveloperOnLogout, shouldSilenceSaveFailureOnDeveloperReturn, shouldSubscribeClassroomNotifications, shouldSyncSchedulePopupsForSubmissions, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
 import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
@@ -1043,5 +1043,52 @@ describe('buildWorkspaceSnapshotMergeFromSelection(開発者の教室選択モ�
     const restoring = { ...base(), users: [{ ...user('m1', 'manager', 'c1'), name: '復元時の室長名' }], classrooms: [classroom('c1', 'm1', '復元')] }
     const result = buildWorkspaceSnapshotMergeFromSelection(current as never, restoring as never, new Map([['c1', true]]))
     expect(result.snapshot.users.find((entry) => entry.id === 'm1')?.name).toBe('復元時の室長名')
+  })
+})
+
+// 確認リスト qs-1(オーナー指示 2026-11-03「提出時に生徒日程表も同時に更新されるようにしたい。開き直すまで提出状況更新されない」)。
+describe('提出用QRの提出で開いている日程表タブを作り直す(qs-1)', () => {
+  it('新しく反映した提出が 1 件でもあれば作り直す・0 件なら作り直さない', () => {
+    expect(shouldSyncSchedulePopupsForSubmissions(1)).toBe(true)
+    expect(shouldSyncSchedulePopupsForSubmissions(3)).toBe(true)
+    expect(shouldSyncSchedulePopupsForSubmissions(0)).toBe(false)
+  })
+
+  it('購読の反映後に合図を上げ、effect が生徒・講師の日程表を force 同期する', async () => {
+    const { readFileSync } = await import('node:fs')
+    const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    expect(app).toContain('if (shouldSyncSchedulePopupsForSubmissions(newlyAppliedEntries.length)) {\n        setSubmissionScheduleSyncTick((current) => current + 1)')
+    expect(app).toContain('      syncStudentSchedulePopup(true)\n      syncTeacherSchedulePopup(true)\n    }, 300)')
+  })
+
+  it('盤面の再マウントでも開いている日程表タブのハンドルを引き継ぐ(null で始めると監視が閉じたと誤判定する)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const board = readFileSync(new URL('./components/schedule-board/ScheduleBoardScreen.tsx', import.meta.url), 'utf8')
+    expect(board).toContain("const studentScheduleWindowRef = useRef<Window | null>(resolveOpenSchedulePopupWindow('student'))")
+    expect(board).toContain("const teacherScheduleWindowRef = useRef<Window | null>(resolveOpenSchedulePopupWindow('teacher'))")
+  })
+})
+
+// 2026-11-03 オーナー指示(確認リスト フリーメモ)「開発用教室から開発用画面に戻るときは保存失敗してても良いので表示、通知しないようにして」。
+describe('開発用教室から開発者画面へ戻るときの保存失敗は出さない', () => {
+  it('開発者が開発用教室から戻るときだけ黙る(本番教室から戻る・室長のログアウトは知らせる)', () => {
+    expect(shouldSilenceSaveFailureOnDeveloperReturn({ screen: 'board', role: 'developer', isDevelopmentClassroom: true })).toBe(true)
+    expect(shouldSilenceSaveFailureOnDeveloperReturn({ screen: 'board', role: 'developer', isDevelopmentClassroom: false })).toBe(false)
+    expect(shouldSilenceSaveFailureOnDeveloperReturn({ screen: 'board', role: 'manager', isDevelopmentClassroom: true })).toBe(false)
+    expect(shouldSilenceSaveFailureOnDeveloperReturn({ screen: 'developer', role: 'developer', isDevelopmentClassroom: true })).toBe(false)
+  })
+
+  it('ログアウトはその判定で保存を積み、失敗時はダイアログ・控え・版数衝突の停止を出さずに抜ける', async () => {
+    const { readFileSync } = await import('node:fs')
+    const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    expect(app).toContain('const silentFailure = shouldSilenceSaveFailureOnDeveloperReturn({ screen: screenRef.current, role: currentUser?.role, isDevelopmentClassroom: isActingDevelopmentClassroomRef.current })\n    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence({ silentFailure })')
+    expect(app).toContain('if (!isStaleSnapshotConflictError(error) && !nextItem.silentFailure) {')
+    // 黙る分岐は版数衝突の処理(remoteStaleConflictRef を立てる)より前で return する。
+    const silentIndex = app.indexOf('if (nextItem.silentFailure) {')
+    const staleIndex = app.indexOf('if (isStaleSnapshotConflictError(error)) {\n          // このタブのデータを保全する')
+    expect(silentIndex).toBeGreaterThan(0)
+    expect(staleIndex).toBeGreaterThan(silentIndex)
+    // まとめた保存がすべて黙ってよいときだけ黙る(先に積まれた通常の保存の失敗は知らせる)。
+    expect(app).toContain('silentFailure: Boolean(callbacks?.silentFailure && (!existingQueuedItem || existingQueuedItem.silentFailure)),')
   })
 })

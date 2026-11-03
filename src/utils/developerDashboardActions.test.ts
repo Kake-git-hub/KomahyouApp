@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 
 import { buildIssueStateMap, type DeveloperReportRecord, type GitHubIssueRecord } from './developerDashboard'
 import {
+  applyDashboardCardDismissals,
+  buildDashboardCardDismissKey,
+  isDashboardCardDismissible,
+  parseDashboardDismissedKeys,
   AWAITING_ISSUE_STALE_MS,
   CLAUDE_CODE_NEW_SESSION_URL,
   CLAUDE_CODE_URL_LENGTH_LIMIT,
@@ -339,5 +343,48 @@ describe('個人情報を Claude への指示に載せない(regression-reviewer
   it('sanitizeErrorForPrompt はメールアドレスを伏せ、長すぎる文を切る', () => {
     expect(sanitizeErrorForPrompt('550 a.b+c@mail.example.co.jp rejected')).toBe('550 [メール] rejected')
     expect(sanitizeErrorForPrompt('x'.repeat(200), 10)).toBe('xxxxxxxxxx…')
+  })
+})
+
+// 2026-11-03 オーナー指示(確認リスト d-7 メモ)「Issue のないものも削除したいものがあるので、削除する仕組みを追加して」。
+describe('Issue の無いカードを消す(この端末だけ)', () => {
+  const card = (id: string, links: DashboardCard['links'] = [], section: DashboardCard['section'] = 'not-built'): DashboardCard => ({
+    id, section, who: 'owner', badge: '保留', title: `題名 ${id}`, summary: `要約 ${id}`, nextAction: '', details: [], links, prompt: null, priority: 1,
+  })
+  const overviewOf = (cards: DashboardCard[]) => ({
+    todo: { owner: cards.filter((c) => c.section === 'todo'), claude: [] as DashboardCard[] },
+    trial: cards.filter((c) => c.section === 'trial'),
+    notBuilt: cards.filter((c) => c.section === 'not-built'),
+    counts: { todo: 0, todoOwner: 0, todoClaude: 0, trial: 0, notBuilt: 0 },
+  })
+
+  it('Issue へのリンクが無いカードだけ消せる', () => {
+    expect(isDashboardCardDismissible(card('a'))).toBe(true)
+    expect(isDashboardCardDismissible(card('b', [{ label: '#5', href: 'x', issueNumber: 5 }]))).toBe(false)
+  })
+
+  it('消したカードは一覧と件数から外れ、Issue 付きのカードは鍵があっても残る', () => {
+    const plain = card('ledger-1')
+    const withIssue = card('issue-5', [{ label: '#5', href: 'x', issueNumber: 5 }])
+    const todo = card('todo-1', [], 'todo')
+    const result = applyDashboardCardDismissals(overviewOf([plain, withIssue, todo]), new Set([buildDashboardCardDismissKey(plain), buildDashboardCardDismissKey(withIssue), buildDashboardCardDismissKey(todo)]))
+    expect(result.notBuilt.map((c) => c.id)).toEqual(['issue-5'])
+    expect(result.todo.owner).toEqual([])
+    expect(result.counts).toMatchObject({ todo: 0, todoOwner: 0, notBuilt: 1 })
+    expect(result.hiddenCount).toBe(2)
+  })
+
+  it('題名か要約が変わったら(件数が増えた等)また出す', () => {
+    const before = card('report-notified-no-issue')
+    const after = { ...before, title: '題名 変わった' }
+    const result = applyDashboardCardDismissals(overviewOf([after]), new Set([buildDashboardCardDismissKey(before)]))
+    expect(result.notBuilt.map((c) => c.id)).toEqual(['report-notified-no-issue'])
+    expect(result.hiddenCount).toBe(0)
+  })
+
+  it('保存値が壊れていても空として読む', () => {
+    expect(parseDashboardDismissedKeys('not json')).toEqual(new Set())
+    expect(parseDashboardDismissedKeys(JSON.stringify(['a', 1, 'b']))).toEqual(new Set(['a', 'b']))
+    expect(parseDashboardDismissedKeys(null)).toEqual(new Set())
   })
 })

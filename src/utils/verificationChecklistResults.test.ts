@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  selectPendingChecklistOtherNotes,
   mergeChecklistReports,
   parseChecklistBody,
   parseChecklistMarker,
@@ -14,7 +15,7 @@ import {
   formatChecklistRecordedAt,
   toChecklistReport,
 } from './verificationChecklistResults'
-import { buildVerificationChecklistReportNotes, createEmptyVerificationChecklistDraft } from './verificationChecklist'
+import { buildVerificationChecklistReportNotes, createEmptyVerificationChecklistDraft, VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS } from './verificationChecklist'
 
 describe('parseChecklistMarker', () => {
   it('単一送信・分割送信のマーカーを認識し、マーカー無しと壊れた分割番号は null', () => {
@@ -156,5 +157,34 @@ describe('summarizeChecklistResultsByClassroom(どの教室で確認済みか・
   it('受付時刻は JST で短く出す', () => {
     expect(formatChecklistRecordedAt('2026-11-03T05:05:00.000Z')).toBe('11/3 14:05')
     expect(formatChecklistRecordedAt('')).toBe('')
+  })
+})
+
+// 2026-11-03 オーナー指示「フリーメモは送信して Claude で処理されるまでは送信内容が確認リストに履歴が残るようにして」。
+describe('selectPendingChecklistOtherNotes(対応待ちのフリーメモ)', () => {
+  const report = (reportId: string, note: string, recordedAt: string, classroomId = 'dev', classroomKind: 'development' | 'sandbox' = 'development') => ({ reportId, classroomId, classroomKind, note, recordedAt })
+
+  it('フリーメモ(「その他」)がある送信だけを、Claude が対応済みにした受付を除いて新しい順に出す', () => {
+    const rows = selectPendingChecklistOtherNotes([
+      report('r1', '[確認リスト v1.5.672]\n- その他: タブを閉じたら関連タブも閉じて', '2026-11-03T10:47:33.454Z'),
+      report('r2', '[確認リスト v1.5.672]\n- その他: 一覧の並びを固定して', '2026-11-03T10:54:58.807Z'),
+      report('r3', '[確認リスト v1.5.672]\n- qs-2 要改善: 割当も解除して', '2026-11-03T11:01:08.129Z'),
+      report('r4', '[確認リスト v1.5.672]\n- その他: 講師専用の講習', '2026-11-03T10:50:53.536Z', 'test', 'sandbox'),
+    ], { currentClassroomId: 'dev', processedReportIds: ['r2'] })
+    expect(rows.map((row) => row.reportId)).toEqual(['r4', 'r1'])
+    expect(rows[1]).toMatchObject({ note: 'タブを閉じたら関連タブも閉じて', classroomLabel: '開発用教室', isCurrentClassroom: true })
+    expect(rows[0]).toMatchObject({ classroomLabel: 'テスト教室', isCurrentClassroom: false })
+  })
+
+  it('確認リストのマーカーが無い送信・受付番号の無い送信は出さない', () => {
+    expect(selectPendingChecklistOtherNotes([
+      report('x1', '普通の要望: その他: ああ', '2026-11-03T10:00:00.000Z'),
+      report('', '[確認リスト v1.5.672]\n- その他: 番号なし', '2026-11-03T10:00:00.000Z'),
+    ], { currentClassroomId: 'dev', processedReportIds: new Set() })).toEqual([])
+  })
+
+  it('対応済みの受付番号は確認リストの正本(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS)に受付番号の形で並ぶ', () => {
+    for (const id of VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS) expect(id).toMatch(/^\d{8}-\d{9}-[0-9a-f]{8}$/)
+    expect(new Set(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).size).toBe(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS.length)
   })
 })
