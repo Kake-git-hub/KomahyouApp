@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.683 (2026-11-03)
+
+- docs: 特別講習「講師専用」(オーナー決定 2026-11-03「生徒側から全部隠す」)を別セッションで進めるための引き継ぎ書 `docs/plan-2026-11-03-teacher-only-special-session-handoff.md` を新設。進行中テーマ台帳に行 `teacher-only-special-session`(未着手・Claude)を足し、memory にも記録。
+
 ## v1.5.682 (2026-11-03)
 
 - fix: **iOS Safari で、登録解除したあと提出用QRを開き直しても「すでに提出済み」のままになる**(確認リスト qs-2 要改善・受付 20261103-134506858「Android は未送信に戻る」)。提出用QRの API(`lectureSubmissionApi`)は Cache-Control を付けておらず、ページの読み込み fetch もキャッシュ指定なしだった(保護者QRの `parentPortalApi`/`ParentPortalPage` はどちらも no-store で非対称)。関数の全応答に `Cache-Control: no-store`、ページの GET に `cache: 'no-store'`、bfcache から出てきた(`pageshow` persisted)ときは読み込み直す。テスト: `submissionFreshLoad.wiring.test.ts`・`functions/src/lectureSubmissionApi.cache.test.ts`(修正なしで 3 件落ちることを確認)。Functions のデプロイが要る(functions/** の変更で自動)。
