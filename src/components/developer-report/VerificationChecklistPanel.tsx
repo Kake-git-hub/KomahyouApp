@@ -48,6 +48,7 @@ import {
   getVerificationChecklistEntry,
   markVerificationChecklistItemSent,
   parseVerificationChecklistDraft,
+  clearReworkedVerificationChecklistEntries,
   removeVerificationChecklistAttachment,
   resolveVerificationChecklistItemSendState,
   resolveVerificationChecklistText,
@@ -152,7 +153,11 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   const storageKey = verificationChecklistStorageKey(classroomId)
   const [draft, setDraft] = useState<VerificationChecklistDraft>(() => {
     pruneStaleDrafts(classroomId)
-    return parseVerificationChecklistDraft(readStorage(storageKey))
+    // 要改善を受けて書き換えた項目は、書き換え前に送った結果・メモを消してから出す(2026-11-03 オーナー指示)。消したら保存し直す。
+    const loaded = parseVerificationChecklistDraft(readStorage(storageKey))
+    const cleaned = clearReworkedVerificationChecklistEntries(loaded)
+    if (cleaned !== loaded) writeStorage(storageKey, serializeVerificationChecklistDraft(cleaned))
+    return cleaned
   })
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
   /** 送信中の項目 id(フリーメモは OTHER_NOTES_SEND_KEY)。同時に 1 件だけ送る。 */
