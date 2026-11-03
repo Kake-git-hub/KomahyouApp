@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRecentlyResetGuard, guardAndResetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, markLectureSubmissionsNotified, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
+import { createRecentlyResetGuard, guardAndResetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, markLectureSubmissionsNotified, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionGroupClassEligibility, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
 
 const existingData = vi.fn()
 const setDoc = vi.fn()
@@ -36,6 +36,7 @@ describe('updateSubmissionOccupiedSlots', () => {
   beforeEach(() => {
     existingData.mockReset()
     setDoc.mockReset()
+    updateDoc.mockReset()
     onSnapshotCallback = null
   })
 
@@ -54,16 +55,60 @@ describe('updateSubmissionOccupiedSlots', () => {
       slotNumbers: [1, 2, 3, 4],
     }])
 
-    expect(setDoc).toHaveBeenCalledWith(
+    // 部分更新(INV-07・2026-11-03): 配布情報だけを書き、提出内容(status / unavailableSlots)は書かない。
+    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalledWith(
       { token: 'teacher-token' },
       {
-        status: 'submitted',
-        unavailableSlots: ['2026-08-24_3'],
         occupiedSlots: { '2026-08-31_4': '通常' },
         slotNumbers: [1, 2, 3, 4],
         slotCount: 4,
       },
     )
+  })
+
+  // INV-07 回帰防止(2026-11-03): 読み→書きの間に保護者が提出しても、提出内容を古い data で巻き戻さない。
+  // 丸ごと書き戻し(setDoc({ ...data, ... }))に戻すと、読んだ時点の status: 'pending' と空の提出内容を書いてしまう。
+  it('読んだ doc の提出内容(status・不可コマ・希望科目数など)を書き込みに含めない', async () => {
+    existingData.mockReturnValue({
+      status: 'pending',
+      unavailableSlots: [],
+      subjectSlots: {},
+      subjectDurations: {},
+      groupClassParticipation: {},
+      optionChecks: {},
+      regularOnly: false,
+      submittedAt: null,
+      notifiedAt: null,
+      occupiedSlots: {},
+    })
+
+    await updateSubmissionOccupiedSlots([{
+      token: 'student-token',
+      occupiedSlots: { '2026-12-24_1': '通英' },
+      holidayDates: ['2026-12-31'],
+      reopenedSlots: [],
+      schedulePublished: false,
+    }])
+
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    for (const key of ['status', 'unavailableSlots', 'subjectSlots', 'subjectDurations', 'groupClassParticipation', 'optionChecks', 'regularOnly', 'submittedAt', 'notifiedAt']) {
+      expect(written, key).not.toHaveProperty(key)
+    }
+    expect(written).toEqual({ occupiedSlots: { '2026-12-24_1': '通英' }, holidayDates: ['2026-12-31'], reopenedSlots: [], schedulePublished: false })
+  })
+
+  // INV-08 回帰防止(2026-11-03): 操作中の教室と違う教室の doc には書かない(登録・登録解除と同じガード)。
+  it('expectedClassroomId と違う教室の doc には書かない(同じ教室・教室 ID の無い旧 doc には書く)', async () => {
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', occupiedSlots: {} })
+    await updateSubmissionOccupiedSlots([{ token: 'foreign-token', occupiedSlots: { '2026-12-24_1': '講数' } }], 'dev-classroom')
+    expect(updateDoc).not.toHaveBeenCalled()
+
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'dev-classroom', occupiedSlots: {} })
+    await updateSubmissionOccupiedSlots([{ token: 'own-token', occupiedSlots: {} }], 'dev-classroom')
+    existingData.mockReturnValue({ status: 'pending', occupiedSlots: {} })
+    await updateSubmissionOccupiedSlots([{ token: 'legacy-token', occupiedSlots: {} }], 'dev-classroom')
+    expect(updateDoc.mock.calls.map((call) => (call[0] as { token: string }).token)).toEqual(['own-token', 'legacy-token'])
   })
 
   // B3 回帰防止: 後から休日を設定/解除した場合に、既発行トークンへ holidayDates を伝播する。
@@ -80,13 +125,13 @@ describe('updateSubmissionOccupiedSlots', () => {
       holidayDates: ['2026-08-10', '2026-08-15'],
     }])
 
-    expect(setDoc).toHaveBeenCalledWith(
+    expect(updateDoc).toHaveBeenCalledWith(
       { token: 'student-token' },
       expect.objectContaining({ holidayDates: ['2026-08-10', '2026-08-15'] }),
     )
   })
 
-  // 後方互換: holidayDates を渡さない呼び出しでは既存値を書き換えない(キーを追加しない)。
+  // 後方互換: holidayDates を渡さない呼び出しでは既存値を書き換えない(キーを作らない＝部分更新で既存値が残る)。
   it('does not overwrite holidayDates when omitted', async () => {
     existingData.mockReturnValue({
       status: 'submitted',
@@ -99,8 +144,8 @@ describe('updateSubmissionOccupiedSlots', () => {
       occupiedSlots: { '2026-08-31_1': '通常' },
     }])
 
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
-    expect(writtenDoc.holidayDates).toEqual(['2026-08-10']) // 既存値(spread)が維持される
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written).not.toHaveProperty('holidayDates')
   })
 
   // 回帰防止: 後から追加した科目(理社など)が、既発行トークンの提出画面に出ない不具合の是正。
@@ -118,7 +163,7 @@ describe('updateSubmissionOccupiedSlots', () => {
       availableSubjects: ['算', '算国', '英', '国', '理', '社', '理社'],
     }])
 
-    expect(setDoc).toHaveBeenCalledWith(
+    expect(updateDoc).toHaveBeenCalledWith(
       { token: 'student-token' },
       expect.objectContaining({ availableSubjects: ['算', '算国', '英', '国', '理', '社', '理社'] }),
     )
@@ -137,8 +182,8 @@ describe('updateSubmissionOccupiedSlots', () => {
       occupiedSlots: { '2026-08-31_1': '通常' },
     }])
 
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
-    expect(writtenDoc.availableSubjects).toEqual(['数', '英', '国', '理', '社']) // 既存値(spread)が維持される
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written).not.toHaveProperty('availableSubjects')
   })
 })
 
@@ -147,6 +192,7 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
   beforeEach(() => {
     existingData.mockReset()
     setDoc.mockReset()
+    updateDoc.mockReset()
   })
 
   it('提出済みドキュメントにも reopenedSlots を反映する(変換は通常提出後に起きる)', async () => {
@@ -158,14 +204,17 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
 
     await updateSubmissionReopenedSlots('student-token', ['2026-07-25_3'])
 
-    expect(setDoc).toHaveBeenCalledWith(
-      { token: 'student-token' },
-      expect.objectContaining({
-        status: 'submitted',
-        unavailableSlots: ['2026-07-25_3', '2026-07-26_2'], // 提出内容は不変(INV-07)
-        reopenedSlots: ['2026-07-25_3'],
-      }),
-    )
+    // 部分更新(INV-07・2026-11-03): reopenedSlots だけを書く(提出内容は書かない＝不変)。
+    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalledWith({ token: 'student-token' }, { reopenedSlots: ['2026-07-25_3'] })
+  })
+
+  it('別教室の doc には書かない(INV-08・2026-11-03)', async () => {
+    existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: ['2026-07-25_3'] })
+    await updateSubmissionReopenedSlots('foreign-token', ['2026-07-25_3'], 'dev-classroom')
+    expect(updateDoc).not.toHaveBeenCalled()
+    await updateSubmissionReopenedSlots('foreign-token', ['2026-07-25_3'], 'prod-classroom')
+    expect(updateDoc).toHaveBeenCalledTimes(1)
   })
 
   it('同値なら書き込まない(冪等)', async () => {
@@ -178,6 +227,7 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
     await updateSubmissionReopenedSlots('student-token', ['2026-07-25_3'])
 
     expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 
   // 確定仕様(2026-07-18): 登録解除しても黄色(reopenedSlots)はキープする。
@@ -194,12 +244,14 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
 
     await resetLectureSubmissionDoc('student-token')
 
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    // 部分更新(2026-11-03・INV-07): 提出内容だけを空へ戻す。配布情報はキーを作らない＝既存値が残る。
+    expect(setDoc).not.toHaveBeenCalled()
+    const writtenDoc = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.status).toBe('pending')
     expect(writtenDoc.unavailableSlots).toEqual([]) // 提出内容はクリア
     expect(writtenDoc.subjectSlots).toEqual({})
-    expect(writtenDoc.reopenedSlots).toEqual(['2026-07-25_3']) // 黄色はキープ
-    expect(writtenDoc.occupiedSlots).toEqual({ '2026-07-21_1': '数' }) // 配布情報は維持(既存仕様)
+    expect(writtenDoc).not.toHaveProperty('reopenedSlots') // 黄色はキープ(書かない)
+    expect(writtenDoc).not.toHaveProperty('occupiedSlots') // 配布情報は維持(書かない)
   })
 
   it('updateSubmissionOccupiedSlots の後追い反映は reopenedSlots を指定時のみ更新する', async () => {
@@ -215,18 +267,18 @@ describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', 
       reopenedSlots: ['2026-07-25_3', '2026-07-26_2'],
     }])
 
-    expect(setDoc).toHaveBeenCalledWith(
+    expect(updateDoc).toHaveBeenCalledWith(
       { token: 'student-token' },
       expect.objectContaining({ reopenedSlots: ['2026-07-25_3', '2026-07-26_2'] }),
     )
 
-    setDoc.mockReset()
+    updateDoc.mockReset()
     await updateSubmissionOccupiedSlots([{
       token: 'student-token',
       occupiedSlots: {},
     }])
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
-    expect(writtenDoc.reopenedSlots).toEqual(['2026-07-25_3']) // 未指定は既存値(spread)を維持
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written).not.toHaveProperty('reopenedSlots') // 未指定はキーを作らない(部分更新で既存値が残る)
   })
 })
 
@@ -237,6 +289,7 @@ describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を do
   beforeEach(() => {
     existingData.mockReset()
     setDoc.mockReset()
+    updateDoc.mockReset()
   })
 
   it('集団参加/オプションを提出ドキュメントに書き戻してロックする', async () => {
@@ -252,7 +305,8 @@ describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を do
       optionChecks: { '0': true },
     })
 
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(setDoc).not.toHaveBeenCalled()
+    const writtenDoc = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.status).toBe('submitted')
     expect(writtenDoc.submittedAt).toEqual(expect.any(String))
     expect(writtenDoc.groupClassParticipation).toEqual({ 集団理科: true })
@@ -268,10 +322,20 @@ describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を do
 
     await markLectureSubmissionDocAsSubmitted('teacher-token')
 
-    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    // 部分更新: 未指定のフィールドはキーを作らない＝既存値が残る。
+    const writtenDoc = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.status).toBe('submitted')
-    expect(writtenDoc.groupClassParticipation).toEqual({ 集団社会: true })
-    expect(writtenDoc.optionChecks).toEqual({ '1': true })
+    expect(writtenDoc).not.toHaveProperty('groupClassParticipation')
+    expect(writtenDoc).not.toHaveProperty('optionChecks')
+  })
+
+  // INV-07 回帰防止(2026-11-03): 読み(pending)→書きの間に保護者が提出しても、その内容を古い data で消さない。
+  // 丸ごと書き戻し(setDoc({ ...data, ... }))に戻すと、読んだ時点の空の不可コマ・希望科目数を書いてしまう。
+  it('読んだ doc の提出内容(不可コマ・希望科目数など)を書き込みに含めない', async () => {
+    existingData.mockReturnValue({ status: 'pending', unavailableSlots: [], subjectSlots: {}, subjectDurations: {}, regularOnly: false, occupiedSlots: {} })
+    await markLectureSubmissionDocAsSubmitted('student-token', { groupClassParticipation: {} })
+    const writtenDoc = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(Object.keys(writtenDoc).sort()).toEqual(['groupClassParticipation', 'status', 'submittedAt'])
   })
 
   it('既に提出済みなら何も書き込まない(再提出ロック)', async () => {
@@ -280,6 +344,7 @@ describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を do
     await markLectureSubmissionDocAsSubmitted('student-token', { groupClassParticipation: { 集団理科: true } })
 
     expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 })
 
@@ -290,37 +355,38 @@ describe('本番データ保護: 別教室 doc への書き込みを弾く (expe
   beforeEach(() => {
     existingData.mockReset()
     setDoc.mockReset()
+    updateDoc.mockReset()
   })
 
   it('mark: doc.classroomId が期待教室と一致すればロックする', async () => {
     existingData.mockReturnValue({ status: 'pending', classroomId: 'dev-classroom', groupClassParticipation: {}, optionChecks: {} })
     await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
-    const written = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(written.status).toBe('submitted')
   })
 
   it('mark: doc.classroomId が別教室なら書き込まない(本番docを提出済みにしない)', async () => {
     existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', groupClassParticipation: {}, optionChecks: {} })
     await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
-    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 
   it('mark: expectedClassroomId 未指定なら従来どおり書き込む(後方互換)', async () => {
     existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', groupClassParticipation: {}, optionChecks: {} })
     await markLectureSubmissionDocAsSubmitted('tok')
-    expect(setDoc).toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalled()
   })
 
   it('reset: doc.classroomId が別教室なら書き込まない', async () => {
     existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: ['2026-07-25_3'] })
     await resetLectureSubmissionDoc('tok', 'dev-classroom')
-    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 
   it('reset: doc.classroomId が一致すれば pending に戻す', async () => {
     existingData.mockReturnValue({ status: 'submitted', classroomId: 'dev-classroom', unavailableSlots: ['2026-07-25_3'] })
     await resetLectureSubmissionDoc('tok', 'dev-classroom')
-    const written = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    const written = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(written.status).toBe('pending')
   })
 
@@ -328,7 +394,7 @@ describe('本番データ保護: 別教室 doc への書き込みを弾く (expe
     existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: ['2026-07-25_3'] })
     const guard = createRecentlyResetGuard(2500, { set: () => 0, clear: () => {} })
     await guardAndResetLectureSubmissionDoc(guard, 'tok', 'dev-classroom')
-    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 
   // 設計判断の固定(regression-reviewer 指摘): doc.classroomId が空/未設定の旧トークンは
@@ -337,11 +403,11 @@ describe('本番データ保護: 別教室 doc への書き込みを弾く (expe
   it('mark: doc.classroomId が空/未設定なら expectedClassroomId 指定でも書き込む(旧トークン後方互換)', async () => {
     existingData.mockReturnValue({ status: 'pending', groupClassParticipation: {}, optionChecks: {} }) // classroomId 無し
     await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
-    expect(setDoc).toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalled()
     existingData.mockReturnValue({ status: 'pending', classroomId: '', groupClassParticipation: {}, optionChecks: {} }) // 空文字
-    setDoc.mockReset()
+    updateDoc.mockReset()
     await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
-    expect(setDoc).toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalled()
   })
 
   // 別教室 doc でも guard.add 自体は行われる(reset だけ弾く)。害はないが挙動を明示。
@@ -351,7 +417,7 @@ describe('本番データ保護: 別教室 doc への書き込みを弾く (expe
     const guard = { add: (t: string) => { added.push(t) }, has: () => false, clear: () => {} }
     await guardAndResetLectureSubmissionDoc(guard, 'tok', 'dev-classroom')
     expect(added).toEqual(['tok'])
-    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 })
 
@@ -458,6 +524,32 @@ describe('markLectureSubmissionsNotified', () => {
 
     await markLectureSubmissionsNotified([{ token: 'foreign-token', submittedAt: '2026-07-20T00:00:00.000Z' }], 'classroom-1')
 
+    expect(updateDoc).not.toHaveBeenCalled()
+  })
+})
+
+// 集団参加の選択肢の後埋め(spec-group-lesson §C)。2026-11-03 に部分更新(INV-07)と別教室ガード(INV-08)へ。
+describe('updateSubmissionGroupClassEligibility', () => {
+  beforeEach(() => {
+    existingData.mockReset()
+    setDoc.mockReset()
+    updateDoc.mockReset()
+  })
+
+  it('未提出の doc に選べる集団科目だけを部分更新で書く(提出内容は書かない)', async () => {
+    existingData.mockReturnValue({ status: 'pending', availableGroupClassSubjects: [], unavailableSlots: [] })
+    await updateSubmissionGroupClassEligibility('student-token', ['集団理科'])
+    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalledWith({ token: 'student-token' }, { availableGroupClassSubjects: ['集団理科'] })
+  })
+
+  it('提出済み・同値・別教室の doc には書かない', async () => {
+    existingData.mockReturnValue({ status: 'submitted', availableGroupClassSubjects: [] })
+    await updateSubmissionGroupClassEligibility('t1', ['集団理科'])
+    existingData.mockReturnValue({ status: 'pending', availableGroupClassSubjects: ['集団理科'] })
+    await updateSubmissionGroupClassEligibility('t2', ['集団理科'])
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', availableGroupClassSubjects: [] })
+    await updateSubmissionGroupClassEligibility('t3', ['集団理科'], 'dev-classroom')
     expect(updateDoc).not.toHaveBeenCalled()
   })
 })
