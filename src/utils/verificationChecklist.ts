@@ -336,6 +336,26 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.672'
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
   version: VERIFICATION_CHECKLIST_VERSION,
   items: [
+    // 第100版(2026-11-03・v1.5.672 据え置き・オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェックしないように
+    // どちらの教室がチェック済みかわかるようにして。それに伴い送信をまとめてではなく一件ごとに」): 項目ごとの送信と両教室の送信済み表示の確認 vc-1。
+    // 開発用教室だけに出す(テスト教室はテンプレ関係だけの指示 2026-10-15)。項目を足すだけなので版は据え置き(送信済みの結果も版で絞って読むため)。
+    {
+      id: 'vc-1',
+      area: '確認リスト',
+      ownerDecision: 'オーナーが 11/3 に決めたこと: 確認リストは 1 項目ずつ送る。開発用教室とテスト教室のどちらで確認済みかを項目ごとに出す。',
+      title: '確認リストの送信が項目ごとになり、開発用教室とテスト教室のどちらで確認済みかが項目に出る',
+      steps: [
+        'テンプレ作成の項目(tp-51 など)を 1 つ OK にして、その項目の「この項目を送信」を押す。そのあと OK を要改善に変える',
+        'テスト教室を開いて確認リストの同じ項目を見る(テスト担当が送った項目は、開発用教室に戻って見る)',
+      ],
+      check: [
+        '押した項目だけが送られ、ボタンが「送信済み」・横に送った時刻が出る。結果を変えると「変更を送信」に変わる',
+        '項目の上に「開発用教室(この教室) OK 送信済み」が出る。テスト教室では同じ項目に「開発用教室 OK」が青い枠で出る',
+        'テスト教室で送った項目は、開発用教室の同じ項目に「テスト教室」と結果・メモが青い枠で出る',
+        '下の「保存して送信」ボタンが無くなり「未送信 n 件」が出る。フリーメモは「フリーメモを送信」で送ると欄が空になる',
+      ],
+      introducedIn: 'v1.5.674',
+    },
     // 第95版(2026-10-30・v1.5.667 据え置き・オーナー指示「AI回答機能を全教室に展開して」): 質問への AI 即時回答を全教室へ昇格した確認 ai-1。
     // 開発用教室だけに出す(項目を足すだけなので版は据え置き)。本番教室では送らず、注意文の切り替わりだけを見る(本番教室で送ると実際の質問として記録される)。
     {
@@ -757,8 +777,25 @@ export type VerificationChecklistDraft = {
   entries: Record<string, VerificationChecklistEntry>
   /** 項目に紐づかない自由記入(その他の気づき)。 */
   otherNotes: string
-  /** 項目ごとの添付画像(2026-10-14)。 */
+  /** 項目ごとの添付画像(2026-10-14)。送信した項目の画像は送信後に外す(サーバーへ届いたので下書きの容量を空ける)。 */
   attachments: VerificationChecklistAttachment[]
+  /**
+   * 項目ごとに最後に送った内容(2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」)。送った後に結果・メモを変えたら
+   * 「未送信の変更あり」と分かるように、送った時点の結果とメモを残す。
+   */
+  sent: Record<string, VerificationChecklistSentRecord>
+}
+
+/** 1 項目を送った記録(下書きに残す・2026-11-03)。 */
+export type VerificationChecklistSentRecord = {
+  status: Exclude<VerificationChecklistStatus, 'unchecked'>
+  memo: string
+  /** 一緒に送った画像の枚数(画像本体は送信後に下書きから外す)。 */
+  attachmentCount: number
+  /** 送った時刻(ISO)。 */
+  sentAt: string
+  /** 受付番号。 */
+  reportId: string
 }
 
 /** 1 項目に付けられる枚数。 */
@@ -801,7 +838,7 @@ export function collectStaleVerificationChecklistDraftKeys(
 export function createEmptyVerificationChecklistDraft(
   version: string = VERIFICATION_CHECKLIST.version,
 ): VerificationChecklistDraft {
-  return { version, entries: {}, otherNotes: '', attachments: [] }
+  return { version, entries: {}, otherNotes: '', attachments: [], sent: {} }
 }
 
 function normalizeStatus(raw: unknown): VerificationChecklistStatus {
@@ -816,6 +853,7 @@ export function serializeVerificationChecklistDraft(draft: VerificationChecklist
     entries: draft.entries,
     otherNotes: draft.otherNotes,
     attachments: draft.attachments,
+    sent: draft.sent,
   })
 }
 
@@ -854,7 +892,7 @@ export function parseVerificationChecklistDraft(
     return empty
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty
-  const candidate = parsed as { version?: unknown; entries?: unknown; otherNotes?: unknown; attachments?: unknown }
+  const candidate = parsed as { version?: unknown; entries?: unknown; otherNotes?: unknown; attachments?: unknown; sent?: unknown }
   if (typeof candidate.version === 'string' && candidate.version !== version) return empty
   const entries: Record<string, VerificationChecklistEntry> = {}
   if (candidate.entries && typeof candidate.entries === 'object' && !Array.isArray(candidate.entries)) {
@@ -877,11 +915,28 @@ export function parseVerificationChecklistDraft(
       attachments.push(attachment)
     }
   }
+  const sent: Record<string, VerificationChecklistSentRecord> = {}
+  if (candidate.sent && typeof candidate.sent === 'object' && !Array.isArray(candidate.sent)) {
+    for (const [id, value] of Object.entries(candidate.sent as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const record = value as { status?: unknown; memo?: unknown; attachmentCount?: unknown; sentAt?: unknown; reportId?: unknown }
+      const status = normalizeStatus(record.status)
+      if (status === 'unchecked') continue
+      sent[id] = {
+        status,
+        memo: typeof record.memo === 'string' ? record.memo : '',
+        attachmentCount: typeof record.attachmentCount === 'number' && Number.isFinite(record.attachmentCount) && record.attachmentCount > 0 ? Math.floor(record.attachmentCount) : 0,
+        sentAt: typeof record.sentAt === 'string' ? record.sentAt : '',
+        reportId: typeof record.reportId === 'string' ? record.reportId : '',
+      }
+    }
+  }
   return {
     version,
     entries,
     otherNotes: typeof candidate.otherNotes === 'string' ? candidate.otherNotes : '',
     attachments,
+    sent,
   }
 }
 
@@ -962,7 +1017,7 @@ export function addVerificationChecklistAttachment(
     return { draft, error: `この項目に付けられる画像は ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_PER_ITEM} 枚までです。` }
   }
   if (draft.attachments.length >= VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL) {
-    return { draft, error: `1 回の送信に付けられる画像は全部で ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL} 枚までです。先に送信してください。` }
+    return { draft, error: `下書きに置ける画像は全部で ${VERIFICATION_CHECKLIST_ATTACHMENT_MAX_TOTAL} 枚までです。画像を付けた項目を先に送信してください(送った画像は下書きから外れます)。` }
   }
   if (sumVerificationChecklistAttachmentBytes(draft) + parsed.byteLength > VERIFICATION_CHECKLIST_ATTACHMENT_TOTAL_MAX_BYTES) {
     return { draft, error: '画像の合計が上限を超えます。先に送信するか、ほかの画像を外してください。' }
@@ -1017,6 +1072,8 @@ export type VerificationChecklistProgress = {
   ok: number
   needsFix: number
   remaining: number
+  /** 結果を付けたがまだ送っていない(送った後に変えた分も含む)項目の数(2026-11-03)。 */
+  unsent: number
 }
 
 /** 進捗カウント(折りたたみボタンの「確認リスト n/N」用)。 */
@@ -1026,13 +1083,16 @@ export function countVerificationChecklistProgress(
 ): VerificationChecklistProgress {
   let ok = 0
   let needsFix = 0
+  let unsent = 0
   for (const item of items) {
     const status = getVerificationChecklistEntry(draft, item.id).status
     if (status === 'ok') ok += 1
     else if (status === 'needs-fix') needsFix += 1
+    const sendState = resolveVerificationChecklistItemSendState(draft, item.id)
+    if (sendState === 'unsent' || sendState === 'changed') unsent += 1
   }
   const checked = ok + needsFix
-  return { total: items.length, checked, ok, needsFix, remaining: items.length - checked }
+  return { total: items.length, checked, ok, needsFix, remaining: items.length - checked, unsent }
 }
 
 /** 送信本文の先頭に必ず付く目印。開発者が受信メールで確認リストだと判別できるようにする。 */
@@ -1118,6 +1178,83 @@ export function buildVerificationChecklistReportNotes(
   }
   const parts = packLines(lines, `${marker} (1/${total})`, limit)
   return parts.map((body, index) => `${marker} (${index + 1}/${parts.length})\n${body}`)
+}
+
+// ---- 項目ごとの送信(2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」) ----
+//
+// 1 項目 = 1 通。本文はまとめ送りと同じ書式(先頭マーカー＋結果行 1 行)なので、読み取り側(verificationChecklistResults.ts /
+// tools の .mjs)はそのまま読める。1 通もの(total=1)は受付ごとに別扱いで集約される(mergeChecklistReports)。
+// ★1 項目の本文は必ず 1 通に収める(分割すると別の項目の分割と取り違えるため)。長すぎるメモは末尾を「…」で切る。
+
+/** 1 項目の送信状態。unchecked=結果がまだ無い / unsent=未送信 / sent=送信済み(その後の変更なし) / changed=送った後に変えた。 */
+export type VerificationChecklistItemSendState = 'unchecked' | 'unsent' | 'sent' | 'changed'
+
+export function resolveVerificationChecklistItemSendState(draft: VerificationChecklistDraft, itemId: string): VerificationChecklistItemSendState {
+  const entry = getVerificationChecklistEntry(draft, itemId)
+  if (entry.status === 'unchecked') return 'unchecked'
+  const sent = draft.sent[itemId]
+  if (!sent) return 'unsent'
+  const pendingImages = getVerificationChecklistAttachments(draft, itemId).length
+  return sent.status === entry.status && singleLineMemo(sent.memo) === singleLineMemo(entry.memo) && pendingImages === 0 ? 'sent' : 'changed'
+}
+
+/** 送信本文のマーカーと 1 行を、上限に収めて 1 通にする。 */
+function buildSingleLineNote(version: string, line: string, limit: number): string {
+  const marker = buildVerificationChecklistMarker(version)
+  const budget = Math.max(1, limit - marker.length - 1)
+  const body = line.length > budget ? `${line.slice(0, Math.max(0, budget - 1))}…` : line
+  return `${marker}\n${body}`
+}
+
+/** 1 項目だけの送信本文(1 通)。未確認・一覧に無い項目なら null(= 送らない)。 */
+export function buildVerificationChecklistItemReportNote(
+  draft: VerificationChecklistDraft,
+  itemId: string,
+  options?: { items?: readonly VerificationChecklistItem[]; limit?: number },
+): string | null {
+  const items = options?.items ?? VERIFICATION_CHECKLIST.items
+  const item = items.find((candidate) => candidate.id === itemId)
+  if (!item) return null
+  const [line] = buildVerificationChecklistLines({ ...draft, otherNotes: '' }, [item])
+  if (!line) return null
+  return buildSingleLineNote(draft.version, line, options?.limit ?? DEVELOPER_REPORT_NOTE_LIMIT)
+}
+
+/** フリーメモ(その他)だけの送信本文(1 通)。空なら null。 */
+export function buildVerificationChecklistOtherNotesReportNote(
+  draft: VerificationChecklistDraft,
+  options?: { limit?: number },
+): string | null {
+  const other = singleLineMemo(draft.otherNotes)
+  if (!other) return null
+  return buildSingleLineNote(draft.version, `- その他: ${other}`, options?.limit ?? DEVELOPER_REPORT_NOTE_LIMIT)
+}
+
+/** 1 項目に添える画像(label=項目 id)。 */
+export function buildVerificationChecklistItemReportAttachments(draft: VerificationChecklistDraft, itemId: string): DeveloperReportAttachment[] {
+  if (getVerificationChecklistEntry(draft, itemId).status === 'unchecked') return []
+  return getVerificationChecklistAttachments(draft, itemId).map((attachment) => ({ label: itemId, name: attachment.name, mimeType: attachment.mimeType, dataUrl: attachment.dataUrl }))
+}
+
+/**
+ * 1 項目を送れたことを下書きへ記録する(純関数)。送った結果とメモを残し、送った画像は下書きから外す
+ * (サーバーに届いた・localStorage の容量を空ける・もう一度送ったときに同じ画像を二重に送らない)。
+ */
+export function markVerificationChecklistItemSent(
+  draft: VerificationChecklistDraft,
+  itemId: string,
+  receipt: { reportId: string; sentAt: string; attachmentCount: number },
+): VerificationChecklistDraft {
+  const entry = getVerificationChecklistEntry(draft, itemId)
+  if (entry.status === 'unchecked') return draft
+  return {
+    ...draft,
+    attachments: draft.attachments.filter((attachment) => attachment.itemId !== itemId),
+    sent: {
+      ...draft.sent,
+      [itemId]: { status: entry.status, memo: entry.memo, attachmentCount: receipt.attachmentCount, sentAt: receipt.sentAt, reportId: receipt.reportId },
+    },
+  }
 }
 
 const STATUS_LABELS: Record<VerificationChecklistStatus, string> = {

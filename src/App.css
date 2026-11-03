@@ -6203,6 +6203,108 @@ body.verification-checklist-window {
   font-size: 26px;
 }
 
+/* 項目ごとの送信(2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」)。 */
+.verification-checklist-send-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.verification-checklist-send-button {
+  font-size: 26px;
+  padding: 6px 16px;
+}
+
+.verification-checklist-send-state {
+  font-size: 24px;
+  color: #475569;
+}
+
+.verification-checklist-send-state.is-sent {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.verification-checklist-send-state.is-changed,
+.verification-checklist-send-state.is-unsent {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.verification-checklist-unsent-count {
+  font-size: 24px;
+  color: #475569;
+  margin-right: auto;
+}
+
+/* どの教室で確認済みか(2026-11-03 オーナー指示「双方が重複チェックしないようにどちらの教室がチェック済みかわかるように」)。 */
+.verification-checklist-shared-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 20px;
+  color: #475569;
+}
+
+.verification-checklist-shared-status .link-button {
+  font-size: 20px;
+}
+
+.verification-checklist-shared {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.verification-checklist-shared-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 24px;
+  border: 2px solid #cbd5e1;
+  background: #f8fafc;
+}
+
+.verification-checklist-shared-row.is-other {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.verification-checklist-shared-classroom {
+  font-weight: 700;
+}
+
+.verification-checklist-shared-result {
+  font-weight: 700;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #15803d;
+}
+
+.verification-checklist-shared-row.is-needs-improvement .verification-checklist-shared-result {
+  background: #b91c1c;
+}
+
+.verification-checklist-shared-time {
+  color: #475569;
+}
+
+.verification-checklist-shared-memo {
+  flex-basis: 100%;
+  color: #334155;
+}
+
 /* 項目の添付画像(2026-10-14 オーナー要望「確認リストにスクショで画像毎保存できるようにしたい」)。 */
 .verification-checklist-attachments {
   display: flex;

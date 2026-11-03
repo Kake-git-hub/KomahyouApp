@@ -1,6 +1,6 @@
 // 開発用教室から送られた「確認リスト」結果を読み取る読み取り専用ツール。
 //
-// 開発用教室(v8OZ7zH8vONNHjjYVcR1)の画面に出す確認チェックリストは、「保存して送信」で
+// 開発用教室(v8OZ7zH8vONNHjjYVcR1)の画面に出す確認チェックリストは、項目ごとの「この項目を送信」(2026-11-03 から・以前はまとめ送り「保存して送信」)で
 // 既存の要望・報告経路(Cloud Function `submitDeveloperReport` → Firestore
 // `workspaces/{ws}/developerReports/{id}`)へ本文を送る。本文の先頭行は固定マーカー
 // `[確認リスト vX.Y.Z]`(分割時は `[確認リスト vX.Y.Z] (1/2)` のように続く)。

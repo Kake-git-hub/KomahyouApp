@@ -176,13 +176,14 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     const saved = JSON.parse(window.localStorage.getItem(verificationChecklistStorageKey(classroomId)) ?? '{}')
     expect(saved.entries?.[firstItem.id]?.status).toBe('ok')
 
-    const submit = popupDoc.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-submit"]')
+    // 2026-11-03: 送信は項目ごと(「この項目を送信」)。
+    const submit = popupDoc.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${firstItem.id}"]`)
     await act(async () => {
       submit!.click()
     })
     expect(onSubmitNote).toHaveBeenCalledTimes(1)
-    expect(String(onSubmitNote.mock.calls[0][0])).toContain(firstItem.id)
-    expect(popupDoc.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('送りました')
+    expect(String(onSubmitNote.mock.calls[0][0])).toBe(`[確認リスト ${VERIFICATION_CHECKLIST.version}]\n- ${firstItem.id} OK`)
+    expect(popupDoc.querySelector(`[data-testid="verification-checklist-send-state-${firstItem.id}"]`)?.textContent).toContain('送信済み')
   })
 
   it('「元の画面に戻す」で別タブを閉じ、右下へ戻る(記入は残る)', () => {
@@ -295,21 +296,25 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     expect(shrinkImage).toHaveBeenCalledTimes(2)
     expect(textPaste.defaultPrevented).toBe(false)
 
-    // 送信: 1 通目に添付が label=項目 id で付く
+    // 外すと消える
+    const removeButton = container.querySelector<HTMLButtonElement>(`[data-testid^="verification-checklist-attachment-remove-"]`)!
+    act(() => removeButton.click())
+    expect(attachments()).toHaveLength(1)
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(attachments()).toHaveLength(2)
+
+    // 送信(項目ごと・2026-11-03): その項目の画像が label=項目 id で付き、送れたら下書きから外れる(二重送信しない・容量を空ける)。
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-submit"]')!.click()
+      container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${firstItem.id}"]`)!.click()
     })
     expect(onSubmitNote).toHaveBeenCalledTimes(1)
     const [note, sent] = onSubmitNote.mock.calls[0] as unknown as [string, Array<{ label: string; name: string; dataUrl: string }>]
     expect(note).toContain(`${firstItem.id} 要改善: [画像2枚]`)
     expect(sent.map((attachment) => attachment.label)).toEqual([firstItem.id, firstItem.id])
     expect(sent[1].name).toBe('shot.png')
-    expect(container.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('画像 2 枚')
-
-    // 外すと消える
-    const removeButton = container.querySelector<HTMLButtonElement>(`[data-testid^="verification-checklist-attachment-remove-"]`)!
-    act(() => removeButton.click())
-    expect(attachments()).toHaveLength(1)
+    expect(container.querySelector(`[data-testid="verification-checklist-send-state-${firstItem.id}"]`)?.textContent).toContain('画像 2 枚')
+    expect(attachments()).toHaveLength(0)
+    expect(JSON.parse(window.localStorage.getItem(verificationChecklistStorageKey(classroomId)) ?? '{}').attachments).toEqual([])
   })
 
   it('パネルを開くと、同じ教室の別の版の下書き(画像つきで数 MB になりうる)を消して容量を空ける。今の版・他教室・拡大率は残る', () => {
@@ -337,6 +342,100 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     expect(container.querySelector('[data-testid="verification-checklist-result"]')?.textContent).toContain('bad.png')
     expect(container.querySelectorAll(`[data-testid="verification-checklist-attachments-${firstItem.id}"] img`)).toHaveLength(0)
     expect(window.localStorage.getItem(verificationChecklistStorageKey(classroomId))).toBeNull()
+  })
+
+  // 2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」。
+  it('送信は項目ごと: 押した項目だけを 1 通で送り、他の項目は送らない。送った後に変えると「変更を送信」になる', async () => {
+    const [first, second] = VERIFICATION_CHECKLIST.items
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="ok"]`)!.click())
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${second.id}"][value="needs-fix"]`)!.click())
+    expect(container.querySelector('[data-testid="verification-checklist-submit"]')).toBeNull()
+    expect(container.querySelector('[data-testid="verification-checklist-unsent-count"]')?.textContent).toContain('未送信 2 件')
+    const sendButton = (id: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${id}"]`)!
+    await act(async () => { sendButton(first.id).click() })
+    expect(onSubmitNote).toHaveBeenCalledTimes(1)
+    expect(onSubmitNote.mock.calls[0][0]).toBe(`[確認リスト ${VERIFICATION_CHECKLIST.version}]\n- ${first.id} OK`)
+    expect(sendButton(first.id).disabled).toBe(true)
+    expect(sendButton(first.id).textContent).toBe('送信済み')
+    expect(sendButton(second.id).textContent).toBe('この項目を送信')
+    expect(container.querySelector('[data-testid="verification-checklist-unsent-count"]')?.textContent).toContain('未送信 1 件')
+    // 送った記録は下書きに残る(再読み込みしても「送信済み」)。
+    expect(JSON.parse(window.localStorage.getItem(verificationChecklistStorageKey(classroomId)) ?? '{}').sent?.[first.id]).toMatchObject({ status: 'ok', reportId: 'r-1' })
+    // 送った後に結果を変えると、もう一度送れる。
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="needs-fix"]`)!.click())
+    expect(sendButton(first.id).textContent).toBe('変更を送信')
+    expect(sendButton(first.id).disabled).toBe(false)
+    // 未確認の項目は送れない。
+    const third = VERIFICATION_CHECKLIST.items[2]
+    expect(sendButton(third.id).disabled).toBe(true)
+  })
+
+  it('送れなかったときは理由をその項目に出し、未送信のまま', async () => {
+    onSubmitNote.mockImplementationOnce(async () => ({ ok: false, error: 'ネットワーク' }))
+    const [first] = VERIFICATION_CHECKLIST.items
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="ok"]`)!.click())
+    await act(async () => { container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${first.id}"]`)!.click() })
+    expect(container.querySelector(`[data-testid="verification-checklist-send-state-${first.id}"]`)?.textContent).toContain('送れませんでした: ネットワーク')
+    expect(container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${first.id}"]`)!.textContent).toBe('この項目を送信')
+  })
+
+  it('フリーメモは単独で送り、送れたら欄を空にする', async () => {
+    const textarea = container.querySelector<HTMLTextAreaElement>('[data-testid="verification-checklist-other-notes"]')!
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    act(() => {
+      setter.call(textarea, '印刷が重い')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { container.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-send-other-notes"]')!.click() })
+    expect(onSubmitNote).toHaveBeenCalledWith(`[確認リスト ${VERIFICATION_CHECKLIST.version}]\n- その他: 印刷が重い`)
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="verification-checklist-other-notes"]')!.value).toBe('')
+  })
+
+  // 2026-11-03 オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェックしないようにどちらの教室がチェック済みかわかるようにして」。
+  it('両教室の送信済み結果を項目ごとに出し、別の教室の結果に印を付ける。送ったあとは読み直す', async () => {
+    const [first, second] = VERIFICATION_CHECKLIST.items
+    const loadSharedResults = vi.fn(async () => [
+      { reportId: 't1', classroomId: 'test_classroom', classroomName: 'テスト教室', classroomKind: 'sandbox' as const, note: `[確認リスト ${VERIFICATION_CHECKLIST.version}]\n- ${first.id} 要改善: 消える`, recordedAt: '2026-11-03T05:05:00.000Z', reportedAt: '' },
+      { reportId: 'd1', classroomId, classroomName: '開発用教室', classroomKind: 'development' as const, note: `[確認リスト ${VERIFICATION_CHECKLIST.version}]\n- ${first.id} OK`, recordedAt: '2026-11-03T04:00:00.000Z', reportedAt: '' },
+    ])
+    act(() => root.render(createElement(Fragment)))
+    await act(async () => {
+      root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote, loadSharedResults }))
+    })
+    expect(loadSharedResults).toHaveBeenCalledTimes(1)
+    const other = container.querySelector(`[data-testid="verification-checklist-shared-${first.id}-sandbox"]`)
+    expect(other?.textContent).toContain('テスト教室')
+    expect(other?.textContent).toContain('要改善')
+    expect(other?.textContent).toContain('11/3 14:05 送信済み')
+    expect(other?.textContent).toContain('消える')
+    expect(other?.className).toContain('is-other')
+    const mine = container.querySelector(`[data-testid="verification-checklist-shared-${first.id}-development"]`)
+    expect(mine?.textContent).toContain('開発用教室(この教室)')
+    expect(mine?.className).toContain('is-current')
+    // 送信の無い項目には出さない。
+    expect(container.querySelector(`[data-testid="verification-checklist-shared-${second.id}"]`)).toBeNull()
+    // 再描画しても読み直さない(関数の identity が変わっても)。
+    await act(async () => {
+      root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote, loadSharedResults: async () => loadSharedResults() }))
+    })
+    expect(loadSharedResults).toHaveBeenCalledTimes(1)
+    // 項目を送ったら読み直す。
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${second.id}"][value="ok"]`)!.click())
+    await act(async () => { container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${second.id}"]`)!.click() })
+    expect(loadSharedResults).toHaveBeenCalledTimes(2)
+  })
+
+  it('両教室の結果を読めなくても、項目の入力と送信は続けられる', async () => {
+    const loadSharedResults = vi.fn(async () => { throw new Error('INTERNAL') })
+    act(() => root.render(createElement(Fragment)))
+    await act(async () => {
+      root.render(createElement(VerificationChecklistPanel, { classroomId, audience: 'development', onSubmitNote, loadSharedResults }))
+    })
+    expect(container.querySelector('[data-testid="verification-checklist-shared-status"]')?.textContent).toContain('読めませんでした(INTERNAL)')
+    const [first] = VERIFICATION_CHECKLIST.items
+    act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="ok"]`)!.click())
+    await act(async () => { container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${first.id}"]`)!.click() })
+    expect(onSubmitNote).toHaveBeenCalledTimes(1)
   })
 
   it('ポップアップを止められたら右下のまま理由を出す', () => {

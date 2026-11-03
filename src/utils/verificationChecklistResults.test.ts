@@ -10,6 +10,8 @@ import {
   parseChecklistMarker,
   summarizeChecklistReports,
   summarizeChecklistResults,
+  summarizeChecklistResultsByClassroom,
+  formatChecklistRecordedAt,
   toChecklistReport,
 } from './verificationChecklistResults'
 import { buildVerificationChecklistReportNotes, createEmptyVerificationChecklistDraft } from './verificationChecklist'
@@ -38,16 +40,28 @@ describe('toChecklistReport / mergeChecklistReports', () => {
     expect(merged[0].lastRecordedAt).toBe('2026-09-12T02:00:00.000Z')
   })
 
-  it('同じ part の再送は受付が新しい方を採用し、版違いは別グループで受付が早い順に並ぶ', () => {
+  it('分割された送信の同じ part の再送は受付が新しい方を採用し、版違いは別グループで受付が早い順に並ぶ', () => {
     const merged = mergeChecklistReports([
-      { reportId: 'new', version: '1.5.502', part: 1, total: 1, body: '- p-1 要改善: 直後', recordedAt: '2026-09-12T03:00:00.000Z', reportedAt: '', attachments: [] },
-      { reportId: 'old', version: '1.5.502', part: 1, total: 1, body: '- p-1 OK', recordedAt: '2026-09-12T01:00:00.000Z', reportedAt: '', attachments: [] },
+      { reportId: 'new', version: '1.5.502', part: 1, total: 2, body: '- p-1 要改善: 直後', recordedAt: '2026-09-12T03:00:00.000Z', reportedAt: '', attachments: [] },
+      { reportId: 'old', version: '1.5.502', part: 1, total: 2, body: '- p-1 OK', recordedAt: '2026-09-12T01:00:00.000Z', reportedAt: '', attachments: [] },
       { reportId: 'v2', version: '1.5.504', part: 1, total: 1, body: '- p-2 OK', recordedAt: '2026-09-12T02:00:00.000Z', reportedAt: '', attachments: [] },
     ])
     // 再送を採用した v1.5.502 の受付は 03:00 になるので、02:00 受付の v1.5.504 が先に並ぶ(グループの最も早い受付順)。
     expect(merged.map((entry) => entry.version)).toEqual(['1.5.504', '1.5.502'])
     expect(merged[1].reportIds).toEqual(['new'])
     expect(merged[1].body).toBe('- p-1 要改善: 直後')
+  })
+
+  it('1 通ものは受付ごとに別扱いで、項目ごとに送っても前に送った項目の結果が残る(2026-11-03 回帰防止)', () => {
+    const summary = summarizeChecklistReports([
+      { reportId: 'a', note: '[確認リスト v1.5.672]\n- tp-51 OK', recordedAt: '2026-11-03T01:00:00.000Z' },
+      { reportId: 'b', note: '[確認リスト v1.5.672]\n- tp-57 要改善: 講師が消える', recordedAt: '2026-11-03T02:00:00.000Z' },
+      { reportId: 'c', note: '[確認リスト v1.5.672]\n- tp-51 要改善: 送り直し', recordedAt: '2026-11-03T03:00:00.000Z' },
+    ])
+    const byId = Object.fromEntries(summary.items.map((item) => [item.itemId, item]))
+    expect(Object.keys(byId).sort()).toEqual(['tp-51', 'tp-57'])
+    expect(byId['tp-51']).toMatchObject({ result: 'needs-improvement', memo: '送り直し', reportIds: ['c'] })
+    expect(byId['tp-57']).toMatchObject({ result: 'needs-improvement', memo: '講師が消える', reportIds: ['b'] })
   })
 
   it('マーカーが無い報告(通常の要望・報告)は確認リストとして扱わない', () => {
@@ -96,5 +110,51 @@ describe('summarizeChecklistResults / summarizeChecklistReports', () => {
       { reportId: 'c', note: '[確認リスト v1.5.556]\n- t-1 OK', recordedAt: '2026-09-22T00:00:00.000Z' },
     ])
     expect(summary.items).toEqual([{ itemId: 't-1', result: 'ok', memo: '', version: '1.5.556', recordedAt: '2026-09-22T00:00:00.000Z', reportIds: ['c'], attachments: [] }])
+  })
+})
+
+describe('summarizeChecklistResultsByClassroom(どの教室で確認済みか・2026-11-03)', () => {
+  const reports = [
+    { reportId: 'd1', classroomId: 'dev', classroomName: '開発用教室', classroomKind: 'development' as const, note: '[確認リスト v1.5.672]\n- tp-51 OK', recordedAt: '2026-11-03T01:00:00.000Z' },
+    { reportId: 't1', classroomId: 'test', classroomName: 'テスト教室', classroomKind: 'sandbox' as const, note: '[確認リスト v1.5.672]\n- tp-51 要改善: 科目を変えると消える', recordedAt: '2026-11-03T02:00:00.000Z' },
+    { reportId: 't2', classroomId: 'test', classroomName: 'テスト教室', classroomKind: 'sandbox' as const, note: '[確認リスト v1.5.672]\n- tp-57 OK', recordedAt: '2026-11-03T03:00:00.000Z' },
+    // 開発用教室の古いまとめ送り(分割 2 通)も読める。
+    { reportId: 'd0a', classroomId: 'dev', classroomName: '開発用教室', classroomKind: 'development' as const, note: '[確認リスト v1.5.672] (1/2)\n- jd-1 OK', recordedAt: '2026-11-02T01:00:00.000Z' },
+    { reportId: 'd0b', classroomId: 'dev', classroomName: '開発用教室', classroomKind: 'development' as const, note: '[確認リスト v1.5.672] (2/2)\n- jd-2 要改善: 二重', recordedAt: '2026-11-02T01:00:01.000Z' },
+  ]
+
+  it('項目ごとに教室別の最新結果を返し、開発用教室を先に並べ、今の教室に印を付ける', () => {
+    const results = summarizeChecklistResultsByClassroom(reports, { currentClassroomId: 'test' })
+    expect(results['tp-51'].map((row) => [row.classroomLabel, row.result, row.isCurrentClassroom])).toEqual([
+      ['開発用教室', 'ok', false],
+      ['テスト教室', 'needs-improvement', true],
+    ])
+    expect(results['tp-51'][1].memo).toBe('科目を変えると消える')
+    expect(results['tp-57'].map((row) => row.classroomKind)).toEqual(['sandbox'])
+    expect(results['jd-1'][0]).toMatchObject({ classroomKind: 'development', result: 'ok' })
+    expect(results['jd-2'][0]).toMatchObject({ classroomKind: 'development', result: 'needs-improvement', memo: '二重' })
+  })
+
+  it('同じ教室で同じ項目を送り直したら後勝ち(教室ごとに 1 行)', () => {
+    const results = summarizeChecklistResultsByClassroom([
+      ...reports,
+      { reportId: 't3', classroomId: 'test', classroomName: 'テスト教室', classroomKind: 'sandbox' as const, note: '[確認リスト v1.5.672]\n- tp-51 OK', recordedAt: '2026-11-03T05:00:00.000Z' },
+    ], { currentClassroomId: 'dev' })
+    expect(results['tp-51'].filter((row) => row.classroomKind === 'sandbox')).toEqual([
+      expect.objectContaining({ result: 'ok', recordedAt: '2026-11-03T05:00:00.000Z', isCurrentClassroom: false }),
+    ])
+  })
+
+  it('テスト教室が複数あるときは教室名を添える', () => {
+    const results = summarizeChecklistResultsByClassroom([
+      { classroomId: 'a', classroomName: 'テストA', classroomKind: 'sandbox' as const, note: '[確認リスト v1.5.672]\n- x OK', recordedAt: '2026-11-03T01:00:00.000Z' },
+      { classroomId: 'b', classroomName: 'テストB', classroomKind: 'sandbox' as const, note: '[確認リスト v1.5.672]\n- x OK', recordedAt: '2026-11-03T02:00:00.000Z' },
+    ], { currentClassroomId: null })
+    expect(results.x.map((row) => row.classroomLabel)).toEqual(['テスト教室(テストB)', 'テスト教室(テストA)'])
+  })
+
+  it('受付時刻は JST で短く出す', () => {
+    expect(formatChecklistRecordedAt('2026-11-03T05:05:00.000Z')).toBe('11/3 14:05')
+    expect(formatChecklistRecordedAt('')).toBe('')
   })
 })

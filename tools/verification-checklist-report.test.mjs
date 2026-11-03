@@ -101,15 +101,29 @@ describe('mergeChecklistReports', () => {
     expect(merged[0].lastRecordedAt).toBe('2026-09-12T00:10:00.000Z')
   })
 
-  it('同一 part が再送されたら受付が新しい方を採用する', () => {
+  it('分割された送信の同一 part が再送されたら受付が新しい方を採用する', () => {
     const parts = [
-      { version: '1.5.502', part: 1, total: 1, body: '- item-a 要改善: 旧メモ', reportId: 'r1', recordedAt: '2026-09-12T00:00:00.000Z' },
-      { version: '1.5.502', part: 1, total: 1, body: '- item-a OK', reportId: 'r2', recordedAt: '2026-09-12T00:05:00.000Z' },
+      { version: '1.5.502', part: 1, total: 2, body: '- item-a 要改善: 旧メモ', reportId: 'r1', recordedAt: '2026-09-12T00:00:00.000Z' },
+      { version: '1.5.502', part: 1, total: 2, body: '- item-a OK', reportId: 'r2', recordedAt: '2026-09-12T00:05:00.000Z' },
     ]
     const merged = mergeChecklistReports(parts)
     expect(merged).toHaveLength(1)
     expect(merged[0].body).toBe('- item-a OK')
     expect(merged[0].reportIds).toEqual(['r2'])
+  })
+
+  it('1 通ものは受付ごとに別扱い(項目ごとの送信で前に送った項目が消えない・2026-11-03 回帰防止)', () => {
+    const parts = [
+      { version: '1.5.672', part: 1, total: 1, body: '- item-a OK', reportId: 'r1', recordedAt: '2026-11-03T00:00:00.000Z' },
+      { version: '1.5.672', part: 1, total: 1, body: '- item-b 要改善: 消える', reportId: 'r2', recordedAt: '2026-11-03T00:05:00.000Z' },
+      { version: '1.5.672', part: 1, total: 1, body: '- item-a 要改善: やはり直して', reportId: 'r3', recordedAt: '2026-11-03T00:10:00.000Z' },
+    ]
+    const merged = mergeChecklistReports(parts)
+    expect(merged.map((entry) => entry.reportIds)).toEqual([['r1'], ['r2'], ['r3']])
+    const summary = summarizeChecklistResults(merged)
+    const byId = Object.fromEntries(summary.items.map((item) => [item.itemId, item]))
+    expect(byId['item-a']).toMatchObject({ result: 'needs-improvement', memo: 'やはり直して', reportIds: ['r3'] })
+    expect(byId['item-b']).toMatchObject({ result: 'needs-improvement', memo: '消える', reportIds: ['r2'] })
   })
 
   it('片方の part しか届いていなくても欠けたまま結合する', () => {

@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.674 (2026-11-03)
+
+- feat: **確認リストの送信を項目ごとにし、開発用教室とテスト教室のどちらで確認済みかを項目ごとに出す**(オーナー指示 2026-11-03「双方が重複チェックしないようにどちらの教室がチェック済みかわかるようにして。それに伴い送信をまとめてではなく一件ごとに」)。各項目に「この項目を送信」(1 項目 = 1 通・必ず 1 通・送った画像は下書きから外す・送った後に変えたら「変更を送信」)、フリーメモは単独送信、まとめ送り「保存して送信」は廃止。両教室の送信済み結果は新しい読み取り専用 callable `listVerificationChecklistResults`(呼び出し元が検証用教室の利用者のときだけ・同じ会社の検証用教室から届いた今の版の本文・教室・受付時刻だけ返す)で読み、項目の上に教室別の最新結果を出す(別の教室は青枠)。**回帰防止**: 読み取り側(verificationChecklistResults.ts と tools の .mjs)が同じ版の 1 通ものを再送とみなし最新 1 通だけ残していたため、項目ごとに送ると前の項目の結果が消えた → 1 通ものは受付ごとに別扱い(項目 id の後勝ちは維持)。確認リストに vc-1 を追加(版 v1.5.672 据え置き)。(VerificationChecklistPanel.tsx・verificationChecklist.ts・verificationChecklistResults.ts・tools/verification-checklist-report.lib.mjs・functions/src/verificationChecklistStatus.ts・functions/src/index.ts・adminFunctions.ts・App.tsx・App.css・docs/spec-developer-report.md)
+
 ## v1.5.673 (2026-11-03)
 
 - feat: 講習履歴(生徒日程表の「講習履歴」ボタン)を**全教室へ昇格**(オーナー指示 2026-11-03「全教室に出して」・確認 h-1〜h-10 OK)。フラグ `lessonHistory` を development-only → all-classrooms。functions 側 getStudentLessonHistory は読み取り専用でフラグ判定を持たず非対称なし。台帳 developmentStatusLedger の該当行を削除。回帰テスト: 全5教室で有効(戻さない)・他の development-only 機能で名前判定/会社の壁テストを維持 (src/utils/featureRollout.ts・featureRollout.test.ts・developmentStatusLedger.ts)

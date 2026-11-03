@@ -33,6 +33,11 @@ import {
   selectVerificationChecklistItems,
   VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS,
   VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER,
+  buildVerificationChecklistItemReportNote,
+  buildVerificationChecklistOtherNotesReportNote,
+  buildVerificationChecklistItemReportAttachments,
+  markVerificationChecklistItemSent,
+  resolveVerificationChecklistItemSendState,
 } from './verificationChecklist'
 
 // 書式・進捗のテストは版ごとに変わる実項目に依存させない(第4版で項目が p-2/p-3 だけになり壊れたため固定の項目一覧を使う)。
@@ -175,7 +180,8 @@ describe('確認リストの項目定義', () => {
     // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
     // 第93版(2026-10-30): 開発用教室だけの項目(ed-1・ed-2・hd-1)も OK → 残りはテスト教室にも出す項目だけ。
     // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。第95版(同日): AI 回答の全教室展開の確認 ai-1 も開発用教室だけ。
-    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // vc-1(2026-11-03・項目ごとの送信と両教室の送信済み表示)も開発用教室だけ。
+    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1' && id !== 'vc-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
@@ -207,7 +213,7 @@ describe('確認リストの項目定義', () => {
     // 第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5 を先頭に足した(開発用教室だけ)。
     // 第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1 を先頭に足した(開発用教室だけ)。
     // 第96版(2026-11-01・v1.5.670): テスト教室の tp-59/tp-64「手置き講師が抹消される」のオーナー確認 tp-66 と、テンプレ保存後の「元に戻す」の tp-67 を足した。
-    expect(ids).toEqual(['ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    expect(ids).toEqual(['vc-1', 'ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -745,5 +751,86 @@ describe('第103版(2026-11-02・v1.5.672・決定記録 62): 「手入力デー
       expect(byId.get(id)!.check?.join('\n'), id).not.toContain('希望回数は減らない')
       expect(byId.get(id)!.ownerDecision, id).toContain('11/2 追加')
     }
+  })
+})
+
+// 2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」。
+describe('項目ごとの送信', () => {
+  const PNG = `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString('base64')}`
+
+  it('1 項目だけの本文(先頭マーカー＋結果行 1 行)。未確認・一覧に無い項目は null', () => {
+    const draft = draftWith([['c-1', 'ok'], ['p-2', 'needs-fix', '行が高い\n文字も大きい']], 'その他メモ')
+    const marker = buildVerificationChecklistMarker()
+    expect(buildVerificationChecklistItemReportNote(draft, 'c-1', { items: FIXTURE_ITEMS })).toBe(`${marker}\n- c-1 OK`)
+    // 他の項目・フリーメモは載せない。
+    expect(buildVerificationChecklistItemReportNote(draft, 'p-2', { items: FIXTURE_ITEMS })).toBe(`${marker}\n- p-2 要改善: 行が高い / 文字も大きい`)
+    expect(buildVerificationChecklistItemReportNote(draft, 'p-3', { items: FIXTURE_ITEMS })).toBeNull()
+    expect(buildVerificationChecklistItemReportNote(draft, 'zz-9', { items: FIXTURE_ITEMS })).toBeNull()
+  })
+
+  it('長いメモでも必ず 1 通(分割しない・末尾を … で切る)', () => {
+    const draft = draftWith([['c-1', 'needs-fix', 'あ'.repeat(5000)]])
+    const note = buildVerificationChecklistItemReportNote(draft, 'c-1', { items: FIXTURE_ITEMS })!
+    expect(note.length).toBeLessThanOrEqual(DEVELOPER_REPORT_NOTE_LIMIT)
+    expect(note.startsWith(`${buildVerificationChecklistMarker()}\n- c-1 要改善: `)).toBe(true)
+    expect(note.endsWith('…')).toBe(true)
+    expect(note).not.toMatch(/\(\d+\/\d+\)/u)
+  })
+
+  it('フリーメモだけの本文。空なら null', () => {
+    expect(buildVerificationChecklistOtherNotesReportNote(draftWith([['c-1', 'ok']], '印刷が重い'))).toBe(`${buildVerificationChecklistMarker()}\n- その他: 印刷が重い`)
+    expect(buildVerificationChecklistOtherNotesReportNote(draftWith([['c-1', 'ok']], '  '))).toBeNull()
+  })
+
+  it('送信状態: 未確認→未送信→送信済み→(変えたら)変更あり。送ったらその項目の画像は下書きから外れる', () => {
+    let draft = createEmptyVerificationChecklistDraft()
+    expect(resolveVerificationChecklistItemSendState(draft, 'c-1')).toBe('unchecked')
+    draft = setVerificationChecklistEntry(draft, 'c-1', { status: 'needs-fix', memo: '直して' })
+    const added = addVerificationChecklistAttachment(draft, { itemId: 'c-1', name: 'a.png', dataUrl: PNG }, 'img-1')
+    const other = addVerificationChecklistAttachment(added.draft, { itemId: 'p-2', name: 'b.png', dataUrl: PNG }, 'img-2')
+    draft = other.draft
+    expect(resolveVerificationChecklistItemSendState(draft, 'c-1')).toBe('unsent')
+    expect(buildVerificationChecklistItemReportAttachments(draft, 'c-1').map((attachment) => attachment.label)).toEqual(['c-1'])
+
+    draft = markVerificationChecklistItemSent(draft, 'c-1', { reportId: 'r-1', sentAt: '2026-11-03T00:00:00.000Z', attachmentCount: 1 })
+    expect(resolveVerificationChecklistItemSendState(draft, 'c-1')).toBe('sent')
+    expect(draft.sent['c-1']).toEqual({ status: 'needs-fix', memo: '直して', attachmentCount: 1, sentAt: '2026-11-03T00:00:00.000Z', reportId: 'r-1' })
+    expect(draft.attachments.map((attachment) => attachment.itemId)).toEqual(['p-2'])
+    expect(countVerificationChecklistProgress(draft, FIXTURE_ITEMS).unsent).toBe(1) // p-2 は画像で要改善になったまま未送信
+
+    expect(resolveVerificationChecklistItemSendState(setVerificationChecklistMemo(draft, 'c-1', '直して(追記)'), 'c-1')).toBe('changed')
+    expect(resolveVerificationChecklistItemSendState(setVerificationChecklistEntry(draft, 'c-1', { status: 'ok' }), 'c-1')).toBe('changed')
+    const moreImage = addVerificationChecklistAttachment(draft, { itemId: 'c-1', name: 'c.png', dataUrl: PNG }, 'img-3').draft
+    expect(resolveVerificationChecklistItemSendState(moreImage, 'c-1')).toBe('changed')
+    // メモの改行や前後の空白だけの違いは変更扱いにしない(本文が同じになる)。
+    expect(resolveVerificationChecklistItemSendState(setVerificationChecklistMemo(draft, 'c-1', ' 直して \n'), 'c-1')).toBe('sent')
+  })
+
+  it('送った記録は下書きの保存・読み戻しで残り、壊れた記録は捨てる', () => {
+    const draft = markVerificationChecklistItemSent(draftWith([['c-1', 'ok']]), 'c-1', { reportId: 'r-1', sentAt: 'x', attachmentCount: 0 })
+    expect(parseVerificationChecklistDraft(serializeVerificationChecklistDraft(draft)).sent).toEqual(draft.sent)
+    const raw = JSON.stringify({ version: VERIFICATION_CHECKLIST.version, entries: {}, otherNotes: '', attachments: [], sent: { a: { status: 'unchecked' }, b: 'junk', c: { status: 'ok', memo: 1, attachmentCount: -3 } } })
+    expect(parseVerificationChecklistDraft(raw).sent).toEqual({ c: { status: 'ok', memo: '', attachmentCount: 0, sentAt: '', reportId: '' } })
+    // 送る前の旧形式(sent なし)の下書きも読める。
+    expect(parseVerificationChecklistDraft(JSON.stringify({ version: VERIFICATION_CHECKLIST.version, entries: {} })).sent).toEqual({})
+  })
+
+  it('未確認の項目は送った記録を付けない', () => {
+    const draft = createEmptyVerificationChecklistDraft()
+    expect(markVerificationChecklistItemSent(draft, 'c-1', { reportId: 'r', sentAt: 'x', attachmentCount: 0 })).toBe(draft)
+  })
+})
+
+// 第100版(2026-11-03・オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェックしないようにどちらの教室がチェック済みか
+// わかるようにして。それに伴い送信をまとめてではなく一件ごとに」): 確認項目 vc-1。版は v1.5.672 据え置き(項目を足すだけ)。
+describe('第100版: 項目ごとの送信と両教室の送信済み表示 vc-1', () => {
+  it('vc-1 は開発用教室だけに出し、版は据え置く', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((candidate) => candidate.id === 'vc-1')!
+    expect(item.introducedIn).toBe('v1.5.674')
+    expect(item.ownerDecision).toContain('オーナーが 11/3 に決めたこと')
+    expect(item.check!.join(' / ')).toContain('「変更を送信」')
+    expect(item.steps.join(' / ')).toContain('「この項目を送信」')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('vc-1')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
 })

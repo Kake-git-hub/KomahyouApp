@@ -428,6 +428,31 @@ export async function submitDeveloperReportViaFunction(input: DeveloperReportReq
   return result.data
 }
 
+/** 確認リストの送信 1 件(Cloud Function `listVerificationChecklistResults` の返す形・2026-11-03)。 */
+export type VerificationChecklistSharedReport = {
+  reportId: string
+  classroomId: string
+  classroomName: string
+  /** development = 開発用教室 / sandbox = テスト教室(それ以外の検証用教室)。 */
+  classroomKind: 'development' | 'sandbox'
+  note: string
+  recordedAt: string
+  reportedAt: string
+}
+
+/**
+ * 確認リストの「どの教室で確認済みか」を読む(2026-11-03 オーナー指示)。開発用教室・テスト教室の利用者だけが呼べる読み取り専用の関数で、
+ * 同じ会社の検証用教室から届いた指定版の確認リスト送信(本文・教室・受付時刻)だけが返る。本文の読み解きは verificationChecklistResults.ts。
+ */
+export async function listVerificationChecklistResultsViaFunction(input: { classroomId: string; version: string }): Promise<VerificationChecklistSharedReport[]> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; classroomId: string; version: string }, { version: string; reports: VerificationChecklistSharedReport[] }>(functions, 'listVerificationChecklistResults', { timeout: 60_000 })
+  const result = await callable({ workspaceKey: config.workspaceKey, classroomId: input.classroomId, version: input.version })
+  return Array.isArray(result.data?.reports) ? result.data.reports : []
+}
+
 export type StudentLessonHistoryRequest = {
   classroomId: string
   studentId: string

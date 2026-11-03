@@ -41,6 +41,14 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     for (const old of ['>前提<', '>操作<', '>見るところ<']) expect(PANEL_TSX).not.toContain(old)
   })
 
+  it('両教室の送信済み結果は読み取り専用の Cloud Function 経由で、今の版だけを読む(2026-11-03)', () => {
+    expect(APP_TSX).toContain('loadSharedResults={loadVerificationChecklistSharedResults}')
+    expect(APP_TSX).toContain('return listVerificationChecklistResultsViaFunction({ classroomId: actingClassroomId, version: VERIFICATION_CHECKLIST.version })')
+    // まとめ送りのボタンは無い(オーナー指示「送信をまとめてではなく一件ごとに」)。
+    expect(PANEL_TSX).not.toContain('verification-checklist-submit')
+    expect(PANEL_TSX).not.toContain('保存して送信')
+  })
+
   it('送信は既存の「要望・報告」経路(source: board / category: request)を使う', () => {
     expect(APP_TSX).toContain("return submit({ source: 'board', category: 'request', note, attachments })")
     expect(APP_TSX).toContain('submitDeveloperReportRef.current = submitDeveloperReport')
@@ -55,7 +63,8 @@ describe('確認リストパネル本体', () => {
     expect(APP_TSX).toContain('const verificationChecklistAudience = useMemo(() => resolveVerificationChecklistAudience(actingClassroom), [actingClassroom])')
     expect(PANEL_TSX).toContain('const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])')
     expect(PANEL_TSX).toContain('countVerificationChecklistProgress(draft, items)')
-    expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes(draft, { items })')
+    // 2026-11-03: 送信は項目ごと(1 項目 = 1 通)。見る相手の項目一覧で本文を作る。
+    expect(PANEL_TSX).toContain('buildVerificationChecklistItemReportNote(draft, itemId, { items })')
     expect(PANEL_TSX).toContain('buildVerificationChecklistMarkdown(draft, items)')
     expect(APP_TSX).toContain('const student = students.find((row) => row.id === studentId)')
     expect(PANEL_TSX).toContain('resolveVerificationChecklistText')
@@ -79,8 +88,12 @@ describe('確認リストパネル本体', () => {
 
   it('書式・下書き・進捗の計算は純関数モジュールへ委譲している', () => {
     expect(PANEL_TSX).toContain("from '../../utils/verificationChecklist'")
-    expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes')
+    expect(PANEL_TSX).toContain('buildVerificationChecklistItemReportNote')
+    expect(PANEL_TSX).toContain('markVerificationChecklistItemSent')
+    expect(PANEL_TSX).toContain('resolveVerificationChecklistItemSendState')
     expect(PANEL_TSX).toContain('countVerificationChecklistProgress')
+    // どの教室で確認済みか(2026-11-03)の集約は純関数。
+    expect(PANEL_TSX).toContain('summarizeChecklistResultsByClassroom(reports, { currentClassroomId: classroomId })')
   })
 
   it('メモ欄は結果(要改善)に関わらず常に描画し、入力は setVerificationChecklistMemo を通す(2026-09-13)', () => {
