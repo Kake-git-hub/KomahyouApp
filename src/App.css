@@ -3656,6 +3656,20 @@ tr.sa-group-row td {
   color: #16314f;
 }
 
+/* 講習の日程公開トグル(2026-11-03)。非公開=灰、公開中=緑。 */
+.special-session-publish-toggle {
+  min-width: 72px;
+  color: #5b6573;
+  background: #f1f3f5;
+  border-color: #c9ced6;
+}
+
+.special-session-publish-toggle.is-published {
+  color: #ffffff;
+  background: #2f8f4e;
+  border-color: #2f8f4e;
+}
+
 .special-session-editor-panel {
   display: grid;
   gap: 14px;

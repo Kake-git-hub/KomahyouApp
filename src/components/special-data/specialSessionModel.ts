@@ -187,6 +187,40 @@ export type SpecialSessionRow = {
   studentInputs: Record<string, SpecialSessionStudentInput>
   createdAt: string
   updatedAt: string
+  /**
+   * 講習の日程(盤面で組んだ講習コマ)を保護者へ見せてよいか(オーナー確定 2026-11-03・機能フラグ lectureSchedulePublishToggle)。
+   * - false … 非公開(フラグ ON の教室で新しく作った講習の初期値)。提出用QRに講習コマを載せず、提出後は組まれたコマを隠す。
+   *   保護者QRにも講習コマを出さない。
+   * - true / 未設定 … 公開。★未設定はこの項目ができる前に作った講習で「公開」扱い(オーナー確定: 既存の講習は終わっているので公開でよい)。
+   * 判定は必ず isSpecialSessionSchedulePublished を通す(`=== true` で読むと既存講習が非公開に化ける)。
+   */
+  schedulePublished?: boolean
+}
+
+/** 講習の日程を保護者へ見せてよいか。未設定(既存の講習)は公開扱い。false のときだけ非公開。 */
+export function isSpecialSessionSchedulePublished(session: Pick<SpecialSessionRow, 'schedulePublished'> | null | undefined): boolean {
+  return session?.schedulePublished !== false
+}
+
+/**
+ * 講習を新しく作るときの日程公開の初期値。トグルが使える教室(機能フラグ ON)では非公開(false)で始める。
+ * フラグ OFF の教室では項目を付けない(=公開扱いのまま。後でフラグを広げたとき、それまでに作った講習が
+ * いきなり非公開に化けないようにする・オーナー確定 2026-11-03「既存の講習は公開でよい」)。
+ */
+export function resolveNewSpecialSessionScheduleFields(toggleEnabled: boolean): Pick<SpecialSessionRow, 'schedulePublished'> {
+  return toggleEnabled ? { schedulePublished: false } : {}
+}
+
+/** 1 講習の日程公開を切り替える(他の講習・他の項目は触らない)。同じ値なら同じ配列を返す。 */
+export function setSpecialSessionSchedulePublished(sessions: SpecialSessionRow[], sessionId: string, published: boolean, updatedAt: string): SpecialSessionRow[] {
+  let changed = false
+  const next = sessions.map((session) => {
+    if (session.id !== sessionId) return session
+    if (isSpecialSessionSchedulePublished(session) === published && session.schedulePublished !== undefined) return session
+    changed = true
+    return { ...session, schedulePublished: published, updatedAt }
+  })
+  return changed ? next : sessions
 }
 
 export const removedDefaultSpecialSessionIds = [

@@ -175,7 +175,8 @@ describe('確認リストの項目定義', () => {
     // 第88版(2026-10-29): ab-1/ab-2(自動バックアップの教室別化・開発用教室だけ)を足した。
     // 第93版(2026-10-30): 開発用教室だけの項目(ed-1・ed-2・hd-1)も OK → 残りはテスト教室にも出す項目だけ。
     // 第94版(2026-10-30): 開発ダッシュボードの確認 d-5 だけは開発用教室だけ。第95版(同日): AI 回答の全教室展開の確認 ai-1 も開発用教室だけ。
-    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    // 第98版(2026-11-03): 講習の日程公開の確認 lp-1〜lp-4 も開発用教室だけ(保護者QRは開発用教室と staging だけの機能)。
+    for (const id of ids.filter((id) => id !== 'd-5' && id !== 'ai-1' && !id.startsWith('lp-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
@@ -207,7 +208,8 @@ describe('確認リストの項目定義', () => {
     // 第94版(2026-10-30・v1.5.667 据え置き): 開発ダッシュボードの作り直しの確認 d-5 を先頭に足した(開発用教室だけ)。
     // 第95版(2026-10-30・v1.5.667 据え置き): 質問への AI 即時回答の全教室展開の確認 ai-1 を先頭に足した(開発用教室だけ)。
     // 第96版(2026-11-01・v1.5.670): テスト教室の tp-59/tp-64「手置き講師が抹消される」のオーナー確認 tp-66 と、テンプレ保存後の「元に戻す」の tp-67 を足した。
-    expect(ids).toEqual(['ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    // 第98版(2026-11-03・v1.5.672 据え置き): 講習の日程公開の確認 lp-1〜lp-4 を先頭に足した(開発用教室だけ)。
+    expect(ids).toEqual(['lp-1', 'lp-2', 'lp-3', 'lp-4', 'ai-1', 'd-5', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -745,5 +747,19 @@ describe('第103版(2026-11-02・v1.5.672・決定記録 62): 「手入力デー
       expect(byId.get(id)!.check?.join('\n'), id).not.toContain('希望回数は減らない')
       expect(byId.get(id)!.ownerDecision, id).toContain('11/2 追加')
     }
+  })
+})
+
+describe('第98版(2026-11-03・v1.5.672 据え置き): 講習の日程公開の確認 lp-1〜lp-4', () => {
+  it('lp-1〜lp-4 は開発用教室だけ・v1.5.674 で追加・非公開→公開→休み連絡の順に見る', () => {
+    const items = ['lp-1', 'lp-2', 'lp-3', 'lp-4'].map((id) => VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!)
+    for (const item of items) {
+      expect(item.introducedIn, item.id).toBe('v1.5.674')
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, item.id).not.toContain(item.id)
+    }
+    expect(items[0]!.ownerDecision).toContain('公開')
+    expect(items[1]!.check!.join('\n')).toContain('講習の日程は準備中です')
+    expect(items[3]!.check!.join('\n')).toContain('振替先を今決める')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
 })

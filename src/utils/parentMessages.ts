@@ -10,7 +10,8 @@ import { getStudentDisplayName } from '../components/basic-data/basicDataModel'
 // 盤面モーダルの四択。'manual' だけは盤面を触らない(手動で処理するので何もしない)。
 export type ParentAbsenceResolution = 'absent' | 'absent-no-makeup' | 'makeup-now' | 'manual'
 
-export type ParentAbsenceLessonKind = 'regular' | 'makeup' | 'extra'
+// 'lecture' = 日程を公開した講習の講習コマ(2026-11-03・spec-parent-portal §0-8)。
+export type ParentAbsenceLessonKind = 'regular' | 'makeup' | 'extra' | 'lecture'
 
 export type ParentAbsenceDetail = {
   dateKey: string
@@ -52,7 +53,7 @@ export type ParentMessageNotification = {
 export const PARENT_MESSAGE_STUDENT_NAME_FALLBACK = '（生徒名不明）'
 
 const PARENT_ABSENCE_RESOLUTIONS: readonly ParentAbsenceResolution[] = ['absent', 'absent-no-makeup', 'makeup-now', 'manual']
-const PARENT_ABSENCE_LESSON_KINDS: readonly ParentAbsenceLessonKind[] = ['regular', 'makeup', 'extra']
+const PARENT_ABSENCE_LESSON_KINDS: readonly ParentAbsenceLessonKind[] = ['regular', 'makeup', 'extra', 'lecture']
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function readText(value: unknown): string {
@@ -144,7 +145,7 @@ export function buildParentMessageNotifications(
 }
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
-const LESSON_KIND_LABELS: Record<ParentAbsenceLessonKind, string> = { regular: '通常', makeup: '振替', extra: '増コマ' }
+const LESSON_KIND_LABELS: Record<ParentAbsenceLessonKind, string> = { regular: '通常', makeup: '振替', extra: '増コマ', lecture: '講習' }
 
 // 「9月20日(土) 3限 英(通常)」。曜日は Date.UTC から取る(Date.parse('YYYY-MM-DD') は TZ で日付がずれる)。
 export function formatParentAbsenceLessonLabel(absence: ParentAbsenceDetail): string {
@@ -162,6 +163,19 @@ export const PARENT_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
   { resolution: 'makeup-now', label: '振替先を今決める', description: '休みにして、続けて振替先の空席を選ぶ' },
   { resolution: 'manual', label: '何もしない', description: '盤面は変えない(手動で処理する)' },
 ]
+
+// 講習コマの休み連絡(2026-11-03 §0-8)の選択肢。盤面の講習メニューと同じ「休み/振無休」と「何もしない」。
+// 「振替先を今決める」は出さない(講習の休みは講習の未消化へ戻り、振替の在庫を作らないので配置モードへ入れない)。
+export const PARENT_LECTURE_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
+  { resolution: 'absent', label: '休み', description: '休みにして未消化講習へ戻す' },
+  { resolution: 'absent-no-makeup', label: '振無休', description: '振替なしの休みにする(講習は消化扱い)' },
+  { resolution: 'manual', label: '何もしない', description: '盤面は変えない(手動で処理する)' },
+]
+
+/** その連絡に出す選択肢。講習コマは PARENT_LECTURE_ABSENCE_CHOICES、それ以外は従来の四択。 */
+export function resolveParentAbsenceChoices(lessonKind: ParentAbsenceLessonKind): readonly ParentAbsenceChoice[] {
+  return lessonKind === 'lecture' ? PARENT_LECTURE_ABSENCE_CHOICES : PARENT_ABSENCE_CHOICES
+}
 
 export const PARENT_ABSENCE_RESOLUTION_LABELS: Record<ParentAbsenceResolution, string> = {
   absent: '休み',

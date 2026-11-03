@@ -1,7 +1,7 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import type { SpecialSessionRow } from './specialSessionModel'
+import { isSpecialSessionSchedulePublished, resolveNewSpecialSessionScheduleFields, setSpecialSessionSchedulePublished, type SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
@@ -13,6 +13,8 @@ type SpecialSessionScreenProps = {
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
   onLogout: () => void
+  /** 機能フラグ lectureSchedulePublishToggle。ON のときだけ「日程」列(非公開／公開)を出し、新しい講習を非公開で作る。 */
+  schedulePublishToggleEnabled?: boolean
 }
 
 type SessionDraft = {
@@ -406,7 +408,9 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
         studentInputs: existing?.studentInputs ?? {},
         createdAt: normalizeTimestampText(row['作成日時']) || existing?.createdAt || timestamp,
         updatedAt: normalizeTimestampText(row['更新日時']) || timestamp,
-      }
+        // 日程公開(2026-11-03)は Excel に列を持たない。取り込みで既存講習の公開状態を落とさない(落とすと未設定=公開に化ける)。
+        ...(existing && existing.schedulePublished !== undefined ? { schedulePublished: existing.schedulePublished } : {}),
+      } as SpecialSessionRow
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))
 
@@ -560,7 +564,7 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout, schedulePublishToggleEnabled = false }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -623,6 +627,17 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       return next
     })
     setEditingSessionId((current) => (current === id ? null : current))
+  }
+
+  // 日程公開トグル(オーナー確定 2026-11-03)。切り替える前に、保護者から見えるものが変わることを確認する。
+  const toggleSchedulePublished = (row: SpecialSessionRow) => {
+    const nextPublished = !isSpecialSessionSchedulePublished(row)
+    const confirmText = nextPublished
+      ? `「${row.label}」の日程を公開します。\n提出用QRと保護者QRに、組んだ講習の日程が表示されるようになります(保護者QRは盤面を保存したあとに反映)。よろしいですか？`
+      : `「${row.label}」の日程を非公開に戻します。\n提出用QRと保護者QRから、講習の日程が見えなくなります。よろしいですか？`
+    if (!window.confirm(confirmText)) return
+    onUpdateSessions((current) => setSpecialSessionSchedulePublished(current, row.id, nextPublished, updateTimestamp()))
+    setStatusMessage(nextPublished ? `「${row.label}」の日程を公開しました。` : `「${row.label}」の日程を非公開にしました。`)
   }
 
   const removeSession = (id: string) => {
@@ -703,6 +718,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       studentInputs: {},
       createdAt: timestamp,
       updatedAt: timestamp,
+      ...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled),
     }, ...current])
     const nextDraft = createDraft()
     setDraft(nextDraft)
@@ -801,7 +817,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
             ) : null}
 
             <table className="basic-data-table" data-testid="special-data-sessions-table">
-              <thead><tr><th>講習名</th><th>講習期間</th><th>更新</th><th>操作</th></tr></thead>
+              <thead><tr><th>講習名</th><th>講習期間</th>{schedulePublishToggleEnabled ? <th>日程</th> : null}<th>更新</th><th>操作</th></tr></thead>
               <tbody>
                 {sortedSessions.flatMap((row) => {
                   const visibleStartMonth = editingVisibleStartMonths[row.id] ?? toMonthKey(row.startDate || toDateString(new Date()))
@@ -815,6 +831,20 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                         </div>
                       </td>
                       <td>{row.startDate && row.endDate ? `${row.startDate} 〜 ${row.endDate}` : '未設定'}</td>
+                      {schedulePublishToggleEnabled ? (
+                        <td>
+                          <button
+                            className={`secondary-button slim special-session-publish-toggle${isSpecialSessionSchedulePublished(row) ? ' is-published' : ''}`}
+                            type="button"
+                            aria-pressed={isSpecialSessionSchedulePublished(row)}
+                            onClick={() => toggleSchedulePublished(row)}
+                            title={isSpecialSessionSchedulePublished(row) ? '押すと非公開に戻します' : 'コマ組みが終わったら押して公開します'}
+                            data-testid={`special-data-schedule-publish-${row.id}`}
+                          >
+                            {isSpecialSessionSchedulePublished(row) ? '公開中' : '非公開'}
+                          </button>
+                        </td>
+                      ) : null}
                       <td><span className="basic-data-muted-inline">{row.updatedAt}</span></td>
                       <td>
                         <div className="basic-data-row-actions">
@@ -825,7 +855,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                     </tr>,
                     isEditing ? (
                       <tr key={`${row.id}_editor`}>
-                        <td colSpan={4}>
+                        <td colSpan={schedulePublishToggleEnabled ? 5 : 4}>
                           <div className="special-session-editor-panel">
                             <div className="special-session-name-row">
                               <label className="basic-data-inline-field basic-data-inline-field-medium special-session-inline-label">

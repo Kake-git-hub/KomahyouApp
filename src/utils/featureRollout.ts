@@ -219,6 +219,17 @@ export const featureRolloutRegistry = {
     scope: 'all-classrooms',
     description: 'Server writes classroom snapshots as a manifest plus per-week parts (1MiB document limit fix); the server predicate is authoritative.',
   },
+  // 講習の日程公開トグル(docs/spec-special-session-submission.md §B-2 / docs/spec-parent-portal.md §0-8・オーナー確定 2026-11-03)。
+  // ON: 特別講習データの各講習に「日程: 非公開／公開」トグルを出し、新しく作る講習は非公開で始める。
+  //   非公開の間は提出用QRに講習コマを載せず(提出前・提出後とも)、提出後の画面では組まれたコマを隠す。
+  //   保護者QRは公開中の講習の講習コマだけを出す(サーバーはスナップショットの schedulePublished を読む)。
+  // OFF: トグルを出さず、すべての講習を公開として扱う(従来どおり)。
+  // ★保護者QR(parentPortalQr)と同じ scope にそろえる(staging の一般教室でもトグルを押せないと、保護者QRの講習表示を確かめられない)。
+  //   全教室へ出すときは、提出用QRの見え方が本番の全教室で変わるので、先に室長へ案内する(公開を押すまで日程が見えない)。
+  lectureSchedulePublishToggle: {
+    scope: 'staging-environment',
+    description: 'Special-session data: per-session schedule publish toggle (hide lecture lessons from submission QR / parent portal until published).',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

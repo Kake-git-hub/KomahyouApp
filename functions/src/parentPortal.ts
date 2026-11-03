@@ -381,8 +381,8 @@ export function isParentAbsenceResolution(value: unknown): value is ParentAbsenc
   return typeof value === 'string' && (PARENT_ABSENCE_RESOLUTIONS as readonly string[]).includes(value)
 }
 
-/** 休み連絡できる授業の種別(isParentLessonAbsenceReportable が真になる kind と一致させる)。 */
-export type ParentAbsenceLessonKind = 'regular' | 'makeup' | 'extra'
+/** 休み連絡できる授業の種別(isParentLessonAbsenceReportable が真になる kind と一致させる)。'lecture' は公開した講習の講習コマ(2026-11-03)。 */
+export type ParentAbsenceLessonKind = 'regular' | 'makeup' | 'extra' | 'lecture'
 
 /** 連絡されたコマ。★科目・種別・予定かどうかは**サーバーが日程計算から引いた値**(リクエストの値は入らない)。 */
 export type ParentAbsenceDetail = {
@@ -617,8 +617,11 @@ export type ParentPortalDeps = {
   loadSnapshot: (workspaceKey: string, classroomId: string) => Promise<{ payload: unknown; savedAt: string | null } | null>
   /** generated/parentSchedule の buildParentScheduleView。生徒が無ければ null。 */
   buildScheduleView: (payload: unknown, studentId: string, range: ParentPortalRange) => { studentName: string; days: unknown[]; hasLectureLessons?: boolean } | null
-  /** generated/parentSchedule の resolveParentScheduleRange。 */
-  resolveRange: (input: { from?: unknown; to?: unknown }, todayKey: string) => ParentPortalResolvedRange
+  /**
+   * generated/parentSchedule の resolveParentScheduleRange。payload(教室データ)は公開中の講習の終了月まで上限を延ばすのに使う
+   * (resolveParentPublishedLectureEndDateKey・2026-11-03 §0-8)。GET と POST の両方で**同じ payload**を渡す。
+   */
+  resolveRange: (input: { from?: unknown; to?: unknown }, todayKey: string, payload: unknown) => ParentPortalResolvedRange
   /** generated/parentSchedule の isParentStudentActiveOnDate(盤面・日程表と同じ isActiveOnDate。§F)。 */
   isStudentActive: (student: { entryDate?: unknown; withdrawDate?: unknown; birthDate?: unknown }, dateKey: string) => boolean
   /** 機能フラグ(§H)。index.ts が projectId を補う。教室は (workspaceKey, id) の組で判定する。 */
@@ -712,7 +715,7 @@ export async function handleParentPortalGet(
   if (!verified.ok) return verified.result
   const { token, tokenDoc, classroomName, snapshot, student, today } = verified.context
 
-  const range = deps.resolveRange({ from: req.from, to: req.to }, today)
+  const range = deps.resolveRange({ from: req.from, to: req.to }, today, snapshot.payload)
   const view = deps.buildScheduleView(snapshot.payload, tokenDoc.studentId, { from: range.from, to: range.to })
   if (!view) {
     return { status: 410, body: { error: PARENT_PORTAL_ERROR_GONE } }
@@ -782,7 +785,7 @@ export async function handleParentPortalPost(
   if (dateKey <= today) {
     return { status: 409, body: { error: PARENT_ABSENCE_ERROR_DEADLINE_PASSED } }
   }
-  const maxTo = deps.resolveRange({}, today).bounds.maxTo
+  const maxTo = deps.resolveRange({}, today, snapshot.payload).bounds.maxTo
   const target = dateKey <= maxTo
     ? findParentAbsenceTargetLesson(
       deps.buildScheduleView(snapshot.payload, tokenDoc.studentId, { from: dateKey, to: dateKey })?.days,

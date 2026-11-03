@@ -50,9 +50,14 @@ describe('resolveParentAbsenceTarget', () => {
     expect(resolveParentAbsenceTarget({ cells: [createCell({ desks: [desk] })], students: [createStudentRow()], ...REQUEST })).toEqual({ ok: false, reason: 'student-not-found' })
   })
 
-  it('講習(special)と体験(trial)のコマは対象にしない(保護者ページに出ないコマを休みにしない)', () => {
-    const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ lessonType: 'special' }), createBoardStudent({ id: 't', lessonType: 'trial' })])] })]
+  it('体験(trial)のコマは対象にしない(保護者ページに出ないコマを休みにしない)', () => {
+    const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ id: 't', lessonType: 'trial' }), null])] })]
     expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST })).toEqual({ ok: false, reason: 'student-not-found' })
+  })
+
+  it('講習(special)のコマは対象にする(日程を公開した講習は保護者QRから休み連絡できる・2026-11-03 §0-8)', () => {
+    const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ lessonType: 'special' }), null])] })]
+    expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST })).toMatchObject({ ok: true, student: { lessonType: 'special' } })
   })
 
   it('振替(makeup)と増コマ(extra)は対象にする', () => {
@@ -121,11 +126,15 @@ describe('hasParentAbsenceRecord(保存した盤面に休みの記録が実在�
       expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ status })), ...target }), status).toBe(false)
     }
   })
-  it('別の日・別の時限・別の生徒・講習コマの休みでは真にならない', () => {
+  it('別の日・別の時限・別の生徒・体験コマの休みでは真にならない', () => {
     expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus()), ...target, dateKey: '2026-09-21' })).toBe(false)
     expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus()), ...target, slotNumber: 4 })).toBe(false)
     expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ managedStudentId: 's002' })), ...target })).toBe(false)
-    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ lessonType: 'special' })), ...target })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ lessonType: 'trial' })), ...target })).toBe(false)
+  })
+  it('講習コマの休み・振無休は記録として数える(講習の休み連絡を処理済みにできる・2026-11-03 §0-8)', () => {
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ lessonType: 'special' })), ...target })).toBe(true)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ lessonType: 'special', status: 'absent-no-makeup' })), ...target })).toBe(true)
   })
   it('表示中でない週の記録も見つける(保存データは全週を持つ)', () => {
     const otherWeek = [createCell({ id: 'x', dateKey: '2026-09-27' })]

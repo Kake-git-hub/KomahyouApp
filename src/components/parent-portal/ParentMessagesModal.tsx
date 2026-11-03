@@ -1,5 +1,5 @@
 import {
-  PARENT_ABSENCE_CHOICES,
+  resolveParentAbsenceChoices,
   buildParentAbsenceUnsavedNote,
   formatParentAbsenceLessonLabel,
   type ParentAbsenceResolution,
@@ -61,7 +61,7 @@ export function ParentMessagesModal({ notifications, collapsed, busyId, errors, 
                 {unsavedNote ? <p className="parent-message-unsaved-note" role="note">{unsavedNote}</p> : null}
                 {error ? <p className="parent-message-error" role="alert">{error}</p> : null}
                 <div className="parent-message-choices">
-                  {PARENT_ABSENCE_CHOICES.map((choice) => (
+                  {resolveParentAbsenceChoices(entry.absence.lessonKind).map((choice) => (
                     <button
                       key={choice.resolution}
                       type="button"

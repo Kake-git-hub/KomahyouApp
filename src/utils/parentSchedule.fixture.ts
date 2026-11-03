@@ -123,7 +123,9 @@ export const parentScheduleFixtureClassroomSettings: ClassroomSettings = {
 }
 
 export const parentScheduleFixtureSpecialSessions: SpecialSessionRow[] = [
-  { id: 'ss-autumn', label: '秋期講習', startDate: '2026-10-01', endDate: '2026-10-05', teacherInputs: {}, studentInputs: {}, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+  // ★schedulePublished: false(日程を非公開・2026-11-03 §0-8)。講習コマを出さない既存のテストをそのまま守る。
+  //   公開したときの表示は parentSchedule.test.ts の「日程公開」のテストが、この値を true に差し替えて確かめる。
+  { id: 'ss-autumn', label: '秋期講習', startDate: '2026-10-01', endDate: '2026-10-05', teacherInputs: {}, studentInputs: {}, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', schedulePublished: false },
 ]
 
 const studentGradeById: Record<string, GradeLabel> = { s001: '中3', s002: '小5', s003: '中1', s004: '中3', s005: '高3', s006: '小6' }

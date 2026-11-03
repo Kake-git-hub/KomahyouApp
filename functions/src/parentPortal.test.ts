@@ -272,6 +272,23 @@ describe('休み連絡できるコマの判定(共有関数 isParentLessonAbsenc
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 4, '2026-09-13')).toEqual({ subject: '理', lessonKind: 'makeup', isTentative: false })
   })
 
+  // 日程公開(2026-11-03 §0-8): 公開した講習の講習コマ(kind 'lecture')も連絡できる。講習の出欠記録(isLecture 付きの absent 等)は不可。
+  it('公開した講習の講習コマ(lecture)は lessonKind=lecture で連絡でき、講習の休み・出席の記録は連絡できない', () => {
+    const lectureDays = [{
+      dateKey: '2026-12-24',
+      weekday: 4,
+      kind: 'board',
+      lessons: [
+        { slotNumber: 1, timeLabel: '13:00-14:30', subject: '数', kind: 'lecture', isTentative: false, isLecture: true },
+        { slotNumber: 2, timeLabel: '14:40-16:10', subject: '英', kind: 'absent', isTentative: false, isLecture: true },
+        { slotNumber: 3, timeLabel: '16:20-17:50', subject: '国', kind: 'attended', isTentative: false, isLecture: true },
+      ],
+    }]
+    expect(findParentAbsenceTargetLesson(lectureDays, '2026-12-24', 1, '2026-12-03')).toEqual({ subject: '数', lessonKind: 'lecture', isTentative: false })
+    expect(findParentAbsenceTargetLesson(lectureDays, '2026-12-24', 2, '2026-12-03')).toBeNull()
+    expect(findParentAbsenceTargetLesson(lectureDays, '2026-12-24', 3, '2026-12-03')).toBeNull()
+  })
+
   it('出席済み・お休みのコマ、別の日、存在しない限は null', () => {
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 1, '2026-09-13')).toBeNull()
     expect(findParentAbsenceTargetLesson(days, '2026-09-20', 3, '2026-09-13')).toBeNull()
@@ -640,7 +657,8 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     const buildScheduleView = vi.fn(() => ({ studentName: 'n', days: [] }))
     const deps = createDeps({ resolveRange, buildScheduleView })
     await handleParentPortalGet({ token: TOKEN, from: '1999-01-01', to: ['bad'] }, deps)
-    expect(resolveRange).toHaveBeenCalledWith({ from: '1999-01-01', to: ['bad'] }, '2026-09-13')
+    // 3 つ目は教室データ(公開中の講習の終了月まで上限を延ばすのに使う・2026-11-03 §0-8)。
+    expect(resolveRange).toHaveBeenCalledWith({ from: '1999-01-01', to: ['bad'] }, '2026-09-13', snapshotPayload)
     expect(buildScheduleView).toHaveBeenCalledWith(snapshotPayload, STUDENT_ID, { from: '2026-09-06', to: '2026-10-11' })
   })
 
@@ -687,6 +705,14 @@ describe('handleParentPortalPost: 休み連絡の検証順(400 → 409 → 429 �
       expect(deps.consumeMessageQuota).not.toHaveBeenCalled()
       expect(deps.saveMessage).not.toHaveBeenCalled()
     }
+  })
+
+  // 2026-11-03 §0-8: 受付上限(bounds.maxTo)は GET と同じく教室データ(公開中の講習の終了月)から作る。
+  it('受付上限は GET と同じ教室データで丸めた範囲から取る(resolveRange に payload を渡す)', async () => {
+    const resolveRange = vi.fn((_input: unknown, _today: string, _payload: unknown) => ({ from: '2026-09-01', to: '2026-09-30', bounds: { minFrom: '2026-08-01', maxTo: '2026-09-30' } }))
+    const deps = createDeps({ resolveRange })
+    await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    expect(resolveRange).toHaveBeenCalledWith({}, '2026-09-13', snapshotPayload)
   })
 
   it('連絡できるコマなら 200 で、連絡を受けたコマを返す', async () => {

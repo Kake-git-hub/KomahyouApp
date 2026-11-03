@@ -41,8 +41,9 @@ export type ParentAbsenceTargetResolution =
   //   下段には休みを付けない（Q26-3）ので自動処理せず、連絡は一覧に残して室長に保留を片づけてもらう。
   | { ok: false; reason: 'cell-not-found' | 'student-not-found' | 'pending-lower-only' }
 
-// 保護者ページに出るのは通常・振替・増コマだけ(講習 special と体験 trial は出さない)。盤面側も同じ集合に限る。
-const PARENT_ABSENCE_LESSON_TYPES: ReadonlySet<LessonType> = new Set(['regular', 'makeup', 'extra'])
+// 保護者ページから休み連絡できるのは通常・振替・増コマと、日程を公開した講習の講習コマ(special・2026-11-03 §0-8)。
+// 体験 trial は出さない。盤面側も同じ集合に限る(講習の休み・振無休は盤面メニューと同じ markStudentAbsentAt 等が会計する)。
+const PARENT_ABSENCE_LESSON_TYPES: ReadonlySet<LessonType> = new Set(['regular', 'makeup', 'extra', 'special'])
 
 function normalizeName(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, '')
@@ -84,7 +85,7 @@ export function isBoardStudentOwnedBy(entry: Pick<StudentEntry, 'managedStudentI
 
 /**
  * 休み連絡の対象席を 1 週間分のセルから探す。
- * - 日付・時限が一致するセルの中で、本人の通常/振替/増コマを探す。
+ * - 日付・時限が一致するセルの中で、本人の通常/振替/増コマ/講習を探す。
  * - 同じコマに本人が複数居る(通常ありえないが手動追加で起こりうる)ときは、連絡の科目に一致する席を優先する。
  * - 見つからない = すでに休みにした・別の日へ動かした・削除した、のいずれか。呼び出し側は何も変えず室長へ知らせる。
  * - 保留（2 行）の机の**上段**に居れば従来どおりその席を返す（上段の休み・振無休は既存の意味どおり・Q26-2）。
@@ -139,7 +140,7 @@ export function resolveParentAbsenceTarget(params: {
  * 連絡を処理済み(notifiedAt)にしてよいのは、これが真のときだけ(spec-parent-portal §0-5)。
  * 四択で休みにしたあと、保存までの間に盤面の「元に戻す」や休み解除で記録が消えていたら偽になり、
  * 連絡は処理済みにならず一覧へ戻る(「連絡は処理済みなのに盤面は休みになっていない」を作らない)。
- * 生徒の同一性は resolveParentAbsenceTarget と同じ決め方。講習・体験の記録は数えない。
+ * 生徒の同一性は resolveParentAbsenceTarget と同じ決め方。体験の記録は数えない(講習は 2026-11-03 から数える)。
  */
 export function hasParentAbsenceRecord(params: {
   weeks: ReadonlyArray<readonly SlotCell[]> | null | undefined

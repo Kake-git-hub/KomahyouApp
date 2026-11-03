@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.674 (2026-11-03)
+
+- feat: **講習の日程公開トグル**(オーナー確定 2026-11-03「室長のコマ組みが完了するまで保護者に講習の日程を見せたくない」・機能フラグ `lectureSchedulePublishToggle`＝開発用/テスト教室＋staging・保護者QRと同じ範囲)。特別講習データの各講習に「日程: 非公開／公開中」を出し、新しく作る講習は非公開で始める(前からある講習は未設定＝公開)。非公開の間は提出用QR(生徒・講師)に講習コマを書かず(`buildSubmissionOccupiedSlotMaps`・公開時は切り出し前と同じ結果)、提出後の画面は組まれたコマを出さず「講習の日程は準備中です」を出す(`resolveSubmittedViewOccupiedSlots`・提出 API が `schedulePublished` を返す＝Functions のデプロイあり)。保護者QRは公開した講習の期間の日だけ講習コマを出し(`kind: 'lecture'`・講習の出欠は `isLecture`)、講習コマも休み連絡でき(室長の選択肢は 休み/振無休/何もしない)、公開中の講習の終了月まで「次の月」で進める(`resolveParentPublishedLectureEndDateKey`)。振替元の補完が同じ限・科目の講習の行を拾わないガード付き。仕様 `docs/spec-special-session-submission.md` §B-2・`docs/spec-parent-portal.md` §0-8。確認リスト lp-1〜lp-4・進行中テーマ台帳に 1 行。テスト: schedulePublish / submissionOccupiedSlots / submissionScheduleVisibility / parentPortalLecture / parentSchedule(日程公開) / parentPortal(functions)。
+- test: 保護者の休み連絡の対象(`parentAbsenceTarget`)に講習を含める仕様変更に合わせ、「講習は対象にしない」テストを「体験は対象にしない／講習は対象にする」へ書き換え(オーナー確定 2026-11-03)。保護者QRの用意データの講習は `schedulePublished: false` にして従来のテストを守る。
+
 ## v1.5.673 (2026-11-03)
 
 - feat: 講習履歴(生徒日程表の「講習履歴」ボタン)を**全教室へ昇格**(オーナー指示 2026-11-03「全教室に出して」・確認 h-1〜h-10 OK)。フラグ `lessonHistory` を development-only → all-classrooms。functions 側 getStudentLessonHistory は読み取り専用でフラグ判定を持たず非対称なし。台帳 developmentStatusLedger の該当行を削除。回帰テスト: 全5教室で有効(戻さない)・他の development-only 機能で名前判定/会社の壁テストを維持 (src/utils/featureRollout.ts・featureRollout.test.ts・developmentStatusLedger.ts)

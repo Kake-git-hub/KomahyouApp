@@ -9,7 +9,8 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { buildSubmissionOccupiedSlotMaps } from './utils/submissionOccupiedSlots'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 import { buildMakeupStockEntries, createBoardStudentStockIdResolver, toOutstandingMakeupOriginEntries } from './components/schedule-board/makeupStock'
@@ -37,7 +38,6 @@ import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, Class
 import { formatWeeklyScheduleTitle, resolveDisplayedOverlappingSession, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { compactBoardSharePayload, publishBoardShare, selectBoardShareLinkResolutionCells } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
-import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, resolveVerificationChecklistAudience, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
@@ -3864,32 +3864,15 @@ function AuthenticatedApp() {
       suppressedRegularLessonOccurrences: latestBoardStateForTokens?.suppressedRegularLessonOccurrences ?? [],
       boardOnly: isFeatureEnabledForClassroom('boardOnlyScheduleCells', actingClassroom),
     })
-    const lessonTypeLabels: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習' }
     const slotNumbers = Array.from(new Set(sessionCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right)
-    const studentOccupiedMap = new Map<string, Record<string, string>>()
-    const teacherOccupiedMap = new Map<string, Record<string, string>>()
-    for (const cell of sessionCells) {
-      const slotKey = `${cell.dateKey}_${cell.slotNumber}`
-      for (const desk of cell.desks) {
-        if (!desk.lesson) continue
-        const teacherName = desk.teacher
-        const matchedTeacher = activeTeachers.find((t) => getTeacherDisplayName(t) === teacherName)
-        if (matchedTeacher) {
-          if (!teacherOccupiedMap.has(matchedTeacher.id)) teacherOccupiedMap.set(matchedTeacher.id, {})
-          const existing = teacherOccupiedMap.get(matchedTeacher.id)!
-          if (!existing[slotKey]) existing[slotKey] = lessonTypeLabels[desk.lesson.studentSlots[0]?.lessonType ?? ''] ?? ''
-        }
-        for (const studentSlot of desk.lesson.studentSlots) {
-          if (!studentSlot) continue
-          const studentId = studentSlot.managedStudentId ?? studentSlot.id
-          if (!studentOccupiedMap.has(studentId)) studentOccupiedMap.set(studentId, {})
-          const existing = studentOccupiedMap.get(studentId)!
-          // オーナー指示(2026-07-19): 生徒の割振コマは「種別+科目」で表記する(例: 講習の数学→'講数'、通常の英語→'通英')。
-          // これにより提出後の再読込画面でも科目まで分かる。講師側(下)は生徒が2人で科目が一意でないため種別全長ラベルのまま。
-          if (!existing[slotKey]) existing[slotKey] = buildOccupiedSlotLabel(studentSlot.lessonType, studentSlot.subject)
-        }
-      }
-    }
+    // 日程公開(オーナー確定 2026-11-03・機能フラグ lectureSchedulePublishToggle): 非公開の講習は講習コマを提出用QRへ載せない。
+    // フラグ OFF の教室は常に公開扱い(従来どおり)。組み立ては純関数 buildSubmissionOccupiedSlotMaps(公開時は切り出し前と同じ結果)。
+    const schedulePublished = !isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom) || isSpecialSessionSchedulePublished(session)
+    const { studentOccupiedMap, teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+      cells: sessionCells,
+      resolveTeacherId: (teacherName) => activeTeachers.find((t) => getTeacherDisplayName(t) === teacherName)?.id ?? null,
+      includeLectureLessons: schedulePublished,
+    })
 
     // spec-group-lesson §E: 提出ページの集団列(1限の左)に出す、盤面の集団授業コマ(集理/集社)を抽出。
     // key=`${dateKey}_${band}`、value=科目。講習期間内のみ。中3生徒の提出ドキュメントへ載せる。
@@ -3940,7 +3923,7 @@ function AuthenticatedApp() {
 
     const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
       ? { updatedSession: sessionForIssue, newTokens: [] }
-      : await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
+      : await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers, { schedulePublished })
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
@@ -3956,7 +3939,7 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[]; schedulePublished: boolean }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
@@ -3965,7 +3948,7 @@ function AuthenticatedApp() {
       if (token && !newTokenSet.has(token)) {
         const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
         const isThirdGrade = gradeLabel === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel), reopenedSlots: studentInput?.reopenedSlots ?? [] })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel), reopenedSlots: studentInput?.reopenedSlots ?? [], schedulePublished })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
@@ -3977,7 +3960,7 @@ function AuthenticatedApp() {
       const teacherInput = updatedSession.teacherInputs[t.id]
       const token = teacherInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, reopenedSlots: teacherInput?.reopenedSlots ?? [] })
+        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, reopenedSlots: teacherInput?.reopenedSlots ?? [], schedulePublished })
       }
     }
     if (existingTokenEntries.length > 0) {
@@ -6238,6 +6221,7 @@ function AuthenticatedApp() {
         onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
         onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
         onLogout={logout}
+        schedulePublishToggleEnabled={isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom)}
       />
     )
   }

@@ -17,6 +17,7 @@ import {
   buildParentScheduleView,
   isParentStudentActiveOnDate,
   resolveParentScheduleRange,
+  resolveParentPublishedLectureEndDateKey,
   toJstDateKey as toParentPortalJstDateKey,
 } from './generated/parentSchedule'
 import {
@@ -4526,6 +4527,8 @@ type LectureSubmissionDoc = {
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`、value=科目。後方互換のため optional。
   groupClassSlots?: Record<string, string>
+  // 講習の日程を見せてよいか(2026-11-03)。false の間は提出後の画面で組まれたコマを出さない。未設定=公開(旧文書)。
+  schedulePublished?: boolean
   submittedAt: string | null
   createdAt: string
 }
@@ -4652,6 +4655,8 @@ export const lectureSubmissionApi = onRequest({
       regularOnly: data.regularOnly ?? false,
       occupiedSlots: data.occupiedSlots ?? {},
       groupClassSlots: data.groupClassSlots ?? {},
+      // 日程公開(2026-11-03)。未設定(旧文書)は公開扱い。false のときだけ提出後の画面で組まれたコマを隠す。
+      schedulePublished: data.schedulePublished !== false,
     })
     return
   }
@@ -4829,7 +4834,8 @@ function buildParentPortalDeps(): ParentPortalDeps {
       return { payload, savedAt: typeof data.savedAt === 'string' && data.savedAt ? data.savedAt : null }
     },
     buildScheduleView: (payload, studentId, range) => buildParentScheduleView(payload, studentId, range),
-    resolveRange: (input, todayKey) => resolveParentScheduleRange(input, todayKey),
+    // 公開中の講習が来月以降まで続くときは、その終了月まで「次の月」で進められる(2026-11-03 §0-8)。
+    resolveRange: (input, todayKey, payload) => resolveParentScheduleRange(input, todayKey, resolveParentPublishedLectureEndDateKey(payload, todayKey)),
     // 在籍判定は盤面・日程表と同じ isActiveOnDate の写し(§F。管理データ画面の入塾日不問規則は使わない)。
     isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
     isEnabled: ({ workspaceKey, id }) => isParentPortalEnabledForClassroom({ workspaceKey, id, projectId: PARENT_PORTAL_PROJECT_ID }),
