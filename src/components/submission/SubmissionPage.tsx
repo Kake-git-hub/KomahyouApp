@@ -231,7 +231,8 @@ export default function SubmissionPage({ token, debug = false }: { token: string
     }
     async function loadData() {
       try {
-        const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`)
+        // 提出状態は端末キャッシュを使わず毎回サーバーから読む(確認リスト qs-2・iOS Safari で登録解除後も提出済みのままだった)。
+        const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`, { cache: 'no-store' })
         if (!response.ok) {
           if (response.status === 404) {
             setError('このQRは無効です。教室へお問い合わせください。')
@@ -260,6 +261,20 @@ export default function SubmissionPage({ token, debug = false }: { token: string
     }
     loadData()
   }, [apiBase, token, debug])
+
+  // iOS Safari は戻る・進むでページを丸ごと保存した状態(bfcache)から見せることがあり、そのときは読み込み直さない。
+  // 提出済みの画面のまま保存状態から出てきたら読み直して、登録解除などで変わった提出状態を出す(確認リスト qs-2・2026-11-03)。
+  // ★入力中(未提出)の画面では読み直さない(保護者が付けかけた✕を消さないため)。
+  const submittedRef = useRef(submitted)
+  submittedRef.current = submitted
+  useEffect(() => {
+    if (debug) return
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && submittedRef.current) window.location.reload()
+    }
+    window.addEventListener('pageshow', handlePageShow)
+    return () => window.removeEventListener('pageshow', handlePageShow)
+  }, [debug])
 
   const availableDates = useMemo(() => {
     if (!data) return []
