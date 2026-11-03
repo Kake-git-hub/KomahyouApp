@@ -40,6 +40,13 @@ export type VerificationChecklistItem = {
    * テスト担当者が分かるようにして」)。挙動の変更がオーナーの判断によるものだと分かるよう、項目の先頭に別色で出す。1〜2 文。
    */
   ownerDecision?: string
+  /**
+   * 要改善を受けて直し、項目を書き換えた時刻(ISO・2026-11-03 オーナー指示「対応したなら要改善の状態は外して、テキスト欄に前回のメモは
+   * 残さなくていい」)。これより前に送った下書きの結果・メモ・画像・送った記録は、パネルを開いたときに消す
+   * (clearReworkedVerificationChecklistEntries)。各教室の送信済みの結果(項目の上の欄)はサーバーの記録なので残る。
+   * 書き換えたら、オーナーがその項目を送った後・デプロイ前の時刻を入れる。
+   */
+  reworkedAt?: string
 }
 
 /**
@@ -376,6 +383,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       ],
       introducedIn: 'v1.5.680',
       ownerDecision: '登録解除したら組んだ講習コマも外す。提出用QRは日程表と同じ内容を残したまま未提出に戻す(2026-11-03)。',
+      // 要改善(受付 20261103-110108129・11/3 20:01)を受けて書き換えた(v1.5.680 のデプロイ 11/3 20:44 より前)。
+      reworkedAt: '2026-11-03T11:40:00.000Z',
     },
     {
       id: 'qs-3',
@@ -521,6 +530,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '保護者QRの「次の月」は、公開中の講習が終わる月まで(非公開にした冬期講習の月へは進めない。来月までは今どおり進める)',
       ],
       ownerDecision: '前からある講習は「公開中」扱いのまま。先の講習を見せたくないときは室長が「非公開」に切り替える(2026-11-03)。',
+      // 要改善(受付 20261103-110436914・11/3 20:04)を受けて手順を書き換えた(v1.5.680)。
+      reworkedAt: '2026-11-03T11:40:00.000Z',
       introducedIn: 'v1.5.675',
     },
     {
@@ -1085,6 +1096,35 @@ export function parseVerificationChecklistDraft(
     attachments,
     sent,
   }
+}
+
+/**
+ * 書き換えた項目(reworkedAt)の、書き換えより前に送った下書きを消す(純関数・2026-11-03 オーナー指示)。
+ * 消すのは結果・メモ・その項目の画像・送った記録。書き換え後に送り直した項目(sentAt が reworkedAt 以後)と、
+ * まだ送っていない下書きは触らない(送り直した後に開き直しても消えない)。変化が無ければ同じ下書きを返す。
+ */
+export function clearReworkedVerificationChecklistEntries(
+  draft: VerificationChecklistDraft,
+  items: readonly VerificationChecklistItem[] = VERIFICATION_CHECKLIST.items,
+): VerificationChecklistDraft {
+  const staleIds = new Set<string>()
+  for (const item of items) {
+    if (!item.reworkedAt) continue
+    const sent = draft.sent[item.id]
+    if (!sent) continue
+    const sentTime = Date.parse(sent.sentAt)
+    const reworkedTime = Date.parse(item.reworkedAt)
+    if (Number.isFinite(sentTime) && Number.isFinite(reworkedTime) && sentTime >= reworkedTime) continue
+    staleIds.add(item.id)
+  }
+  if (staleIds.size === 0) return draft
+  const entries = { ...draft.entries }
+  const sent = { ...draft.sent }
+  for (const id of staleIds) {
+    delete entries[id]
+    delete sent[id]
+  }
+  return { ...draft, entries, sent, attachments: draft.attachments.filter((attachment) => !staleIds.has(attachment.itemId)) }
 }
 
 /** 1項目を書き換えた新しい下書きを返す(純関数・元は変えない)。 */

@@ -1,6 +1,7 @@
 // 開発用教室の確認リスト(2026-09-12)の回帰防止テスト。
 // パネルは開発用教室でしか出ないが、書式・下書き・分割は純関数なのでここで固定する。
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { DEVELOPER_REPORT_NOTE_LIMIT } from './developerReport'
@@ -37,6 +38,7 @@ import {
   buildVerificationChecklistOtherNotesReportNote,
   buildVerificationChecklistItemReportAttachments,
   markVerificationChecklistItemSent,
+  clearReworkedVerificationChecklistEntries,
   resolveVerificationChecklistItemSendState,
 } from './verificationChecklist'
 
@@ -850,5 +852,46 @@ describe('第98版(2026-11-03・v1.5.672 据え置き): 講習の日程公開の
     }
     expect(items[1]!.check!.join('\n')).toContain('振替先を今決める')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
+  })
+})
+
+// 2026-11-03 オーナー指示「(qs-2 を)対応したなら要改善の状態は外して、テキスト欄に前回のメモは残さなくていい。
+// 上にある前回なにを送信したかの文章は残しても良い」。書き換えた項目(reworkedAt)の書き換え前の下書きを消す。
+describe('書き換えた項目の下書きを消す(clearReworkedVerificationChecklistEntries)', () => {
+  const item = (id: string, reworkedAt?: string) => ({ id, area: 'a', title: 't', steps: ['s'], introducedIn: 'v1.5.680', ...(reworkedAt ? { reworkedAt } : {}) })
+  const sentDraft = (sentAt: string) => {
+    let draft = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'qs-2', { status: 'needs-fix', memo: '割当も解除して' })
+    draft = markVerificationChecklistItemSent(draft, 'qs-2', { reportId: 'r1', sentAt, attachmentCount: 1 })
+    return draft
+  }
+
+  it('書き換えより前に送った要改善とメモ・送った記録を消す(結果は未確認に戻る)', () => {
+    const cleaned = clearReworkedVerificationChecklistEntries(sentDraft('2026-11-03T11:01:08.129Z'), [item('qs-2', '2026-11-03T11:40:00.000Z')])
+    expect(getVerificationChecklistEntry(cleaned, 'qs-2')).toEqual({ status: 'unchecked', memo: '' })
+    expect(cleaned.sent['qs-2']).toBeUndefined()
+    expect(resolveVerificationChecklistItemSendState(cleaned, 'qs-2')).toBe('unchecked')
+  })
+
+  it('書き換え後に送り直した項目・書き換えていない項目は触らない(開き直しても消えない)', () => {
+    const resent = sentDraft('2026-11-03T12:00:00.000Z')
+    expect(clearReworkedVerificationChecklistEntries(resent, [item('qs-2', '2026-11-03T11:40:00.000Z')])).toBe(resent)
+    const old = sentDraft('2026-11-03T11:01:08.129Z')
+    expect(clearReworkedVerificationChecklistEntries(old, [item('qs-2')])).toBe(old)
+  })
+
+  it('まだ送っていない下書きは触らない', () => {
+    const draft = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'qs-2', { status: 'ok', memo: '' })
+    expect(clearReworkedVerificationChecklistEntries(draft, [item('qs-2', '2026-11-03T11:40:00.000Z')])).toBe(draft)
+  })
+
+  it('正本では要改善を受けて書き換えた qs-2・lp-3 に reworkedAt がある(送った 11/3 20:01・20:04 より後)', () => {
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((entry) => [entry.id, entry]))
+    for (const id of ['qs-2', 'lp-3']) expect(Date.parse(byId.get(id)!.reworkedAt!), id).toBeGreaterThan(Date.parse('2026-11-03T11:04:36.914Z'))
+  })
+
+  it('パネルは開いたときに消してから出し、消したら保存し直す', () => {
+    const panel = readFileSync(new URL('../components/developer-report/VerificationChecklistPanel.tsx', import.meta.url), 'utf8')
+    expect(panel).toContain('const cleaned = clearReworkedVerificationChecklistEntries(loaded)')
+    expect(panel).toContain('if (cleaned !== loaded) writeStorage(storageKey, serializeVerificationChecklistDraft(cleaned))')
   })
 })
