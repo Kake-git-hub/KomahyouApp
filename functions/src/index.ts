@@ -137,6 +137,7 @@ import {
 } from './generated/workspaceBackupLayout'
 import { parseWorkspaceAutoBackupLayoutConfig, readBackupDownloadPurpose, resolveWorkspaceAutoBackupLayout } from './workspaceBackupLayoutConfig'
 import { writePerClassroomWorkspaceBackup, type PerClassroomBackupWriteIo } from './workspaceBackupWriter'
+import { readVerificationChecklistVersion, selectVerificationChecklistStatusReports, VERIFICATION_CHECKLIST_STATUS_SELECT_FIELDS } from './verificationChecklistStatus'
 
 initializeApp()
 
@@ -2985,6 +2986,36 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
   return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest, ...aiAnswerFields }
+})
+
+// 確認リストの「どの教室で確認済みか」(2026-11-03 オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェック
+// しないようにどちらの教室がチェック済みかわかるようにして」)。developerReports は rules で developer だけが読めるので、検証用教室
+// (開発用教室・テスト教室)の利用者に、同じ会社の検証用教室から届いた**指定版の確認リスト送信の本文だけ**を返す。読み取り専用・書き込みなし。
+// 選別と返す形は verificationChecklistStatus.ts(純関数)。送信者・操作痕跡・教室データ・画像の保存先は返さない。
+export const listVerificationChecklistResults = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const classroomId = readString(rawData.classroomId, 'classroomId')
+  const version = readVerificationChecklistVersion(rawData.version)
+  if (!version) throw new HttpsError('invalid-argument', 'version は v1.2.3 の形で指定してください。')
+  await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+  // 本番教室からは読ませない(確認リストは検証用教室だけの道具)。
+  if (!isDevelopmentClassroomIdentity({ workspaceKey, classroomId })) {
+    throw new HttpsError('permission-denied', '確認リストは開発用教室・テスト教室だけで使えます。')
+  }
+  const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('developerReports')
+    .where('isVerificationChecklist', '==', true)
+    .select(...VERIFICATION_CHECKLIST_STATUS_SELECT_FIELDS)
+    .get()
+  const reports = selectVerificationChecklistStatusReports(
+    snapshot.docs.map((doc) => ({ id: doc.id, data: doc.data() as Record<string, unknown> })),
+    {
+      version,
+      isAllowedClassroom: (reportClassroomId) => isDevelopmentClassroomIdentity({ workspaceKey, classroomId: reportClassroomId }),
+      developmentClassroomId: resolveDevelopmentClassroomId(workspaceKey),
+    },
+  )
+  return { version, reports }
 })
 
 // 「要望・報告」のメール即時通知(オーナー要望 2026-09-04: LINE ではなくメールへ直接、15分待たずに)。

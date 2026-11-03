@@ -151,8 +151,22 @@
   テスト教室でも同じ機能が触れる。
 - 項目の正本は `src/utils/verificationChecklist.ts`（`VERIFICATION_CHECKLIST`）。各項目は 未確認／OK／要改善 の
   3 択とメモを持ち、入力のたびに localStorage（`verification-checklist:<教室ID>:<版>`）へ下書き保存する。
-- **「保存して送信」は同じ経路で送る**: 既存の `submitDeveloperReport`（`source: board` / `category: request`）を
-  そのまま使い、developerReports に蓄積する。新しい保存先・別の送信口は作らない。
+- **送信は項目ごと（2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」）**: 各項目の「この項目を送信」で 1 項目 = 1 通を、
+  既存の `submitDeveloperReport`（`source: board` / `category: request`）でそのまま送り、developerReports に蓄積する。新しい保存先・
+  別の送信口は作らない。旧「保存して送信」（まとめ送り）は廃止。本文は `buildVerificationChecklistItemReportNote`（先頭の目印＋結果行 1 行・
+  **必ず 1 通**＝長いメモは末尾を「…」で切る）、画像はその項目の分だけ同梱し、送れたら下書きから外す。下書きには項目ごとに送った結果・メモ・
+  時刻（`sent`）を残し、送った後に結果・メモ・画像を変えたら「変更を送信」で送り直せる（`resolveVerificationChecklistItemSendState`）。
+  フリーメモは「フリーメモを送信」で単独に送り、送れたら欄を空にする。
+  - 読み取り側（`verificationChecklistResults.ts` と tools の `.mjs`）は **1 通もの（total=1）を受付ごとに別扱い**にする
+    （以前は同じ版の 1 通ものを再送とみなして最新 1 通だけ残していたため、項目ごとに送ると前の項目の結果が消えた）。同じ項目の送り直しは
+    項目 id ごとの後勝ちで集約する。分割（total≥2）の旧まとめ送りは従来どおり同じ版・同じ total で結合する。
+- **どの教室で確認済みかを項目ごとに出す（2026-11-03 オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェック
+  しないようにどちらの教室がチェック済みかわかるようにして」）**: developerReports は rules で developer だけが読めるので、読み取り専用の
+  Cloud Function `listVerificationChecklistResults`（`functions/src/verificationChecklistStatus.ts`）が、呼び出し元が検証用教室の利用者で
+  あることを確かめたうえで、**同じ会社の検証用教室から届いた今の版の確認リスト送信の本文・教室・受付時刻だけ**を返す（送信者・操作痕跡・
+  教室データ・画像の保存先は返さない）。パネルは開いたとき・送ったあと・「更新」で読み、`summarizeChecklistResultsByClassroom` で
+  教室ごとの最新結果に集約して、項目の上に「開発用教室(この教室) OK 11/3 14:05 送信済み」「テスト教室 要改善 …（メモ）」と出す
+  （別の教室の結果は青枠）。読めなくても入力・送信は続けられる。
 - **確認リストはメール通知も Issue 起票もしない（オーナー指示 2026-09-13）**: 要望・報告・質問と違い、開発者が
   `tools/verification-checklist-report.mjs` で読んで必ず修正するため通知は不要。サーバーは「開発用教室（サンドボックス含む）
   かつ本文先頭行が目印」のとき `isVerificationChecklist: true`・`notifiedAt` 即時・`notifySkipped: 'verification-checklist'`
@@ -160,10 +174,10 @@
   （`isVerificationChecklistReport` / `resolveDeveloperReportMailSkipReason`）。本番教室で同じ書式を書いても通知は止めない。
 - **メモ欄は結果に関わらず全項目に常に出す（2026-09-13）**。未確認のままメモを書くと要改善に切り替える
   （未確認は送信本文に載らないため、書いたメモを黙って捨てない・`setVerificationChecklistMemo`）。
-- 本文は `buildVerificationChecklistReportNotes` が整形する。先頭行は目印 `[確認リスト <版>]`、未確認の項目は
+- （旧まとめ送りの書式・読み取り側が引き続き読む）本文は `buildVerificationChecklistReportNotes` が整形する。先頭行は目印 `[確認リスト <版>]`、未確認の項目は
   省略、`- <id> OK` / `- <id> 要改善: <メモ>` の圧縮書式。`DEVELOPER_REPORT_NOTE_LIMIT`(2000字)を超える場合は
   複数通に分け、各通の先頭に同じ目印と `(i/n)` を付ける。**送信本文に生徒名は入れない**（項目 id とメモだけ）。
-- 送信できないときの保険として「Markdown をコピー」も用意する。送信後も下書きは残る（再送できる）。
+- 送信できないときの保険として「Markdown をコピー」も用意する。送信後も下書き（結果・メモ）は残る。
 
 ## E-3. 開発ダッシュボード（開発者画面のサブページ・2026-09-25 オーナー指示）
 

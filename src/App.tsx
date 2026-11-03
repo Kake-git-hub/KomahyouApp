@@ -22,7 +22,7 @@ const DeveloperAdminScreen = lazy(() => import('./components/developer-admin/Dev
 const BillingAutomationScreen = lazy(() => import('./components/billing/BillingAutomationScreen').then((m) => ({ default: m.BillingAutomationScreen })))
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackupJson, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, listRecentFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { listVerificationChecklistResultsViaFunction, deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackupJson, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, listRecentFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { buildManagerSelfRestoreConfirmation, isRestoreSourceForClassroom, listManagerSelfRestoreCandidates, replaceClassroomData, resolveManagerSelfRestoreCutoffIso, resolveManagerSelfRestoreGuard, type ManagerSelfRestoreConfirmation, type ManagerSelfRestoreSummary } from './components/backup-restore/managerSelfRestore'
 import { canApplyUndoSnapshotToClassroom } from './utils/classroomScopedUndo'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
@@ -56,6 +56,7 @@ import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, pa
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { useDeveloperReportWindow } from './components/developer-report/useDeveloperReportWindow'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
+import { VERIFICATION_CHECKLIST } from './utils/verificationChecklist'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
 import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
 import { markReportAnswersReadViaFunction, subscribeReportAnswers } from './integrations/firebase/reportAnswersStore'
@@ -1925,6 +1926,11 @@ function AuthenticatedApp() {
     // 添付画像(確認リストのスクリーンショット・2026-10-14)は本文と同じ 1 通に載せる(別の経路は作らない)。
     return submit({ source: 'board', category: 'request', note, attachments })
   }, [])
+  // 確認リストの「どの教室で確認済みか」(2026-11-03 オーナー指示): 開発用教室・テスト教室から送られた今の版の送信を読む(読み取り専用の Cloud Function)。
+  const loadVerificationChecklistSharedResults = useCallback(async () => {
+    if (!actingClassroomId) return []
+    return listVerificationChecklistResultsViaFunction({ classroomId: actingClassroomId, version: VERIFICATION_CHECKLIST.version })
+  }, [actingClassroomId])
   // 確認リストの文面の `{{student:<生徒ID>}}` を、開いている教室(開発用教室)の生徒データの名前にする
   // (2026-10-10 オーナー指示「開発用教室は名前を見ていいので、確認リストに生徒名を表示して」)。ソースに実名は置かない。
   const resolveVerificationChecklistStudentName = useCallback((studentId: string) => {
@@ -1963,6 +1969,7 @@ function AuthenticatedApp() {
         classroomName={actingClassroom?.name}
         audience={verificationChecklistAudience ?? 'sandbox'}
         onSubmitNote={submitVerificationChecklistNote}
+        loadSharedResults={loadVerificationChecklistSharedResults}
         resolveStudentName={resolveVerificationChecklistStudentName}
       />
     ) : null
@@ -2037,7 +2044,7 @@ function AuthenticatedApp() {
         ) : null}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, resolveVerificationChecklistStudentName, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, loadVerificationChecklistSharedResults, resolveVerificationChecklistStudentName, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current

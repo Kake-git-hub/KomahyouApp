@@ -146,7 +146,10 @@ export function toChecklistReport(raw: {
 export function mergeChecklistReports(reports: readonly ChecklistReportPart[]): MergedChecklistReport[] {
   const groups = new Map<string, ChecklistReportPart[]>()
   for (const report of reports) {
-    const key = `${report.version} ${report.total}`
+    // ★1 通だけの報告(total=1)は**それぞれ別の受付**として扱う(2026-11-03・確認リストを項目ごとに送るようにしたため)。
+    //   以前は同じ版の 1 通ものを「同一版の再送」とみなして最新 1 通だけ残しており、項目ごとに送ると前に送った項目の結果が消えた。
+    //   同じ項目を送り直したときの後勝ちは summarizeChecklistResults(項目 id ごとの後勝ち)が担う。
+    const key = report.total === 1 ? `single ${report.reportId} ${report.recordedAt}` : `${report.version} ${report.total}`
     const bucket = groups.get(key)
     if (bucket) bucket.push(report)
     else groups.set(key, [report])
@@ -243,4 +246,86 @@ export function summarizeChecklistReports(
     if (part) parts.push(part)
   }
   return summarizeChecklistResults(mergeChecklistReports(parts))
+}
+
+// ---- どの教室で確認済みか(2026-11-03 オーナー指示) ----
+//
+// 「確認リストで、開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェックしないように
+//  どちらの教室がチェック済みかわかるようにして」。Cloud Function listVerificationChecklistResults が返す
+// 送信(検証用教室から届いた指定版の確認リスト本文)を、教室ごとに項目 id の最新結果へ集約する。
+// 集約の規則(マーカー・結果行・分割の結合・後勝ち)は上の関数をそのまま使う(教室で分けて呼ぶだけ)。
+
+export type ChecklistClassroomKind = 'development' | 'sandbox'
+
+/** listVerificationChecklistResults の 1 件(src/integrations/firebase/adminFunctions.ts と同じ形)。 */
+export type ChecklistSharedReport = {
+  reportId?: string | null
+  classroomId: string
+  classroomName?: string | null
+  classroomKind: ChecklistClassroomKind
+  note?: string | null
+  recordedAt?: string | null
+  reportedAt?: string | null
+}
+
+export type ChecklistItemClassroomResult = {
+  classroomId: string
+  classroomKind: ChecklistClassroomKind
+  /** 「開発用教室」「テスト教室」(テスト教室が複数あるときは教室名を添える)。 */
+  classroomLabel: string
+  /** 今開いている教室の結果か。 */
+  isCurrentClassroom: boolean
+  result: ChecklistItemResultKind
+  memo: string
+  recordedAt: string
+}
+
+/** 項目 id → 教室ごとの最新結果(開発用教室が先・同じ種類は受付が新しい順)。 */
+export type ChecklistItemClassroomResults = Record<string, ChecklistItemClassroomResult[]>
+
+export function summarizeChecklistResultsByClassroom(
+  reports: readonly ChecklistSharedReport[],
+  options: { currentClassroomId: string | null | undefined },
+): ChecklistItemClassroomResults {
+  const byClassroom = new Map<string, ChecklistSharedReport[]>()
+  for (const report of reports) {
+    if (!report?.classroomId) continue
+    const list = byClassroom.get(report.classroomId) ?? []
+    list.push(report)
+    byClassroom.set(report.classroomId, list)
+  }
+  const sandboxCount = [...byClassroom.values()].filter((list) => list[0].classroomKind !== 'development').length
+  const results: ChecklistItemClassroomResults = {}
+  for (const [classroomId, list] of byClassroom) {
+    const kind: ChecklistClassroomKind = list[0].classroomKind === 'development' ? 'development' : 'sandbox'
+    const name = list.map((report) => report.classroomName ?? '').find(Boolean) ?? ''
+    const classroomLabel = kind === 'development' ? '開発用教室' : sandboxCount > 1 && name ? `テスト教室(${name})` : 'テスト教室'
+    const summary = summarizeChecklistReports(list)
+    for (const item of summary.items) {
+      const bucket = results[item.itemId] ?? []
+      bucket.push({
+        classroomId,
+        classroomKind: kind,
+        classroomLabel,
+        isCurrentClassroom: Boolean(options.currentClassroomId) && classroomId === options.currentClassroomId,
+        result: item.result,
+        memo: item.memo,
+        recordedAt: item.recordedAt,
+      })
+      results[item.itemId] = bucket
+    }
+  }
+  for (const bucket of Object.values(results)) {
+    bucket.sort((a, b) => (a.classroomKind === b.classroomKind ? b.recordedAt.localeCompare(a.recordedAt) : a.classroomKind === 'development' ? -1 : 1))
+  }
+  return results
+}
+
+/** 画面に出す受付時刻(JST・`11/3 14:05`)。読めなければ空文字。 */
+export function formatChecklistRecordedAt(iso: string | null | undefined): string {
+  const time = Date.parse(String(iso ?? ''))
+  if (!Number.isFinite(time)) return ''
+  const jst = new Date(time + 9 * 60 * 60 * 1000)
+  const minutes = String(jst.getUTCMinutes()).padStart(2, '0')
+  return `${jst.getUTCMonth() + 1}/${jst.getUTCDate()} ${jst.getUTCHours()}:${minutes}`
 }

@@ -2,7 +2,11 @@
 //
 // 画面最前面(右下・fixed)に浮かび、操作しながら各項目を 未確認/OK/要改善 で記録し、
 // どの項目にもメモを書ける(未確認で書くと要改善になる)。入力のたびに localStorage へ下書き保存し、リロードしても残る。
-// 「保存して送信」で既存の「要望・報告」経路(submitDeveloperReport)へ送る＝新しい保存先は作らない。
+// 送信は**項目ごと**(2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」): 各項目の「この項目を送信」で 1 項目 = 1 通を
+// 既存の「要望・報告」経路(submitDeveloperReport)へ送る＝新しい保存先は作らない。フリーメモも単独で送る。
+// どの教室で確認済みか(2026-11-03 オーナー指示「開発用教室とテスト用教室の双方でチェックしているため、双方が重複チェックしないように
+// どちらの教室がチェック済みかわかるようにして」): App が渡す loadSharedResults(Cloud Function listVerificationChecklistResults・読み取り専用)で
+// 両教室の送信済み結果を読み、項目ごとに「開発用教室 OK 11/3 14:05」「テスト教室 要改善 …」と出す。集約は verificationChecklistResults.ts の純関数。
 // 送った結果は developerReports に記録されるだけで、要望・報告と違いメール通知も Issue 起票もしない
 // (サーバー側 isVerificationChecklistReport で判定・2026-09-13 オーナー指示)。
 //
@@ -14,10 +18,16 @@
 // 空のタブを開き、同じパネルを createPortal でそのタブへ描く(状態・送信・生徒名の解決はこのコンポーネントのまま)。
 // 別タブを閉じるか「元の画面に戻す」で右下へ戻る。元のタブを閉じる/再読み込み/教室を切り替えると別タブも閉じる。
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type { DeveloperReportAttachment, DeveloperReportSubmitResult } from '../../utils/developerReport'
+import {
+  formatChecklistRecordedAt,
+  summarizeChecklistResultsByClassroom,
+  type ChecklistItemClassroomResults,
+  type ChecklistSharedReport,
+} from '../../utils/verificationChecklistResults'
 import {
   VERIFICATION_CHECKLIST,
   selectVerificationChecklistItems,
@@ -26,14 +36,17 @@ import {
   VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY,
   addVerificationChecklistAttachment,
   collectStaleVerificationChecklistDraftKeys,
+  buildVerificationChecklistItemReportAttachments,
+  buildVerificationChecklistItemReportNote,
   buildVerificationChecklistMarkdown,
-  buildVerificationChecklistReportAttachments,
-  buildVerificationChecklistReportNotes,
+  buildVerificationChecklistOtherNotesReportNote,
   countVerificationChecklistProgress,
   getVerificationChecklistAttachments,
   getVerificationChecklistEntry,
+  markVerificationChecklistItemSent,
   parseVerificationChecklistDraft,
   removeVerificationChecklistAttachment,
+  resolveVerificationChecklistItemSendState,
   resolveVerificationChecklistText,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
@@ -61,9 +74,14 @@ export type VerificationChecklistPanelProps = {
   audience: VerificationChecklistAudience
   /**
    * 1通ぶんの本文を送る。App 側の submitDeveloperReport(source: 'board', category: 'request')へ委譲。
-   * attachments は項目に貼ったスクリーンショット(2026-10-14)。複数通に分かれるときは 1 通目にだけ付ける。
+   * 1 項目 = 1 通(2026-11-03)。attachments はその項目に貼ったスクリーンショット(2026-10-14)。
    */
   onSubmitNote: (note: string, attachments?: DeveloperReportAttachment[]) => Promise<DeveloperReportSubmitResult>
+  /**
+   * 開発用教室・テスト教室から送られた、今の版の確認リスト送信を読む(2026-11-03・読み取り専用)。App が Cloud Function
+   * listVerificationChecklistResults へ委譲する。無ければ「どの教室で確認済みか」を出さない。
+   */
+  loadSharedResults?: () => Promise<ChecklistSharedReport[]>
   /** 画像の縮小(既定は canvas で長辺 1600px の JPEG)。テストで差し替える。 */
   shrinkImage?: (file: File) => Promise<{ name: string; dataUrl: string }>
   /**
@@ -111,7 +129,15 @@ function pruneStaleDrafts(classroomId: string | null) {
 
 // 教室を切り替えたときは App 側が key={classroomId} で作り直すため、下書きは初期化時に読み直される
 // (他教室の入力を持ち越さない)。ここで effect を使って state を書き戻さない。
-export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+/** 送信中の印(フリーメモ用)。項目 id と重ならない。 */
+const OTHER_NOTES_SEND_KEY = '__other-notes__'
+
+type SharedResultsState =
+  | { status: 'idle' | 'loading' }
+  | { status: 'ready'; results: ChecklistItemClassroomResults }
+  | { status: 'error'; message: string; results: ChecklistItemClassroomResults }
+
+export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
@@ -120,8 +146,12 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     return parseVerificationChecklistDraft(readStorage(storageKey))
   })
   const [collapsed, setCollapsed] = useState<boolean>(() => readStorage(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY) !== 'open')
-  const [sending, setSending] = useState(false)
+  /** 送信中の項目 id(フリーメモは OTHER_NOTES_SEND_KEY)。同時に 1 件だけ送る。 */
+  const [sendingKey, setSendingKey] = useState<string | null>(null)
+  /** 項目ごとの送信結果の一言(失敗の理由など)。 */
+  const [itemMessages, setItemMessages] = useState<Record<string, string>>({})
   const [resultMessage, setResultMessage] = useState<string | null>(null)
+  const [shared, setShared] = useState<SharedResultsState>({ status: 'idle' })
   /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
   const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
   /**
@@ -255,34 +285,90 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     return [...map.entries()]
   }, [items])
 
-  const handleSubmit = useCallback(async () => {
-    const notes = buildVerificationChecklistReportNotes(draft, { items })
-    if (notes.length === 0) {
-      setResultMessage('まだ何も記録されていません。OK か要改善を付けてから送信してください。')
+  // 両教室の送信済み結果を読む(開いたとき・送ったあと・「更新」)。失敗しても項目の入力・送信は続けられる。
+  // App の再描画で関数の identity が変わっても読み直さない(読むのは開いたとき・送ったあと・「更新」だけ)。
+  const loadSharedResultsRef = useRef(loadSharedResults)
+  useLayoutEffect(() => {
+    loadSharedResultsRef.current = loadSharedResults
+  }, [loadSharedResults])
+  const hasSharedResults = Boolean(loadSharedResults)
+  const refreshShared = useCallback(async () => {
+    const load = loadSharedResultsRef.current
+    if (!load) return
+    setShared((current) => (current.status === 'ready' || current.status === 'error' ? current : { status: 'loading' }))
+    try {
+      const reports = await load()
+      setShared({ status: 'ready', results: summarizeChecklistResultsByClassroom(reports, { currentClassroomId: classroomId }) })
+    } catch (error) {
+      setShared((current) => ({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        results: current.status === 'ready' || current.status === 'error' ? current.results : {},
+      }))
+    }
+  }, [classroomId])
+
+  useEffect(() => {
+    if (hasSharedResults) void refreshShared()
+  }, [hasSharedResults, refreshShared])
+
+  const setItemMessage = useCallback((key: string, message: string | null) => {
+    setItemMessages((current) => {
+      const next = { ...current }
+      if (message) next[key] = message
+      else delete next[key]
+      return next
+    })
+  }, [])
+
+  /** 1 項目を送る(2026-11-03)。1 項目 = 1 通。送れたら下書きに「送った内容」を残し、その項目の画像を下書きから外す。 */
+  const handleSendItem = useCallback(async (itemId: string) => {
+    if (sendingKey) return
+    const note = buildVerificationChecklistItemReportNote(draft, itemId, { items })
+    if (!note) {
+      setItemMessage(itemId, 'OK か要改善を選んでから送信してください。')
       return
     }
-    setSending(true)
-    setResultMessage(null)
-    // 添付画像は 1 通目にだけ載せる(分割されても画像は 1 回・label=項目 id で何の画像か分かる)。
-    const attachments = buildVerificationChecklistReportAttachments(draft)
-    const reportIds: string[] = []
-    let failure: string | null = null
-    for (const [index, note] of notes.entries()) {
-      // 送信は逐次(受付番号を順番に並べる・サーバー側の連投を避ける)。
-      const result = await onSubmitNote(note, index === 0 && attachments.length > 0 ? attachments : undefined)
-      if (result.ok) reportIds.push(result.reportId)
-      else {
-        failure = result.error
-        break
-      }
-    }
-    setSending(false)
-    if (failure) {
-      setResultMessage(`送れませんでした: ${failure}${reportIds.length > 0 ? `(送信済み ${reportIds.length}通: ${reportIds.join(', ')})` : ''}`)
+    const attachments = buildVerificationChecklistItemReportAttachments(draft, itemId)
+    setSendingKey(itemId)
+    setItemMessage(itemId, null)
+    const result = await onSubmitNote(note, attachments.length > 0 ? attachments : undefined)
+    setSendingKey(null)
+    if (!result.ok) {
+      setItemMessage(itemId, `送れませんでした: ${result.error}`)
       return
     }
-    setResultMessage(`送りました(${reportIds.length}通${attachments.length > 0 ? `・画像 ${attachments.length} 枚` : ''}・受付番号 ${reportIds.join(', ')})。下書きはこのまま残ります。`)
-  }, [draft, items, onSubmitNote])
+    setDraft((current) => {
+      const next = markVerificationChecklistItemSent(current, itemId, { reportId: result.reportId, sentAt: new Date().toISOString(), attachmentCount: attachments.length })
+      writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(next))
+      return next
+    })
+    void refreshShared()
+  }, [classroomId, draft, items, onSubmitNote, refreshShared, sendingKey, setItemMessage])
+
+  /** フリーメモだけを送る。送れたら欄を空にする(同じメモを二重に送らない)。 */
+  const handleSendOtherNotes = useCallback(async () => {
+    if (sendingKey) return
+    const note = buildVerificationChecklistOtherNotesReportNote(draft)
+    if (!note) {
+      setItemMessage(OTHER_NOTES_SEND_KEY, 'フリーメモが空です。')
+      return
+    }
+    setSendingKey(OTHER_NOTES_SEND_KEY)
+    setItemMessage(OTHER_NOTES_SEND_KEY, null)
+    const result = await onSubmitNote(note)
+    setSendingKey(null)
+    if (!result.ok) {
+      setItemMessage(OTHER_NOTES_SEND_KEY, `送れませんでした: ${result.error}`)
+      return
+    }
+    setDraft((current) => {
+      const next = setVerificationChecklistOtherNotes(current, '')
+      writeStorage(verificationChecklistStorageKey(classroomId), serializeVerificationChecklistDraft(next))
+      return next
+    })
+    setItemMessage(OTHER_NOTES_SEND_KEY, `送りました(受付番号 ${result.reportId})。`)
+  }, [classroomId, draft, onSubmitNote, sendingKey, setItemMessage])
 
   const handleCopy = useCallback(async () => {
     const markdown = buildVerificationChecklistMarkdown(draft, items)
@@ -305,6 +391,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
       >
         確認リスト {progress.checked}/{progress.total}
         {progress.needsFix > 0 ? <span className="verification-checklist-toggle-badge">要改善 {progress.needsFix}</span> : null}
+        {progress.unsent > 0 ? <span className="verification-checklist-toggle-badge">未送信 {progress.unsent}</span> : null}
       </button>
     )
   }
@@ -321,8 +408,14 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
         <div>
           <div className="verification-checklist-title">確認リスト {VERIFICATION_CHECKLIST.version}</div>
           <div className="verification-checklist-subtitle">
-            {audience === 'sandbox' ? 'テスト教室(テンプレ関係のみ)' : '開発用教室(全項目)'}{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}
+            {audience === 'sandbox' ? 'テスト教室(テンプレ関係のみ)' : '開発用教室(全項目)'}{classroomName ? `／${classroomName}` : ''}・OK {progress.ok} / 要改善 {progress.needsFix} / 未確認 {progress.remaining}{progress.unsent > 0 ? ` / 未送信 ${progress.unsent}` : ''}
           </div>
+          {loadSharedResults ? (
+            <div className="verification-checklist-shared-status" data-testid="verification-checklist-shared-status">
+              {shared.status === 'loading' || shared.status === 'idle' ? '両教室の送信済みを読み込み中…' : shared.status === 'error' ? `両教室の送信済みを読めませんでした(${shared.message})` : '項目ごとに、開発用教室・テスト教室で送信済みの結果を出しています'}
+              <button type="button" className="link-button" onClick={() => { void refreshShared() }} data-testid="verification-checklist-shared-refresh">更新</button>
+            </div>
+          ) : null}
         </div>
         {detached ? (
           <div className="verification-checklist-header-actions">
@@ -360,6 +453,18 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
             onChange={(event) => updateDraft(setVerificationChecklistOtherNotes(draft, event.target.value))}
             data-testid="verification-checklist-other-notes"
           />
+          <div className="verification-checklist-send-row">
+            <button
+              type="button"
+              className="secondary-button verification-checklist-send-button"
+              onClick={() => { void handleSendOtherNotes() }}
+              disabled={sendingKey !== null || !draft.otherNotes.trim()}
+              data-testid="verification-checklist-send-other-notes"
+            >
+              {sendingKey === OTHER_NOTES_SEND_KEY ? '送信中…' : 'フリーメモを送信'}
+            </button>
+            {itemMessages[OTHER_NOTES_SEND_KEY] ? <span className="verification-checklist-send-state">{itemMessages[OTHER_NOTES_SEND_KEY]}</span> : null}
+          </div>
         </div>
         {groups.map(([area, items]) => (
           <div key={area} className="verification-checklist-group">
@@ -367,12 +472,33 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
             {items.map((item) => {
               const entry = getVerificationChecklistEntry(draft, item.id)
               const attachments = getVerificationChecklistAttachments(draft, item.id)
+              const sendState = resolveVerificationChecklistItemSendState(draft, item.id)
+              const sentRecord = draft.sent[item.id]
+              const sharedResults = shared.status === 'ready' || shared.status === 'error' ? shared.results[item.id] ?? [] : []
+              const isSending = sendingKey === item.id
               return (
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>
                   <div className="verification-checklist-item-title">
                     <span className="verification-checklist-item-id">{item.id}</span>
                     {text(item.title)}
                   </div>
+                  {/* どの教室で確認済みか(2026-11-03): 両教室の送信済み結果。別の教室の結果は目立たせ、重複して確かめないようにする。 */}
+                  {sharedResults.length > 0 ? (
+                    <ul className="verification-checklist-shared" data-testid={`verification-checklist-shared-${item.id}`}>
+                      {sharedResults.map((row) => (
+                        <li
+                          key={row.classroomId}
+                          className={`verification-checklist-shared-row is-${row.result}${row.isCurrentClassroom ? ' is-current' : ' is-other'}`}
+                          data-testid={`verification-checklist-shared-${item.id}-${row.classroomKind}`}
+                        >
+                          <span className="verification-checklist-shared-classroom">{row.classroomLabel}{row.isCurrentClassroom ? '(この教室)' : ''}</span>
+                          <span className="verification-checklist-shared-result">{row.result === 'ok' ? 'OK' : '要改善'}</span>
+                          <span className="verification-checklist-shared-time">{formatChecklistRecordedAt(row.recordedAt)} 送信済み</span>
+                          {row.memo ? <span className="verification-checklist-shared-memo">{row.memo}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                   {/* オーナーが新たに決めたこと(2026-11-01 オーナー指示「私が行った新たな判断があるものは、確認リストの説明に新たに定義したことを記載しテスト担当者が分かるように」)。 */}
                   {item.ownerDecision ? <p className="verification-checklist-owner-decision" data-testid={`verification-checklist-owner-decision-${item.id}`}><span className="verification-checklist-label">オーナーの決定</span>{text(item.ownerDecision)}</p> : null}
                   {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p> : null}
@@ -450,6 +576,28 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                   {entry.status === 'needs-fix' && !entry.memo.trim() ? (
                     <p className="verification-checklist-memo-hint">改善内容を書くと、そのまま修正に取りかかれます。</p>
                   ) : null}
+                  {/* 項目ごとの送信(2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」)。 */}
+                  <div className="verification-checklist-send-row">
+                    <button
+                      type="button"
+                      className={`${sendState === 'unsent' || sendState === 'changed' ? 'primary-button' : 'secondary-button'} verification-checklist-send-button`}
+                      onClick={() => { void handleSendItem(item.id) }}
+                      disabled={sendingKey !== null || sendState === 'unchecked' || sendState === 'sent'}
+                      data-testid={`verification-checklist-send-${item.id}`}
+                    >
+                      {isSending ? '送信中…' : sendState === 'sent' ? '送信済み' : sendState === 'changed' ? '変更を送信' : 'この項目を送信'}
+                    </button>
+                    <span className={`verification-checklist-send-state is-${sendState}`} data-testid={`verification-checklist-send-state-${item.id}`}>
+                      {itemMessages[item.id]
+                        ?? (sendState === 'sent' && sentRecord
+                          ? `送信済み ${formatChecklistRecordedAt(sentRecord.sentAt)}${sentRecord.attachmentCount > 0 ? `・画像 ${sentRecord.attachmentCount} 枚` : ''}`
+                          : sendState === 'changed'
+                            ? '送った後に変更があります(まだ送っていません)'
+                            : sendState === 'unsent'
+                              ? '未送信'
+                              : 'OK か要改善を選ぶと送れます')}
+                    </span>
+                  </div>
                 </div>
               )
             })}
@@ -464,9 +612,9 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
           <button type="button" className="secondary-button" onClick={() => { void handleCopy() }} data-testid="verification-checklist-copy">
             Markdown をコピー
           </button>
-          <button type="button" className="primary-button" onClick={() => { void handleSubmit() }} disabled={sending} data-testid="verification-checklist-submit">
-            {sending ? '送信中…' : '保存して送信'}
-          </button>
+          <span className="verification-checklist-unsent-count" data-testid="verification-checklist-unsent-count">
+            {progress.unsent > 0 ? `未送信 ${progress.unsent} 件(各項目の「この項目を送信」で送ります)` : '未送信の項目はありません'}
+          </span>
         </div>
       </footer>
     </section>
