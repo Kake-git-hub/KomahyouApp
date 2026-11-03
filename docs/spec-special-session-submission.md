@@ -28,6 +28,10 @@
   - **盤面変更（青表示の occupiedSlots）・休日設定・限数（slotNumbers）・集団コマ・オプション文言（optionLabels）は
     既発行 QR にも後追い反映**され、提出ページが常に最新の盤面/休日を映す（`updateSubmissionOccupiedSlots` /
     中3の集団選択肢後埋め `updateSubmissionGroupClassEligibility`）。
+  - ★**後追い反映は配布情報だけを部分更新で書く**（2026-11-03・INV-07 / INV-08）: `updateSubmissionOccupiedSlots`・`updateSubmissionReopenedSlots`・
+    `updateSubmissionGroupClassEligibility` は読んだ文書を丸ごと書き戻さない（読み→書きの間に保護者が提出すると、提出済みを未提出へ巻き戻すため）。
+    書くのは `buildSubmissionDistributionPatch` の項目だけで、提出内容（status・不可コマ・希望科目数・集団参加・オプション・提出日時）は書かない。
+    また操作中の教室 ID を渡し、別教室の文書には書かない（`isForeignClassroomSubmissionDoc`。登録・登録解除と同じガード）。
 - ★**日程表の表示範囲に講習期間が複数重なるときの QR/バッジの講習選択**（2026-08-29・手動テスト No.201）:
   **表示開始日を含む講習を優先**し、無ければ表示範囲内で最初に始まる講習を選ぶ
   （`resolveDisplayedOverlappingSession`・日程表の QR/「希望提出済」バッジ・トークン発行/後追い反映が同規則）。
