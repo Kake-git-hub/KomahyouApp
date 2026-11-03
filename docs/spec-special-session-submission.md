@@ -32,6 +32,9 @@
     `updateSubmissionGroupClassEligibility` は読んだ文書を丸ごと書き戻さない（読み→書きの間に保護者が提出すると、提出済みを未提出へ巻き戻すため）。
     書くのは `buildSubmissionDistributionPatch` の項目だけで、提出内容（status・不可コマ・希望科目数・集団参加・オプション・提出日時）は書かない。
     また操作中の教室 ID を渡し、別教室の文書には書かない（`isForeignClassroomSubmissionDoc`。登録・登録解除と同じガード）。
+  - ★**室長の「登録」「登録解除」も部分更新**（2026-11-03・INV-07）: `markLectureSubmissionDocAsSubmitted` は status・提出日時と渡された
+    集団参加/オプションだけ（`buildSubmissionLockPatch`）、`resetLectureSubmissionDoc` は提出内容を空へ戻す項目と status だけ（`buildSubmissionResetPatch`）を書く。
+    読み→書きの間に保護者が提出しても、その不可コマ・希望科目数を古い内容で消さない。配布情報（黄色コマ含む）は書かないので残る。
 - ★**日程表の表示範囲に講習期間が複数重なるときの QR/バッジの講習選択**（2026-08-29・手動テスト No.201）:
   **表示開始日を含む講習を優先**し、無ければ表示範囲内で最初に始まる講習を選ぶ
   （`resolveDisplayedOverlappingSession`・日程表の QR/「希望提出済」バッジ・トークン発行/後追い反映が同規則）。
