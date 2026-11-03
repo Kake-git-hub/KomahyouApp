@@ -362,6 +362,26 @@ export function toStudentFacingScheduleParams<T extends Pick<OpenScheduleHtmlPar
   }
 }
 
+/**
+ * 提出用QRを発行・後追い反映する講習(2026-11-03 レビュー指摘 M-1)。生徒日程表と講師日程表が QR を出す講習と**同じ選び方**にする。
+ * - 生徒の講習 = 講師専用を外した一覧から resolveDisplayedOverlappingSession(buildStudentPayload と同じ)
+ * - 講師の講習 = 全件から resolveDisplayedOverlappingSession(buildTeacherPayload と同じ)
+ * 同じ講習なら 1 件、違えば両方を返す(講師専用の講習は発行側で生徒を 0 人として扱う)。
+ * ★全件から 1 つだけ選ぶと、表示範囲が講師専用と生徒向けの両方に掛かったときに生徒向けの講習の生徒QRが発行されない。
+ */
+export function resolveSubmissionTokenTargetSessions<T extends { startDate: string; endDate: string; teacherOnly?: boolean }>(
+  specialSessions: T[] | undefined,
+  startDate: string,
+  endDate: string,
+): T[] {
+  const studentSession = resolveDisplayedOverlappingSession(selectStudentFacingSpecialSessions(specialSessions), startDate, endDate)
+  const teacherSession = resolveDisplayedOverlappingSession(specialSessions, startDate, endDate)
+  const targets: T[] = []
+  if (studentSession) targets.push(studentSession)
+  if (teacherSession && teacherSession !== studentSession) targets.push(teacherSession)
+  return targets
+}
+
 function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
   return { session: resolveDisplayedOverlappingSession(specialSessions, startDate, endDate), error: undefined as string | undefined }
 }

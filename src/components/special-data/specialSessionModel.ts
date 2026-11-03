@@ -206,6 +206,14 @@ export type SpecialSessionRow = {
   teacherOnly?: boolean
 }
 
+/**
+ * 提出用QRの文書に書く「日程公開」(2026-11-03)。トグルが使えない教室(フラグ OFF)は常に公開。
+ * ★講師専用の講習は公開トグルを出さないので常に公開扱い(レビュー指摘 M-2: 非公開のままだと講師の提出後の画面が「準備中」から戻せない)。
+ */
+export function resolveSubmissionSchedulePublished(session: Pick<SpecialSessionRow, 'schedulePublished' | 'teacherOnly'>, toggleEnabled: boolean): boolean {
+  return !toggleEnabled || isTeacherOnlySpecialSession(session) || isSpecialSessionSchedulePublished(session)
+}
+
 /** 講師専用の講習か(生徒・保護者には出さない)。true のときだけ講師専用。 */
 export function isTeacherOnlySpecialSession(session: Pick<SpecialSessionRow, 'teacherOnly'> | null | undefined): boolean {
   return session?.teacherOnly === true

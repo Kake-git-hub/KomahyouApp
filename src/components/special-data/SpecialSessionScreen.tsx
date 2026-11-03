@@ -394,6 +394,7 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
 
   const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
   const existingByLabel = new Map(fallback.map((row) => [normalizeSessionLabel(row.label), row]))
+  const existingById = new Map(fallback.map((row) => [row.id, row]))
   const timestamp = updateTimestamp()
 
   const importedSessions = rows
@@ -421,7 +422,9 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
           : resolveNewSpecialSessionScheduleFields(options.schedulePublishToggleEnabled === true)),
         // 講師専用(2026-11-03)も Excel に列を持たない。既存講習の印は落とさない(落とすと生徒側へ急に出る)。
         // Excel で新しく増えた講習には付けない(付けられるのは画面の作成欄だけ)。
-        ...(existing && isTeacherOnlySpecialSession(existing) ? { teacherOnly: true } : {}),
+        // ★講習 ID で照合する(レビュー指摘 L-1: 名前だけだと、名前を変えた行で印が落ちて生徒側へ急に出る・別 ID の同名の行が印を受け継ぐ)。
+        //   講習 ID の列が空の行だけ名前で照合する。
+        ...(isTeacherOnlySpecialSession(normalizeText(row['講習ID']) ? existingById.get(normalizeText(row['講習ID'])) : existing) ? { teacherOnly: true } : {}),
       } as SpecialSessionRow
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))
@@ -732,7 +735,8 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       studentInputs: {},
       createdAt: timestamp,
       updatedAt: timestamp,
-      ...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled),
+      // 講師専用の講習は公開トグルを出さないので非公開で始めない(項目を付けない=公開扱い・レビュー指摘 M-2)。
+      ...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled && !(teacherOnlyEnabled && draft.teacherOnly === true)),
       ...resolveNewSpecialSessionTeacherOnlyFields(teacherOnlyEnabled, draft.teacherOnly === true),
     }, ...current])
     const nextDraft = createDraft()
