@@ -330,7 +330,7 @@ export function guardAndResetLectureSubmissionDoc(
  * 未提出(pending)ドキュメントの availableGroupClassSubjects を後埋めする。
  * 提出済み(submitted)は再提出不可なので触らない。既に同値なら書き込まない(冪等)。
  */
-export async function updateSubmissionGroupClassEligibility(token: string, availableGroupClassSubjects: string[]) {
+export async function updateSubmissionGroupClassEligibility(token: string, availableGroupClassSubjects: string[], expectedClassroomId?: string | null) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
 
@@ -339,12 +339,16 @@ export async function updateSubmissionGroupClassEligibility(token: string, avail
   if (!existing.exists()) return
   const data = existing.data() as LectureSubmissionDoc
   if (data.status === 'submitted') return
+  // 本番データ保護(INV-08): 別教室の doc には書かない。
+  if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
   const current = Array.isArray(data.availableGroupClassSubjects) ? data.availableGroupClassSubjects : []
   const isSame = current.length === availableGroupClassSubjects.length
     && current.every((value, index) => value === availableGroupClassSubjects[index])
   if (isSame) return
 
-  await setDoc(docRef, { ...data, availableGroupClassSubjects: [...availableGroupClassSubjects] })
+  // ★部分更新(INV-07): 読んだ doc を丸ごと書き戻すと、読み→書きの間に保護者が提出(Functions の update)した
+  //   内容を古い data で巻き戻す。書くのは配布情報の 1 項目だけ。
+  await updateDoc(docRef, { availableGroupClassSubjects: [...availableGroupClassSubjects] })
 }
 
 /**
@@ -401,7 +405,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
  * 室長の変換操作(盤面/日程表)の直後に呼び、保護者/講師がQRを開いたとき黄色表示が即反映されるようにする。
  * 提出済み(submitted)ドキュメントも更新対象(変換は通常提出後に起きるため)。同値なら書き込まない(冪等)。
  */
-export async function updateSubmissionReopenedSlots(token: string, reopenedSlots: string[]) {
+export async function updateSubmissionReopenedSlots(token: string, reopenedSlots: string[], expectedClassroomId?: string | null) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
 
@@ -409,17 +413,69 @@ export async function updateSubmissionReopenedSlots(token: string, reopenedSlots
   const existing = await getDoc(docRef)
   if (!existing.exists()) return
   const data = existing.data() as LectureSubmissionDoc
+  // 本番データ保護(INV-08): 別教室の doc には書かない。
+  if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
   const current = Array.isArray(data.reopenedSlots) ? data.reopenedSlots : []
   const isSame = current.length === reopenedSlots.length
     && current.every((value, index) => value === reopenedSlots[index])
   if (isSame) return
 
-  await setDoc(docRef, { ...data, reopenedSlots: [...reopenedSlots] })
+  // ★部分更新(INV-07): 提出内容(unavailableSlots・status 等)を古い data で巻き戻さないよう、この 1 項目だけ書く。
+  await updateDoc(docRef, { reopenedSlots: [...reopenedSlots] })
 }
 
-/** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
+export type SubmissionDistributionUpdate = {
+  token: string
+  occupiedSlots: Record<string, string>
+  slotNumbers?: number[]
+  holidayDates?: string[]
+  groupClassSlots?: Record<string, string>
+  optionLabels?: string[]
+  availableSubjects?: string[]
+  reopenedSlots?: string[]
+  schedulePublished?: boolean
+}
+
+/**
+ * 既発行QRへ後追い反映する「配布情報」だけの差分(純関数・テストで固定)。
+ * ★提出内容(status / unavailableSlots / subjectSlots / subjectDurations / groupClassParticipation / optionChecks /
+ *   regularOnly / submittedAt / notifiedAt)は**決して含めない**(INV-07)。指定の無い項目はキーを作らない(既存値を残す)。
+ */
+export function buildSubmissionDistributionPatch(entry: SubmissionDistributionUpdate): Record<string, unknown> {
+  return {
+    occupiedSlots: { ...entry.occupiedSlots },
+    // 既発行トークンにも最新の休日設定を反映する(後から休日を設定/解除した場合に提出側へ伝播)。
+    ...(entry.holidayDates ? { holidayDates: [...entry.holidayDates] } : {}),
+    ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
+    // spec-group-lesson §E: 既発行QRにも最新の集団授業コマ(集理/集社)を反映する。
+    ...(entry.groupClassSlots ? { groupClassSlots: { ...entry.groupClassSlots } } : {}),
+    // オプション欄(開発用教室): 既発行QRにも最新のオプション文言(学年共通)を反映する。
+    ...(entry.optionLabels ? { optionLabels: [...entry.optionLabels] } : {}),
+    // 既発行QRにも最新の選択可能科目を反映する。理社など後から追加した科目が、
+    // トークン発行済みの生徒の提出画面に出ないのを防ぐ(availableSubjects は発行時に凍結されるため)。
+    // 提出済みドキュメントでも害はない(提出画面は subjectSlots>0 の科目だけ表示するため未選択科目は出ない)。
+    ...(entry.availableSubjects ? { availableSubjects: [...entry.availableSubjects] } : {}),
+    // 「後から出席可能に変更」(reopenedSlots)の後追い反映。変換直後の updateSubmissionReopenedSlots が
+    // 失敗した場合でも、日程表を開いたタイミングでアプリ内の正へ収束させる(アプリ内 state が正)。
+    ...(entry.reopenedSlots ? { reopenedSlots: [...entry.reopenedSlots] } : {}),
+    // 日程公開(2026-11-03)。公開/非公開の切り替えを既発行QRへ伝える(提出後の画面で組まれたコマを出すかどうか)。
+    ...(typeof entry.schedulePublished === 'boolean' ? { schedulePublished: entry.schedulePublished } : {}),
+  }
+}
+
+/**
+ * Update occupiedSlots on existing submission docs so the phone screen reflects current board state.
+ *
+ * ★部分更新(updateDoc・2026-11-03 修正・INV-07): 以前は getDoc → `setDoc({ ...data, ... })` の丸ごと書き戻しで、
+ *   読みと書きの間に保護者がスマホから提出(Functions の docRef.update)すると、提出済みを古い data(未提出)で
+ *   巻き戻せた。書くのは buildSubmissionDistributionPatch の配布情報だけにする。
+ * ★本番データ保護(INV-08・2026-11-03): expectedClassroomId を渡すと、別教室の doc には書き込まない
+ *   (isForeignClassroomSubmissionDoc。登録・登録解除・通知済みと同じガード)。
+ * 読むのは「doc があるか」と「どの教室の doc か」を確かめるためだけ(無い doc へ updateDoc すると例外になる)。
+ */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[]; schedulePublished?: boolean }>,
+  entries: SubmissionDistributionUpdate[],
+  expectedClassroomId?: string | null,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -429,27 +485,8 @@ export async function updateSubmissionOccupiedSlots(
     const docRef = doc(db, 'lectureSubmissions', entry.token)
     const existing = await getDoc(docRef)
     if (!existing.exists()) continue
-    const data = existing.data()
-    await setDoc(docRef, {
-      ...data,
-      occupiedSlots: entry.occupiedSlots,
-      // 既発行トークンにも最新の休日設定を反映する(後から休日を設定/解除した場合に提出側へ伝播)。
-      ...(entry.holidayDates ? { holidayDates: [...entry.holidayDates] } : {}),
-      ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
-      // spec-group-lesson §E: 既発行QRにも最新の集団授業コマ(集理/集社)を反映する。
-      ...(entry.groupClassSlots ? { groupClassSlots: { ...entry.groupClassSlots } } : {}),
-      // オプション欄(開発用教室): 既発行QRにも最新のオプション文言(学年共通)を反映する。
-      ...(entry.optionLabels ? { optionLabels: [...entry.optionLabels] } : {}),
-      // 既発行QRにも最新の選択可能科目を反映する。理社など後から追加した科目が、
-      // トークン発行済みの生徒の提出画面に出ないのを防ぐ(availableSubjects は発行時に凍結されるため)。
-      // 提出済みドキュメントでも害はない(提出画面は subjectSlots>0 の科目だけ表示するため未選択科目は出ない)。
-      ...(entry.availableSubjects ? { availableSubjects: [...entry.availableSubjects] } : {}),
-      // 「後から出席可能に変更」(reopenedSlots)の後追い反映。変換直後の updateSubmissionReopenedSlots が
-      // 失敗した場合でも、日程表を開いたタイミングでアプリ内の正へ収束させる(アプリ内 state が正)。
-      ...(entry.reopenedSlots ? { reopenedSlots: [...entry.reopenedSlots] } : {}),
-      // 日程公開(2026-11-03)。公開/非公開の切り替えを既発行QRへ伝える(提出後の画面で組まれたコマを出すかどうか)。
-      ...(typeof entry.schedulePublished === 'boolean' ? { schedulePublished: entry.schedulePublished } : {}),
-    })
+    if (isForeignClassroomSubmissionDoc(existing.data(), expectedClassroomId)) continue
+    await updateDoc(docRef, buildSubmissionDistributionPatch(entry))
   }
 }
 

@@ -3960,7 +3960,7 @@ function AuthenticatedApp() {
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
-          void updateSubmissionGroupClassEligibility(token, [...sessionGroupClassSubjects]).catch(() => { /* non-fatal */ })
+          void updateSubmissionGroupClassEligibility(token, [...sessionGroupClassSubjects], actingClassroomId).catch(() => { /* non-fatal */ })
         }
       }
     }
@@ -3972,7 +3972,8 @@ function AuthenticatedApp() {
       }
     }
     if (existingTokenEntries.length > 0) {
-      updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
+      // 本番データ保護(INV-08): 操作中の教室の doc だけに書く。書くのは配布情報だけ(部分更新・INV-07)。
+      updateSubmissionOccupiedSlots(existingTokenEntries, actingClassroomId).catch(() => { /* non-fatal */ })
     }
   }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessions, students, teachers])
 
@@ -4175,7 +4176,7 @@ function AuthenticatedApp() {
         // 混入防止(2026-07-09): 検証用教室では自教室発行でないトークンへ書き込まない(登録/解除経路と同じガード)。
         if (isActingDevelopmentClassroom && !isSubmissionTokenOwnedByClassroom(input, actingClassroomId)) continue
         syncedTokens.add(input.submissionToken)
-        updateSubmissionReopenedSlots(input.submissionToken, input.reopenedSlots ?? []).catch(() => { /* non-fatal: 後追い反映(updateSubmissionOccupiedSlots)で収束 */ })
+        updateSubmissionReopenedSlots(input.submissionToken, input.reopenedSlots ?? [], actingClassroomId).catch(() => { /* non-fatal: 後追い反映(updateSubmissionOccupiedSlots)で収束 */ })
       }
     }
   }, [actingClassroomId, isActingDevelopmentClassroom, setSpecialSessions, specialSessionsRef])
