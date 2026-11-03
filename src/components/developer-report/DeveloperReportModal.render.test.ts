@@ -118,6 +118,17 @@ describe('DeveloperReportModal の描画(添付画像・2026-10-22 オーナー�
     expect(html).not.toContain('data-testid="developer-report-attachment"')
   })
 
+  it('タブを撮る関数を渡すと「タブを選んで撮る」も出て、案内に生徒日程表などのタブを選べることが入る(2026-11-03)', () => {
+    const shot = async () => ({ name: 'x', dataUrl: 'data:image/jpeg;base64,AAAA' })
+    const html = renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: shot, onCaptureTab: shot }))
+    expect(html).toContain('data-testid="developer-report-capture"')
+    expect(html).toContain('data-testid="developer-report-capture-tab"')
+    expect(html).toContain('>タブを選んで撮る<')
+    expect(html).toContain('生徒日程表など開いているタブを選んで付けられます')
+    // 渡さなければ出さない(タブ選択が使えないブラウザ)。
+    expect(renderToString(createElement(DeveloperReportModal, { ...baseProps, onCaptureScreen: shot }))).not.toContain('developer-report-capture-tab')
+  })
+
   it('撮る関数が無ければ「画像を選ぶ」だけと、スクリーンショットを選ぶ案内', () => {
     const html = renderToString(createElement(DeveloperReportModal, baseProps))
     expect(html).not.toContain('data-testid="developer-report-capture"')

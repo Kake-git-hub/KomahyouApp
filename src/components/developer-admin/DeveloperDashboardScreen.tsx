@@ -9,15 +9,20 @@
 //   - 2026-09-28 の 1 行 1 件の表・複数選択・指示の編集欄はやめ、カードごとの「Claude に頼む」(指示入りの新セッション)だけにした。
 //     指示は Claude Code の入力欄に入るだけなので、送る前にそこで書き足せる。
 //   - 報告の教室別一覧・GitHub Issue・機能フラグの全量は「報告と Issue の一覧」(DeveloperDashboardDetail.tsx)で見る。
+//   - 2026-11-03 オーナー指示「ダッシュボード上で Close できるようにしたい」(確認リスト v1.5.672 d-5): 開いている Issue のリンクの横に
+//     「Issue を閉じる」。確認の画面のあと callable closeGitHubIssue(開発者だけ・このリポジトリの Issue だけ・PR は断る)で GitHub 上で閉じる。
+//     閉じた Issue はこの画面では閉じた扱いにする(GitHub の公開 API は 1 分ほど古い結果を返すことがあるため・台帳のカードは「済み」に変わる)。
 //
-// ★読み取り専用。Firestore(developerReports)は developerReportsStore.ts の getDocs、GitHub は公開 API の GET だけ。
-//   この画面から何かを書き込む導線は作らない(本番データ保護ルール)。Claude Code へ渡すのは URL とクリップボードだけ。
+// ★Firestore へは書かない。developerReports は developerReportsStore.ts の getDocs、GitHub の読み取りは公開 API の GET だけ。
+//   書く操作は「Issue を閉じる」(GitHub の Issue の状態だけ・Cloud Function 経由)の 1 つだけ。教室データ・Firestore に書く導線は作らない
+//   (本番データ保護ルール)。Claude Code へ渡すのは URL とクリップボードだけ。
 // ★集計はすべて src/utils/developerDashboard.ts / developerDashboardActions.ts の純関数に委譲する(ここは取得と見た目だけ)。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { listRecentDeveloperReports } from '../../integrations/firebase/developerReportsStore'
 import { fetchGitHubIssues } from '../../integrations/github/issues'
+import { closeGitHubIssueViaFunction, type CloseGitHubIssueReason, type CloseGitHubIssueResult } from '../../integrations/firebase/githubIssueCloseStore'
 import {
   DEVELOPER_DASHBOARD_DEFAULT_SINCE_DAYS,
   DEVELOPER_DASHBOARD_REPORT_LIMIT,
@@ -33,6 +38,7 @@ import {
   DASHBOARD_SECTION_DESCRIPTIONS,
   DASHBOARD_SECTION_LABELS,
   DASHBOARD_WHO_LABELS,
+  buildCloseIssueConfirmMessage,
   buildDashboardOverview,
   resolveClaudeCodeSessionUrl,
   type DashboardCard,
@@ -54,6 +60,14 @@ export type DeveloperDashboardScreenProps = {
   loadIssues?: () => Promise<GitHubIssueRecord[]>
   /** 最初に開く面。既定は【いまの状況】(テストで一覧面を描くために差し替え可)。 */
   initialView?: DeveloperDashboardView
+  /** テスト・差し替え用。既定は githubIssueCloseStore.closeGitHubIssueViaFunction(callable closeGitHubIssue)。 */
+  closeIssue?: (input: { issueNumber: number; reason: CloseGitHubIssueReason }) => Promise<CloseGitHubIssueResult>
+  /** テスト・差し替え用。既定は window.confirm。 */
+  confirmAction?: (message: string) => boolean
+}
+
+function defaultConfirmAction(message: string): boolean {
+  return typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm(message) : false
 }
 
 const SECTION_ANCHORS: Readonly<Record<DashboardSection, string>> = {
@@ -78,7 +92,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
   return false
 }
 
-export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, classrooms, onBack, loadReports = listRecentDeveloperReports, loadIssues = fetchGitHubIssues, initialView = 'overview' }: DeveloperDashboardScreenProps) {
+export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, classrooms, onBack, loadReports = listRecentDeveloperReports, loadIssues = fetchGitHubIssues, initialView = 'overview', closeIssue = closeGitHubIssueViaFunction, confirmAction = defaultConfirmAction }: DeveloperDashboardScreenProps) {
   const [view, setView] = useState<DeveloperDashboardView>(initialView)
   const [sinceDays, setSinceDays] = useState<number>(DEVELOPER_DASHBOARD_DEFAULT_SINCE_DAYS)
   // 読み込みの世代番号(state)。再読込・期間変更で +1 し、effect はその世代の結果だけを state へ入れる。
@@ -89,6 +103,10 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const [issuesResult, setIssuesResult] = useState<{ serial: number; issues: GitHubIssueRecord[]; error: string; loadedAt: string } | null>(null)
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [copiedCardId, setCopiedCardId] = useState('')
+  // この画面で閉じた Issue(再読込しても GitHub の公開 API が古い結果を返す間は閉じた扱いを保つ)。
+  const [closedIssueNumbers, setClosedIssueNumbers] = useState<ReadonlySet<number>>(() => new Set())
+  const [closingIssueNumber, setClosingIssueNumber] = useState<number | null>(null)
+  const [closeIssueNote, setCloseIssueNote] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
 
   const reload = useCallback(() => setRequestSerial((value) => value + 1), [])
   const changeSinceDays = useCallback((days: number) => {
@@ -129,7 +147,10 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const issuesLoading = issuesCurrent === null
   const issuesReady = issuesCurrent !== null && !issuesCurrent.error
   const issuesError = issuesCurrent?.error ?? ''
-  const issues = useMemo(() => issuesCurrent?.issues ?? [], [issuesCurrent])
+  const issues = useMemo(
+    () => (issuesCurrent?.issues ?? []).map((issue) => (closedIssueNumbers.has(issue.number) && issue.state === 'open' ? { ...issue, state: 'closed' as const } : issue)),
+    [issuesCurrent, closedIssueNumbers],
+  )
   const loadedAt = [reportsCurrent?.loadedAt ?? '', issuesCurrent?.loadedAt ?? ''].sort().reverse()[0] ?? ''
 
   const issueStates = useMemo(() => buildIssueStateMap(issues), [issues])
@@ -148,6 +169,21 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
     void copyToClipboard(card.prompt).then((ok) => setCopiedCardId(ok ? card.id : ''))
   }, [])
 
+  const canCloseIssues = authMode === 'firebase'
+  const requestCloseIssue = useCallback((issueNumber: number) => {
+    if (closingIssueNumber !== null) return
+    if (!confirmAction(buildCloseIssueConfirmMessage(issueNumber))) return
+    setClosingIssueNumber(issueNumber)
+    setCloseIssueNote(null)
+    void closeIssue({ issueNumber, reason: 'completed' })
+      .then((result) => {
+        setClosedIssueNumbers((current) => new Set(current).add(issueNumber))
+        setCloseIssueNote({ tone: 'ok', text: result.alreadyClosed ? `Issue #${issueNumber} はもう閉じていました。` : `Issue #${issueNumber} を閉じました。` })
+      })
+      .catch((error: unknown) => setCloseIssueNote({ tone: 'error', text: `Issue #${issueNumber} を閉じられませんでした: ${errorMessage(error, '原因不明のエラーです。')}` }))
+      .finally(() => setClosingIssueNumber(null))
+  }, [closeIssue, closingIssueNumber, confirmAction])
+
   const loadingNote = [reportsLoading ? '報告を読み込んでいます…' : '', issuesLoading ? 'GitHub Issue を読み込んでいます…' : ''].filter(Boolean).join(' ')
 
   const tiles: ReadonlyArray<{ section: DashboardSection; count: number; sub: string }> = [
@@ -162,7 +198,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
     ) : (
       <div className="dev-dash-cards">
         {cards.map((card) => (
-          <DashboardCardView key={card.id} card={card} expanded={expandedIds.has(card.id)} copied={copiedCardId === card.id} onToggleExpanded={toggleExpanded} onCopyPrompt={copyCardPrompt} />
+          <DashboardCardView key={card.id} card={card} expanded={expandedIds.has(card.id)} copied={copiedCardId === card.id} onToggleExpanded={toggleExpanded} onCopyPrompt={copyCardPrompt} onCloseIssue={canCloseIssues ? requestCloseIssue : undefined} closingIssueNumber={closingIssueNumber} />
         ))}
       </div>
     )
@@ -231,6 +267,10 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
               ))}
             </nav>
 
+            {closeIssueNote ? (
+              <p className={closeIssueNote.tone === 'error' ? 'developer-report-error dev-dash-close-note' : 'dev-dash-close-note'} role="status" data-testid="developer-dashboard-close-note">{closeIssueNote.text}</p>
+            ) : null}
+
             {authMode !== 'firebase' || loadingNote || reportsError || issuesError ? (
               <div className="dev-dash-notes">
                 {authMode !== 'firebase' ? <span>ローカルモードでは報告を読み込めません(Firebase 接続時のみ)。</span> : null}
@@ -279,18 +319,24 @@ function SectionHead({ section, count }: { section: DashboardSection; count: num
   )
 }
 
-function DashboardCardView({
+export function DashboardCardView({
   card,
   expanded,
   copied,
   onToggleExpanded,
   onCopyPrompt,
+  onCloseIssue,
+  closingIssueNumber = null,
 }: {
   card: DashboardCard
   expanded: boolean
   copied: boolean
   onToggleExpanded: (id: string) => void
   onCopyPrompt: (card: DashboardCard) => void
+  /** 「Issue を閉じる」(undefined なら出さない・ローカルモード)。 */
+  onCloseIssue?: (issueNumber: number) => void
+  /** いま閉じている最中の Issue(その間はどの「閉じる」も押せない)。 */
+  closingIssueNumber?: number | null
 }) {
   const claudeUrl = card.prompt === null ? null : resolveClaudeCodeSessionUrl(card.prompt)
   return (
@@ -307,7 +353,21 @@ function DashboardCardView({
       </p>
       <div className="dev-dash-card-foot">
         {card.links.map((link) => (
-          <a key={link.href} className="dev-dash-link" href={link.href} target="_blank" rel="noreferrer">GitHub {link.label}</a>
+          <span key={link.href} className="dev-dash-link-group">
+            <a className="dev-dash-link" href={link.href} target="_blank" rel="noreferrer">GitHub {link.label}</a>
+            {onCloseIssue && link.issueNumber !== undefined ? (
+              <button
+                type="button"
+                className="dev-dash-close-issue"
+                onClick={() => onCloseIssue(link.issueNumber as number)}
+                disabled={closingIssueNumber !== null}
+                data-testid={`developer-dashboard-close-issue-${link.issueNumber}`}
+                title="GitHub 上でこの Issue を閉じます(確認の画面が出ます)"
+              >
+                {closingIssueNumber === link.issueNumber ? '閉じています…' : `${link.label} を閉じる`}
+              </button>
+            ) : null}
+          </span>
         ))}
         {card.prompt !== null ? (
           claudeUrl ? (

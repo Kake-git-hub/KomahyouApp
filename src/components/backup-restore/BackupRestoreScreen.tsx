@@ -383,7 +383,9 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             ) : null}
           </div>
 
-          <section className="basic-data-section-card" data-testid="initial-setup-panel">
+          {/* 初期設定フローは使っていないので非表示(オーナー指示 2026-11-03・確認リスト v1.5.672 その他欄)。机数は管理データ画面で編集できる。
+              「初期設定を完了してコマ表をリセットする」を誤って押さないよう、下の ongoing-excel-tools-panel と同じく display:none で隠す。 */}
+          <section className="basic-data-section-card" data-testid="initial-setup-panel" style={{ display: 'none' }}>
             <div className="basic-data-card-head">
               <h3>初期設定フロー</h3>
                 <p>運用開始前に、管理データの初期取り込みと教室設定をここで完了します。</p>

@@ -6852,6 +6852,38 @@ body.verification-checklist-window {
   text-decoration: none;
 }
 
+/* 「Issue を閉じる」(2026-11-03)。リンクの右に小さく添える(押すと確認の画面)。 */
+.dev-dash-link-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dev-dash-close-issue {
+  padding: 3px 9px;
+  border: 1px solid #c9ced8;
+  border-radius: 7px;
+  background: #fff;
+  color: #4a5160;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dev-dash-close-issue:hover:not(:disabled) {
+  border-color: #b23b3b;
+  color: #b23b3b;
+}
+
+.dev-dash-close-issue:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dev-dash-close-note {
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
 .dev-dash-claude {
   padding: 5px 12px;
   border-radius: 8px;

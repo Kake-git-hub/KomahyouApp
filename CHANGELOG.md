@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.674 (2026-11-03)
+
+- feat: 受付 20261103-093117499-4152798b(確認リスト v1.5.672)への対応。(1) **開発ダッシュボードから利用者報告の Issue を外した**(「質問への回答」・確認リストと同じ報告が 2 か所に並んでいた・要改善 d-5)。(2) **「#N を閉じる」で GitHub の Issue をその場で閉じる**(オーナー選択)。新しい callable `closeGitHubIssue`(開発者だけ・このリポジトリの Issue だけ・PR は断る・Firestore には書かない)と、トークンを runtime env へ入れる `deploy-functions.yml` の手順(secret `ISSUE_CLOSE_TOKEN`・オーナーが登録するまで「未設定」と出る)。(3) **「質問・要望」に「タブを選んで撮る」**(ブラウザのタブ選択画面で生徒日程表などを選んで 1 枚撮る・オーナー選択)。(4) **バックアップ画面の「初期設定フロー」を非表示**(使っていない・机数は管理データで編集できる)。確認リストは ai-1(OK)・d-5 を外し d-6・d-7・sc-4・bk-1 を足して版 v1.5.674 へ。台帳に「Issue を閉じるための鍵を登録する」(オーナー)。テスト: developerDashboardActions/DeveloperDashboardScreen(render・wiring)/githubIssueClose/screenCapture/DeveloperReportModal/developerReport/verificationChecklist (src/utils/developerDashboardActions.ts・src/components/developer-admin/DeveloperDashboardScreen.tsx・functions/src/githubIssueClose.ts・functions/src/index.ts・src/integrations/firebase/githubIssueCloseStore.ts・src/components/developer-report/screenCapture.ts・DeveloperReportModal.tsx・src/App.tsx・src/components/backup-restore/BackupRestoreScreen.tsx・.github/workflows/deploy-functions.yml)
+
 ## v1.5.673 (2026-11-03)
 
 - feat: 講習履歴(生徒日程表の「講習履歴」ボタン)を**全教室へ昇格**(オーナー指示 2026-11-03「全教室に出して」・確認 h-1〜h-10 OK)。フラグ `lessonHistory` を development-only → all-classrooms。functions 側 getStudentLessonHistory は読み取り専用でフラグ判定を持たず非対称なし。台帳 developmentStatusLedger の該当行を削除。回帰テスト: 全5教室で有効(戻さない)・他の development-only 機能で名前判定/会社の壁テストを維持 (src/utils/featureRollout.ts・featureRollout.test.ts・developmentStatusLedger.ts)

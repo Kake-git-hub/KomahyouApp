@@ -96,6 +96,21 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
+      # 開発ダッシュボードの「Issue を閉じる」(callable closeGitHubIssue・2026-11-03)の GitHub トークンを runtime env に足す(別 secret・値はログに出さない)。
+      # このリポジトリだけ・「Issues: Read and write」だけの fine-grained personal access token を ISSUE_CLOSE_TOKEN に登録する。
+      - name: Append GitHub token for closing issues from the developer dashboard
+        run: |
+          if [ -n "$ISSUE_CLOSE_TOKEN" ]; then
+            touch functions/.env.komahyouapp-prod
+            sed -i '/^ISSUE_CLOSE_TOKEN=/d' functions/.env.komahyouapp-prod
+            printf 'ISSUE_CLOSE_TOKEN=%s\n' "$ISSUE_CLOSE_TOKEN" >> functions/.env.komahyouapp-prod
+            echo "Appended ISSUE_CLOSE_TOKEN to functions/.env.komahyouapp-prod"
+          else
+            echo "::warning::ISSUE_CLOSE_TOKEN secret が未設定です。開発ダッシュボードの「Issue を閉じる」は「トークンが未設定」で止まります。"
+          fi
+        env:
+          ISSUE_CLOSE_TOKEN: ${{ secrets.ISSUE_CLOSE_TOKEN }}
+
       - name: Write Firebase service account credentials
         run: |
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"

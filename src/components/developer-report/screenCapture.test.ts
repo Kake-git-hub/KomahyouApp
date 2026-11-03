@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  TabCaptureCancelledError,
+  buildTabCaptureOptions,
+  canCaptureBrowserTab,
+  captureBrowserTabToDataUrl,
+  isTabCaptureCancelled,
+  type TabCaptureDeps,
   SCREEN_CAPTURE_IGNORED_SELECTOR,
   SCREEN_CAPTURE_SCALE,
   buildScreenCaptureFileName,
@@ -88,5 +94,65 @@ describe('captureScreenToDataUrl(描画 → 長辺 1600px の JPEG)', () => {
   it('描画そのものが失敗したら例外をそのまま伝える(呼び出し側が「画像を選ぶ」を案内する)', async () => {
     const failing = fakeDeps({ width: 1, height: 1 }, { render: async () => { throw new Error('render failed') } })
     await expect(captureScreenToDataUrl(failing.deps)).rejects.toThrow('render failed')
+  })
+})
+
+describe('「タブを選んで撮る」(2026-11-03 オーナー指示・ブラウザのタブ選択画面で開いているタブを選ぶ)', () => {
+  function fakeTabDeps(overrides: Partial<TabCaptureDeps> = {}) {
+    const stop = vi.fn()
+    const stream = { getTracks: () => [{ stop }] } as unknown as MediaStream
+    const setFocusBehavior = vi.fn()
+    const getDisplayMedia = vi.fn(async () => stream)
+    const drawImage = vi.fn()
+    const deps: TabCaptureDeps = {
+      mediaDevices: { getDisplayMedia },
+      createController: () => ({ setFocusBehavior }),
+      grabFrame: vi.fn(async () => ({ width: 2560, height: 1440 }) as unknown as CanvasImageSource & { width: number; height: number }),
+      createCanvas: (width, height) => ({ width, height, getContext: () => ({ fillRect() {}, drawImage, fillStyle: '' }), toDataURL: () => 'data:image/jpeg;base64,/9j/BBBB' }) as unknown as HTMLCanvasElement,
+      now: () => new Date(2026, 10, 3, 18, 5, 7),
+      ...overrides,
+    }
+    return { deps, stop, setFocusBehavior, getDisplayMedia, drawImage }
+  }
+
+  it('getDisplayMedia がある環境だけで使える', () => {
+    expect(canCaptureBrowserTab({ getDisplayMedia: async () => ({}) as MediaStream })).toBe(true)
+    expect(canCaptureBrowserTab({})).toBe(false)
+    expect(canCaptureBrowserTab(undefined)).toBe(false)
+  })
+
+  it('タブの一覧を先に出し、音は取らず、「質問・要望」のタブ自身は候補から外す', () => {
+    const controller = {}
+    expect(buildTabCaptureOptions(controller)).toMatchObject({ video: { displaySurface: 'browser' }, audio: false, selfBrowserSurface: 'exclude', preferCurrentTab: false, controller })
+    expect('controller' in buildTabCaptureOptions(null)).toBe(false)
+  })
+
+  it('選んだタブを 1 枚撮り、長辺 1600px の JPEG にして、共有をすぐ止める。画面は「質問・要望」のタブのまま', async () => {
+    const { deps, stop, setFocusBehavior, getDisplayMedia, drawImage } = fakeTabDeps()
+    const result = await captureBrowserTabToDataUrl(deps)
+    expect(getDisplayMedia).toHaveBeenCalledTimes(1)
+    expect(setFocusBehavior).toHaveBeenCalledWith('no-focus-change')
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1600, 900)
+    expect(result).toEqual({ name: '画面_20261103-180507.jpg', dataUrl: 'data:image/jpeg;base64,/9j/BBBB', width: 1600, height: 900 })
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('選ばずに閉じたら TabCaptureCancelledError(画面はエラーを出さない)。撮れなかったときも共有は止める', async () => {
+    const cancelled = fakeTabDeps({ mediaDevices: { getDisplayMedia: async () => { throw Object.assign(new Error('denied'), { name: 'NotAllowedError' }) } } })
+    await expect(captureBrowserTabToDataUrl(cancelled.deps)).rejects.toBeInstanceOf(TabCaptureCancelledError)
+    expect(new TabCaptureCancelledError().name).toBe('TabCaptureCancelledError')
+    expect(isTabCaptureCancelled({ name: 'NotAllowedError' })).toBe(true)
+    expect(isTabCaptureCancelled(new Error('x'))).toBe(false)
+    const failing = fakeTabDeps({ grabFrame: async () => { throw new Error('no frame') } })
+    await expect(captureBrowserTabToDataUrl(failing.deps)).rejects.toThrow('no frame')
+    expect(failing.stop).toHaveBeenCalledTimes(1)
+    const unsupported = fakeTabDeps({ mediaDevices: {} })
+    await expect(captureBrowserTabToDataUrl(unsupported.deps)).rejects.toThrow('タブを選んで撮れません')
+  })
+
+  it('focus の指定ができないブラウザ(CaptureController 無し・指定が投げる)でも撮影は続ける', async () => {
+    expect((await captureBrowserTabToDataUrl(fakeTabDeps({ createController: () => null }).deps)).width).toBe(1600)
+    const throwing = fakeTabDeps({ createController: () => ({ setFocusBehavior: () => { throw new Error('InvalidStateError') } }) })
+    expect((await captureBrowserTabToDataUrl(throwing.deps)).width).toBe(1600)
   })
 })

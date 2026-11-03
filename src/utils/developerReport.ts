@@ -237,6 +237,11 @@ export const DEVELOPER_REPORT_UI_TEXT = {
   removeImage: '外す',
   attachHintBoard: '「画面を撮る」でいまのコマ表の画面がそのまま付きます。スクリーンショットを貼り付け（Ctrl+V）しても付きます。',
   attachHintSchedule: 'スクリーンショットを撮って「画像を選ぶ」から付けられます。',
+  /** 「タブを選んで撮る」(2026-11-03 オーナー指示)。ブラウザのタブ選択画面で、生徒日程表など開いている別のタブを選んで 1 枚撮る。 */
+  captureTabButton: 'タブを選んで撮る',
+  captureTabTitle: '生徒日程表・講師日程表など、開いているタブを選んで 1 枚撮ります(ブラウザのタブ選択画面が出ます)',
+  attachHintBoardWithTab: '「画面を撮る」でいまのコマ表の画面が付きます。「タブを選んで撮る」では、生徒日程表など開いているタブを選んで付けられます。スクリーンショットを貼り付け（Ctrl+V）しても付きます。',
+  captureTabError: '選んだタブを撮れませんでした。スクリーンショットを撮って「画像を選ぶ」から付けてください。',
   attachLimitError: (limit: number | string) => `画像は ${limit} 枚までです。`,
   attachReadError: '画像として読めませんでした。',
   attachTooLargeError: '画像が大きすぎます（1 枚 1.5MB まで）。',

@@ -374,6 +374,9 @@ describe('developerReport: 一般モーダルの添付画像(2026-10-22 オー�
     expect(modalSource).toContain('attachments.length < DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT ? (')
     const appSource = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
     expect(appSource).toContain('onCaptureScreen={captureScreenToDataUrl}')
+    // 「タブを選んで撮る」(2026-11-03): タブ選択が使えるブラウザだけ渡し、押したタブの window から撮る。
+    expect(appSource).toContain("onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}")
+    expect(modalSource).toContain('void captureTab(event.currentTarget.ownerDocument.defaultView ?? window)')
     expect(appSource).toContain("submitDeveloperReport({ source: 'board', category, note, ...(attachments.length > 0 ? { attachments } : {}) })")
     expect(appSource).toContain('attachments: developerReport.attachments })')
   })
