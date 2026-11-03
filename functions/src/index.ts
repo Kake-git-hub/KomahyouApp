@@ -4678,6 +4678,10 @@ export const lectureSubmissionApi = onRequest({
   region: process.env.FUNCTION_REGION ?? 'asia-northeast1',
   maxInstances: 10,
 }, async (req, res) => {
+  // 提出状態を端末キャッシュで見せない(確認リスト qs-2 要改善 2026-11-03: iOS Safari で登録解除のあと開き直しても
+  // 「すでに提出済み」のままだった。Android は戻る)。保護者QR(parentPortalApi)と同じく全応答に付ける。
+  // ★firebase.json の headers だけに頼らない(関数の応答には関数側で付ける)。ページ側の fetch も cache:'no-store'。
+  res.set('Cache-Control', 'no-store')
   const token = extractTokenFromPath(req.path)
   if (!token || token.length < 16 || token.length > 64) {
     res.status(400).json({ error: 'Invalid token' })

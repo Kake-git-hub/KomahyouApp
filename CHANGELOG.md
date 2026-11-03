@@ -14,6 +14,12 @@
 
 ## 未リリース
 
+## v1.5.682 (2026-11-03)
+
+- fix: **iOS Safari で、登録解除したあと提出用QRを開き直しても「すでに提出済み」のままになる**(確認リスト qs-2 要改善・受付 20261103-134506858「Android は未送信に戻る」)。提出用QRの API(`lectureSubmissionApi`)は Cache-Control を付けておらず、ページの読み込み fetch もキャッシュ指定なしだった(保護者QRの `parentPortalApi`/`ParentPortalPage` はどちらも no-store で非対称)。関数の全応答に `Cache-Control: no-store`、ページの GET に `cache: 'no-store'`、bfcache から出てきた(`pageshow` persisted)ときは読み込み直す。テスト: `submissionFreshLoad.wiring.test.ts`・`functions/src/lectureSubmissionApi.cache.test.ts`(修正なしで 3 件落ちることを確認)。Functions のデプロイが要る(functions/** の変更で自動)。
+- fix: **保護者からの講習コマの休み連絡で、「休み」の説明が「手動で追加した講習は戻らない」と動きと食い違っていた**(確認リスト lp-4 メモ「手動で置いたものでも未消化に積んで」)。盤面の「休み」は手動で置いた講習も未消化講習へ戻す(`shouldReturnLectureStockOnAbsence`・spec-makeup-stock §B-3・2026-07-31 オーナー確定)ので、説明を「休みにして未消化講習へ戻す(手動で置いた講習も戻る)」へ直した(`PARENT_LECTURE_ABSENCE_CHOICES`)。動きは変えていない。テスト: parentPortalLecture。
+- docs: 確認リストを更新(版 v1.5.672 据え置き)。OK の qs-3・qr-1・lp-5・sc-5・fm-1・d-8・dv-1・qs-4・tb-2・lp-3・lp-4 を外し、qs-2 を iPhone の手順へ書き換え(`reworkedAt`)、lp-6(講習の休みの説明と手で置いた講習の戻り)を足した。フリーメモ「講師専用の特別講習」(20261103-105053536)はオーナーが検討中(2026-11-03「まだ対応しなくていい」)なので対応済みに入れず残す。
+
 ## v1.5.681 (2026-11-03)
 
 - fix: **確認リストで、要改善を受けて書き換えた項目の下書き(要改善・メモ・画像・送った記録)を消す**(オーナー指示 2026-11-03「qs-2 は対応したなら要改善の状態は外して、テキスト欄に前回のメモは残さなくていい。上にある前回なにを送信したかの文章は残しても良い」)。項目に `reworkedAt`(書き換えた時刻)を持たせ、それより前に送った下書きをパネルを開いたときに消して保存し直す(`clearReworkedVerificationChecklistEntries`)。書き換え後に送り直したもの・未送信の下書きは触らない。各教室の送信済みの結果(項目の上の欄)はサーバーの記録なので残る。qs-2・lp-3 に付けた。テスト: verificationChecklist(消す条件・送り直し後は消えない・正本の reworkedAt・パネルの配線)。

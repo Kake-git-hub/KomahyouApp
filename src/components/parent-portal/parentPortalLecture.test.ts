@@ -12,6 +12,7 @@ import {
   resolveParentAbsenceChoices,
 } from '../../utils/parentMessages'
 import { buildParentScheduleRows, describeParentScheduleLesson, isParentLessonSameDayPhoneNotice } from './parentPortalPageModel'
+import { shouldReturnLectureStockOnAbsence } from '../schedule-board/ScheduleBoardScreen'
 
 describe('describeParentScheduleLesson: 講習コマ', () => {
   it('講習コマは科目に「講習」の補足を付ける', () => {
@@ -72,6 +73,14 @@ describe('室長側: 講習コマの休み連絡', () => {
     for (const kind of ['regular', 'makeup', 'extra'] as const) {
       expect(resolveParentAbsenceChoices(kind)).toBe(PARENT_ABSENCE_CHOICES)
     }
+  })
+
+  it('講習の「休み」の説明は手動で置いた講習も戻ると書く(盤面の休みは手動追加も未消化講習へ戻す・lp-4 メモ 2026-11-03)', () => {
+    const absent = PARENT_LECTURE_ABSENCE_CHOICES.find((choice) => choice.resolution === 'absent')
+    expect(absent?.description).toBe('休みにして未消化講習へ戻す(手動で置いた講習も戻る)')
+    expect(absent?.description).not.toContain('戻らない')
+    // 説明の根拠: 休みで講習を戻すかの権威関数は specialStockSource(session / manual)を見ない
+    expect(shouldReturnLectureStockOnAbsence({ lessonType: 'special', specialSessionId: 'session-1', specialStockSource: 'manual' })).toBe(true)
   })
 
   it('連絡モーダルは連絡ごとに resolveParentAbsenceChoices で選択肢を出す', () => {
