@@ -21,17 +21,17 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
 
   it('台帳は (workspaceKey, featureKey) で引かれる(会社の壁: 接続先 workspace のキーをそのまま渡す)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
-    expect(featureRolloutRegistry.lessonHistory.scope).toBe('development-only')
-    expect(isFeatureEnabledForClassroom('lessonHistory', PROD_CLASSROOM, 'main')).toBe(false)
-    expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'lessonHistory')
-    expect(isFeatureEnabledForClassroom('lessonHistory', PROD_CLASSROOM, 'company-b')).toBe(false)
-    expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('company-b', 'lessonHistory')
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(false)
+    expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'templateDiffApply')
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'company-b')).toBe(false)
+    expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('company-b', 'templateDiffApply')
   })
 
   it("会社既定 'on' は development-only の機能を本番教室でも有効にする(会社の全教室へ出す)", () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('on')
-    expect(isFeatureEnabledForClassroom('lessonHistory', PROD_CLASSROOM, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('lessonHistory', DEV_CLASSROOM, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
   })
 
   it("会社既定 'off' は all-classrooms の機能も無効にする(開発用教室でも無効)", () => {
@@ -43,8 +43,8 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
 
   it('会社既定なし(null)は基本スコープのとおり(従来の挙動)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
-    expect(isFeatureEnabledForClassroom('lessonHistory', DEV_CLASSROOM, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('lessonHistory', PROD_CLASSROOM, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', PROD_CLASSROOM, 'main')).toBe(true)
   })
 })

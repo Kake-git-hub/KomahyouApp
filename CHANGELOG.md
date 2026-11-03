@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.673 (2026-11-03)
+
+- feat: 講習履歴(生徒日程表の「講習履歴」ボタン)を**全教室へ昇格**(オーナー指示 2026-11-03「全教室に出して」・確認 h-1〜h-10 OK)。フラグ `lessonHistory` を development-only → all-classrooms。functions 側 getStudentLessonHistory は読み取り専用でフラグ判定を持たず非対称なし。台帳 developmentStatusLedger の該当行を削除。回帰テスト: 全5教室で有効(戻さない)・他の development-only 機能で名前判定/会社の壁テストを維持 (src/utils/featureRollout.ts・featureRollout.test.ts・developmentStatusLedger.ts)
+
 ## v1.5.672 (2026-11-02)
 
 - fix: **保留の片づけ「手入力データを採用」で通常授業を外したときの予定数を単発削除と揃える**(オーナー決定 2026-11-02「2つとも予定数を 1 減らして単発削除と揃えて」・決定記録 62)。(1) 休日解除の押し出しで戻した通常授業を取り下げたとき、(2) A-10 で別の机のテンプレの通常授業を外したときの 2 形とも希望回数 −1(v1.5.671 までは −1 せず、回数表で通常授業が 1 回足りないように見えた)。「同じ日に生きている」判定は通常授業だけを数える(戻した振替・講習は通常授業の代わりにしない・外すと 3 件落ちることを確認)。在庫は不変。確認リスト tp-74/tp-75 の目安と「オーナーの決定」を更新し版を v1.5.672 へ。(ScheduleBoardScreen.tsx・templateDiffApply.ts `resolveAdoptExistingCountAdjustments`・inv06-holiday-record-retention / inv06-lecture-stock-reconciliation / inv12-placement-uniqueness マトリクス・docs/spec-invariants.md・INV-06 / INV-12)

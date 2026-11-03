@@ -133,9 +133,6 @@ describe('featureRollout: 教室の識別は ID（名前だけでは判定しな
     //   (下の) `@ts-expect-error` は「エラーが出なくなったら tsc が落ちる」ので、型に name を戻す回帰をここで検出する。
     //   実行時の意味(名前一致では有効にならない)も同じ行で担保する。
     // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { name: '開発用教室' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
     expect(isFeatureEnabledForClassroom('templateDiffApply', { name: '開発用教室' }, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('templateDiffApply', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
   })
@@ -157,12 +154,11 @@ describe('featureRollout: テスト教室(sandbox)は development-only 機能の
   //   オーナー確定によりこれが正となった。**この期待値を kind で絞る方向へ黙って反転させない。**
   // ★2026-10-13: 盤面ベース予定数(boardBasedPlannedCount)は全教室へ昇格したので、まだ development-only の
   //   講習履歴・テンプレ差分反映で同じ保証を固定する(AI 即答は 2026-10-30 に全教室へ昇格)。
-  it('テスト教室でも development-only 機能(講習履歴・テンプレ差分反映)が有効', () => {
+  it('テスト教室でも development-only 機能(テンプレ差分反映)が有効', () => {
     const sandbox = { id: 'test_classroom_20260507_dai' }
-    expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('templateDiffApply', sandbox, 'main')).toBe(true)
     // 別会社(workspaceKey 違い)では同じ ID でも無効(会社の壁)。
-    expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'other-company')).toBe(false)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', sandbox, 'other-company')).toBe(false)
   })
 })
 
@@ -177,14 +173,11 @@ describe('featureRollout: questionAiAnswer（質問への AI 即時回答）', (
 })
 
 describe('featureRollout: lessonHistory（講習履歴）', () => {
-  it('開発用教室でのみ有効（本番3教室では出さない）', () => {
-    // 新機能はフラグ付きで作る方針(docs/plan-2026-09-11-five-requests.md)。まず開発用教室で先行検証する。
-    // 昇格(all-classrooms)はオーナー確認後。ここを勝手に広げないこと。
-    expect(featureRolloutRegistry.lessonHistory.scope).toBe('development-only')
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-1' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-2' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-3' }, 'main')).toBe(false)
+  it('全教室で有効（開発用教室で先行 → 確認 h-1〜h-10 OK・オーナー指示 2026-11-03「全教室に出して」で昇格・戻さない）', () => {
+    expect(featureRolloutRegistry.lessonHistory.scope).toBe('all-classrooms')
+    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb', 'v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai']) {
+      expect(isFeatureEnabledForClassroom('lessonHistory', { id }, 'main'), id).toBe(true)
+    }
   })
 })
 

@@ -105,18 +105,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     references: ['docs/spec-parent-portal.md §0-5/§0-7/§H', 'functions/src/parentPortal.ts'],
     updatedOn: '2026-10-30',
   },
-  {
-    id: 'lesson-history',
-    title: '講習履歴の一覧(生徒日程表の「講習履歴」ボタン)',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '生徒ごとに出席・休み・振替・未消化を期間を決めて一覧できる。開発用・テスト教室だけで動作中で、確認はすべて OK。',
-    nextAction: 'オーナーが全教室に出すか決める(決まれば Claude がフラグを全教室へ切り替える)。',
-    notes: '機能フラグ lessonHistory。functions 側は読み取りだけなので、フラグの scope を all-classrooms にするだけで片側だけ広がる非対称は無い。確認 h-1〜h-10 OK(Issue #63〜#66)。',
-    featureKeys: ['lessonHistory'],
-    references: ['docs/plan-2026-09-11-five-requests.md §6'],
-    updatedOn: '2026-10-30',
-  },
 
   // ── やること(オーナー) ──────────────────────────────────────────────────────
   {

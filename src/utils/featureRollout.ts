@@ -110,8 +110,10 @@ export const featureRolloutRegistry = {
   // 生徒授業台帳(lessonLedgerDays)から出席/休み/振替/予定/未消化を期間指定(最大366日)で一覧する。
   // 台帳はクライアントから直接読めないため callable getStudentLessonHistory を本体が中継する(読み取りのみ)。
   // 新機能はフラグ付きで作る方針(§計画 フラグ表)に従い、まず開発用教室のみで先行検証する。
+  // ★2026-11-03 オーナー指示「全教室に出して」で全教室へ昇格(確認 h-1〜h-10 OK)。development-only へ戻すのはオーナー指示があるときだけ。
+  //   functions 側(getStudentLessonHistory)は教室メンバー権限の読み取り専用でフラグ判定を持たないので、片側だけ広がる非対称は無い。
   lessonHistory: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Student schedule tab: "講習履歴" button and overlay backed by the getStudentLessonHistory callable.',
   },
   // 保護者向け固定QR(docs/spec-parent-portal.md §H / docs/plan-2026-09-11-five-requests.md §7 K-2〜K-6)。
