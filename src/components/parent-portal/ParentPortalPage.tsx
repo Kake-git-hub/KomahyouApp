@@ -443,6 +443,8 @@ const baseStyles = `
   .pp-lesson-absent .pp-lesson-main, .pp-lesson-absent-no-makeup .pp-lesson-main { color: #b00020; }
   .pp-lesson-absent .pp-lesson-sub { color: #1f5d96; font-weight: 700; }
   .pp-lesson-attended .pp-lesson-sub { color: #2a7e2a; }
+  /* 講習コマ(公開した講習だけ・2026-11-03) */
+  .pp-lesson-lecture .pp-lesson-sub { color: #8a4b00; font-weight: 700; }
 
   .pp-modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
   .pp-modal { width: 100%; max-width: 420px; background: #fff; border-radius: 12px; padding: 18px 16px; display: grid; gap: 10px; max-height: 90dvh; overflow-y: auto; }

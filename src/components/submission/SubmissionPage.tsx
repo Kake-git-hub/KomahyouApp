@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { IOS_VIEWPORT_WIDTH, IOS_ZOOM, ANDROID_VIEWPORT_WIDTH, ANDROID_ZOOM, isIOS as detectIOS, isAndroid as detectAndroid, buildSubmissionViewportContent } from './iosViewport'
+import { isSubmissionSchedulePublished, resolveSubmittedViewOccupiedSlots, SUBMISSION_SCHEDULE_PENDING_MESSAGE } from './submissionScheduleVisibility'
 
 type SubmissionData = {
   personName: string
@@ -32,6 +33,8 @@ type SubmissionData = {
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。
   groupClassSlots?: Record<string, string>
+  // 講習の日程を見せてよいか(2026-11-03)。false の間は提出後の画面で組まれたコマを出さない。未設定=公開(旧応答)。
+  schedulePublished?: boolean
 }
 
 export type DateSlot = {
@@ -419,7 +422,9 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   // 提出後／既提出リンク: 提出した内容を「閲覧専用(編集不可)」で表示する。
   if (submitted) {
     const isStudentView = data.personType === 'student'
-    const viewOccupiedSlots = data.occupiedSlots ?? {}
+    // 日程公開(2026-11-03): 非公開の間は組まれたコマ(通常も講習も)を出さず、提出内容(✕・希望科目数)だけにする。
+    const viewOccupiedSlots = resolveSubmittedViewOccupiedSlots(data)
+    const viewSchedulePublished = isSubmissionSchedulePublished(data)
     // 「後から出席可能に変更」(2026-07-18): 提出済みの不可コマ(✕)のうち教室が出席可能へ変更したコマは黄色表示。
     const viewReopenedSlots = new Set((data.reopenedSlots ?? []).filter((slotKey) => selectedSlots.has(slotKey)))
     const viewMaxSlot = availableDates.length > 0 ? Math.max(...availableDates.map((d) => d.slots.length)) : 5
@@ -445,6 +450,10 @@ export default function SubmissionPage({ token, debug = false }: { token: string
             <div className="sub-submitted-sub">以下の内容で提出済みです（変更はできません）</div>
           </div>
         </div>
+
+        {!viewSchedulePublished && (
+          <div className="sub-schedule-pending" data-testid="sub-schedule-pending">{SUBMISSION_SCHEDULE_PENDING_MESSAGE}</div>
+        )}
 
         <section className="sub-section sub-section-lg">
           <div className="sub-section-head">
@@ -932,6 +941,8 @@ const baseStyles = `
   .sub-submitted-text { min-width: 0; }
   .sub-submitted-title { font-size: 42px; font-weight: 700; color: #1f5d1f; line-height: 1.2; }
   .sub-submitted-sub { font-size: 15px; color: #3a6b3a; margin-top: 4px; line-height: 1.4; }
+  /* 日程公開前(2026-11-03): 組まれたコマを隠している間の案内 */
+  .sub-schedule-pending { margin: 12px 14px 0; padding: 12px 14px; border: 1px solid #c9ced6; border-radius: 8px; background: #f4f5f7; color: #3d4652; font-size: 18px; font-weight: 600; line-height: 1.5; }
 
   /* 閲覧専用テーブル(操作不可) */
   .sub-slot-table-readonly .sub-th-slot,

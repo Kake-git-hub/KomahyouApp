@@ -52,6 +52,12 @@ export type LectureSubmissionDoc = {
   // spec-group-lesson §E: 中3の集団授業コマ(盤面に組まれた集団理科/集団社会)を提出ページの集団列に表示する。
   // key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。中3のみ非空。後方互換のため optional。
   groupClassSlots?: Record<string, string>
+  /**
+   * 講習の日程を見せてよいか(オーナー確定 2026-11-03・SpecialSessionRow.schedulePublished の写し。フラグ OFF の教室は常に true)。
+   * false の間は occupiedSlots に講習コマが入らず(App 側で落とす)、提出後の画面は組まれたコマを出さない。
+   * 未設定(この項目ができる前の文書)は公開扱い。後方互換のため optional。
+   */
+  schedulePublished?: boolean
   submittedAt: string | null
   // QR提出通知(モーダル)を室長へ一度でも表示した提出の「通知済み」記録(サーバー側=localStorage 非依存)。
   // 値は通知した時点の submittedAt と一致させる。次回起動の初回スナップショットで submittedAt===notifiedAt の
@@ -67,7 +73,9 @@ export async function ensureSubmissionTokens(
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
+  options: { schedulePublished?: boolean } = {},
 ): Promise<{ updatedSession: SpecialSessionRow; newTokens: Array<{ token: string; doc: LectureSubmissionDoc }> }> {
+  const schedulePublished = options.schedulePublished !== false
   const config = getFirebaseBackendConfig()
   if (!config.enabled) return { updatedSession: session, newTokens: [] }
 
@@ -107,6 +115,7 @@ export async function ensureSubmissionTokens(
         subjectSlots: {},
         regularOnly: false,
         occupiedSlots: teacher.occupiedSlots ?? {},
+        schedulePublished,
         submittedAt: null,
         createdAt: updatedAt,
       },
@@ -150,6 +159,7 @@ export async function ensureSubmissionTokens(
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
         groupClassSlots: { ...(student.groupClassSlots ?? {}) },
+        schedulePublished,
         submittedAt: null,
         createdAt: updatedAt,
       },
@@ -409,7 +419,7 @@ export async function updateSubmissionReopenedSlots(token: string, reopenedSlots
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[] }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[]; schedulePublished?: boolean }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -437,6 +447,8 @@ export async function updateSubmissionOccupiedSlots(
       // 「後から出席可能に変更」(reopenedSlots)の後追い反映。変換直後の updateSubmissionReopenedSlots が
       // 失敗した場合でも、日程表を開いたタイミングでアプリ内の正へ収束させる(アプリ内 state が正)。
       ...(entry.reopenedSlots ? { reopenedSlots: [...entry.reopenedSlots] } : {}),
+      // 日程公開(2026-11-03)。公開/非公開の切り替えを既発行QRへ伝える(提出後の画面で組まれたコマを出すかどうか)。
+      ...(typeof entry.schedulePublished === 'boolean' ? { schedulePublished: entry.schedulePublished } : {}),
     })
   }
 }

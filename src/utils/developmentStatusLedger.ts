@@ -94,6 +94,18 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-11-01',
   },
   {
+    id: 'lecture-schedule-publish',
+    title: '講習の日程公開(コマ組みが終わるまで隠す)',
+    stage: 'development-only',
+    who: 'owner',
+    summary: '講習ごとに「公開」を押すまで、提出用QRと保護者QRに講習の日程を出さない。公開すると保護者QRから講習の休み連絡もできる。開発用・テスト教室と検証環境だけで動作中。',
+    nextAction: 'オーナーが確認リストで見る。全教室に出すときは、先に室長へ「公開を押すまで日程は見えない」と知らせる。',
+    notes: '機能フラグ lectureSchedulePublishToggle(scope staging-environment・保護者QR parentPortalQr と同じ)。SpecialSessionRow.schedulePublished(未設定=公開・新規作成はフラグ ON のとき false)。提出用QRは App.tsx ensureScheduleSubmissionTokens → buildSubmissionOccupiedSlotMaps で非公開の講習コマを文書へ書かず、提出後の画面は resolveSubmittedViewOccupiedSlots で組まれたコマを隠す(functions の GET が schedulePublished を返す・Functions のデプロイが要る)。保護者QRは parentSchedule.ts(kind lecture・公開した講習の期間の日だけ・終了月まで「次の月」)と盤面の休み連絡(講習は 休み/振無休/何もしない)。保護者QRを全教室へ出すときはこのフラグも同じ push で広げる。オーナー確定 2026-11-03(仕様 spec-special-session-submission §B-2・spec-parent-portal §0-8)。',
+    featureKeys: ['lectureSchedulePublishToggle'],
+    references: ['docs/spec-special-session-submission.md §B-2', 'docs/spec-parent-portal.md §0-8', 'src/utils/submissionOccupiedSlots.ts', 'src/utils/parentSchedule.ts'],
+    updatedOn: '2026-11-03',
+  },
+  {
     id: 'parent-portal-qr',
     title: '保護者向けQR(休みの連絡)',
     stage: 'awaiting-owner',

@@ -10,7 +10,8 @@
 //   (判定を分散させない。片側だけ条件を足すと「押せるのに 409」「押せないのに送れる」の非対称になる)。
 import { isParentLessonAbsenceReportable } from '../../utils/parentSchedule'
 
-export type ParentScheduleLessonKind = 'regular' | 'makeup' | 'extra' | 'absent' | 'absent-no-makeup' | 'attended'
+// 'lecture' = 日程を公開した講習の講習コマ(2026-11-03 §0-8)。旧 functions の応答には出てこない。
+export type ParentScheduleLessonKind = 'regular' | 'makeup' | 'extra' | 'lecture' | 'absent' | 'absent-no-makeup' | 'attended'
 
 export type ParentScheduleLesson = {
   slotNumber: number
@@ -24,6 +25,8 @@ export type ParentScheduleLesson = {
   makeupOrigin?: { dateKey: string; slotNumber: number | null }
   // テンプレ補完由来(行末に短い「予定」印を出す・§D-6)。
   isTentative: boolean
+  // 講習コマ(公開した講習だけ・kind 'lecture' と講習の出欠記録)。旧 functions の応答には無いので省略可。
+  isLecture?: boolean
 }
 
 // closed=臨時・祝日の休み。授業の無い日・定休曜日は応答に含まれない(オーナー指示 2026-09-14)。
@@ -221,6 +224,19 @@ export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { ma
   const subject = String(lesson.subject ?? '').trim() || '授業'
   const originSlot = lesson.makeupOrigin ? formatParentScheduleLinkedSlot(lesson.makeupOrigin) : ''
   const originText = originSlot ? `${originSlot}の振替` : ''
+  // 講習コマ(2026-11-03 §0-8)。「講習」と分かるように補足を付ける。講習の休みには振替日の案内を出さない
+  // (講習の休みは教室が日程を組み直すもので、振替の「調整中」とは別)。
+  if (lesson.kind === 'lecture' || lesson.isLecture === true) {
+    switch (lesson.kind) {
+      case 'attended':
+        return { main: subject, sub: '講習・出席済み' }
+      case 'absent':
+      case 'absent-no-makeup':
+        return { main: 'お休み', sub: `講習 ${subject}` }
+      default:
+        return { main: subject, sub: '講習' }
+    }
+  }
   switch (lesson.kind) {
     case 'regular':
     case 'extra':
@@ -317,7 +333,7 @@ export function resolveParentAbsenceStatus(
  * 行は押せるままにして電話の案内モーダルを出す(spec §0-7)。翌日以降は isParentLessonAbsenceReportable が真になり、こちらは偽。
  */
 export function isParentLessonSameDayPhoneNotice(kind: ParentScheduleLessonKind, dateKey: string, today: string): boolean {
-  if (kind !== 'regular' && kind !== 'makeup' && kind !== 'extra') return false
+  if (kind !== 'regular' && kind !== 'makeup' && kind !== 'extra' && kind !== 'lecture') return false
   return dateKey === today && !isParentLessonAbsenceReportable(kind, dateKey, today)
 }
 

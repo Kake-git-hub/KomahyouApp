@@ -14,6 +14,7 @@ import {
   SUBJECT_OPTIONS,
   TEMPLATE_DAY_OPTIONS,
   TEMPLATE_SLOT_NUMBERS,
+  resolveParentPublishedLectureEndDateKey,
   resolveParentScheduleRange,
   toJstDateKey,
   type ParentScheduleDay,
@@ -1027,5 +1028,144 @@ describe('buildParentScheduleView: 休日記録(holiday)は保護者ページに
     expect(withStatus('holiday', 'special').hasLectureLessons).toBe(false)
     // 比較: 出席/休みは従来どおり数える(ガードを広げすぎていない)
     expect(withStatus('attended', 'special').hasLectureLessons).toBe(true)
+  })
+})
+
+// 日程公開(オーナー確定 2026-11-03・spec-parent-portal §0-8): 講習の日程を公開した講習だけ、講習コマを保護者QRに出す。
+describe('buildParentScheduleView 日程公開(講習コマ)', () => {
+  const withSessionPublished = (published: boolean | undefined) => {
+    const payload = clonePayload()
+    payload.specialSessions = (payload.specialSessions ?? []).map((session) => {
+      const next = { ...session }
+      if (published === undefined) delete next.schedulePublished
+      else next.schedulePublished = published
+      return next
+    })
+    return payload
+  }
+  const setLectureStatus = (payload: AppSnapshotPayload, statusKind: string) => {
+    const week = (payload.boardState?.weeks[2] ?? []) as SlotCell[]
+    const target = week.find((cell) => cell.id === '2026-10-02_1')
+    target!.desks[0] = {
+      ...target!.desks[0],
+      lesson: undefined,
+      statusSlots: [
+        { id: 'status-lecture', studentId: 'x1', sourceManagedLesson: false, name: '青木', managedStudentId: 's001', grade: '中3', subject: '数', lessonType: 'special', teacherType: 'normal', teacherName: '田中', dateKey: '2026-10-02', slotNumber: 1, recordedAt: '', status: statusKind, sourceLessonId: '' } as never,
+        null,
+      ],
+    }
+    return payload
+  }
+
+  it('非公開の講習は講習コマを出さない(修正前と同じ)', () => {
+    const view = buildView('s001', DEFAULT_RANGE, withSessionPublished(false))
+    expect(summarizeOn(view, '2026-10-02').some((entry) => entry.startsWith('1:'))).toBe(false)
+  })
+
+  it('公開した講習は講習期間の日の講習コマを kind=lecture で出す。期間外に置かれた講習コマは出さない', () => {
+    const view = buildView('s001', DEFAULT_RANGE, withSessionPublished(true))
+    expect(dayOf(view, '2026-10-02').lessons).toEqual([
+      { slotNumber: 1, timeLabel: '13:00-14:30', subject: '数', kind: 'lecture', isTentative: false, isLecture: true },
+    ])
+    // 9/30 2限(講習期間外の講習コマ)は公開しても出さない。
+    expect(summarize(dayOf(view, '2026-09-30'))).toEqual(['1:理:regular'])
+    // 通常授業はそのまま(10/01)。
+    expect(summarize(dayOf(view, '2026-10-01'))).toEqual(['3:英:regular', '3:数:absent'])
+  })
+
+  it('schedulePublished が無い講習(この項目ができる前に作った講習)は公開として扱う', () => {
+    const view = buildView('s001', DEFAULT_RANGE, withSessionPublished(undefined))
+    expect(summarize(dayOf(view, '2026-10-02'))).toEqual(['1:数:lecture'])
+  })
+
+  it('講習コマの出欠記録(休み・振無休・出席)は kind=状態 に isLecture を付けて出し、振替先は付けない', () => {
+    for (const statusKind of ['absent', 'absent-no-makeup', 'attended'] as const) {
+      const view = buildView('s001', DEFAULT_RANGE, setLectureStatus(withSessionPublished(true), statusKind))
+      expect(dayOf(view, '2026-10-02').lessons, statusKind).toEqual([
+        { slotNumber: 1, timeLabel: '13:00-14:30', subject: '数', kind: statusKind, isTentative: false, isLecture: true },
+      ])
+    }
+    // 非公開なら記録も出さない。
+    const hidden = buildView('s001', DEFAULT_RANGE, setLectureStatus(withSessionPublished(false), 'absent'))
+    expect(summarizeOn(hidden, '2026-10-02')).toEqual([])
+  })
+
+  it('hasLectureLessons は出していない講習コマだけを数える(公開した講習の講習コマは行で出る)', () => {
+    const lectureRange = { from: '2026-10-01', to: '2026-10-05' }
+    expect(buildView('s001', lectureRange, withSessionPublished(false)).hasLectureLessons).toBe(true)
+    expect(buildView('s001', lectureRange, withSessionPublished(true)).hasLectureLessons).toBe(false)
+    // 期間外の講習コマ(9/30)は公開しても出さないので印に数える。
+    expect(buildView('s001', { from: '2026-09-28', to: '2026-09-30' }, withSessionPublished(true)).hasLectureLessons).toBe(true)
+  })
+
+  it('講習コマの行のキーは isLecture を足した形だけ(講師名・内部 ID を出さない)', () => {
+    const view = buildView('s001', DEFAULT_RANGE, withSessionPublished(true))
+    const lecture = dayOf(view, '2026-10-02').lessons[0]
+    expect(Object.keys(lecture).sort()).toEqual(['isLecture', 'isTentative', 'kind', 'slotNumber', 'subject', 'timeLabel'])
+    expect(JSON.stringify(view)).not.toMatch(/teacher|managedStudentId|studentId|recordedAt|specialSessionId/i)
+  })
+
+  it('そのコマ自身の講習が非公開なら、公開中の別の講習の期間に置かれていても出さない(レビュー指摘 L1)', () => {
+    const payload = withSessionPublished(true)
+    payload.specialSessions = [
+      ...(payload.specialSessions ?? []),
+      { id: 'ss-winter', label: '冬期講習', startDate: '2026-12-22', endDate: '2027-01-07', teacherInputs: {}, studentInputs: {}, createdAt: 'x', updatedAt: 'x', schedulePublished: false },
+    ]
+    const week = (payload.boardState?.weeks[2] ?? []) as SlotCell[]
+    const target = week.find((cell) => cell.id === '2026-10-02_1')
+    const entry = target!.desks[0]!.lesson!.studentSlots[0]!
+    target!.desks[0]!.lesson!.studentSlots[0] = { ...entry, specialSessionId: 'ss-winter' }
+    const view = buildView('s001', { from: '2026-10-01', to: '2026-10-05' }, payload)
+    expect(summarizeOn(view, '2026-10-02')).toEqual([])
+    expect(view.hasLectureLessons).toBe(true)
+    // 講習 ID が名簿に無いコマは日付の判定に従う(出す)。
+    target!.desks[0]!.lesson!.studentSlots[0] = { ...entry, specialSessionId: 'ss-unknown' }
+    expect(summarizeOn(buildView('s001', { from: '2026-10-01', to: '2026-10-05' }, payload), '2026-10-02')).toEqual(['1:数:lecture'])
+  })
+
+  it('講習コマは保護者から休み連絡できる(明日以降だけ・当日と過去は不可)', () => {
+    expect(isParentLessonAbsenceReportable('lecture', '2026-10-02', '2026-10-01')).toBe(true)
+    expect(isParentLessonAbsenceReportable('lecture', '2026-10-02', '2026-10-02')).toBe(false)
+  })
+
+  it('振替元の補完は同じ限・同じ科目の講習の行を振替元の代わりにしない', () => {
+    // 10/02 1限 数 から出た振替(振替先 10/03 2限)を足す。10/02 1限には同じ科目の講習コマがある。
+    const payload = withSessionPublished(true)
+    const week = (payload.boardState?.weeks[2] ?? []) as SlotCell[]
+    const destination = week.find((cell) => cell.id === '2026-10-03_2')
+    destination!.desks[1] = {
+      ...destination!.desks[1],
+      lesson: { id: 'mk-1003', studentSlots: [{ id: 'mk-entry', name: '青木', managedStudentId: 's001', grade: '中3', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-10-02', makeupSourceLabel: '2026/10/2(金) 1限' } as never, null] },
+    }
+    const lessons = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-10-02').lessons
+    expect(lessons.map((lesson) => `${lesson.kind}${lesson.isLecture ? ':講' : ''}`).sort()).toEqual(['absent', 'lecture:講'])
+    expect(lessons.find((lesson) => lesson.kind === 'lecture')).not.toHaveProperty('makeupDestination')
+  })
+})
+
+describe('resolveParentPublishedLectureEndDateKey / 範囲の延長(2026-11-03 §0-8)', () => {
+  const payloadWith = (sessions: Array<{ startDate: string; endDate: string; schedulePublished?: boolean }>) => ({ specialSessions: sessions })
+
+  it('公開中でまだ終わっていない講習の最も遅い終了日を返す。非公開・終わった講習は数えない', () => {
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07', schedulePublished: true }]), '2026-12-03')).toBe('2027-01-07')
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07' }]), '2026-12-03')).toBe('2027-01-07')
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07', schedulePublished: false }]), '2026-12-03')).toBe('')
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-07-21', endDate: '2026-08-28' }]), '2026-12-03')).toBe('')
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([
+      { startDate: '2026-12-22', endDate: '2027-01-07' },
+      { startDate: '2027-03-20', endDate: '2027-04-07', schedulePublished: false },
+    ]), '2026-12-03')).toBe('2027-01-07')
+    expect(resolveParentPublishedLectureEndDateKey(null, '2026-12-03')).toBe('')
+  })
+
+  it('延長日の月末まで「次の月」の上限を延ばす。今月以前・不正な値は無視する', () => {
+    expect(resolveParentScheduleRange({}, '2026-12-03').bounds.maxTo).toBe('2026-12-31')
+    const extended = resolveParentScheduleRange({}, '2026-12-03', '2027-01-07')
+    expect(extended.bounds).toEqual({ minFrom: '2026-11-01', maxTo: '2027-01-31' })
+    expect(resolveParentScheduleRange({ from: '2027-01-15' }, '2026-12-03', '2027-01-07')).toMatchObject({ from: '2027-01-01', to: '2027-01-31' })
+    // 延長が無ければ来月は今月へ寄せる(従来どおり)。
+    expect(resolveParentScheduleRange({ from: '2027-01-15' }, '2026-12-03')).toMatchObject({ from: '2026-12-01' })
+    expect(resolveParentScheduleRange({}, '2026-12-03', '2026-12-10').bounds.maxTo).toBe('2026-12-31')
+    expect(resolveParentScheduleRange({}, '2026-12-03', 'bad').bounds.maxTo).toBe('2026-12-31')
   })
 })

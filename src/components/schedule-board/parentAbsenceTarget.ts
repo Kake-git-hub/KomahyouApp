@@ -8,6 +8,10 @@ import { buildTemplatePendingDeskKey, hasTemplatePendingDesks, type TemplatePend
 
 export type ParentAbsenceAction = 'absent' | 'absent-no-makeup' | 'makeup-now'
 
+// 連絡された授業の種別(サーバーが日程計算から引いた値・src/utils/parentMessages.ts ParentAbsenceLessonKind と同じ集合)。
+// 'lecture' は日程を公開した講習の講習コマ(2026-11-03 §0-8)。
+export type ParentAbsenceTargetLessonKind = 'regular' | 'makeup' | 'extra' | 'lecture'
+
 // App → 盤面の一過性コマンド。Issue #46 と同型の再発火を防ぐため、盤面は処理したら必ず App 側の state を
 // 消費(null)させる(shouldProcessParentAbsenceRequest / consumeParentAbsenceRequest)。
 export type ParentAbsenceRequest = {
@@ -18,6 +22,8 @@ export type ParentAbsenceRequest = {
   slotNumber: number
   subject: string
   action: ParentAbsenceAction
+  /** 連絡された授業の種別。'lecture' は講習コマだけ、それ以外(未指定を含む)は講習以外の席だけに当てる(取り違え防止)。 */
+  lessonKind?: ParentAbsenceTargetLessonKind
 }
 
 export type ParentAbsenceRequestResult = {
@@ -28,6 +34,7 @@ export type ParentAbsenceRequestResult = {
   studentId: string
   dateKey: string
   slotNumber: number
+  lessonKind?: ParentAbsenceTargetLessonKind
   ok: boolean
   // ok=false のとき室長へ見せる理由(盤面にコマが無い等)。ok=true のときは空文字。
   message: string
@@ -41,8 +48,20 @@ export type ParentAbsenceTargetResolution =
   //   下段には休みを付けない（Q26-3）ので自動処理せず、連絡は一覧に残して室長に保留を片づけてもらう。
   | { ok: false; reason: 'cell-not-found' | 'student-not-found' | 'pending-lower-only' }
 
-// 保護者ページに出るのは通常・振替・増コマだけ(講習 special と体験 trial は出さない)。盤面側も同じ集合に限る。
-const PARENT_ABSENCE_LESSON_TYPES: ReadonlySet<LessonType> = new Set(['regular', 'makeup', 'extra'])
+// 保護者ページから休み連絡できるのは通常・振替・増コマと、日程を公開した講習の講習コマ(special・2026-11-03 §0-8)。
+// 体験 trial は出さない。盤面側も同じ集合に限る(講習の休み・振無休は盤面メニューと同じ markStudentAbsentAt 等が会計する)。
+const PARENT_ABSENCE_LESSON_TYPES: ReadonlySet<LessonType> = new Set(['regular', 'makeup', 'extra', 'special'])
+
+/**
+ * 盤面の授業(lessonType)が、その連絡(lessonKind)の対象になりうるか。
+ * - 講習の連絡('lecture')は講習(special)の席だけ。
+ * - それ以外の連絡(通常・振替・増コマ・未指定)は講習以外の席だけ(連絡のあとで同じ限に講習が組まれても、講習を休みにしない)。
+ * 体験(trial)はどちらでも対象外。
+ */
+export function isParentAbsenceLessonTypeTargeted(lessonType: LessonType, lessonKind?: ParentAbsenceTargetLessonKind | null): boolean {
+  if (!PARENT_ABSENCE_LESSON_TYPES.has(lessonType)) return false
+  return lessonKind === 'lecture' ? lessonType === 'special' : lessonType !== 'special'
+}
 
 function normalizeName(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, '')
@@ -84,7 +103,7 @@ export function isBoardStudentOwnedBy(entry: Pick<StudentEntry, 'managedStudentI
 
 /**
  * 休み連絡の対象席を 1 週間分のセルから探す。
- * - 日付・時限が一致するセルの中で、本人の通常/振替/増コマを探す。
+ * - 日付・時限が一致するセルの中で、本人の通常/振替/増コマ/講習を探す。
  * - 同じコマに本人が複数居る(通常ありえないが手動追加で起こりうる)ときは、連絡の科目に一致する席を優先する。
  * - 見つからない = すでに休みにした・別の日へ動かした・削除した、のいずれか。呼び出し側は何も変えず室長へ知らせる。
  * - 保留（2 行）の机の**上段**に居れば従来どおりその席を返す（上段の休み・振無休は既存の意味どおり・Q26-2）。
@@ -99,6 +118,7 @@ export function resolveParentAbsenceTarget(params: {
   slotNumber: number
   subject: string
   templatePendingDesks?: TemplatePendingDeskMap | null
+  lessonKind?: ParentAbsenceTargetLessonKind | null
 }): ParentAbsenceTargetResolution {
   const cell = params.cells.find((candidate) => candidate.dateKey === params.dateKey && candidate.slotNumber === params.slotNumber)
   if (!cell) return { ok: false, reason: 'cell-not-found' }
@@ -108,7 +128,7 @@ export function resolveParentAbsenceTarget(params: {
   cell.desks.forEach((desk, deskIndex) => {
     desk.lesson?.studentSlots.forEach((student, studentIndex) => {
       if (!student) return
-      if (!PARENT_ABSENCE_LESSON_TYPES.has(student.lessonType)) return
+      if (!isParentAbsenceLessonTypeTargeted(student.lessonType, params.lessonKind)) return
       if (!isBoardStudentOwnedBy(student, params.studentId, ownerByName)) return
       matches.push({ target: { cellId: cell.id, deskIndex, studentIndex }, student })
     })
@@ -118,7 +138,7 @@ export function resolveParentAbsenceTarget(params: {
       const pendingMap = params.templatePendingDesks
       const inPendingLower = cell.desks.some((desk) => (
         (pendingMap[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []).some((student) => (
-          Boolean(student) && PARENT_ABSENCE_LESSON_TYPES.has(student!.lessonType) && isBoardStudentOwnedBy(student!, params.studentId, ownerByName)
+          Boolean(student) && isParentAbsenceLessonTypeTargeted(student!.lessonType, params.lessonKind) && isBoardStudentOwnedBy(student!, params.studentId, ownerByName)
         ))
       ))
       if (inPendingLower) return { ok: false, reason: 'pending-lower-only' }
@@ -139,7 +159,7 @@ export function resolveParentAbsenceTarget(params: {
  * 連絡を処理済み(notifiedAt)にしてよいのは、これが真のときだけ(spec-parent-portal §0-5)。
  * 四択で休みにしたあと、保存までの間に盤面の「元に戻す」や休み解除で記録が消えていたら偽になり、
  * 連絡は処理済みにならず一覧へ戻る(「連絡は処理済みなのに盤面は休みになっていない」を作らない)。
- * 生徒の同一性は resolveParentAbsenceTarget と同じ決め方。講習・体験の記録は数えない。
+ * 生徒の同一性・授業の種別は resolveParentAbsenceTarget と同じ決め方(講習の連絡は講習の記録だけ、それ以外は講習以外の記録だけ)。
  */
 export function hasParentAbsenceRecord(params: {
   weeks: ReadonlyArray<readonly SlotCell[]> | null | undefined
@@ -147,6 +167,7 @@ export function hasParentAbsenceRecord(params: {
   studentId: string
   dateKey: string
   slotNumber: number
+  lessonKind?: ParentAbsenceTargetLessonKind | null
 }): boolean {
   if (!params.weeks) return false
   const ownerByName = buildUniqueNameOwnerMap(params.students)
@@ -157,7 +178,7 @@ export function hasParentAbsenceRecord(params: {
         for (const status of desk.statusSlots ?? []) {
           if (!status) continue
           if (status.status !== 'absent' && status.status !== 'absent-no-makeup') continue
-          if (!PARENT_ABSENCE_LESSON_TYPES.has(status.lessonType)) continue
+          if (!isParentAbsenceLessonTypeTargeted(status.lessonType, params.lessonKind)) continue
           if (isBoardStudentOwnedBy(status, params.studentId, ownerByName)) return true
         }
       }
