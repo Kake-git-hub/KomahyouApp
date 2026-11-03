@@ -22,8 +22,9 @@ describe('配布情報の後追い反映(App.tsx → lectureSubmission.ts)', () 
     expect(APP).toContain('updateSubmissionReopenedSlots(input.submissionToken, input.reopenedSlots ?? [], actingClassroomId)')
   })
 
-  it('3 経路とも別教室ガードを通し、部分更新(updateDoc)だけで書く(INV-07)', () => {
-    for (const name of ['updateSubmissionOccupiedSlots', 'updateSubmissionGroupClassEligibility', 'updateSubmissionReopenedSlots']) {
+  it('後追い反映の 3 経路と登録・登録解除は、別教室ガードを通し、部分更新(updateDoc)だけで書く(INV-07)', () => {
+    // 2026-11-03: 室長の「登録」(markLectureSubmissionDocAsSubmitted)と「登録解除」(resetLectureSubmissionDoc)も同じ形にした。
+    for (const name of ['updateSubmissionOccupiedSlots', 'updateSubmissionGroupClassEligibility', 'updateSubmissionReopenedSlots', 'markLectureSubmissionDocAsSubmitted', 'resetLectureSubmissionDoc']) {
       const body = functionBody(name)
       expect(body, name).toContain('isForeignClassroomSubmissionDoc(')
       expect(body, name).toContain('await updateDoc(docRef, ')

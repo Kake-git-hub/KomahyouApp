@@ -283,6 +283,24 @@ function isForeignClassroomSubmissionDoc(
  * 「登録解除しても黄色コマはキープ」の確定仕様(2026-07-18)が壊れる）。
  * expectedClassroomId を渡すと、別教室の doc には書き込まない(本番データ保護・上記ヘルパ参照)。
  */
+/**
+ * 登録解除で書く差分(純関数・テストで固定)。提出内容だけを空へ戻し pending にする。
+ * ★配布情報(occupiedSlots / availableSubjects / slotNumbers / holidayDates / reopenedSlots / schedulePublished など)は
+ *   **含めない**＝部分更新で既存値が残る(登録解除しても黄色はキープ・2026-07-18 確定仕様)。
+ */
+export function buildSubmissionResetPatch(): Record<string, unknown> {
+  return {
+    status: 'pending',
+    unavailableSlots: [],
+    subjectSlots: {},
+    subjectDurations: {},
+    groupClassParticipation: {},
+    optionChecks: {},
+    regularOnly: false,
+    submittedAt: null,
+  }
+}
+
 export async function resetLectureSubmissionDoc(token: string, expectedClassroomId?: string | null) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
@@ -293,17 +311,9 @@ export async function resetLectureSubmissionDoc(token: string, expectedClassroom
   const data = existing.data()
   if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
 
-  await setDoc(docRef, {
-    ...data,
-    status: 'pending',
-    unavailableSlots: [],
-    subjectSlots: {},
-    subjectDurations: {},
-    groupClassParticipation: {},
-    optionChecks: {},
-    regularOnly: false,
-    submittedAt: null,
-  })
+  // ★部分更新(2026-11-03・INV-07): 読んだ doc を丸ごと書き戻すと、読み→書きの間に別の書き込み(配布情報の後追い反映など)が
+  //   入ったとき古い data で巻き戻す。書くのは登録解除で空へ戻す項目だけ。
+  await updateDoc(docRef, buildSubmissionResetPatch())
 }
 
 /**
@@ -362,6 +372,26 @@ export async function updateSubmissionGroupClassEligibility(token: string, avail
  * (登録解除→登録の経路では resetLectureSubmissionDoc が doc の集団参加を空に戻すため特に再発しやすい)。
  * 渡されないフィールドは従来どおり既存値を保全する(講師経路など)。
  */
+/**
+ * 室長の「登録」で書く差分(純関数・テストで固定)。status と提出日時、渡された保護者所有フィールドだけ。
+ * ★保護者が出した不可コマ・希望科目数などは**含めない**(読み→書きの間に保護者が提出しても、その内容を古い data で消さない)。
+ */
+export function buildSubmissionLockPatch(
+  parentOwnedFields: { groupClassParticipation?: Record<string, boolean>; optionChecks?: Record<string, boolean> } | undefined,
+  submittedAt: string,
+): Record<string, unknown> {
+  return {
+    ...(parentOwnedFields?.groupClassParticipation !== undefined
+      ? { groupClassParticipation: { ...parentOwnedFields.groupClassParticipation } }
+      : {}),
+    ...(parentOwnedFields?.optionChecks !== undefined
+      ? { optionChecks: { ...parentOwnedFields.optionChecks } }
+      : {}),
+    status: 'submitted',
+    submittedAt,
+  }
+}
+
 export async function markLectureSubmissionDocAsSubmitted(
   token: string,
   parentOwnedFields?: { groupClassParticipation?: Record<string, boolean>; optionChecks?: Record<string, boolean> },
@@ -379,17 +409,10 @@ export async function markLectureSubmissionDocAsSubmitted(
   // 本番データ保護: 別教室の doc はロックしない(開発用教室で他教室由来トークンを提出済みにしない)。
   if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
 
-  await setDoc(docRef, {
-    ...data,
-    ...(parentOwnedFields?.groupClassParticipation !== undefined
-      ? { groupClassParticipation: { ...parentOwnedFields.groupClassParticipation } }
-      : {}),
-    ...(parentOwnedFields?.optionChecks !== undefined
-      ? { optionChecks: { ...parentOwnedFields.optionChecks } }
-      : {}),
-    status: 'submitted',
-    submittedAt: new Date().toISOString(),
-  })
+  // ★部分更新(2026-11-03・INV-07): 以前は読んだ doc を丸ごと書き戻していたため、読み(pending)→書きの間に
+  //   保護者がスマホから提出すると、その不可コマ・希望科目数を読んだ時点の空の内容で消していた。
+  //   書くのは buildSubmissionLockPatch の項目だけ(渡されないフィールドは既存値が残る＝講師経路など後方互換)。
+  await updateDoc(docRef, buildSubmissionLockPatch(parentOwnedFields, new Date().toISOString()))
 }
 
 export async function deleteLectureSubmissionDoc(token: string) {

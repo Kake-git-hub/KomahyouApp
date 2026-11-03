@@ -184,7 +184,7 @@ describe('確認リストの項目定義', () => {
     // 第98版(2026-11-03): 講習の日程公開の確認 lp-1〜lp-4 も開発用教室だけ(保護者QRは開発用教室と staging だけの機能)。
     // 第104版(2026-11-03): d-5・ai-1 を外し、開発用教室だけの d-6・d-7・sc-4・bk-1 を足した。
     const developmentOnly = ['vc-1', 'd-6', 'd-7', 'sc-4', 'bk-1']
-    for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && id !== 'qs-1')) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
@@ -219,7 +219,8 @@ describe('確認リストの項目定義', () => {
     // 第98版(2026-11-03・v1.5.672 据え置き): 講習の日程公開の確認 lp-1〜lp-4 を先頭に足した(開発用教室だけ)。
     // 第104版(2026-11-03・v1.5.672 据え置き): ai-1 は OK・d-5 は要改善への対応の d-6・d-7 へ差し替え、sc-4・bk-1 を足した。
     // 第101版(2026-11-03): 提出用QRの書き直しを部分更新にした確認 qs-1 を先頭に足した(開発用教室だけ)。
-    expect(ids).toEqual(['qs-1', 'lp-1', 'lp-2', 'lp-3', 'lp-4', 'vc-1', 'd-6', 'd-7', 'sc-4', 'bk-1', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    // 第102版(2026-11-03): 室長の「登録」「登録解除」も部分更新にした確認 qs-2 を先頭に足した(開発用教室だけ)。
+    expect(ids).toEqual(['qs-2', 'qs-1', 'lp-1', 'lp-2', 'lp-3', 'lp-4', 'vc-1', 'd-6', 'd-7', 'sc-4', 'bk-1', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'jd-3', 'jd-4', 'tp-73', 'tp-74', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -866,5 +867,14 @@ describe('第101版(2026-11-03・v1.5.672 据え置き): 提出用QRの書き直
     expect(item.introducedIn).toBe('v1.5.677')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('qs-1')
     expect(item.check!.join('\n')).toContain('すでに提出済みです')
+  })
+})
+
+describe('第102版(2026-11-03・v1.5.672 据え置き): 室長の「登録」「登録解除」も部分更新にした確認 qs-2', () => {
+  it('qs-2 は開発用教室だけ・v1.5.678 で追加・解除で黄色が残ることを見る', () => {
+    const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'qs-2')!
+    expect(item.introducedIn).toBe('v1.5.678')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('qs-2')
+    expect(item.check!.join('\n')).toContain('黄色のコマは残っている')
   })
 })

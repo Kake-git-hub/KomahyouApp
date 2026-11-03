@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.678 (2026-11-03)
+
+- fix: **室長の「登録」「登録解除」も提出用QRの文書を部分更新で書くようにした**(オーナー指示 2026-11-03「2箇所も今直して」・INV-07)。`markLectureSubmissionDocAsSubmitted` は読んだ文書を `setDoc({ ...data })` で丸ごと書き戻していたため、読み(未提出)→書きの間に保護者が提出すると、その不可コマ・希望科目数を読んだ時点の空の内容で消していた。status・提出日時・渡された集団参加/オプションだけの差分 `buildSubmissionLockPatch` を `updateDoc` で書く。`resetLectureSubmissionDoc` も提出内容を空へ戻す項目と status だけの差分 `buildSubmissionResetPatch` を `updateDoc` で書く(配布情報・黄色コマは書かない＝残る・2026-07-18 確定仕様のまま)。別教室ガード(`isForeignClassroomSubmissionDoc`)は従来どおり。テスト: lectureSubmission(部分更新・提出内容を含めない・別教室ガード) / lectureSubmissionWrites.wiring(5 関数とも setDoc と ...data を使わない)。確認リスト qs-2。
+
 ## v1.5.677 (2026-11-03)
 
 - fix: **提出用QRの後追い反映を部分更新にし、別教室の文書へ書かないようにした**(オーナー指示 2026-11-03「講習期間ではなく誰も提出用QRを使っていない今のうちに修正して」・INV-07 / INV-08)。`updateSubmissionOccupiedSlots` は読んだ文書を `setDoc({ ...data })` で丸ごと書き戻していたため、読み→書きの間に保護者がスマホから提出すると提出済みを未提出へ巻き戻せた。配布情報だけの差分 `buildSubmissionDistributionPatch` を `updateDoc` で書くように変え、提出内容(status・不可コマ・希望科目数・集団参加・オプション・提出日時)は書かない。操作中の教室 ID を受けて別教室の文書には書かない(`isForeignClassroomSubmissionDoc`)。同じ形の兄弟 `updateSubmissionReopenedSlots`・`updateSubmissionGroupClassEligibility` も同じく部分更新＋別教室ガードにした。App.tsx の 3 か所の呼び出しは `actingClassroomId` を渡す。テスト: lectureSubmission(部分更新・提出内容を含めない・別教室ガード) / lectureSubmissionWrites.wiring。確認リスト qs-1。
