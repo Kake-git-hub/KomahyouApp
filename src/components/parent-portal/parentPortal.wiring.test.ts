@@ -103,7 +103,7 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     const failIndex = body.indexOf('if (!result.ok) {')
     expect(consumeIndex).toBeGreaterThan(0)
     expect(failIndex).toBeGreaterThan(consumeIndex)
-    expect(body).toContain('addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber })')
+    expect(body).toContain('addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber, ...(result.lessonKind ? { lessonKind: result.lessonKind } : {}) })')
     expect(body).toContain("stage: 'acknowledged', resolution: result.action")
     expect(body).not.toContain("stage: 'notified'")
   })

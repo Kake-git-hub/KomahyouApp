@@ -4,11 +4,16 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as xlsx from 'xlsx'
 import {
+  buildSchedulePublishedMap,
   isSpecialSessionSchedulePublished,
   resolveNewSpecialSessionScheduleFields,
+  selectSchedulePublishChangedSessionIds,
   setSpecialSessionSchedulePublished,
   type SpecialSessionRow,
 } from './specialSessionModel'
+import { featureRolloutRegistry } from '../../utils/featureRollout'
+import { isSubmissionSchedulePublished } from '../submission/submissionScheduleVisibility'
+import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from '../../utils/parentSchedule'
 import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
 
 function createSession(overrides: Partial<SpecialSessionRow> = {}): SpecialSessionRow {
@@ -67,11 +72,50 @@ describe('Excel 取り込みで日程公開を落とさない', () => {
     expect(parsed[0]?.schedulePublished).toBe(false)
   })
 
+  it('Excel で新しく増えた講習は、フラグ ON なら非公開で始める(画面から作ったときと同じ・レビュー指摘 M1)', () => {
+    const imported = [createSession({ id: 'ss-new', label: '2027 春期講習', startDate: '2027-03-20', endDate: '2027-04-07' })]
+    const workbook = buildSpecialSessionWorkbook(xlsx, imported, [], [])
+    expect(parseSpecialSessionWorkbook(xlsx, workbook, [], { schedulePublishToggleEnabled: true })[0]?.schedulePublished).toBe(false)
+    expect(parseSpecialSessionWorkbook(xlsx, workbook, [], { schedulePublishToggleEnabled: false })[0]).not.toHaveProperty('schedulePublished')
+    expect(parseSpecialSessionWorkbook(xlsx, workbook, [])[0]).not.toHaveProperty('schedulePublished')
+  })
+
   it('項目の無い既存講習は項目を付けない(公開のまま)', () => {
     const existing = [createSession()]
     const workbook = buildSpecialSessionWorkbook(xlsx, existing, [], [])
     const parsed = parseSpecialSessionWorkbook(xlsx, workbook, existing)
     expect(parsed[0]).not.toHaveProperty('schedulePublished')
+  })
+})
+
+describe('selectSchedulePublishChangedSessionIds(切り替えた講習の提出用QRをすぐ書き直す・レビュー指摘 M2)', () => {
+  it('前回から公開状態が変わった講習だけを返す。初回・新しく増えた講習は返さない', () => {
+    const before = [createSession({ schedulePublished: false }), createSession({ id: 'ss2' })]
+    expect(selectSchedulePublishChangedSessionIds(null, before)).toEqual([])
+    const previous = buildSchedulePublishedMap(before)
+    expect(selectSchedulePublishChangedSessionIds(previous, before)).toEqual([])
+    const after = [createSession({ schedulePublished: true }), createSession({ id: 'ss2', schedulePublished: true }), createSession({ id: 'ss3', schedulePublished: false })]
+    // ss2 は未設定(公開)→ true(公開)で変化なし。ss3 は前回に無い。
+    expect(selectSchedulePublishChangedSessionIds(previous, after)).toEqual(['ss1'])
+  })
+})
+
+describe('「false のときだけ非公開」の判定がそろっている(レビュー指摘 L2)', () => {
+  const cases = [false, true, undefined] as const
+  it('講習データ・提出用QR・保護者QRの 3 か所が同じ答えを返す', () => {
+    for (const value of cases) {
+      const session = createSession(value === undefined ? {} : { schedulePublished: value })
+      const expected = value !== false
+      expect(isSpecialSessionSchedulePublished(session), String(value)).toBe(expected)
+      expect(isSubmissionSchedulePublished({ schedulePublished: value }), String(value)).toBe(expected)
+      // 保護者QR: 公開中ならまだ終わっていない講習の終了日が延長の日付として返る。
+      expect(resolveParentPublishedLectureEndDateKey({ specialSessions: [session] }, '2026-12-01') !== '', String(value)).toBe(expected)
+    }
+    expect(buildParentScheduleView({}, 's001', { from: '2026-12-01', to: '2026-12-31' })).toBeNull()
+  })
+
+  it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る)', () => {
+    expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(featureRolloutRegistry.parentPortalQr.scope)
   })
 })
 
@@ -86,6 +130,12 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
 
   it('トグル列はフラグ ON のときだけ出る', () => {
     expect(SCREEN).toContain("{schedulePublishToggleEnabled ? <th>日程</th> : null}")
+  })
+
+  it('Excel 取り込みにもフラグを渡す(M1)・公開状態が変わった講習は講習自身の期間で提出用QRを書き直す(M2)', () => {
+    expect(APP).toContain("parseSpecialSessionWorkbook(xlsx, workbook, specialSessions, { schedulePublishToggleEnabled: isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom) })")
+    expect(APP).toContain('const changedIds = selectSchedulePublishChangedSessionIds(previousSchedulePublishedRef.current, specialSessions)')
+    expect(APP).toContain('void ensureScheduleSubmissionTokens(session.startDate, session.endDate)')
   })
 
   it('App は機能フラグ lectureSchedulePublishToggle を講習データ画面へ渡す', () => {

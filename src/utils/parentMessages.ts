@@ -167,7 +167,7 @@ export const PARENT_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
 // 講習コマの休み連絡(2026-11-03 §0-8)の選択肢。盤面の講習メニューと同じ「休み/振無休」と「何もしない」。
 // 「振替先を今決める」は出さない(講習の休みは講習の未消化へ戻り、振替の在庫を作らないので配置モードへ入れない)。
 export const PARENT_LECTURE_ABSENCE_CHOICES: readonly ParentAbsenceChoice[] = [
-  { resolution: 'absent', label: '休み', description: '休みにして未消化講習へ戻す' },
+  { resolution: 'absent', label: '休み', description: '休みにして未消化講習へ戻す(手動で追加した講習は戻らない)' },
   { resolution: 'absent-no-makeup', label: '振無休', description: '振替なしの休みにする(講習は消化扱い)' },
   { resolution: 'manual', label: '何もしない', description: '盤面は変えない(手動で処理する)' },
 ]
@@ -243,6 +243,8 @@ export type PendingParentAbsenceFinalize = {
   studentId: string
   dateKey: string
   slotNumber: number
+  /** 連絡された授業の種別(講習の連絡は講習の休み記録だけで処理済みにする・2026-11-03)。旧データには無い(=講習以外)。 */
+  lessonKind?: ParentAbsenceLessonKind
 }
 
 // 同じ連絡をやり直した(見つからず失敗 → もう一度選んだ等)ときは、新しい processedAt で置き換える。

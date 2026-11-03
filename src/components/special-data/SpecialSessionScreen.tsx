@@ -382,7 +382,9 @@ function resolveSessionIdentity(row: Record<string, unknown>, sessionsById: Map<
   return null
 }
 
-export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: SpecialSessionRow[]) {
+// options.schedulePublishToggleEnabled: 機能フラグ lectureSchedulePublishToggle。ON の教室では Excel で**新しく増えた講習**も
+// 画面から作ったときと同じく非公開で始める(resolveNewSpecialSessionScheduleFields・2026-11-03 レビュー指摘 M1)。
+export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: SpecialSessionRow[], options: { schedulePublishToggleEnabled?: boolean } = {}) {
   const sheet = workbook.Sheets['特別講習']
   if (!sheet) return fallback
 
@@ -409,7 +411,10 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
         createdAt: normalizeTimestampText(row['作成日時']) || existing?.createdAt || timestamp,
         updatedAt: normalizeTimestampText(row['更新日時']) || timestamp,
         // 日程公開(2026-11-03)は Excel に列を持たない。取り込みで既存講習の公開状態を落とさない(落とすと未設定=公開に化ける)。
-        ...(existing && existing.schedulePublished !== undefined ? { schedulePublished: existing.schedulePublished } : {}),
+        // 新しく増えた講習(同じ講習名が無い)は画面から作ったときと同じ初期値(フラグ ON なら非公開)。
+        ...(existing
+          ? (existing.schedulePublished !== undefined ? { schedulePublished: existing.schedulePublished } : {})
+          : resolveNewSpecialSessionScheduleFields(options.schedulePublishToggleEnabled === true)),
       } as SpecialSessionRow
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))

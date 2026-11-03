@@ -87,3 +87,12 @@ describe('保護者QRの範囲(functions/src/index.ts)', () => {
     expect(FUNCTIONS_INDEX).toContain('resolveRange: (input, todayKey, payload) => resolveParentScheduleRange(input, todayKey, resolveParentPublishedLectureEndDateKey(payload, todayKey)),')
   })
 })
+
+describe('App の配線: 連絡の種別を盤面と処理済みの判定へ渡す(レビュー指摘 M3)', () => {
+  const APP = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+  it('一過性コマンドに lessonKind を載せ、保存後の判定にも同じ種別を使う', () => {
+    expect(APP).toContain('lessonKind: notification.absence.lessonKind,')
+    expect(APP).toContain('...(result.lessonKind ? { lessonKind: result.lessonKind } : {})')
+    expect(APP).toContain('slotNumber: item.slotNumber, lessonKind: item.lessonKind })')
+  })
+})

@@ -1105,6 +1105,24 @@ describe('buildParentScheduleView 日程公開(講習コマ)', () => {
     expect(JSON.stringify(view)).not.toMatch(/teacher|managedStudentId|studentId|recordedAt|specialSessionId/i)
   })
 
+  it('そのコマ自身の講習が非公開なら、公開中の別の講習の期間に置かれていても出さない(レビュー指摘 L1)', () => {
+    const payload = withSessionPublished(true)
+    payload.specialSessions = [
+      ...(payload.specialSessions ?? []),
+      { id: 'ss-winter', label: '冬期講習', startDate: '2026-12-22', endDate: '2027-01-07', teacherInputs: {}, studentInputs: {}, createdAt: 'x', updatedAt: 'x', schedulePublished: false },
+    ]
+    const week = (payload.boardState?.weeks[2] ?? []) as SlotCell[]
+    const target = week.find((cell) => cell.id === '2026-10-02_1')
+    const entry = target!.desks[0]!.lesson!.studentSlots[0]!
+    target!.desks[0]!.lesson!.studentSlots[0] = { ...entry, specialSessionId: 'ss-winter' }
+    const view = buildView('s001', { from: '2026-10-01', to: '2026-10-05' }, payload)
+    expect(summarizeOn(view, '2026-10-02')).toEqual([])
+    expect(view.hasLectureLessons).toBe(true)
+    // 講習 ID が名簿に無いコマは日付の判定に従う(出す)。
+    target!.desks[0]!.lesson!.studentSlots[0] = { ...entry, specialSessionId: 'ss-unknown' }
+    expect(summarizeOn(buildView('s001', { from: '2026-10-01', to: '2026-10-05' }, payload), '2026-10-02')).toEqual(['1:数:lecture'])
+  })
+
   it('講習コマは保護者から休み連絡できる(明日以降だけ・当日と過去は不可)', () => {
     expect(isParentLessonAbsenceReportable('lecture', '2026-10-02', '2026-10-01')).toBe(true)
     expect(isParentLessonAbsenceReportable('lecture', '2026-10-02', '2026-10-02')).toBe(false)

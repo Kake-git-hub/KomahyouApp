@@ -14603,7 +14603,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const request = parentAbsenceRequest!
     const finish = (ok: boolean, message: string) => {
       processedParentAbsenceRequestIdRef.current = request.requestId
-      onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, studentId: request.studentId, dateKey: request.dateKey, slotNumber: request.slotNumber, ok, message })
+      onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, studentId: request.studentId, dateKey: request.dateKey, slotNumber: request.slotNumber, lessonKind: request.lessonKind, ok, message })
     }
     // テンプレ編集中の cells はテンプレ用で、実日付の盤面ではない。出欠を書き込まない。
     if (isTemplateMode) {
@@ -14631,6 +14631,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       dateKey: request.dateKey,
       slotNumber: request.slotNumber,
       subject: request.subject,
+      // 講習の連絡は講習の席だけ、それ以外は講習以外の席だけ(2026-11-03 §0-8・取り違え防止)。
+      lessonKind: request.lessonKind,
       // spec-template-behavior Q31: 保留の下段にだけ居る生徒は自動処理せず一覧に残す（フラグ OFF は null＝従来どおり）。
       templatePendingDesks: activeTemplatePendingDesks,
     })

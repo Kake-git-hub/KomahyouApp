@@ -17,6 +17,7 @@
 ## v1.5.674 (2026-11-03)
 
 - feat: **講習の日程公開トグル**(オーナー確定 2026-11-03「室長のコマ組みが完了するまで保護者に講習の日程を見せたくない」・機能フラグ `lectureSchedulePublishToggle`＝開発用/テスト教室＋staging・保護者QRと同じ範囲)。特別講習データの各講習に「日程: 非公開／公開中」を出し、新しく作る講習は非公開で始める(前からある講習は未設定＝公開)。非公開の間は提出用QR(生徒・講師)に講習コマを書かず(`buildSubmissionOccupiedSlotMaps`・公開時は切り出し前と同じ結果)、提出後の画面は組まれたコマを出さず「講習の日程は準備中です」を出す(`resolveSubmittedViewOccupiedSlots`・提出 API が `schedulePublished` を返す＝Functions のデプロイあり)。保護者QRは公開した講習の期間の日だけ講習コマを出し(`kind: 'lecture'`・講習の出欠は `isLecture`)、講習コマも休み連絡でき(室長の選択肢は 休み/振無休/何もしない)、公開中の講習の終了月まで「次の月」で進める(`resolveParentPublishedLectureEndDateKey`)。振替元の補完が同じ限・科目の講習の行を拾わないガード付き。仕様 `docs/spec-special-session-submission.md` §B-2・`docs/spec-parent-portal.md` §0-8。確認リスト lp-1〜lp-4・進行中テーマ台帳に 1 行。テスト: schedulePublish / submissionOccupiedSlots / submissionScheduleVisibility / parentPortalLecture / parentSchedule(日程公開) / parentPortal(functions)。
+- fix: 日程公開の regression-reviewer 指摘への対応(同じ版)。M1: Excel 取り込みで新しく増えた講習もフラグ ON なら非公開で始める。M2: トグルを切り替えた講習の提出用QRを、日程表の表示期間に関係なくすぐ書き直す(`selectSchedulePublishChangedSessionIds`)。M3: 保護者の休み連絡は連絡の種別で席を分ける(講習の連絡は講習の席だけ・それ以外は講習以外だけ。保存後の処理済み判定も同じ・`isParentAbsenceLessonTypeTargeted`・INV-06 の取り違え防止)。L1: 保護者QRはコマ自身の講習(`specialSessionId`)が非公開なら出さない。L2: 「false のときだけ非公開」の 3 か所の判定と、保護者QRとフラグ範囲が同じことをテストで固定。L3: 講習の「休み」の説明に「手動で追加した講習は戻らない」を足した。
 - test: 保護者の休み連絡の対象(`parentAbsenceTarget`)に講習を含める仕様変更に合わせ、「講習は対象にしない」テストを「体験は対象にしない／講習は対象にする」へ書き換え(オーナー確定 2026-11-03)。保護者QRの用意データの講習は `schedulePublished: false` にして従来のテストを守る。
 
 ## v1.5.673 (2026-11-03)

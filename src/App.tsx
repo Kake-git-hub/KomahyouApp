@@ -9,7 +9,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { appendReopenedSlots, buildSchedulePublishedMap, groupClassSubmissionSubjects, initialSpecialSessions, isSpecialSessionSchedulePublished, removedDefaultSpecialSessionIds, selectSchedulePublishChangedSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { buildSubmissionOccupiedSlotMaps } from './utils/submissionOccupiedSlots'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
@@ -1824,6 +1824,7 @@ function AuthenticatedApp() {
       slotNumber: notification.absence.slotNumber,
       subject: notification.absence.subject,
       action: resolution,
+      lessonKind: notification.absence.lessonKind,
     })
   }, [actingClassroomIdRef, parentAbsenceBusyId, screenRef, setParentAbsenceError])
   // 盤面が一過性コマンドを処理し終えた。成功なら「保存待ち」に積み、保護者ページ向けに acknowledged を記録する。
@@ -1838,7 +1839,7 @@ function AuthenticatedApp() {
     }
     const classroomId = actingClassroomIdRef.current
     if (!classroomId) return
-    setPendingParentAbsenceFinalize((current) => addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber }))
+    setPendingParentAbsenceFinalize((current) => addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber, ...(result.lessonKind ? { lessonKind: result.lessonKind } : {}) }))
     if (result.action === 'makeup-now') {
       // 振替先の空席を盤面で選ぶので、モーダルは畳んで左下の入口だけにする。
       isParentAbsencePlacementActiveRef.current = true
@@ -1876,7 +1877,7 @@ function AuthenticatedApp() {
     const { toFinalize, returned, remaining } = splitPendingParentAbsenceFinalize(pendingBefore, {
       classroomId: savedClassroomId,
       snapshotSavedAt,
-      isRecordedInSavedBoard: (item) => hasParentAbsenceRecord({ weeks: savedPayload.boardState?.weeks, students: savedPayload.students, studentId: item.studentId, dateKey: item.dateKey, slotNumber: item.slotNumber }),
+      isRecordedInSavedBoard: (item) => hasParentAbsenceRecord({ weeks: savedPayload.boardState?.weeks, students: savedPayload.students, studentId: item.studentId, dateKey: item.dateKey, slotNumber: item.slotNumber, lessonKind: item.lessonKind }),
     })
     if (toFinalize.length === 0 && returned.length === 0) return
     setPendingParentAbsenceFinalize(remaining)
@@ -3968,6 +3969,21 @@ function AuthenticatedApp() {
     }
   }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessions, students, teachers])
 
+  // 日程公開を切り替えた講習は、日程表の表示期間に関係なくその講習の提出用QRをすぐ書き直す(2026-11-03 レビュー指摘 M2)。
+  // 上の ensureScheduleSubmissionTokens は「日程表の表示期間に重なる講習」だけを書き直すので、表示期間が別の講習だと
+  // 非公開に戻しても講習コマが提出文書に残る・公開にしても提出後の画面が「準備中」のままになる。講習自身の期間を渡せば
+  // resolveDisplayedOverlappingSession がその講習を選ぶ。初回と教室の切り替え(前回に無い講習)では動かない。
+  const previousSchedulePublishedRef = useRef<Map<string, boolean> | null>(null)
+  useEffect(() => {
+    const changedIds = selectSchedulePublishChangedSessionIds(previousSchedulePublishedRef.current, specialSessions)
+    previousSchedulePublishedRef.current = buildSchedulePublishedMap(specialSessions)
+    for (const sessionId of changedIds) {
+      const session = specialSessions.find((row) => row.id === sessionId)
+      if (!session?.startDate || !session.endDate) continue
+      void ensureScheduleSubmissionTokens(session.startDate, session.endDate).catch(() => { /* non-fatal: 日程表を開いたときの書き直しで収束 */ })
+    }
+  }, [ensureScheduleSubmissionTokens, specialSessions])
+
   const buildPopupBoardWeeksForRange = useCallback((range: ScheduleRangePreference) => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const latestBoardState = boardStateRef.current
@@ -5900,12 +5916,12 @@ function AuthenticatedApp() {
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      setSpecialSessions(parseSpecialSessionWorkbook(xlsx, workbook, specialSessions))
+      setSpecialSessions(parseSpecialSessionWorkbook(xlsx, workbook, specialSessions, { schedulePublishToggleEnabled: isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom) }))
       setPersistenceMessage('特別講習データを Excel から取り込みました。')
     } catch {
       setPersistenceMessage('特別講習データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [specialSessions])
+  }, [actingClassroom, specialSessions])
 
   const exportAutoAssignTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')

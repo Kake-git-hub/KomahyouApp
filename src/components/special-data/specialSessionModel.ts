@@ -211,6 +211,22 @@ export function resolveNewSpecialSessionScheduleFields(toggleEnabled: boolean): 
   return toggleEnabled ? { schedulePublished: false } : {}
 }
 
+/**
+ * 日程公開が前回から変わった講習の ID(2026-11-03 レビュー指摘 M2)。
+ * 切り替えた講習の提出用QRを、日程表の表示期間に関係なくすぐ書き直すために使う。
+ * previous が null(初回)なら空。前回に無かった講習(新規作成・教室の切り替え)は数えない。
+ */
+export function selectSchedulePublishChangedSessionIds(previous: ReadonlyMap<string, boolean> | null, sessions: readonly SpecialSessionRow[]): string[] {
+  if (!previous) return []
+  return sessions
+    .filter((session) => previous.has(session.id) && previous.get(session.id) !== isSpecialSessionSchedulePublished(session))
+    .map((session) => session.id)
+}
+
+export function buildSchedulePublishedMap(sessions: readonly SpecialSessionRow[]): Map<string, boolean> {
+  return new Map(sessions.map((session) => [session.id, isSpecialSessionSchedulePublished(session)]))
+}
+
 /** 1 講習の日程公開を切り替える(他の講習・他の項目は触らない)。同じ値なら同じ配列を返す。 */
 export function setSpecialSessionSchedulePublished(sessions: SpecialSessionRow[], sessionId: string, published: boolean, updatedAt: string): SpecialSessionRow[] {
   let changed = false

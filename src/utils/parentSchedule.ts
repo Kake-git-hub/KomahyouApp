@@ -134,6 +134,8 @@ type ParentBoardStudentEntry = {
   lessonType: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
+  /** 講習コマの講習 ID(日程公開の判定に使う・2026-11-03)。 */
+  specialSessionId?: string
 }
 
 type ParentBoardStatusEntry = ParentBoardStudentEntry & {
@@ -163,7 +165,7 @@ type ParentClassroomSettings = {
 }
 
 // 講習期間(specialSessions の写し・日程公開の判定に要る項目だけ)。published は schedulePublished !== false(未設定=公開)。
-type ParentLectureSession = { startDate: string; endDate: string; published: boolean }
+type ParentLectureSession = { id: string; startDate: string; endDate: string; published: boolean }
 
 type ParentPayload = {
   lectureSessions: ParentLectureSession[]
@@ -522,6 +524,7 @@ function readBoardEntry(value: unknown): ParentBoardStudentEntry | null {
   const managedStudentId = readString(value.managedStudentId)
   const makeupSourceDate = readString(value.makeupSourceDate)
   const makeupSourceLabel = readString(value.makeupSourceLabel)
+  const specialSessionId = readString(value.specialSessionId)
   return {
     id: readString(value.id),
     name: readString(value.name),
@@ -531,6 +534,7 @@ function readBoardEntry(value: unknown): ParentBoardStudentEntry | null {
     lessonType: readString(value.lessonType),
     makeupSourceDate: makeupSourceDate || undefined,
     makeupSourceLabel: makeupSourceLabel || undefined,
+    specialSessionId: specialSessionId || undefined,
   }
 }
 
@@ -580,13 +584,21 @@ function readLectureSessions(value: unknown): ParentLectureSession[] {
     const startDate = readString(raw.startDate)
     const endDate = readString(raw.endDate)
     if (!isValidDateKey(startDate) || !isValidDateKey(endDate) || endDate < startDate) return []
-    return [{ startDate, endDate, published: raw.schedulePublished !== false }]
+    return [{ id: readString(raw.id), startDate, endDate, published: raw.schedulePublished !== false }]
   })
 }
 
 // その日が「日程を公開した講習」の期間か。講習期間は重ならない制約(spec-special-session-submission §A)なので 1 件見つかれば足りる。
 function isPublishedLectureDate(sessions: readonly ParentLectureSession[], dateKey: string): boolean {
   return sessions.some((session) => session.published && session.startDate <= dateKey && dateKey <= session.endDate)
+}
+
+// その講習コマ自身の講習(specialSessionId)が非公開なら出さない(2026-11-03 レビュー指摘 L1: 非公開の講習のコマを公開中の別の講習の
+// 期間へ前倒しで置いたとき、日付だけで判定すると出てしまう)。ID が無い・見つからないコマは日付の判定だけに従う。
+function isLectureEntrySessionPublished(sessions: readonly ParentLectureSession[], specialSessionId: string | undefined): boolean {
+  if (!specialSessionId) return true
+  const own = sessions.find((session) => session.id === specialSessionId)
+  return own ? own.published : true
 }
 
 /**
@@ -1061,14 +1073,14 @@ function compareLessons(left: ParentScheduleLesson, right: ParentScheduleLesson)
 //   (moved は移動先の行が出る／holiday はその日が「教室休み」行で出る。出すと同じ1コマが二重に見える)。
 //   下の status ホワイトリストが両方を自然に弾く。ホワイトリストを「moved 以外」のような否定形へ
 //   書き換えないこと(新種別が黙って保護者ページに出る)。
-// ★showLectureLessons(その日が日程を公開した講習の期間か・§0-8)が真のときだけ講習(special)も出す。
+// ★isLectureShown(その日が日程を公開した講習の期間で、そのコマ自身の講習も非公開でない・§0-8)が真の講習(special)だけ出す。
 //   配置は kind 'lecture'、出欠記録は kind=status に isLecture を付ける。講習には振替先・振替元を付けない
 //   (講習の休みは講習の未消化へ戻り、振替のリンクを持たない)。偽のときは従来どおり講習を出さない。
 function extractBoardLessons(
   cells: ParentBoardCell[],
   matches: (entry: { managedStudentId?: string; name: string }) => boolean,
   linkedDestinationByStatusId: Map<string, { dateKey: string; slotNumber: number }>,
-  showLectureLessons = false,
+  isLectureShown: (entry: ParentBoardStudentEntry) => boolean = () => false,
 ): ParentScheduleLesson[] {
   const lessons: ParentScheduleLesson[] = []
   for (const cell of sortCells(cells)) {
@@ -1076,7 +1088,7 @@ function extractBoardLessons(
     for (const desk of cell.desks) {
       for (const student of desk.studentSlots) {
         if (!student) continue
-        if (showLectureLessons && student.lessonType === 'special') {
+        if (student.lessonType === 'special' && isLectureShown(student)) {
           if (!matches(student)) continue
           lessons.push({
             slotNumber: cell.slotNumber,
@@ -1108,7 +1120,7 @@ function extractBoardLessons(
         if (statusEntry.status !== 'absent' && statusEntry.status !== 'absent-no-makeup' && statusEntry.status !== 'attended') continue
         if (statusEntry.lessonType === 'trial') continue
         if (statusEntry.lessonType === 'special') {
-          if (!showLectureLessons || !matches(statusEntry)) continue
+          if (!isLectureShown(statusEntry) || !matches(statusEntry)) continue
           lessons.push({
             slotNumber: cell.slotNumber,
             timeLabel,
@@ -1226,20 +1238,23 @@ function buildClosedDayMakeupDestinations(links: readonly ParentMakeupOriginLink
   return [...byKey.values()].sort((left, right) => (left.dateKey !== right.dateKey ? (left.dateKey < right.dateKey ? -1 : 1) : left.slotNumber - right.slotNumber))
 }
 
-// 講習コマ(special)がこのセル群にこの生徒の分としてあるか。表示はしない(注記の判定だけに使う)。
+// **出していない**講習コマ(special)がこのセル群にこの生徒の分としてあるか。表示はしない(注記の判定だけに使う)。
+// isLectureShown が真の講習コマは行として出るので数えない(2026-11-03 §0-8)。
 function boardCellsHaveLectureLesson(
   cells: ParentBoardCell[],
   matches: (entry: { managedStudentId?: string; name: string }) => boolean,
+  isLectureShown: (entry: ParentBoardStudentEntry) => boolean = () => false,
 ): boolean {
   for (const cell of cells) {
     for (const desk of cell.desks) {
       for (const student of desk.studentSlots) {
-        if (student && student.lessonType === 'special' && matches(student)) return true
+        if (student && student.lessonType === 'special' && !isLectureShown(student) && matches(student)) return true
       }
       for (const statusEntry of desk.statusSlots) {
         // moved は移動先側に出るので数えない(移動先が範囲外なら講習の印も付けない)。
         // holiday(休日設定で消えたコマの表示専用記録)も同じ扱い＝数えない(在庫へ返却済みで実施されない)。
         if (!statusEntry || statusEntry.lessonType !== 'special' || statusEntry.status === 'moved' || statusEntry.status === 'holiday') continue
+        if (isLectureShown(statusEntry)) continue
         if (matches(statusEntry)) return true
       }
     }
@@ -1380,10 +1395,11 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     // 講習期間の日も通常日と同じく「盤面優先 → テンプレ補完」。講習コマは日程を公開した講習の期間の日だけ出す(§0-8)。
     const cells = cellsByDateKey.get(dateKey)
     if (cells && cells.length > 0) {
-      const showLectureLessons = isPublishedLectureDate(parsed.lectureSessions, dateKey)
+      const isPublishedDate = isPublishedLectureDate(parsed.lectureSessions, dateKey)
+      const isLectureShown = (entry: ParentBoardStudentEntry) => isPublishedDate && isLectureEntrySessionPublished(parsed.lectureSessions, entry.specialSessionId)
       // 注記の印は「出していない講習コマ」だけ数える(公開した講習の講習コマは行として出る)。
-      if (!hasLectureLessons && !showLectureLessons) hasLectureLessons = boardCellsHaveLectureLesson(cells, matches)
-      const lessons = appendMakeupOriginAbsences(extractBoardLessons(cells, matches, linkedDestinationByStatusId, showLectureLessons), originLinksByDate.get(dateKey), cells)
+      if (!hasLectureLessons) hasLectureLessons = boardCellsHaveLectureLesson(cells, matches, isLectureShown)
+      const lessons = appendMakeupOriginAbsences(extractBoardLessons(cells, matches, linkedDestinationByStatusId, isLectureShown), originLinksByDate.get(dateKey), cells)
       if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'board', lessons })
       continue
     }

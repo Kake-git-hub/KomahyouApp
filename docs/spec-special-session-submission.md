@@ -52,6 +52,8 @@
   - 公開状態は提出文書の `schedulePublished` に写す（新規発行・後追い反映 `updateSubmissionOccupiedSlots` の両方）。未設定の文書は公開扱い。
     提出 API（GET）が `schedulePublished` を返す（Functions のデプロイが要る。旧 Functions のあいだは公開扱い＝従来の見え方）。
   - 反映するのは**保存前の盤面**でもよい（従来どおり。日程表を開く・期間を変える・「最新表示」・講習データが変わったときに書き直す）。
+  - **トグルを切り替えたら、その講習の提出用QRをすぐ書き直す**（日程表の表示期間に関係なく、講習自身の期間で書き直す。`selectSchedulePublishChangedSessionIds`）。
+  - Excel の取り込みで**新しく増えた講習**も、画面から作ったときと同じく非公開で始める（フラグ ON の教室）。
 - **保護者QR**: `docs/spec-parent-portal.md` §0-8。
 - 集団授業の列（`groupClassSlots`）は講習全体の予定で、提出前に参加を選ぶのに要るので隠さない。
 
