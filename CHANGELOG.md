@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.685 (2026-11-03)
+
+- feat: 特別講習に「講師専用」を追加(確認リストのフリーメモ 20261103-105053536-c0f31680・オーナー確定 2026-11-03「生徒側から全部隠す」・機能フラグ `teacherOnlySpecialSession`＝開発用/テスト教室＋staging)。作成欄のチェックで `SpecialSessionRow.teacherOnly: true` を付け(作成時だけ・あとから付け外し不可・期間の重なりは今どおり禁止)、生徒日程表と印刷用生徒日程表(`toStudentFacingScheduleParams`)・生徒の提出用QRの発行(`ensureScheduleSubmissionTokens`・`ensureSubmissionTokens`)・盤面で生徒を講習として足す選択肢・未消化講習(`buildLectureStockEntries`)・保護者QR(`parentSchedule.ts` `readLectureSessions`＋functions の写し)・Excel 取り込みから外す。講師日程表・講師の提出用QRは従来どおり。一覧に「講師専用」の札、保護者への公開トグルは出さない。判定は `isTeacherOnlySpecialSession` / `selectStudentFacingSpecialSessions` に一本化し、隠す処理はデータで決まる(フラグに依らない)。仕様 `docs/spec-special-session-submission.md` §B-3・`docs/spec-parent-portal.md` §0-8 の 8。テスト `teacherOnlySpecialSession.test.ts`(19 件・修正なしで 10 件落ちる)。確認リスト to-1・to-2(版は v1.5.672 据え置き)・台帳の行を development-only へ。
+- fix: 講師専用の regression-reviewer 指摘を修正(INV-04)。M-1: 表示範囲が講師専用と生徒向けの両方に掛かると生徒向け講習の生徒QRが発行されなかった → 日程表と同じ選び方の `resolveSubmissionTokenTargetSessions`(生徒=講師専用を除いて選ぶ・講師=全件から選ぶ)で両方を処理。M-2: 講師専用を作ると講師QRの提出後が「準備中」のまま戻せなかった → 講師専用は作成時に非公開を付けず、提出用QRでは常に公開扱い(`resolveSubmissionSchedulePublished`)。L-1: Excel は講習 ID で講師専用の印を照合。L-2: 保護者QRは講師専用を捨てずに非公開として残す(src と functions の写し)。L-3: 生徒日程表からの不可コマ/希望数の保存は講師専用なら何もしない。回帰テスト 9 件(修正なしで全部落ちる)。
+
 ## v1.5.684 (2026-11-03)
 
 - fix: 確認リスト第107版(11/3 深夜の送信 受付 20261103-143905581〜20261103-144805226 への対応・版 v1.5.672 据え置き)。OK の qs-2・lp-6・jd-3・jd-4 を外し、tp-74 はオーナー指示「そもそも休みの日には置けないようにしてブロックして。この確認は不要」で外した(休日のコマへ生徒を置く操作は v1.5.653 の `closedDayPlacementGuard` で既に止めている・hd-1 は 10/30 OK。休日解除の席戻しのコードは過去データ用に残す)。lp-6 のメモで、講習の休み連絡の「休み」の説明から「(手動で置いた講習も戻る)」を消した(`PARENT_LECTURE_ABSENCE_CHOICES`・動きは不変)。フリーメモ 20261103-142142896-15b7a2a8 で、保護者QRの黄色い枠の注意書きを日程の一覧の下へ移し、2 行目を「アプリからの欠席連絡は、授業の前日まで可能です。」に(締切の判定は不変)、どのスマホでも 1 文 1 行の 3 行になるよう文字の大きさを一番長い行から決める(`resolveParentPortalNotesFontSizeCss`・上限 15px・nowrap・行頭の「・」は外した)。確認項目 pq-1(開発用教室だけ)。講師専用の特別講習(フリーメモ 20261103-105053536)は別ブランチで対応済みのため触れていない。仕様 `docs/spec-parent-portal.md` §0-6。

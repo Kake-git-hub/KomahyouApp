@@ -9,7 +9,7 @@ import { isFeatureEnabledForClassroom } from './featureRollout'
 import { appName, resolveCompanyReportHooks, roleLabel } from '@company/profile'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
-import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
+import { selectStudentFacingSpecialSessions, type SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell, StudentEntry } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
@@ -282,7 +282,7 @@ type OpenScheduleHtmlParams = {
   defaultPersonId?: string
   titleLabel: string
   classroomSettings: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates' | 'scheduleNotes'>
-  periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>[]
+  periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate' | 'teacherOnly'>[]
   specialSessions?: SpecialSessionRow[]
   // spec-group-lesson §A: 盤面の集団授業割当。生徒/講師日程表へ集団行・回数・給与として反映する。
   groupClassEntries?: GroupClassEntryMap
@@ -347,6 +347,39 @@ export function resolveDisplayedOverlappingSession<T extends { startDate: string
   const containingStart = overlapping.filter((s) => s.startDate <= startDate && s.endDate >= startDate)
   const candidates = containingStart.length > 0 ? containingStart : overlapping
   return candidates.slice().sort((a, b) => a.startDate.localeCompare(b.startDate))[0]
+}
+
+/**
+ * 生徒向けの日程表(生徒日程表・印刷用生徒日程表)へ渡す前に、講師専用の講習を外す(2026-11-03・spec-special-session-submission §B-3)。
+ * specialSessions(講習の切り替え・講習回数・提出用QR・登録)と periodBands(期間の帯・講習の選択肢)の両方から外す。
+ * ★講師向け(buildTeacherPayload・印刷用講師日程表)には使わない(講師専用も出す)。
+ */
+export function toStudentFacingScheduleParams<T extends Pick<OpenScheduleHtmlParams, 'specialSessions' | 'periodBands'>>(params: T): T {
+  return {
+    ...params,
+    specialSessions: params.specialSessions ? selectStudentFacingSpecialSessions(params.specialSessions) : params.specialSessions,
+    periodBands: params.periodBands ? selectStudentFacingSpecialSessions(params.periodBands) : params.periodBands,
+  }
+}
+
+/**
+ * 提出用QRを発行・後追い反映する講習(2026-11-03 レビュー指摘 M-1)。生徒日程表と講師日程表が QR を出す講習と**同じ選び方**にする。
+ * - 生徒の講習 = 講師専用を外した一覧から resolveDisplayedOverlappingSession(buildStudentPayload と同じ)
+ * - 講師の講習 = 全件から resolveDisplayedOverlappingSession(buildTeacherPayload と同じ)
+ * 同じ講習なら 1 件、違えば両方を返す(講師専用の講習は発行側で生徒を 0 人として扱う)。
+ * ★全件から 1 つだけ選ぶと、表示範囲が講師専用と生徒向けの両方に掛かったときに生徒向けの講習の生徒QRが発行されない。
+ */
+export function resolveSubmissionTokenTargetSessions<T extends { startDate: string; endDate: string; teacherOnly?: boolean }>(
+  specialSessions: T[] | undefined,
+  startDate: string,
+  endDate: string,
+): T[] {
+  const studentSession = resolveDisplayedOverlappingSession(selectStudentFacingSpecialSessions(specialSessions), startDate, endDate)
+  const teacherSession = resolveDisplayedOverlappingSession(specialSessions, startDate, endDate)
+  const targets: T[] = []
+  if (studentSession) targets.push(studentSession)
+  if (teacherSession && teacherSession !== studentSession) targets.push(teacherSession)
+  return targets
 }
 
 function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
@@ -928,7 +961,9 @@ export function buildCombinedRegularLessonsFromHistory(params: {
   return combinedLessons
 }
 
-export function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
+export function buildStudentPayload(rawParams: OpenStudentScheduleHtmlParams): SchedulePayload {
+  // 講師専用の講習は生徒日程表に一切出さない(講習の切り替え・講習回数・提出用QR・登録・埋め込みスクリプトの DATA.specialSessions)。
+  const params = toStudentFacingScheduleParams(rawParams)
   const basePayload = createBasePayload(params, params.students)
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
@@ -8347,7 +8382,8 @@ export function openTeacherScheduleHtml(params: OpenTeacherScheduleHtmlParams) {
 export function openAllScheduleHtml(params: OpenAllScheduleHtmlParams & { viewType?: 'all-student' | 'all-teacher' }) {
   registerScheduleQrBuilder()
   const viewType = params.viewType || 'all-student'
-  const payload = buildAllPayload(params)
+  // 印刷用生徒日程表も生徒向けなので講師専用の講習を外す(印刷用講師日程表は外さない)。
+  const payload = buildAllPayload(viewType === 'all-student' ? toStudentFacingScheduleParams(params) : params)
   const viewLabel = viewType === 'all-student' ? '印刷用生徒日程表' : '印刷用講師日程表'
   const popupWindow = createPopupWindow(params.targetWindowName || payload.titleLabel + '-' + viewType)
   if (!popupWindow) {

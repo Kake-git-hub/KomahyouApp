@@ -1,7 +1,7 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import { isSpecialSessionSchedulePublished, resolveNewSpecialSessionScheduleFields, setSpecialSessionSchedulePublished, sortSpecialSessionsForList, type SpecialSessionRow } from './specialSessionModel'
+import { isSpecialSessionSchedulePublished, isTeacherOnlySpecialSession, resolveNewSpecialSessionScheduleFields, resolveNewSpecialSessionTeacherOnlyFields, setSpecialSessionSchedulePublished, sortSpecialSessionsForList, type SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
@@ -15,12 +15,16 @@ type SpecialSessionScreenProps = {
   onLogout: () => void
   /** 機能フラグ lectureSchedulePublishToggle。ON のときだけ「日程」列(非公開／公開)を出し、新しい講習を非公開で作る。 */
   schedulePublishToggleEnabled?: boolean
+  /** 機能フラグ teacherOnlySpecialSession。ON のときだけ作成欄に「講師専用」チェックを出す(付けられるのは作成時だけ)。 */
+  teacherOnlyEnabled?: boolean
 }
 
 type SessionDraft = {
   label: string
   startDate: string
   endDate: string
+  // 講師専用(2026-11-03)。作成欄のチェック。フラグ OFF の教室では使わない(resolveNewSpecialSessionTeacherOnlyFields)。
+  teacherOnly?: boolean
 }
 
 type DateCalendarProps = {
@@ -390,6 +394,7 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
 
   const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
   const existingByLabel = new Map(fallback.map((row) => [normalizeSessionLabel(row.label), row]))
+  const existingById = new Map(fallback.map((row) => [row.id, row]))
   const timestamp = updateTimestamp()
 
   const importedSessions = rows
@@ -415,6 +420,11 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
         ...(existing
           ? (existing.schedulePublished !== undefined ? { schedulePublished: existing.schedulePublished } : {})
           : resolveNewSpecialSessionScheduleFields(options.schedulePublishToggleEnabled === true)),
+        // 講師専用(2026-11-03)も Excel に列を持たない。既存講習の印は落とさない(落とすと生徒側へ急に出る)。
+        // Excel で新しく増えた講習には付けない(付けられるのは画面の作成欄だけ)。
+        // ★講習 ID で照合する(レビュー指摘 L-1: 名前だけだと、名前を変えた行で印が落ちて生徒側へ急に出る・別 ID の同名の行が印を受け継ぐ)。
+        //   講習 ID の列が空の行だけ名前で照合する。
+        ...(isTeacherOnlySpecialSession(normalizeText(row['講習ID']) ? existingById.get(normalizeText(row['講習ID'])) : existing) ? { teacherOnly: true } : {}),
       } as SpecialSessionRow
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))
@@ -431,6 +441,8 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
       const session = resolveSessionIdentity(row, importedById, importedByLabel)
       const studentId = normalizeText(row['生徒ID'])
       if (!session || !studentId) continue
+      // 講師専用の講習には生徒の入力を取り込まない(生徒側から全部隠す講習に希望数や不可コマが入ると未消化講習へ出てしまう)。
+      if (isTeacherOnlySpecialSession(session)) continue
 
       nextStudentInputsBySessionId.get(session.id)![studentId] = {
         unavailableSlots: parseSlotList(row['参加不可コマ']),
@@ -569,7 +581,7 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout, schedulePublishToggleEnabled = false }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout, schedulePublishToggleEnabled = false, teacherOnlyEnabled = false }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -723,13 +735,15 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       studentInputs: {},
       createdAt: timestamp,
       updatedAt: timestamp,
-      ...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled),
+      // 講師専用の講習は公開トグルを出さないので非公開で始めない(項目を付けない=公開扱い・レビュー指摘 M-2)。
+      ...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled && !(teacherOnlyEnabled && draft.teacherOnly === true)),
+      ...resolveNewSpecialSessionTeacherOnlyFields(teacherOnlyEnabled, draft.teacherOnly === true),
     }, ...current])
     const nextDraft = createDraft()
     setDraft(nextDraft)
     setDraftVisibleStartMonth(toMonthKey(nextDraft.startDate))
     setShowCreateForm(false)
-    setStatusMessage('特別講習データを追加しました。')
+    setStatusMessage(teacherOnlyEnabled && draft.teacherOnly === true ? '講師専用の特別講習データを追加しました。' : '特別講習データを追加しました。')
   }
 
   return (
@@ -815,6 +829,20 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                     showRange
                   />
                 </section>
+                {teacherOnlyEnabled ? (
+                  <label className="special-session-teacher-only-field" data-testid="special-data-draft-teacher-only-field">
+                    <input
+                      type="checkbox"
+                      checked={draft.teacherOnly === true}
+                      onChange={(event) => setDraft((current) => ({ ...current, teacherOnly: event.target.checked }))}
+                      data-testid="special-data-draft-teacher-only"
+                    />
+                    <span>
+                      <strong>講師専用(生徒・保護者には出さない)</strong>
+                      <small>講師の予定だけを集めます。生徒日程表・生徒の提出用QR・保護者QR・講習回数には出ず、講師日程表と講師の提出用QRだけに出ます。作成したあとは変えられません。</small>
+                    </span>
+                  </label>
+                ) : null}
                 <div className="basic-data-actions-row">
                   <button className="primary-button" type="button" onClick={createSession} data-testid="special-data-create-button">特別講習を作成</button>
                 </div>
@@ -833,11 +861,16 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                       <td>
                         <div className="special-session-list-name" data-testid={`special-data-session-summary-${row.id}`}>
                           <strong>{row.label}</strong>
+                          {isTeacherOnlySpecialSession(row) ? <span className="special-session-teacher-only-badge" data-testid={`special-data-teacher-only-badge-${row.id}`}>講師専用</span> : null}
                         </div>
                       </td>
                       <td>{row.startDate && row.endDate ? `${row.startDate} 〜 ${row.endDate}` : '未設定'}</td>
                       {schedulePublishToggleEnabled ? (
                         <td>
+                          {/* 講師専用の講習は保護者QRに出さないので公開トグルを出さない(保存された公開の値はいじらない・オーナー確定 2026-11-03)。 */}
+                          {isTeacherOnlySpecialSession(row) ? (
+                            <span className="basic-data-muted-inline" data-testid={`special-data-schedule-publish-teacher-only-${row.id}`}>講師専用のため出しません</span>
+                          ) : (
                           <button
                             className={`secondary-button slim special-session-publish-toggle${isSpecialSessionSchedulePublished(row) ? ' is-published' : ''}`}
                             type="button"
@@ -848,6 +881,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                           >
                             {isSpecialSessionSchedulePublished(row) ? '公開中' : '非公開'}
                           </button>
+                          )}
                         </td>
                       ) : null}
                       <td><span className="basic-data-muted-inline">{row.updatedAt}</span></td>

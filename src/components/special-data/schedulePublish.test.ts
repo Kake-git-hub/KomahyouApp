@@ -125,7 +125,8 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
   const APP = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
 
   it('講習を作るときは resolveNewSpecialSessionScheduleFields(フラグ)で初期値を付ける', () => {
-    expect(SCREEN).toContain('...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled),')
+    // 講師専用で作るときだけ非公開の項目を付けない(2026-11-03 レビュー指摘 M-2・teacherOnlySpecialSession.test.ts)。
+    expect(SCREEN).toContain('...resolveNewSpecialSessionScheduleFields(schedulePublishToggleEnabled && !(teacherOnlyEnabled && draft.teacherOnly === true)),')
   })
 
   it('トグル列はフラグ ON のときだけ出る', () => {
@@ -145,7 +146,8 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
   })
 
   it('提出用QRへ載せる組まれたコマは、フラグ OFF なら常に公開・ON なら講習の公開状態で講習コマを含めるか決める', () => {
-    expect(APP).toContain("const schedulePublished = !isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom) || isSpecialSessionSchedulePublished(session)")
+    // 判定は resolveSubmissionSchedulePublished(フラグ OFF=公開・講師専用=公開・それ以外は schedulePublished)へ切り出した(2026-11-03)。
+    expect(APP).toContain("const schedulePublished = resolveSubmissionSchedulePublished(session, isFeatureEnabledForClassroom('lectureSchedulePublishToggle', actingClassroom))")
     expect(APP).toContain('includeLectureLessons: schedulePublished,')
     // 新規トークンにも既発行トークンにも公開状態を書く。
     expect(APP).toContain('await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers, { schedulePublished })')

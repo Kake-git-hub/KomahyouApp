@@ -188,8 +188,8 @@ describe('確認リストの項目定義', () => {
     // 第104版(2026-11-03): d-5・ai-1 を外し、開発用教室だけの d-6・d-7・sc-4・bk-1 を足した。
     // 第105版(2026-11-03): vc-1・d-6・d-7・sc-4・bk-1 は OK で外し、開発用教室だけの qr-1・sc-5・fm-1・d-8・dv-1 を足した。
     // 第106版(2026-11-03): qr-1・sc-5・fm-1・d-8・dv-1・tb-2 も OK で外した(残る開発用教室だけの項目は qs-2・lp-6)。
-    // 第107版(2026-11-03): qs-2・lp-6 は OK で外した。保護者QRの黄色い枠の確認 pq-1 は開発用教室だけ。
-    const developmentOnly: string[] = ['pq-1']
+    // 第107版(2026-11-03): qs-2・lp-6 は OK で外した。保護者QRの黄色い枠の確認 pq-1 と講師専用の講習の確認 to-1・to-2 は開発用教室だけ。
+    const developmentOnly: string[] = ['pq-1', 'to-1', 'to-2']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
@@ -229,7 +229,8 @@ describe('確認リストの項目定義', () => {
     // 第105版(2026-11-03): 11/3 午後の送信を受けて OK の 8 件を外し、qs-2 を書き換え、qs-3・qr-1・lp-5・sc-5・fm-1・d-8・dv-1 を足した(lp-3 はオーナー判断待ちで残す)。
     // 第106版(2026-11-03): 11/3 夜の送信で OK の 11 件を外し、qs-2 を書き換え(iOS Safari)、lp-6(講習の休みの説明)を足した。
     // 第107版(2026-11-03): qs-2・lp-6・jd-3・jd-4 は OK、tp-74 はオーナー指示(休日には置けないので確認不要)で外し、pq-1 を先頭に足した。
-    expect(ids).toEqual(['pq-1', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'tp-73', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
+    // 同じ第107版で、講師専用の講習の確認 to-1・to-2 を pq-1 の後に足した(開発用教室だけ・v1.5.685)。
+    expect(ids).toEqual(['pq-1', 'to-1', 'to-2', 'tp-68', 'tp-51', 'tp-64', 'tp-65', 'tp-66', 'tp-67', 'tp-71', 'tp-72', 'jd-1', 'jd-2', 'tp-73', 'tp-75', 'tp-57', 'tp-58', 'tp-59', 'tp-69', 'tp-70'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -878,6 +879,19 @@ describe('書き換えた項目の下書きを消す(clearReworkedVerificationCh
     const panel = readFileSync(new URL('../components/developer-report/VerificationChecklistPanel.tsx', import.meta.url), 'utf8')
     expect(panel).toContain('const cleaned = clearReworkedVerificationChecklistEntries(loaded)')
     expect(panel).toContain('if (cleaned !== loaded) writeStorage(storageKey, serializeVerificationChecklistDraft(cleaned))')
+  })
+})
+
+describe('第107版: 講師専用の特別講習(フリーメモ 20261103-105053536-c0f31680)', () => {
+  it('to-1・to-2 は開発用教室だけに出し、v1.5.685 で足した項目。版は据え置き', () => {
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    for (const id of ['to-1', 'to-2']) {
+      expect(byId.get(id)?.introducedIn, id).toBe('v1.5.685')
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
+    }
+    expect(byId.get('to-1')?.ownerDecision).toContain('生徒側から全部隠し')
+    expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).toContain('20261103-105053536-c0f31680')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.672')
   })
 })
 

@@ -106,6 +106,18 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-11-03',
   },
   {
+    id: 'teacher-only-special-session',
+    title: '講師だけが予定を出す特別講習',
+    stage: 'development-only',
+    who: 'owner',
+    summary: '特別講習を「講師専用」で作ると、生徒日程表・生徒のQR・保護者QR・講習回数には出ず、講師日程表と講師のQRだけに出る。開発用・テスト教室と検証環境だけで動作中。',
+    nextAction: 'オーナーが確認リストで見る。問題なければ、全教室に出すかオーナーが決める。',
+    notes: '機能フラグ teacherOnlySpecialSession(scope staging-environment・作成欄のチェックを出すかだけ)。隠す処理はデータ SpecialSessionRow.teacherOnly で決まりフラグに依らない(isTeacherOnlySpecialSession / selectStudentFacingSpecialSessions)。オーナー確定 2026-11-03: 生徒側から全部隠す・期間はほかの講習と重ねない(今どおり)・印は作成時だけ(あとから付け外ししない)・講師専用では保護者への公開トグルを出さない。隠す場所は生徒日程表と印刷用生徒日程表(toStudentFacingScheduleParams)・生徒の提出用QRの発行(App.tsx ensureScheduleSubmissionTokens と ensureSubmissionTokens)・盤面の講習の選択(addableSpecialSessions)・未消化講習(buildLectureStockEntries)・保護者QR(parentSchedule.ts readLectureSessions と functions の写し)・Excel 取り込み。確認リストのフリーメモ 20261103-105053536-c0f31680(対応済み)。保護者QRの写しを変えたので Functions のデプロイが要る。',
+    featureKeys: ['teacherOnlySpecialSession'],
+    references: ['docs/spec-special-session-submission.md §B-3', 'docs/spec-parent-portal.md §0-8', 'docs/plan-2026-11-03-teacher-only-special-session-handoff.md'],
+    updatedOn: '2026-11-03',
+  },
+  {
     id: 'parent-portal-qr',
     title: '保護者向けQR(休みの連絡)',
     stage: 'awaiting-owner',
@@ -200,17 +212,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── まだ作っていないもの(計画あり) ──────────────────────────────────────────
-  {
-    id: 'teacher-only-special-session',
-    title: '講師だけが予定を出す特別講習',
-    stage: 'planned',
-    who: 'claude',
-    summary: '特別講習に「講師専用」の印を付け、生徒日程表・生徒の提出用QR・保護者QR・講習回数には出さず、講師日程表と講師の提出用QRだけに出す。まだ作っていない。',
-    nextAction: 'Claude が別のセッションで作る。期間の重なりなど 3 点を着手前にオーナーへ確認する。',
-    notes: 'オーナー決定 2026-11-03「生徒側から全部隠す」・開発用教室で先行(機能フラグ staging-environment)。確認リストのフリーメモ 20261103-105053536-c0f31680。引き継ぎ書に隠す場所の一覧と完了の定義。',
-    references: ['docs/plan-2026-11-03-teacher-only-special-session-handoff.md'],
-    updatedOn: '2026-11-03',
-  },
   {
     id: 'issue-backlog-2026-07',
     title: '小さな改善の積み残し(8 件)',

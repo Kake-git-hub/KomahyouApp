@@ -230,6 +230,16 @@ export const featureRolloutRegistry = {
     scope: 'staging-environment',
     description: 'Special-session data: per-session schedule publish toggle (hide lecture lessons from submission QR / parent portal until published).',
   },
+  // 講師専用の特別講習(docs/spec-special-session-submission.md §B-3・オーナー確定 2026-11-03「生徒側から全部隠す」)。
+  // ON: 特別講習の作成欄に「講師専用」チェックを出す。チェックして作った講習は生徒日程表・生徒の提出用QR・保護者QR・講習回数に出さず、
+  //   講師日程表と講師の提出用QRだけに出す。
+  // OFF: チェックを出さない(項目も付けない)。★隠す処理はデータ(SpecialSessionRow.teacherOnly)だけで決まり、フラグに依らない
+  //   (フラグを戻した教室でも、講師専用で作った講習が生徒側へ急に出てこないようにする)。
+  // サーバー側(保護者QR)はスナップショットの teacherOnly を読むだけで、フラグの判定は持たない。
+  teacherOnlySpecialSession: {
+    scope: 'staging-environment',
+    description: 'Special-session data: "teacher only" checkbox at creation (hide the session from student schedule, student QR, parent portal and lecture counts).',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

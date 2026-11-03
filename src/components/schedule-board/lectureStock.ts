@@ -1,6 +1,6 @@
 import { formatStudentSelectionLabel, resolveScheduledStatus, type StudentRow } from '../basic-data/basicDataModel'
 import type { SubjectLabel } from './types'
-import { resolveEffectiveUnavailableSlots, type SpecialSessionRow } from '../special-data/specialSessionModel'
+import { resolveEffectiveUnavailableSlots, selectStudentFacingSpecialSessions, type SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { LectureStockCountMap, ManualLectureStockOrigin } from '../../types/appState'
 
 export type LectureStockEntry = {
@@ -23,7 +23,8 @@ export function buildLectureStockEntries(params: {
   const { specialSessions, students, referenceDate } = params
   const studentMap = new Map(students.map((student) => [student.id, student]))
 
-  return specialSessions
+  // 講師専用の講習(2026-11-03)は生徒の講習として数えない(未消化講習・生徒授業台帳に出さない)。
+  return selectStudentFacingSpecialSessions(specialSessions)
     .flatMap((session) => Object.entries(session.studentInputs).flatMap(([studentId, input]) => {
       if (!input.countSubmitted) return []
       if (input.regularOnly) return []

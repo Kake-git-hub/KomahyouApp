@@ -195,6 +195,44 @@ export type SpecialSessionRow = {
    * 判定は必ず isSpecialSessionSchedulePublished を通す(`=== true` で読むと既存講習が非公開に化ける)。
    */
   schedulePublished?: boolean
+  /**
+   * 講師専用の講習(オーナー確定 2026-11-03・機能フラグ teacherOnlySpecialSession)。講師の予定(出勤できないコマ)だけを集める。
+   * - true … 生徒側から全部隠す: 生徒日程表(講習の切り替え・講習回数・提出用QR)・生徒の提出用QRの発行・保護者QR・
+   *   盤面で生徒を講習として足すときの講習の選択・未消化講習に出さない。講師日程表と講師の提出用QRには従来どおり出す。
+   * - 未設定 / false … 従来どおり(生徒にも出る)。
+   * ★作成するときにだけ付けられる(あとから付け外ししない・オーナー確定 2026-11-03)。発行済みの生徒QRが残る状態を作らないため。
+   * ★判定は必ず isTeacherOnlySpecialSession を通す(各所で `=== true` を散らさない)。生徒向けの一覧は selectStudentFacingSpecialSessions。
+   */
+  teacherOnly?: boolean
+}
+
+/**
+ * 提出用QRの文書に書く「日程公開」(2026-11-03)。トグルが使えない教室(フラグ OFF)は常に公開。
+ * ★講師専用の講習は公開トグルを出さないので常に公開扱い(レビュー指摘 M-2: 非公開のままだと講師の提出後の画面が「準備中」から戻せない)。
+ */
+export function resolveSubmissionSchedulePublished(session: Pick<SpecialSessionRow, 'schedulePublished' | 'teacherOnly'>, toggleEnabled: boolean): boolean {
+  return !toggleEnabled || isTeacherOnlySpecialSession(session) || isSpecialSessionSchedulePublished(session)
+}
+
+/** 講師専用の講習か(生徒・保護者には出さない)。true のときだけ講師専用。 */
+export function isTeacherOnlySpecialSession(session: Pick<SpecialSessionRow, 'teacherOnly'> | null | undefined): boolean {
+  return session?.teacherOnly === true
+}
+
+/**
+ * 生徒・保護者に見せる講習だけに絞る(講師専用を除く)。生徒日程表の payload・盤面で生徒を講習として足す選択・未消化講習が使う。
+ * 講師側(講師日程表・講師の提出用QR・講師の自動配置)には使わない(講師専用も出す)。
+ */
+export function selectStudentFacingSpecialSessions<T extends Pick<SpecialSessionRow, 'teacherOnly'>>(sessions: readonly T[] | null | undefined): T[] {
+  return (sessions ?? []).filter((session) => !isTeacherOnlySpecialSession(session))
+}
+
+/**
+ * 講習を新しく作るときの講師専用の項目。チェックが使える教室(機能フラグ ON)でチェックしたときだけ teacherOnly: true を付ける。
+ * それ以外(フラグ OFF・チェックなし)は項目を付けない(未設定=従来どおり)。
+ */
+export function resolveNewSpecialSessionTeacherOnlyFields(featureEnabled: boolean, checked: boolean): Pick<SpecialSessionRow, 'teacherOnly'> {
+  return featureEnabled && checked ? { teacherOnly: true } : {}
 }
 
 /** 講習の日程を保護者へ見せてよいか。未設定(既存の講習)は公開扱い。false のときだけ非公開。 */
