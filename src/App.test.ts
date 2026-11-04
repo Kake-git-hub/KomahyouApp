@@ -1081,7 +1081,7 @@ describe('開発用教室から開発者画面へ戻るときの保存失敗は�
   it('ログアウトはその判定で保存を積み、失敗時はダイアログ・控え・版数衝突の停止を出さずに抜ける', async () => {
     const { readFileSync } = await import('node:fs')
     const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-    expect(app).toContain('const silentFailure = shouldSilenceSaveFailureOnDeveloperReturn({ screen: screenRef.current, role: currentUser?.role, isDevelopmentClassroom: isActingDevelopmentClassroomRef.current })\n    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence({ silentFailure })')
+    expect(app).toContain('const silentFailure = shouldSilenceSaveFailureOnDeveloperReturn({ screen: screenRef.current, role: currentUser?.role, isDevelopmentClassroom: isActingDevelopmentClassroomRef.current })\n    const queuedSnapshot = shouldPersistBeforeLogout ? queueCurrentWorkspaceSnapshotPersistence({ silentFailure }) : null')
     expect(app).toContain('if (!isStaleSnapshotConflictError(error) && !nextItem.silentFailure) {')
     // 黙る分岐は版数衝突の処理(remoteStaleConflictRef を立てる)より前で return する。
     const silentIndex = app.indexOf('if (nextItem.silentFailure) {')

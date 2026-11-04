@@ -3727,9 +3727,13 @@ function AuthenticatedApp() {
   }, [remoteLoginEmail])
 
   const logout = useCallback(() => {
-    syncCurrentClassroomData(actingClassroomId)
+    // 開発者画面からのログアウトでは教室を保存しない(2026-11-04)。開発者画面へ戻った時点で保存は出しているので、
+    // ここで最後に開いていた教室(本番教室のこともある)の保存を出すと、サインアウトと競合して「ログインしてください」で断られ、
+    // 次のログイン後に「日大前の保存に失敗」のような誤った失敗表示が出ていた(書き込みは起きていない)。
+    const shouldPersistBeforeLogout = shouldSyncCurrentClassroomBeforeOpen(screenRef.current, currentUser?.role)
+    if (shouldPersistBeforeLogout) syncCurrentClassroomData(actingClassroomId)
     const silentFailure = shouldSilenceSaveFailureOnDeveloperReturn({ screen: screenRef.current, role: currentUser?.role, isDevelopmentClassroom: isActingDevelopmentClassroomRef.current })
-    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence({ silentFailure })
+    const queuedSnapshot = shouldPersistBeforeLogout ? queueCurrentWorkspaceSnapshotPersistence({ silentFailure }) : null
     setSubmissionAcknowledgements([])
     resetParentAbsenceNoticeState()
     // 【本番データ混入防止】アカウント切替で前セッションの「直前に戻す(undo)」が残ると、
