@@ -2734,6 +2734,16 @@ tr.sa-group-row td {
   box-shadow: inset 3px 0 0 #2e7d32;
 }
 
+/* 講師の休み（docs/spec-template-conflict-v2.md §2-4・§5・段 3・機能フラグ templateDiffApply の教室の盤面だけ）。講師なしの机をグレーにし、
+   「休」＋休みにした講師名を灰色で出す。別の講師を置けば通常の表示。盤面 PDF は stripTemplatePendingLowerForPdf がクラスと文字を外す。 */
+.sa-teacher.sa-teacher-rest {
+  background: #eceff1;
+}
+.sa-teacher-rest-label {
+  color: #78909c;
+  font-weight: 600;
+}
+
 /* A-12（オーナー決定 2026-11-01・spec-template-behavior §H Q36）: 同日移動の写し（日の中で手で動かした通常授業）で、テンプレが同じ日の別のコマにも
    同じ授業を置く／テンプレに無くなったもの。手入力データとして残し、保留と同じ緑＋左の縦線で知らせる（保留ではないので操作の制限は無い）。
    名前の行の短い帯（.sa-student-copy-note）とツールチップに注意文。盤面 PDF は stripTemplatePendingLowerForPdf が両方外す。 */

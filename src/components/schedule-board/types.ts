@@ -172,6 +172,14 @@ export type DeskCell = {
    * teacher がこの机の講師と一致し、かつ非 manual のときだけ有効（講師が替わった／手で置き直した後の古い印は表示に使わない＝isShiftedTemplateTeacherDesk）。
    */
   templateTeacherShift?: { teacher: string; fromDeskIndex: number }
+  /**
+   * 講師の休み（docs/spec-template-conflict-v2.md §2-4・段 3・機能フラグ templateDiffApply の教室だけ書く）。講師欄のメニューの「休み」で付ける手入力の記録。
+   * 休みにした講師の名前と ID を残し、机の teacher は空にする（講師日程表・PDF・保護者 QR は盤面の写しなので講師なしの机として出る・INV-13 の考え方）。
+   * そのコマ（日付×時限）のどの机にも、テンプレはこの講師を置かない（休みが勝つ・判定は teacherRest.ts の isTeacherRestedInCell）。
+   * 別の講師を手で置いても記録は残る（teacher にその講師）。解除は同じボタンをもう一度押す（記録を消す）。削除記録（teacherAssignmentSource='deleted'）とは別。
+   * sessionId: 日程表登録（QR）の講師を休みにしたときの講習 ID（起動時の自己修復が「室長が外した」と数え、置き直さないため）。
+   */
+  teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]

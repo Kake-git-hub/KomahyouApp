@@ -120,15 +120,16 @@ export function findManualTeacherDeskElsewhere(deskIndex: number, teacher: Pick<
 /**
  * §9-15（オーナー決定 2026-11-05）: 手置き講師 X の机にテンプレが別の講師 W を置き、テンプレが同じコマの別の机にも X を置く形では、その机の講師は X のまま
  * （W を置かず講師欄は 1 行・別の机にも X を置かない）。X がテンプレの別の机に居るかを見る（差分反映と再マージが同じこの関数で判定する）。
+ * isRested（段 3 の講師の休み §2-4）: そのコマで休みの講師はテンプレの机に「居ない」と数える（休みの X は机に置かれない方が勝つ＝§9-15 の「X のまま」で W を押さえない）。
  */
-export function isManualTeacherAlsoInTemplateElsewhere(deskIndex: number, manualTeacher: Pick<DeskCell, 'teacher'>, templateDesks: ReadonlyArray<Pick<DeskCell, 'teacher'>>, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
+export function isManualTeacherAlsoInTemplateElsewhere(deskIndex: number, manualTeacher: Pick<DeskCell, 'teacher'>, templateDesks: ReadonlyArray<Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>>, aliases: TeacherAliasResolver = defaultTeacherAliases, isRested: (templateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => boolean = () => false): boolean {
   if (!manualTeacher.teacher.trim()) return false
-  return templateDesks.some((templateDesk, index) => index !== deskIndex && templateDesk.teacher.trim() !== '' && isSameTeacherByAliases(templateDesk.teacher, manualTeacher.teacher, aliases))
+  return templateDesks.some((templateDesk, index) => index !== deskIndex && templateDesk.teacher.trim() !== '' && isSameTeacherByAliases(templateDesk.teacher, manualTeacher.teacher, aliases) && !isRested(templateDesk))
 }
 
 /**
- * 講師の休み（§2-4・段 3 で足す）の差し込み口。段 2 では常に「休みでない」。段 3 は盤面の休みの記録（日付×時限×講師 ID）をここで引く。
- * 差分反映と再マージの両方がこの関数を通す（片方だけ休みを見ると不動点が崩れる）。
+ * 講師の休み（§2-4・段 3）の差し込み口。盤面の休みの記録（日付×時限×講師）から teacherRest.ts の buildTemplateTeacherRestPredicate が作る。
+ * 差分反映と再マージの両方がこの関数を通す（片方だけ休みを見ると不動点が崩れる）。休みが無い教室・フラグ OFF の教室は noTemplateTeacherRest。
  */
 export type TemplateTeacherRestPredicate = (cell: Pick<SlotCell, 'dateKey' | 'slotNumber'>, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => boolean
 export const noTemplateTeacherRest: TemplateTeacherRestPredicate = () => false
@@ -143,7 +144,8 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
   const blockers = collectTemplateBlockersInCell(boardCell, pendingDesks)
   // §1-1 #2: 同じ日の中で手で動かしたテンプレの授業（写し）の元の時限には、次のテンプレ反映までテンプレの同じ授業を置き直さない（移動の抑止キーの代わり）。
   const movedAway = sameDayMoveSources.filter((source) => source.slotNumber === managedCell.slotNumber)
-  if (blockers.students.length === 0 && blockers.teachers.length === 0 && movedAway.length === 0) return managedCell
+  // 休みの述語（§2-4）を渡されたときは、ほかの取り除きが無くてもテンプレの講師を休みと突き合わせる（早く返すと休みの講師が置かれる）。
+  if (blockers.students.length === 0 && blockers.teachers.length === 0 && movedAway.length === 0 && isTeacherOnRest === noTemplateTeacherRest) return managedCell
   const isMovedAway = (student: StudentEntry) => movedAway.some((source) => source.subject === student.subject && isSameTemplateStudent(source.student, student))
   let changed = false
   const desks = managedCell.desks.map((desk, deskIndex) => {
@@ -156,7 +158,7 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
       }
     }
     const ownManual = blockers.teachers.find((blocker) => blocker.deskIndex === deskIndex)
-    const keptByManualX = Boolean(ownManual) && !isSameTeacherByAliases(ownManual!.teacher.teacher, next.teacher, aliases) && isManualTeacherAlsoInTemplateElsewhere(deskIndex, ownManual!.teacher, managedCell.desks, aliases)
+    const keptByManualX = Boolean(ownManual) && !isSameTeacherByAliases(ownManual!.teacher.teacher, next.teacher, aliases) && isManualTeacherAlsoInTemplateElsewhere(deskIndex, ownManual!.teacher, managedCell.desks, aliases, (templateDesk) => isTeacherOnRest(managedCell, templateDesk))
     if (next.teacher.trim() && (keptByManualX || findManualTeacherDeskElsewhere(deskIndex, next, blockers.teachers, aliases) >= 0 || isTeacherOnRest(managedCell, next))) {
       changed = true
       next = { ...next, teacher: '', teacherAssignmentTeacherId: undefined }
@@ -397,7 +399,7 @@ function applyRulesToDesk(params: {
   const hasUpperStudents = Boolean(upperSlots[0] || upperSlots[1])
   if (manualTeacher) {
     if (!placeableTemplateTeacher || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
-    else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases)) {
+    else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases, (templateDesk) => params.isTeacherOnRest(cell, templateDesk))) {
       // §9-15: X がテンプレの別の机にも居る → この机は X のまま（W を置かない・講師欄は 1 行）。別の机の X は §2-3 で置かない。
       upperTeacher = pickTeacher(manualTeacher)
       params.teacherNotes.push({ kind: 'teacher-kept', teacherName: placeableTemplateTeacher.teacher, templateTeacher: manualTeacher.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })

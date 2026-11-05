@@ -23,6 +23,7 @@ import { buildTemplatePendingTeacherChoiceConfirm, isTemplatePendingTeacherOnly,
 import { buildTemplatePendingList, describeTemplatePendingTeacherReason } from './templatePendingList'
 import { buildTeacherPayload } from '../../utils/scheduleHtml'
 import { buildTeacherSheetViewModel } from '../../utils/scheduleViewData'
+import { releaseDeskTeacherRest, restDeskTeacher } from './teacherRest'
 
 const WEEK_START = '2026-10-05'
 const WEEK_END = '2026-10-11'
@@ -562,6 +563,23 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     expect(cellOf(again.nextWeeks).desks).toEqual(cell.desks)
   })
 
+  // 段 3 × §9-15（統合 2026-11-05）: テンプレの別の机 1 の倉島がこのコマで休み → 休みの倉島は机に置かれない方が勝つ。テンプレはこのコマに倉島を置かないので
+  // §9-15 の前提（テンプレが別の机にも X を置く）が無く、机 0 は §2-3 の 2 行目どおり（上＝田村／下＝手置きの倉島・保留）。机 1 は講師なしで休みの記録が残る。
+  // 休みを §9-15 が見ないと、机 0 は倉島のまま田村を押さえてしまう（置かれない倉島を理由に W を消す）。反映・再マージ 2 回で不変（INV-03）。
+  it('§9-15 × 講師の休み: 机 1 の倉島が休み × テンプレが机 0 に田村・机 1 に倉島 → 机 1 に倉島は置かない（休みが勝つ）・机 0 は「倉島のまま」にしない（上＝田村／下＝倉島）', () => {
+    const rows = [row('r0', 'tD', 'sC'), row('r1', 'tB', 'sX')]
+    const restedOnDesk1 = mutateDesk(boardWith(MAKEUP_A, 0), 1, (desk) => ({ ...desk, teacher: '', teacherAssignmentTeacherId: undefined, teacherRest: { teacher: '倉島', teacherId: 'tB' } }))
+    const saved = save(restedOnDesk1, rows)
+    const cell = cellOf(saved.nextWeeks)
+    expect(cell.desks[1]).toMatchObject({ teacher: '', teacherRest: { teacher: '倉島' } })
+    expect(cell.desks[0].teacher).toBe('田村')
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher?.teacher).toBe('倉島')
+    expect(saved.studentNotes.some((note) => note.kind === 'teacher-kept')).toBe(false)
+    expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(0)
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    expect(cellOf(resaveSame(saved, rows).nextWeeks).desks).toEqual(cell.desks)
+  })
+
   it('§9-1 × QR（§9-13）: QR の倉島の机 1 があるコマで、テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（QR の講師も手入力が勝つ）', () => {
     const rows = [row('r0', 'tB', 'sC')]
     const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 'tB' }))
@@ -569,5 +587,36 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     expect(cellOf(saved.nextWeeks).desks.map((desk) => desk.teacher)).toEqual(['', '倉島'])
     expect(cellOf(saved.nextWeeks).desks[1].teacherAssignmentSource).toBe('schedule-registration')
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+  })
+})
+
+// 第 2 版 段 3（spec-template-conflict-v2 §2-3 の表の 5 行目・§2-4・§9-7）: 講師の休み。テンプレの講師 D（田村）を休みにした机は講師なし（休みが勝つ）。
+// 休みの机に手置き講師 B（倉島）を置くと、テンプレの D は休みで置かないので講師欄は 2 行にならない（B の 1 行・休みの記録は残る）。
+// 休みを解除すると D が戻り、手置きの B とは講師欄 2 行（§2-3 の 2 行目）になる＝2 行にしないのは休みの記録のおかげ。反映・再マージ 2 回で不変（INV-03）。
+describe('講師の休み（§2-4）: 休みの記録は反映で消えない・休みの机に手で置いた講師は 1 行', () => {
+  const restedBoard = (extra: Partial<DeskCell> = {}) => mutateDesk(buildWeek(NEW_ROWS), 0, (desk) => ({ ...restDeskTeacher(desk)!, ...extra }))
+  it('D を休みにした机 0 × 反映 → 講師なし・生徒 C は残る・記録は残る・保留なし。再マージ 2 回で不変。講師日程表の D のページに C は出ない', () => {
+    const saved = save(restedBoard(), NEW_ROWS)
+    expect(desk0(saved.nextWeeks)).toMatchObject({ teacher: '', teacherRest: { teacher: '田村', teacherId: 'tD' } })
+    expect(ids(desk0(saved.nextWeeks))).toEqual(['sC', null])
+    expect(saved.nextPendingDesks).toEqual({})
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, NEW_ROWS, [])
+    expect(teacherSheetPeople(saved.nextWeeks, 'tD')).toEqual([])
+  })
+  it('休みの机 0 に B を手で置く × 反映 → B の 1 行（講師欄 2 行にならない）・休みの記録は残る。C は B のページにだけ出る', () => {
+    const saved = save(restedBoard(MANUAL_TEACHER_B), NEW_ROWS)
+    expect(desk0(saved.nextWeeks)).toMatchObject({ teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '田村' } })
+    expect(saved.nextPendingDesks).toEqual({})
+    expect(saved.summary.manualTeacherPending).toBe(0)
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, NEW_ROWS, [])
+    expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual(['千葉'])
+    expect(teacherSheetPeople(saved.nextWeeks, 'tD')).toEqual([])
+  })
+  it('休みを解除して B が残る机 0 × 反映 → D が戻り、講師欄だけ 2 行（上＝D／下＝B）。休みの記録が無ければ §2-3 の 2 行目どおり', () => {
+    const released = mutateDesk(restedBoard(MANUAL_TEACHER_B), 0, (desk) => releaseDeskTeacherRest(desk)!)
+    const saved = save(released, NEW_ROWS)
+    expect(desk0(saved.nextWeeks)).toMatchObject({ teacher: '田村', manualTeacher: false })
+    expect(desk0(saved.nextWeeks).teacherRest).toBeUndefined()
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toMatchObject({ teacher: '倉島' })
   })
 })

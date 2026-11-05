@@ -19,6 +19,8 @@ import {
   applySaveToState, balances, buildWeek, cellOf, liveIds, OLD_ROWS, remerge, row, save, settings, slotFilterBetween, students, transferredBoard,
   THU, THU_CELL, WED, WED_CELL, WEEK_END, type SavedState,
 } from './templateTransferFollow.fixture'
+import { buildTemplatePendingDeskKey } from './templatePendingDesks'
+import { computeToggleDeskTeacherRest, hasDeskTeacherRest } from './teacherRest'
 
 const RANGE = { fromDate: WED, toDate: WEEK_END }
 function audit(state: SavedState, rows: RegularLessonRow[]) {
@@ -361,6 +363,62 @@ describe('第 2 版: 盤面の操作 × テンプレ保存の全ペアで、保�
           const ids = liveIds(state.weeks, cell.id)
           expect(new Set(ids).size, `${label} ${cell.id}`).toBe(ids.length)
         }
+      }
+    })
+  }
+})
+
+// 第 2 版 段 3（spec-template-conflict-v2 §2-4・§9-4・§9-7・§9-8）: 講師の休み × テンプレ保存の全ペア（順序つき）。INV-03（同じ保存 2 回・再マージ 2 回で不変）と
+// INV-01（同じ講師はそのコマの 1 机まで）・INV-02（休みの記録は反映で消えない）を、操作の順に依らずに見る。丸ごと振替の無い水 5限（机 0=田中+A・机 1=鈴木+B）。
+// 盤面の操作は保留（2 行）の机では行わない（画面も講師メニューを開かない）。各操作の後にテンプレを保存（反映）する。
+describe('講師の休み × テンプレ保存の全ペア（INV-03・INV-01・INV-02）', () => {
+  type RestOp = { name: string; board?: (state: SavedState) => SavedState; rows?: (rows: RegularLessonRow[]) => RegularLessonRow[] }
+  const deskIndexWhere = (state: SavedState, predicate: (desk: SlotCell['desks'][number]) => boolean) => cellOf(state.weeks, WED_CELL).desks.findIndex((desk) => !state.pendingDesks[buildTemplatePendingDeskKey(WED_CELL, desk.id)] && predicate(desk))
+  const toggleAt = (state: SavedState, deskIndex: number): SavedState => {
+    if (deskIndex < 0) return state
+    const result = computeToggleDeskTeacherRest({ weeks: state.weeks, weekIndex: 0, cellId: WED_CELL, deskIndex, resolveTeacherId: (name) => (name === '田中' ? 't1' : undefined) })
+    return result.status === 'blocked' ? state : { ...state, weeks: result.nextWeeks }
+  }
+  const OPS: RestOp[] = [
+    { name: '田中を休みにする', board: (state) => toggleAt(state, deskIndexWhere(state, (desk) => desk.teacher === '田中' && !hasDeskTeacherRest(desk))) },
+    { name: '休みを解除する', board: (state) => toggleAt(state, deskIndexWhere(state, (desk) => hasDeskTeacherRest(desk))) },
+    {
+      name: '休みの机に高橋を手で置く',
+      board: (state) => {
+        const index = deskIndexWhere(state, (desk) => hasDeskTeacherRest(desk) && !desk.teacher.trim())
+        if (index < 0) return state
+        return { ...state, weeks: state.weeks.map((week) => week.map((cell) => (cell.id !== WED_CELL ? cell : { ...cell, desks: cell.desks.map((desk, deskIndex) => (deskIndex === index ? { ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual' as const, teacherAssignmentTeacherId: 't4' } : desk)) }))) }
+      },
+    },
+    { name: 'テンプレで田中と鈴木の机を入れ替える', rows: (rows) => rows.map((item) => (item.id === 'r0' ? { ...item, teacherId: item.teacherId === 't1' ? 't2' : 't1' } : item.id === 'r1' ? { ...item, teacherId: item.teacherId === 't2' ? 't1' : 't2' } : item)) },
+    { name: '何も変えない' },
+  ]
+  const upperTeachers = (state: SavedState) => cellOf(state.weeks, WED_CELL).desks.map((desk) => desk.teacher.trim()).filter(Boolean)
+  const restedTanaka = (state: SavedState) => cellOf(state.weeks, WED_CELL).desks.some((desk) => desk.teacherRest?.teacher === '田中')
+
+  for (const first of OPS) for (const second of OPS) {
+    it(`${first.name} → ${second.name}`, () => {
+      let rows = OLD_ROWS
+      let state: SavedState = { weeks: remerge([buildWeek(OLD_ROWS)], OLD_ROWS, []), suppressed: [], ledgers: {}, scheduleCountAdjustments: [], pendingDesks: {} }
+      for (const [index, op] of [first, second].entries()) {
+        const label = `${index + 1} 手目: ${op.name}`
+        const restedBefore = restedTanaka(state)
+        if (op.board) state = op.board(state)
+        const nextRows = op.rows ? op.rows(rows) : rows
+        const { state: nextState } = step(state, rows, nextRows)
+        // INV-02: 休みの記録は反映で消えない（解除の操作だけが消す）。
+        if (restedBefore && op.name !== '休みを解除する') expect(restedTanaka(nextState), label).toBe(true)
+        // §2-4: 休みがあれば田中はこのコマのどの机にも居ない。休みが無ければテンプレどおり 1 机（講師欄 2 行の上段を含む）。
+        expect(upperTeachers(nextState).filter((name) => name === '田中').length, label).toBe(restedTanaka(nextState) ? 0 : 1)
+        // INV-01: 同じ講師はこのコマの 1 机まで（上段）。
+        expect(new Set(upperTeachers(nextState)).size, label).toBe(upperTeachers(nextState).length)
+        // 生徒は休みでも残る（A・B の 2 人がこのコマに居る）。
+        expect(liveIds(nextState.weeks, WED_CELL).sort(), label).toEqual(['sA', 'sB'])
+        expectNoViolation(nextState, nextRows, label)
+        expectFixpoint(nextState, nextRows)
+        expectIdempotentResave(nextState, nextRows, `${label} の再保存`)
+        rows = nextRows
+        state = nextState
       }
     })
   }
