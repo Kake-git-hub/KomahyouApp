@@ -74,6 +74,8 @@ export type SerializedStudentEntry = {
   // 振替元の日付(YYYY-MM-DD)。振替欄の行を「元コマ」で重ね合わせる(元起点の行と重複排除する)ために使う。
   // ラベル(makeupSourceLabel)だけだと年が無く日付として比較できない(2026-09-16 追加)。
   makeupSourceDate?: string
+  // 丸ごと振替の付け替え（spec-template-conflict-v2 §3・段 4）で移動元 D のテンプレを展開した授業の D。回数表は D の月で数える（決定記録 3・4-8）。
+  wholeDayPairSourceDate?: string
   warning?: string
   // 授業時間サフィックス('60'/'45'/''=90分)。手動テスト No.250: statusEntry 側には元からあるのに
   // こちらだけ欠けており、日程表セルで講習の 60/45 分が表示されなかった(2026-08-29 追加)。
@@ -521,6 +523,7 @@ function serializeCells(
                   makeupSourceLabel: student.makeupSourceLabel,
                   // 振替欄の重複排除(元コマ単位)と並べ替えに使う。ラベルだけだと年が無く比較できない。
                   makeupSourceDate: student.makeupSourceDate,
+                  ...(student.wholeDayPairSourceDate ? { wholeDayPairSourceDate: student.wholeDayPairSourceDate } : {}),
                   warning: student.warning,
                   noteSuffix: student.noteSuffix,
                 })),
@@ -3382,6 +3385,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
       function filterCells(startDate, endDate) {
         return DATA.cells.filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate);
+      }
+
+      // 段 4(丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3): 付け替えの授業は移動元 D の月で数える(scheduleViewData と同じ規則)。
+      function isWholeDayPairCountedOutside(lesson, startDate, endDate) {
+        const sourceDateKey = lesson && lesson.wholeDayPairSourceDate;
+        return Boolean(sourceDateKey) && (sourceDateKey < startDate || sourceDateKey > endDate);
+      }
+
+      function countWholeDayPairLessonsFromOutside(student, startDate, endDate) {
+        const outsideCells = DATA.cells.filter((cell) => cell.dateKey < startDate || cell.dateKey > endDate);
+        if (outsideCells.length === 0) return [];
+        const assignmentMap = buildStudentAssignments(outsideCells);
+        return getStudentAssignmentKeys(student).flatMap((key) => assignmentMap.get(key) || [])
+          .filter((entry) => !entry.lesson.status && entry.lesson.lessonType !== 'special' && entry.lesson.wholeDayPairSourceDate
+            && entry.lesson.wholeDayPairSourceDate >= startDate && entry.lesson.wholeDayPairSourceDate <= endDate)
+          .map((entry) => entry.lesson.subject);
       }
 
       function sortSlotKeys(slotKeys) {
@@ -6255,6 +6274,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           // ★moved(移動元)/holiday(休日記録)は実績ではない。数えると「移動したのに実績が増える」
           //   「休日にしたのに授業をやったことになる」になる(INV-05: 回数表示の実配置一致)。
           if (isRestRecordStatus(entry.lesson.status)) return;
+          // 段 4(丸ごと振替の付け替え・決定記録 3): 付け替えの授業は移動元 D の月で数える。D が表示期間の外なら数えない(下で D の期間へ足す)。
+          if (isWholeDayPairCountedOutside(entry.lesson, startDate, endDate)) return;
           if (entry.lesson.lessonType === 'special') {
             lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             const normalizedSubject = normalizeSubjectForStudent(entry.lesson.subject, student, startDate);
@@ -6262,6 +6283,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             lectureMinutesBySubjectList[normalizedSubject].push(formatScheduleMinutesSuffix(entry.lesson.noteSuffix));
           }
           else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
+        });
+        // 段 4: 表示期間の外のコマにある付け替えの授業のうち、移動元 D が期間内のものを数える(scheduleViewData の countWholeDayPairLessonsFromOutside と同じ規則)。
+        countWholeDayPairLessonsFromOutside(student, startDate, endDate).forEach((subject) => {
+          subjectCounts[subject] = (subjectCounts[subject] || 0) + 1;
         });
         // 科目の授業時間(60/45分)併記。実配置コマの分数を優先し、未配置(希望登録のみ)の科目は
         // 希望登録(subjectDurations)の分数でフォールバックする。いずれも科目内で一意のときだけ付ける。

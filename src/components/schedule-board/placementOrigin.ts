@@ -23,11 +23,14 @@ export const MANUAL_ORIGIN_CLASS = 'sa-manual-origin'
  * 別日への移動先・編集で振替にした授業・編集で元の授業を置き換えたもの。テンプレ＝それ以外の通常授業
  * （テンプレの管理授業・同じ日の中で動かした通常授業〔sameDayMoveSourceDate＝§1-1 #2〕を含む）。
  */
-export function inferStudentOrigin(student: Pick<StudentEntry, 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'>): PlacementOrigin {
-  if (student.lessonType !== 'regular') return 'manual'
+export function inferStudentOrigin(student: Pick<StudentEntry, 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular' | 'wholeDayPairSourceDate'>): PlacementOrigin {
   if (student.manualAdded) return 'manual'
-  if (student.makeupSourceDate) return 'manual'
   if (student.editedToMakeup || student.editedFromRegular) return 'manual'
+  // 段 4（§1-1 #17）: 丸ごと振替の付け替えで D' に展開した授業はテンプレ（付け替え）。振替（makeup）の形だが手入力にしない（青字にしない・
+  // 再マージ／差分反映が D の新テンプレで置き直す）。科目・授業時間の手直し（origin='manual'）は resolveStudentOrigin の印が勝つ。
+  if (student.wholeDayPairSourceDate) return 'template'
+  if (student.lessonType !== 'regular') return 'manual'
+  if (student.makeupSourceDate) return 'manual'
   return 'template'
 }
 
@@ -36,12 +39,12 @@ export function inferStudentOrigin(student: Pick<StudentEntry, 'lessonType' | 'm
  * 読み込み時に template と付いた後の「編集」での区分の変更に対する二重の守り・regression-reviewer 重大-2）。無ければ印、印も無ければテンプレ。
  * ＝印が効くのは「推定ではテンプレだが手入力」（科目・授業時間の手直し §9-11 など）の形だけ。
  */
-export function resolveStudentOrigin(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'>): PlacementOrigin {
+export function resolveStudentOrigin(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular' | 'wholeDayPairSourceDate'>): PlacementOrigin {
   if (inferStudentOrigin(student) === 'manual') return 'manual'
   return student.origin ?? 'template'
 }
 
-export function isManualOriginStudent(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'> | null | undefined): boolean {
+export function isManualOriginStudent(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular' | 'wholeDayPairSourceDate'> | null | undefined): boolean {
   return Boolean(student) && resolveStudentOrigin(student!) === 'manual'
 }
 

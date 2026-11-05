@@ -17,6 +17,7 @@ import { studentHasManualMark, studentSubjectKey, type TemplateDiffTemplateCell 
 import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, isTemplatePendingLowerEmpty, placeIntoPendingLower, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { isWholeDayPairExpandedStudent } from './wholeDayTransferPair'
 
 type StudentPair = [StudentEntry | null, StudentEntry | null]
 type StatusPair = [StudentStatusEntry | null, StudentStatusEntry | null]
@@ -186,6 +187,9 @@ export function collectOrphanedMakeups(params: {
   const scan = (cell: SlotCell, deskId: string, slots: readonly (StudentEntry | null)[] | undefined, inLower: boolean) => {
     slots?.forEach((student, seatIndex) => {
       if (!student || student.lessonType !== 'makeup' || student.manualAdded || !student.makeupSourceDate) return
+      // 段 4（spec-template-conflict-v2 §3）: 丸ごと振替の付け替えで展開した授業はテンプレ（D のテンプレから毎回展開し直す）。孤児の判定に入れない
+      // （テンプレから外れた生徒は展開し直しで消える。ここで外すと「振替を外した」の理由の行が誤って出る）。
+      if (isWholeDayPairExpandedStudent(student)) return
       // 管理生徒 ID の無い振替（名前だけ・旧データ）はテンプレの生徒と突き合わせられないので触らない（消さない側に倒す・監査 M-B）。
       if (!student.managedStudentId) return
       const sourceDateKey = student.makeupSourceDate

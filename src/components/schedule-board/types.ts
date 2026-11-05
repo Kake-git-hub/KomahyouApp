@@ -69,6 +69,12 @@ export type StudentEntry = {
   // spec-template-behavior §H Q36)。写しは手入力データとして残し、superseded＝同じ日の別のコマにテンプレが同じ授業を置く／stale＝テンプレでは
   // この日にこの授業が無い、を盤面で緑＋注意文で知らせる。テンプレ保存のたびに付け直す(状態が変われば消える)。日程表・PDF・回数には出ない。
   templateCopyNotice?: 'superseded' | 'stale'
+  /**
+   * 丸ごと振替の付け替え（docs/spec-template-conflict-v2.md §3・§1-1 #17・段 4）で、移動元 D のテンプレを移動先 D' に展開した授業の印（値は D）。
+   * 出自＝テンプレ（付け替え）＝青字にしない・再マージが D の新テンプレに追従させる。予定数は D の月で数える（決定記録 3）。
+   * 別の日へ動かすと外れる（prepareStudentForMove）。読み手は wholeDayTransferPair.ts の isWholeDayPairExpandedStudent を通す。
+   */
+  wholeDayPairSourceDate?: string
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -139,6 +145,13 @@ export type StudentStatusEntry = {
    * 印の無い旧データは、振替の授業の ID（丸ごと振替が付ける `daymove_<振替元の日>_…`）で組を確かめる。
    */
   wholeDayTransfer?: boolean
+  /** 付け替えで展開した授業の印を、記録（D' で休みにしたなど）を外して席へ戻すときに戻すために控える（StudentEntry.wholeDayPairSourceDate）。 */
+  wholeDayPairSourceDate?: string
+  /**
+   * 丸ごと振替の付け替え（段 4）で移動元 D に作った表示専用の「休)」記録（status='moved'）。再マージのたびに D のテンプレから作り直し、
+   * 解除で外す。会計を持たない。出欠記録としては数えない（解除・付け替えの判定・cellsHaveNonDerivedStatusEntries）。
+   */
+  wholeDayPairDerived?: boolean
   sourceLessonId: string
   sourceLessonNote?: string
   sourceLessonWarning?: string

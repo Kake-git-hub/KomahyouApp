@@ -239,7 +239,8 @@ describe('確認リストの項目定義', () => {
     // 同じ第109版(2026-11-05 午後・第 2 版 spec-template-conflict-v2): tp-75・tp-59 を「手入力が勝つ」へ書き換え、出自の印（青字・並び替え）の v2-1 を足した。
     // 同じ第109版(2026-11-05 午後・第 2 版 段 3): 講師の休み(講師欄の「休み」・休みが勝つ)の v2-2 を足した(版は据え置き)。
     // 同じ第109版(2026-11-05 夜・第 2 版 監査の追補 §9-14・§9-15): 下の行だけの手入力を上げる・手置き講師がテンプレの別の机にも居る机の v2-3 を足した(版は据え置き)。
-    expect(ids).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-73', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-2', 'v2-3'])
+    // 同じ第109版(2026-11-05 夜・第 2 版 段 4): 丸ごと振替の付け替え(同じ曜日だけ・テンプレに追従・解除)の v2-4 を足した(版は据え置き・テスト教室にも出す)。
+    expect(ids).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-73', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-2', 'v2-3', 'v2-4'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -650,7 +651,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-73', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-2', 'v2-3'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-68', 'tp-51', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-73', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-2', 'v2-3', 'v2-4'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
