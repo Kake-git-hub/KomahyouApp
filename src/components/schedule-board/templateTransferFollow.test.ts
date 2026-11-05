@@ -340,7 +340,7 @@ describe('planWholeDayTransferPlacements（Q40-2）', () => {
       expect(plan.pendingPlaced).toEqual([expect.objectContaining({ deskId: 't5d1', shape: 'lower', fallbackDesk: false })])
       expect(plan.nextPendingDesks[key].lower.lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sC' && entry.lessonType === 'makeup')).toBe(true)
       expect(plan.nextPendingDesks[key].origin?.kind).toBe('transfer-follow-full')
-      expect(plan.nextPendingDesks[key].origin?.note).toContain('席の生徒はテンプレの生徒なので下段にできません')
+      expect(plan.nextPendingDesks[key].origin?.note).toContain('席の 2 人ともテンプレ由来の生徒')
       // 上段は変えない
       expect(thuOf(plan).desks[0].lesson?.studentSlots.map((entry) => entry?.managedStudentId)).toEqual(['sX', 'sY'])
     })
@@ -571,7 +571,7 @@ describe('planSlotChangeTransferFollow × 満席の押し出し（決定記録 5
     expect(plan.moves[0]).toMatchObject({ placement: 'pending', deskId: 't3d1', fallbackDesk: false })
     expect(plan.moves[0].displacedStudent).toBeUndefined()
     expect(plan.nextPendingDesks[key].origin?.kind).toBe('slot-follow-full')
-    expect(plan.nextPendingDesks[key].origin?.note).toContain('席の生徒はテンプレの生徒なので下段にできません')
+    expect(plan.nextPendingDesks[key].origin?.note).toContain('席の 2 人ともテンプレ由来の生徒')
     expect(plan.nextPendingDesks[key].lower.lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sA' && entry.lessonType === 'makeup' && /3限/u.test(entry.makeupSourceLabel ?? ''))).toBe(true)
     const thu3 = plan.weeks[0].find((entry) => entry.id === `${THU}_3`)!
     expect(thu3.desks[0].lesson?.studentSlots.map((entry) => entry?.managedStudentId)).toEqual(['sX', 'sY'])

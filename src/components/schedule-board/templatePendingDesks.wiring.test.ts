@@ -377,7 +377,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(plan).toContain('manualMakeupAdjustments,\n      suppressedMakeupOrigins,\n      // 決定記録 46（Q40-9）: 保存前のテンプレの行（時限を変えた生徒の丸ごと振替の振替を新しい時限へ動かす）。\n      previousRegularLessons: regularLessons,\n    })')
     expect(plan).not.toMatch(/filterTemplateOverwriteHolidayDates\(/)
     // Q40-1 根拠 (b) は在庫の正本 collectMakeupOriginDatesByKey を、取り下げ後の台帳・保存後の盤面（上段＋保留の下段）・同じ抑止で呼ぶ（監査 H-A/M-A・判定を在庫と分けない）。
-    const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// 差分反映の本体を 1 回計算する')
+    const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// Q36 の反復本体')
     expect(entry).toContain('resolveLedgerOriginDates: (ledgerAfterRemovals) => collectMakeupOriginDatesByKey({')
     expect(entry).toContain('manualAdjustments: ledgerAfterRemovals, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(params.students),')
     expect(entry).toContain('includeAbsentMakeupOrigins: true, templatePendingDesks: run.diff.nextPendingDesks,')
@@ -385,7 +385,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain('const managedStudentByAnyName = useMemo(() => buildManagedStudentByAnyNameMap(students), [students])')
     expect(BOARD_TSX).toContain('const byAnyName = buildManagedStudentByAnyNameMap(students)')
     expect(entry).toContain('manualMakeupAdjustments: MakeupOriginMap\n')
-    // 追従で触ったセルは再マージの重ね合わせにだけ足す（入口の絞り込みを書き換えない・監査 M-1。2026-11-01 以降 Q36 の反復は無い）。
+    // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の反復の絞り込みを書き換えない・監査 M-1）。
     expect(entry).not.toMatch(/params\.slotFilter\s*=/)
     expect(entry).toContain('slotFilter: settleSlotFilter,')
   })
