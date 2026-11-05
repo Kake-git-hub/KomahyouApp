@@ -32,6 +32,8 @@ export function weekHasManualBoardData(week: SlotCell[]): boolean {
       if (desk.teacherAssignmentSource) return true
       // テンプレの同じ講師に寄せて外した QR 机の記録(2026-10-15)。間引きで消えると自己修復が「未配置」と誤判定して置き直す(regression-reviewer L-2)。
       if (desk.scheduleRegistrationSupersededByTemplate) return true
+      // 講師の休み(spec-template-conflict-v2 §2-4)。手入力の記録で、間引きで消えると次の再マージでテンプレの講師が戻る。
+      if (desk.teacherRest) return true
       if (desk.memoSlots && desk.memoSlots.some((memo) => memo != null && memo.trim() !== '')) return true
       if (desk.statusSlots && desk.statusSlots.some((status) => status != null)) return true
       const lesson = desk.lesson

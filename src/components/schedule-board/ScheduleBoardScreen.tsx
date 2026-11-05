@@ -67,6 +67,7 @@ import {
 } from './templatePendingResolution'
 import { collectTemplateOriginDeskIds, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate } from './templateConflictRules'
+import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell } from './teacherRest'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
@@ -3046,6 +3047,7 @@ function runTemplateDiffApplyV2(params: {
   const removedSuppressed = collectSameDayMovedTemplateOccurrenceKeys(params)
   const suppressed = removedSuppressed.size > 0 ? params.suppressedRegularLessonOccurrences.filter((key) => !removedSuppressed.has(key)) : params.suppressedRegularLessonOccurrences
   const templateCells = buildTemplateDiffTemplateCells({ ...params, suppressedRegularLessonOccurrences: suppressed })
+  const teacherAliases = buildTeacherAliasResolver(params.teachers)
   const diff = computeTemplateDiffApply({
     weeks: params.weeks,
     templateCells,
@@ -3053,9 +3055,11 @@ function runTemplateDiffApplyV2(params: {
     suppressedRegularLessonOccurrences: suppressed,
     pendingDesks: params.templatePendingDesks,
     createdAt: params.createdAt,
-    teacherAliases: buildTeacherAliasResolver(params.teachers),
+    teacherAliases,
     slotFilter: null,
     wholeDayTransferSettlement: params.wholeDayTransferSettlement,
+    // §2-4 講師の休み（休みが勝つ）: 休みの講師はそのコマのどの机にも置かない。再マージ（overlayPreparedManagedCells）と同じ述語。
+    isTeacherOnRest: buildTemplateTeacherRestPredicate(params.weeks, teacherAliases) ?? undefined,
   })
   return { diff, suppressed, removedSuppressed, templateCells }
 }
@@ -4635,6 +4639,8 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
   const managedCellIds = new Set(preparedCells.map(({ raw }) => raw.id))
   // 第 2 版（フラグ ON の教室だけ）: 同じ日の中で動かしたテンプレの授業（写し）の元の時限には、テンプレの同じ授業を置き直さない（移動の抑止キーの代わり・§1-1 #2）。
   const sameDayMoveSourcesByDate = templateOriginRules ? collectSameDayMoveSourcesByDate(boardWeeks, templateOriginRules.pendingDesks) : null
+  // 第 2 版 §2-4（フラグ ON の教室だけ）: 盤面の講師の休み（日付×時限×講師）。差分反映（runTemplateDiffApplyV2）と同じ述語を当てる（不動点・INV-03）。
+  const teacherRestPredicate = templateOriginRules ? buildTemplateTeacherRestPredicate(boardWeeks, teacherAliases) : null
   const managedCellDateSlots = new Set(preparedCells.map(({ raw }) => buildCellDateSlotKey(raw)))
 
   const mergedCells = preparedCells.map(({ raw: managedCell, applied: adjustedManagedCell }) => {
@@ -4647,7 +4653,7 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
     // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
     // 第 2 版（機能フラグ templateDiffApply の教室だけ）: 手入力の同じ生徒・記録・別の机の手置き講師と同じ講師をテンプレから外してから重ねる（§2-2〜§2-4）。
     const ruledManagedCell = templateOriginRules
-      ? applyTemplateOriginRulesToManagedCell(adjustedManagedCell, boardCell, templateOriginRules.pendingDesks, teacherAliases, undefined, sameDayMoveSourcesByDate?.get(boardCell.dateKey) ?? [])
+      ? applyTemplateOriginRulesToManagedCell(adjustedManagedCell, boardCell, templateOriginRules.pendingDesks, teacherAliases, teacherRestPredicate ?? undefined, sameDayMoveSourcesByDate?.get(boardCell.dateKey) ?? [])
       : adjustedManagedCell
     return mergeManagedWeek([boardCell], [ruledManagedCell], [managedCell], teacherAliases, templateOriginRules)[0] ?? ruledManagedCell
   })
@@ -5168,8 +5174,8 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       if (isDeletedTeacher(managedDesk, mi)) return
 
       // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
-      const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
-        ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
+      // 講師の休み（§2-4）の机は最後の候補（休みの記録は机に残るので消えないが、空き机を先に使い、休みのグレーを別の講師で隠さない）。
+      const targetDesk = findManagedPlacementTargetDesk(nextDesks)
 
       if (!targetDesk) return
 
@@ -5190,9 +5196,8 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
 
       if (preservedLessonIds.has(managedDesk.lesson.id)) continue
 
-      // 同上: 出欠記録のある机はテンプレ授業の置き場にしない（記録だけ残して講師が入れ替わるため）。
-      const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
-        ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
+      // 同上: 出欠記録のある机はテンプレ授業の置き場にしない（記録だけ残して講師が入れ替わるため）。休みの机は最後の候補（同上）。
+      const targetDesk = findManagedPlacementTargetDesk(nextDesks)
 
       if (!targetDesk) continue
 
@@ -5216,6 +5221,16 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       desks: nextDesks,
     }
   })
+}
+
+// 再マージ（mergeManagedWeek）がテンプレの授業・講師だけの机を置く空き机。授業・手置き・出欠記録のある机は使わない（従来どおり）。
+// 講師が空の机を先に、講師の休み（teacherRest・§2-4）の机は最後に回す（机数が足りないときだけ使う＝テンプレの授業を落とさない。休みの記録は残る）。
+// 休みの無い盤面（フラグ OFF の教室を含む）では従来の 2 段の探し方と同じ結果になる。
+function findManagedPlacementTargetDesk(desks: DeskCell[]): DeskCell | undefined {
+  const free = (desk: DeskCell) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk)
+  return desks.find((desk) => free(desk) && !desk.teacher && !hasDeskTeacherRest(desk))
+    ?? desks.find((desk) => free(desk) && !hasDeskTeacherRest(desk))
+    ?? desks.find((desk) => free(desk))
 }
 
 function clearTeacherAssignment(desk: DeskCell) {
@@ -5266,7 +5281,7 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
   const isLockedDesk = (desk: DeskCell) => Boolean(lockedDeskIds?.has(desk.id))
   const teacherOnlyDesks = desks
     // tombstone(teacher='')は teacher.trim() が空なので元々ここには入らないが、意図を明示して除外する。
-    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && desk.teacher.trim())
+    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk) && desk.teacher.trim())
     .map((desk) => ({
       teacher: desk.teacher,
       manualTeacher: Boolean(desk.manualTeacher),
@@ -5283,6 +5298,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
     if (hasRecordedStatusSlots(desk)) return desk
     // 保留（2 行）の机も据え置く(Q31)。
     if (isLockedDesk(desk)) return desk
+    // 講師の休み（spec-template-conflict-v2 §2-4）の机も据え置く(削除記録と同じ守り方。詰めると休みのグレーが別の講師で隠れる／上書きした講師が動く)。
+    if (hasDeskTeacherRest(desk)) return desk
     return {
       ...desk,
       teacher: '',
@@ -5302,6 +5319,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
     if (hasRecordedStatusSlots(nextDesks[deskIndex])) continue
     // 保留（2 行）の机も入れ先にしない(Q31)。
     if (isLockedDesk(nextDesks[deskIndex])) continue
+    // 講師の休みの机も入れ先にしない(§2-4)。
+    if (hasDeskTeacherRest(nextDesks[deskIndex])) continue
     const teacherOnlyDesk = teacherOnlyDesks[teacherOnlyIndex]
     if (!teacherOnlyDesk) break
     nextDesks[deskIndex] = {
@@ -5741,6 +5760,8 @@ function autoAssignTeacherToSpecialSession(params: {
       const isLockedDesk = (desk: DeskCell) => Boolean(lockedDeskIds?.has(desk.id))
       // Q41-5: 保留の下段に居る手置き講師も「そのコマに居る」と数える（数えないと保留中に別の机へ置き直し、解決後に同じ講師が 2 机になる）。
       const alreadyAssigned = cell.desks.some((desk) => desk.teacher === teacherName) || collectTemplatePendingLowerTeacherNames(params.templatePendingDesks, cell.id).includes(teacherName)
+      // 講師の休み（spec-template-conflict-v2 §2-4・フラグ ON の教室だけ記録がある）: 室長がこのコマでこの講師を休みにしたなら置かない。
+      if (!alreadyAssigned && isTeacherRestedInCell(cell, { teacher: teacherName, teacherAssignmentTeacherId: params.teacher.id })) continue
       if (alreadyAssigned) {
         const repackedDesks = repackTeacherOnlyDesks(cell.desks, lockedDeskIds)
         const repackedChanged = repackedDesks.some((desk, deskIndex) => (
@@ -5759,15 +5780,16 @@ function autoAssignTeacherToSpecialSession(params: {
       // 次の再マージで削除した講師が赤く復活する(回帰防止 2026-07-10。repack だけでなくこの経路も塞ぐ)。
       // 出欠記録のある机も「空き机」ではない(講習の自動割当が講師を上書きすると実績の帰属が変わる)。
       // 保留（2 行）の机（上段が空いていても）も「空き机」ではない(Q31)。
-      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk)).length
+      // 講師の休みの机（§2-4）も「空き机」ではない(休みの記録の机に別の講師を自動で置かない。手で置くのは室長)。
+      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk)).length
       if (teacherOnlyDesks.length >= emptyDeskCount) {
         skippedFullCellCount += 1
         continue
       }
 
       const nextDesks = cell.desks.map((desk) => ({ ...desk }))
-      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk))
-        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk))
+      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk))
       if (!candidateDesk) {
         skippedFullCellCount += 1
         continue
@@ -5925,6 +5947,11 @@ export function reconcileSubmittedTeacherPlacements(params: {
             && desk.teacherAssignmentSessionId === session.id
             && desk.teacherAssignmentTeacherId) {
             deletedTeacherKeysInSession.add(desk.teacherAssignmentTeacherId.trim())
+          }
+          // 講師の休み（spec-template-conflict-v2 §2-4）: この講習の登録机の講師を室長が休みにした記録も「配置済み(=室長が外した)」に数える
+          // (削除記録と同じ理由・数えないと再マウント毎に同じ講師を別の空き机へ置き直す)。講習 ID の無い休み(通常授業の机)は数えない。
+          if (desk.teacherRest?.sessionId === session.id && desk.teacherRest.teacherId) {
+            deletedTeacherKeysInSession.add(desk.teacherRest.teacherId.trim())
           }
         }
       }
@@ -11756,6 +11783,27 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`)
   }
 
+  // 講師の休み（docs/spec-template-conflict-v2.md §2-4・段 3・機能フラグ templateDiffApply の教室だけ）。同じボタンで休み⇄解除。
+  // 1 コマ（机）ごと（一括の操作は作らない・§9-4）。操作ログ（operationEvents）には残さない（§9-8）。削除記録とは別（applyUserDeletedTeacherTombstone は使わない）。
+  const handleToggleTeacherRest = () => {
+    const currentTeacherMenu = teacherMenu
+    if (!currentTeacherMenu || !teacherMenuContext || !templateDiffApplyEnabled || isTemplateMode) return
+    const result = computeToggleDeskTeacherRest({
+      weeks,
+      weekIndex,
+      cellId: currentTeacherMenu.cellId,
+      deskIndex: currentTeacherMenu.deskIndex,
+      resolveTeacherId: (teacherName) => teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherName || teacher.name === teacherName)?.id,
+    })
+    if (result.status === 'blocked') {
+      setStatusMessage(result.message)
+      return
+    }
+    commitWeeks(result.nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
+    setTeacherMenu(null)
+    setStatusMessage(result.message)
+  }
+
   const handleDeleteTeacher = () => {
     const currentTeacherMenu = teacherMenu
     if (!currentTeacherMenu || !teacherMenuContext) return
@@ -15920,6 +15968,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             transferSourceRestDisplayEnabled={transferSourceRestDisplayEnabled}
             templatePendingDesks={isTemplateMode ? undefined : (activeTemplatePendingDesks ?? undefined)}
             showManualOriginColor={!isTemplateMode && templateDiffApplyEnabled}
+            showTeacherRest={!isTemplateMode && templateDiffApplyEnabled}
             onTemplatePendingLowerClick={isTemplateMode || !activeTemplatePendingDesks ? undefined : stableHandleTemplatePendingLowerClick}
             onTemplatePendingLowerTeacherClick={isTemplateMode || !activeTemplatePendingDesks ? undefined : stableHandleTemplatePendingLowerTeacherClick}
             onTemplatePendingLowerMouseDown={isTemplateMode || !activeTemplatePendingDesks || !studentDragMoveEnabled ? undefined : stableHandleTemplatePendingLowerMouseDown}
@@ -16189,6 +16238,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
                 {teacherMenuContext?.desk.teacher ? (
                   <button type="button" className="menu-link-button danger" onClick={isTemplateMode ? handleTemplateDeleteTeacher : handleDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
+                ) : null}
+                {/* 講師の休み（spec-template-conflict-v2 §2-4・段 3）: フラグ ON の教室のコマ表だけ。休みの机は同じボタンで解除。 */}
+                {!isTemplateMode && templateDiffApplyEnabled && teacherMenuContext && (teacherMenuContext.desk.teacher.trim() || hasDeskTeacherRest(teacherMenuContext.desk)) ? (
+                  <button type="button" className="menu-link-button" onClick={handleToggleTeacherRest} data-testid="teacher-rest-button">
+                    {hasDeskTeacherRest(teacherMenuContext.desk) ? `休みを解除する(${teacherMenuContext.desk.teacherRest!.teacher})` : '休み'}
+                  </button>
                 ) : null}
               </div>
             </div>

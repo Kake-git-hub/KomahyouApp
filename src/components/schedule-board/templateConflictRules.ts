@@ -115,8 +115,8 @@ export function findManualTeacherDeskElsewhere(deskIndex: number, teacher: Pick<
 }
 
 /**
- * 講師の休み（§2-4・段 3 で足す）の差し込み口。段 2 では常に「休みでない」。段 3 は盤面の休みの記録（日付×時限×講師 ID）をここで引く。
- * 差分反映と再マージの両方がこの関数を通す（片方だけ休みを見ると不動点が崩れる）。
+ * 講師の休み（§2-4・段 3）の差し込み口。盤面の休みの記録（日付×時限×講師）から teacherRest.ts の buildTemplateTeacherRestPredicate が作る。
+ * 差分反映と再マージの両方がこの関数を通す（片方だけ休みを見ると不動点が崩れる）。休みが無い教室・フラグ OFF の教室は noTemplateTeacherRest。
  */
 export type TemplateTeacherRestPredicate = (cell: Pick<SlotCell, 'dateKey' | 'slotNumber'>, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>) => boolean
 export const noTemplateTeacherRest: TemplateTeacherRestPredicate = () => false
@@ -131,7 +131,8 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
   const blockers = collectTemplateBlockersInCell(boardCell, pendingDesks)
   // §1-1 #2: 同じ日の中で手で動かしたテンプレの授業（写し）の元の時限には、次のテンプレ反映までテンプレの同じ授業を置き直さない（移動の抑止キーの代わり）。
   const movedAway = sameDayMoveSources.filter((source) => source.slotNumber === managedCell.slotNumber)
-  if (blockers.students.length === 0 && blockers.teachers.length === 0 && movedAway.length === 0) return managedCell
+  // 休みの述語（§2-4）を渡されたときは、ほかの取り除きが無くてもテンプレの講師を休みと突き合わせる（早く返すと休みの講師が置かれる）。
+  if (blockers.students.length === 0 && blockers.teachers.length === 0 && movedAway.length === 0 && isTeacherOnRest === noTemplateTeacherRest) return managedCell
   const isMovedAway = (student: StudentEntry) => movedAway.some((source) => source.subject === student.subject && isSameTemplateStudent(source.student, student))
   let changed = false
   const desks = managedCell.desks.map((desk, deskIndex) => {
