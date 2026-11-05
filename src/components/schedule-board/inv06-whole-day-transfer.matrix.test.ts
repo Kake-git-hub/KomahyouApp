@@ -6,9 +6,15 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
 import * as pairFx from './wholeDayTransferPair.fixture'
 import { buildWholeDayTransferPairKey } from './wholeDayTransferPair'
+import { buildParentScheduleView } from '../../utils/parentSchedule'
+import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../../../functions/src/generated/parentSchedule'
 import {
   buildStudentStatusEntry,
   buildWholeDayTransferConfirmMessage,
+  computeHolidayReleaseRestoration,
+  convertHolidayDeskEntriesToRecords,
+  reconcileHolidayDeskStockReturns,
+  resolveHolidayReleaseSuppressedOccurrences,
   computeWholeDayTransfer,
   disposeDayDeskEntries,
   overlayBoardWeeksOnScheduleCells,
@@ -1112,5 +1118,89 @@ describe('INV-06 マトリクス: 丸ごと振替の付け替え（第 2 版・�
     // 体験は在庫・希望回数を持たない＝台帳は動かない。再マージの不動点（保留込み）。
     expect(pairFx.balances(result.nextWeeks, pairFx.ROWS)).toEqual({})
     expect(pairFx.snapshot(pairFx.remerge(result.nextWeeks, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences, pairFx.settings(), result.nextTemplatePendingDesks))).toBe(pairFx.snapshot(result.nextWeeks))
+  })
+})
+
+// 段 4 監査（2026-11-05・HEAD d0f8283）: 休日設定・休日解除と付け替え（重大-1・重大-2）、§9-21（D' に同じ生徒の手入力）。
+describe('INV-06 マトリクス: 丸ごと振替の付け替え × 休日設定（段 4 監査）', () => {
+  const late = new Date('2026-10-20T00:00:00')
+  const byName = new Map(pairFx.students.map((row) => [row.name, row]))
+  const stockId = (entry: StudentEntry) => entry.managedStudentId ?? entry.name
+  const emptyLedgers = () => ({ manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} })
+  // 休日設定（handleToggleHolidayDate の設定側と同じ 2 手: 在庫へ返す → 机を休日の記録に変える）。
+  const setHoliday = (weeks: SlotCell[][], dateKey: string) => {
+    const next = structuredClone(weeks)
+    let ledgers: Parameters<typeof reconcileHolidayDeskStockReturns>[0]['ledgers'] = emptyLedgers()
+    for (const cell of next.flat()) {
+      if (cell.dateKey !== dateKey) continue
+      for (const desk of cell.desks) {
+        const result = reconcileHolidayDeskStockReturns({ desk, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: stockId, ledgerOriginDatesByKey: {}, includeManualAddedLessons: true })
+        ledgers = result.ledgers
+        convertHolidayDeskEntriesToRecords({ desk, cell, enabled: true, stockReturns: result.stockReturnStamps })
+      }
+    }
+    return { weeks: next, ledgers }
+  }
+  // 休日解除（handleToggleHolidayDate の解除側と同じ 2 手: 席へ戻す＋在庫の巻き戻し → 抑止キー）。
+  const releaseHoliday = (weeks: SlotCell[][], dateKey: string, ledgers: ReturnType<typeof emptyLedgers>, suppressed: string[]) => {
+    const restoration = computeHolidayReleaseRestoration({ weeks, dateKey, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: stockId, templatePendingDesks: {} })
+    const keys = resolveHolidayReleaseSuppressedOccurrences({ dateKey, regularLessons: pairFx.ROWS, students: pairFx.students, teachers: pairFx.teachers, suppressedRegularLessonOccurrences: suppressed, restoredOccurrenceKeys: new Set(restoration.restoredOccurrenceKeys) })
+    return { weeks: restoration.nextWeeks, ledgers: restoration.ledgers, keys }
+  }
+
+  it('段4: D を休日設定→解除しても D\' の付け替えは残り在庫 0・再マージ＝保存の不動点', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const holiday = pairFx.settings({ holidayDates: [pairFx.D] })
+    const set = setHoliday(paired.nextWeeks, pairFx.D)
+    const onHoliday = pairFx.remerge(set.weeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, holiday)
+    expect(pairFx.seatIds(onHoliday, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.balances(onHoliday, pairFx.ROWS, set.ledgers.manualMakeupAdjustments, holiday, late)).toEqual({})
+    const released = releaseHoliday(onHoliday, pairFx.D, set.ledgers, paired.nextSuppressedRegularLessonOccurrences)
+    // 組の日には休日解除の抑止キーを積まない（積むと D' の付け替えが抑止され、再マージは残し保存で消える）。
+    expect(released.keys).toEqual(paired.nextSuppressedRegularLessonOccurrences)
+    const remerged = pairFx.remerge(released.weeks, pairFx.ROWS, released.keys)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    const saved = pairFx.save(remerged, pairFx.ROWS, released.keys, { manualMakeupAdjustments: released.ledgers.manualMakeupAdjustments })
+    expect(pairFx.snapshot(saved.nextWeeks)).toBe(pairFx.snapshot(remerged))
+    expect(pairFx.balances(saved.nextWeeks, pairFx.ROWS, released.ledgers.manualMakeupAdjustments, pairFx.settings(), late)).toEqual({})
+  })
+
+  it('段4: D\' を休日設定しても +1（D の 1 回分）だけ・休日解除で 0 に戻る', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const holiday = pairFx.settings({ holidayDates: [pairFx.D2] })
+    const set = setHoliday(paired.nextWeeks, pairFx.D2)
+    const onHoliday = pairFx.remerge(set.weeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, holiday)
+    // 対照: 組が無ければ D' を休日にしても 1 人 +1。
+    const control = pairFx.remerge(pairFx.buildBoard(pairFx.ROWS, holiday), pairFx.ROWS, [], holiday)
+    expect(pairFx.balances(control, pairFx.ROWS, {}, holiday, late)).toEqual({ sA__数: 1, sB__数: 1 })
+    expect(pairFx.balances(onHoliday, pairFx.ROWS, set.ledgers.manualMakeupAdjustments, holiday, late)).toEqual({ sA__数: 1, sB__数: 1 })
+    const released = releaseHoliday(onHoliday, pairFx.D2, set.ledgers, paired.nextSuppressedRegularLessonOccurrences)
+    expect(released.keys).toEqual(paired.nextSuppressedRegularLessonOccurrences)
+    const remerged = pairFx.remerge(released.weeks, pairFx.ROWS, released.keys)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.balances(remerged, pairFx.ROWS, released.ledgers.manualMakeupAdjustments, pairFx.settings(), late)).toEqual({})
+  })
+
+  it('段4: D\' に同じ生徒の手入力 → D の S は休みで +1（振替先なし）・解除で 0', () => {
+    const board = structuredClone(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []))
+    pairFx.cellAt(board, pairFx.D2).desks[1].lesson!.studentSlots[1] = { id: 'mk-a', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual', manualAdded: true }
+    const before = pairFx.balances(board, pairFx.ROWS)
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(board))
+    expect(pairFx.recordIds(paired.nextWeeks, pairFx.D)).toEqual([['absent:sA', null], ['moved:sB', null]])
+    const absent = pairFx.cellAt(paired.nextWeeks, pairFx.D).desks[0].statusSlots![0]!
+    expect(absent.moveDestinationDateKey).toBeUndefined()
+    expect(pairFx.balances(paired.nextWeeks, pairFx.ROWS)).toEqual({ ...before, sA__数: (before.sA__数 ?? 0) + 1 })
+    expect(pairFx.snapshot(pairFx.remerge(paired.nextWeeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), paired.nextTemplatePendingDesks))).toBe(pairFx.snapshot(paired.nextWeeks))
+    // 保護者ページ: D は「お休み」だけ（振替先なし）。本体と Functions の複製が同じ。
+    const payload = { students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), boardState: { weeks: paired.nextWeeks, suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences } }
+    const range = { from: '2026-10-05', to: '2026-10-18' }
+    const view = buildParentScheduleView(payload, 'sA', range)
+    expect(buildGeneratedParentScheduleView(payload, 'sA', range)).toEqual(view)
+    expect(view?.days.find((day) => day.dateKey === pairFx.D)?.lessons).toEqual([expect.objectContaining({ kind: 'absent', makeupDestination: null })])
+    const released = pairFx.releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.recordIds(released.nextWeeks, pairFx.D)).toEqual([[null, null], [null, null]])
+    expect(pairFx.balances(released.nextWeeks, pairFx.ROWS)).toEqual(before)
   })
 })

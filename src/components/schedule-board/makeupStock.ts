@@ -3,6 +3,7 @@ import { formatStudentSelectionLabel, getStudentDisplayName, isActiveOnDate, typ
 import { hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 import { buildTemplatePendingLowerScanWeeks, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { collectWholeDayPairTargetDates } from './wholeDayTransferPair'
 
 type OriginMap = Record<string, string[]>
 
@@ -694,6 +695,13 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
           // absent 限定。absent-no-makeup(振無休)は振替を出さない仕様、attended/moved は消化済み、
           // holiday(休日設定で消えたコマの表示専用記録)は休日設定時に在庫へ返却済み(=moved と同じ側)。
           if (statusEntry.status !== 'absent') continue
+          // 段 4（spec-template-conflict-v2 §9-21）: 付け替えの D で、D' に同じ生徒の手入力があり D' に置かなかった授業の「休み」（再マージが作り直す記録）。
+          // 台帳には積まず、記録から算出する（組を解除すれば記録ごと消えて在庫も戻る）。
+          if (statusEntry.wholeDayPairDerived) {
+            const pairStudentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
+            pushOrigin(origins, buildMakeupStockKey(resolveStudentKey(pairStudentLike), statusEntry.subject), buildOriginToken(statusEntry.dateKey, statusEntry.slotNumber))
+            continue
+          }
           if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) continue
           const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
           const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
@@ -875,6 +883,11 @@ export function computeAutomaticShortageOrigins(
   students: StudentRow[],
   classroomSettings: ClassroomSettings,
   today = new Date(),
+  /**
+   * 段 4（spec-template-conflict-v2 §3・監査 重大-2）: 丸ごと振替の付け替えの移動先 D' の日付。組がある間 D' 自身のテンプレの授業は出さない
+   * （消去・在庫に入れない）ので、D' を休日設定しても D' 自身のテンプレで休日振替を積まない（D の授業は付け替えの振替の返却で 1 回だけ在庫へ入る）。
+   */
+  excludedDates: ReadonlySet<string> = new Set(),
 ) {
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const studentById = new Map(students.map((student) => [student.id, student]))
@@ -914,6 +927,7 @@ export function computeAutomaticShortageOrigins(
         const shortageDates = missedDates.slice(0, shortageCount)
         for (const shortageDate of shortageDates) {
           if (setupFloorKey && shortageDate < setupFloorKey) continue
+          if (excludedDates.has(shortageDate)) continue
           pushOrigin(shortages, stockKey, buildOriginToken(shortageDate, row.slotNumber))
         }
       }
@@ -1097,7 +1111,7 @@ function consumeOriginDates(originDates: string[], usedOriginDates: ReadonlyArra
 export function collectMakeupOriginCategoriesByKey(params: Parameters<typeof collectMakeupOriginDatesByKey>[0]): { effective: Record<string, string[]>; relaxed: Record<string, string[]> } {
   const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true, templatePendingDesks } = params
   const managedStudentIds = new Set(students.map((student) => student.id))
-  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
+  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks)).origins
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
   const absentMakeupOrigins = includeAbsentMakeupOrigins
     ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(resolveMakeupScanWeeks(weeks, templatePendingDesks), resolveStudentKey), managedStudentIds)
@@ -1235,7 +1249,7 @@ export function buildMakeupStockEntries(params: {
   // teachers はパラメータ型に残す(呼び出し側の互換維持)が、空きコマ不足origin廃止に伴い内部では未使用。
   const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date(), templatePendingDesks } = params
   const scanWeeks = resolveMakeupScanWeeks(weeks, templatePendingDesks)
-  const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
+  const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks))
   const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
   const absentMakeupResultOrigins = collectAbsentMakeupOrigins(scanWeeks, resolveStudentKey)
   const automaticShortages = automaticShortageResult.origins

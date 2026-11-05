@@ -20,6 +20,7 @@ import {
   reconcileSubmittedTeacherPlacements,
   applyUserDeletedTeacherTombstone,
   computeStudentMove,
+  resolveRemovedLessonOccurrenceKeyFor,
   applyHistoryEntry,
   remergeBoardWeekWithManagedData,
   removeStudentFromDeskLesson,
@@ -2777,14 +2778,66 @@ describe('INV-02 マトリクス: 丸ごと振替の付け替え（第 2 版・�
     check(pairFx.remerge(saved.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), saved.nextPendingDesks), saved.nextPendingDesks)
   })
 
-  it('D の手入力は D\' の同じ席へ手入力のまま移り、解除しても D\' に残る（テンプレの授業だけが D へ戻る）', () => {
+  // §9-20（オーナー決定 2026-11-05・監査 要確認-1）で「解除しても D' に残る」から「解除で D の元の席へ戻る」へ改めた。
+  it('D の手入力は D\' の同じ席へ手入力のまま移り、解除で D の元の席へ戻る（§9-20）', () => {
     const withManual = structuredClone(board())
     pairFx.cellAt(withManual, pairFx.D).desks[1].lesson!.studentSlots[1] = { id: 'trial-1', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }
     const paired = pairFx.pairedOrThrow(pairFx.pairOf(withManual))
     expect(pairFx.cellAt(paired.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-1', origin: 'manual' })
     const released = pairFx.releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
     if (released.status !== 'transferred') throw new Error(released.message)
-    expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-1' })
-    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D).desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-1', origin: 'manual' })
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D).desks[1].lesson?.studentSlots[1]?.wholeDayPairMovedFrom).toBeUndefined()
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1] ?? null).toBeNull()
+    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', '体験生']])
+  })
+})
+
+// 段 4 監査（2026-11-05）要修正-B・§9-20: 付け替えの授業を消した・動かした記録は D の日付で積み、解除で D' 自身のテンプレを消さない。D から移した手入力は解除で D へ戻る。
+describe('INV-02 マトリクス: 丸ごと振替の付け替えの解除（段 4 監査）', () => {
+  const board = () => pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])
+  const managedByName = new Map(pairFx.students.map((row) => [row.name, row]))
+  for (const operation of ['delete', 'move'] as const) {
+    it(`段4: 付け替えを${operation === 'delete' ? '消して' : '動かして'}から解除しても D' 自身のテンプレは戻る`, () => {
+      const paired = pairFx.pairedOrThrow(pairFx.pairOf(board()))
+      const pairStudent = pairFx.cellAt(paired.nextWeeks, pairFx.D2).desks[0].lesson!.studentSlots[0]!
+      let weeks = structuredClone(paired.nextWeeks)
+      let keys = paired.nextSuppressedRegularLessonOccurrences
+      if (operation === 'delete') {
+        const key = resolveRemovedLessonOccurrenceKeyFor(pairStudent, pairFx.D2, pairFx.SLOT, true)!
+        expect(key).toBe(`sA__数__${pairFx.D}__${pairFx.SLOT}`)
+        pairFx.cellAt(weeks, pairFx.D2).desks[0].lesson = undefined
+        keys = [...keys, key]
+      } else {
+        const moved = computeStudentMove({
+          weeks, weekIndex: 1, cells: weeks[1], movingStudentId: pairStudent.id, cellId: pairFx.cellAt(weeks, '2026-10-15').id, deskIndex: 0, studentIndex: 0,
+          suppressedRegularLessonOccurrences: keys, managedStudentByAnyName: managedByName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
+        })
+        if (moved.status !== 'moved') throw new Error(moved.message)
+        weeks = moved.nextWeeks
+        keys = moved.nextSuppressedRegularLessonOccurrences
+      }
+      expect(keys).not.toContain(`sA__数__${pairFx.D2}__${pairFx.SLOT}`)
+      const remerged = pairFx.remerge(weeks, pairFx.ROWS, keys)
+      expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([[], ['sB', null]])
+      const released = pairFx.releaseOf(remerged, keys)
+      if (released.status !== 'transferred') throw new Error(released.message)
+      // D' 自身のテンプレの青木（通常）が戻る。D の青木は消した・動かした記録どおり置かない（D の日付の記録）。
+      expect(pairFx.seatIds(released.nextWeeks, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+      expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[0].lesson?.studentSlots[0]).toMatchObject({ lessonType: 'regular' })
+      expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([[], ['sB', null]])
+    })
+  }
+
+  it('§9-20: 作成で D から D\' へ移した手入力（振替）は解除で D の元の席へ戻り、手入力の印・振替元はそのまま', () => {
+    const withMakeup = structuredClone(board())
+    const makeup: StudentEntry = { id: 'mk-c', name: '千葉', managedStudentId: 'sC', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual' }
+    pairFx.cellAt(withMakeup, pairFx.D).desks[0].lesson!.studentSlots[1] = makeup
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(withMakeup))
+    expect(pairFx.cellAt(paired.nextWeeks, pairFx.D2).desks[0].lesson?.studentSlots[1]).toMatchObject({ id: 'mk-c', wholeDayPairMovedFrom: { dateKey: pairFx.D } })
+    const released = pairFx.releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D).desks[0].lesson?.studentSlots[1]).toEqual(makeup)
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[0].lesson?.studentSlots[1] ?? null).toBeNull()
   })
 })

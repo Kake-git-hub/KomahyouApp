@@ -98,6 +98,8 @@ export type SerializedStudentStatusEntry = {
   //   moved は機能フラグ transferSourceRestDisplay が ON の教室だけ(OFF では従来どおり日程表へ渡さない)。
   //   **どちらも会計を持たない**。回数表・講師日程・給与・交通費では必ず除外すること(INV-05/INV-06)。
   status: 'absent' | 'absent-no-makeup' | 'attended' | 'moved' | 'holiday'
+  // 付け替えの授業を出席・振無休にした記録の移動元 D（回数表は D の月で数える・段 4 監査 要修正-A）。
+  wholeDayPairSourceDate?: string
   noteSuffix?: string
   linkedDestinationDateKey?: string
   linkedDestinationSlotNumber?: number
@@ -497,6 +499,7 @@ function serializeCells(
               makeupSourceLabel: entry.makeupSourceLabel,
               recordedAt: entry.recordedAt,
               status: entry.status as SerializedStudentStatusEntry['status'],
+              ...(entry.wholeDayPairSourceDate ? { wholeDayPairSourceDate: entry.wholeDayPairSourceDate } : {}),
               noteSuffix: entry.noteSuffix,
               linkedDestinationDateKey: linkedDestination?.dateKey,
               linkedDestinationSlotNumber: linkedDestination?.slotNumber,
@@ -3387,10 +3390,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return DATA.cells.filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate);
       }
 
-      // 段 4(丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3): 付け替えの授業は移動元 D の月で数える(scheduleViewData と同じ規則)。
+      // 段 4(丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3): 付け替えの授業(出席・振無休の記録も)は移動元 D の月で数える。
+      // 「数える日」は wholeDayTransferPair.ts の resolveWholeDayPairCountDateKey と同じ規則(scheduleHtml.test が両方を突き合わせる)。
+      function resolveWholeDayPairCountDateKey(lesson, cellDateKey) {
+        return (lesson && lesson.wholeDayPairSourceDate) || cellDateKey;
+      }
+
       function isWholeDayPairCountedOutside(lesson, startDate, endDate) {
-        const sourceDateKey = lesson && lesson.wholeDayPairSourceDate;
-        return Boolean(sourceDateKey) && (sourceDateKey < startDate || sourceDateKey > endDate);
+        if (!lesson || !lesson.wholeDayPairSourceDate) return false;
+        const countDateKey = resolveWholeDayPairCountDateKey(lesson, '');
+        return countDateKey < startDate || countDateKey > endDate;
       }
 
       function countWholeDayPairLessonsFromOutside(student, startDate, endDate) {
@@ -3398,8 +3407,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (outsideCells.length === 0) return [];
         const assignmentMap = buildStudentAssignments(outsideCells);
         return getStudentAssignmentKeys(student).flatMap((key) => assignmentMap.get(key) || [])
-          .filter((entry) => !entry.lesson.status && entry.lesson.lessonType !== 'special' && entry.lesson.wholeDayPairSourceDate
-            && entry.lesson.wholeDayPairSourceDate >= startDate && entry.lesson.wholeDayPairSourceDate <= endDate)
+          .filter((entry) => (!entry.lesson.status || entry.lesson.status === 'attended' || entry.lesson.status === 'absent-no-makeup')
+            && entry.lesson.lessonType !== 'special' && entry.lesson.wholeDayPairSourceDate)
+          .filter((entry) => {
+            const countDateKey = resolveWholeDayPairCountDateKey(entry.lesson, entry.dateKey);
+            return countDateKey >= startDate && countDateKey <= endDate;
+          })
           .map((entry) => entry.lesson.subject);
       }
 

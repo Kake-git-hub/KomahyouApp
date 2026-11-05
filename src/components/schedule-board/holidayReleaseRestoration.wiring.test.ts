@@ -47,8 +47,13 @@ describe('休日解除の配線(席の復元・在庫巻き戻し)', () => {
   it('★復元した通常授業の抑止キーは積まず、既にあるものは外す(積むと再マージで戻した席が消える)', () => {
     const branch = holidayReleaseBranch()
     expect(branch).toContain('const restoredOccurrenceKeys = new Set(restoration?.restoredOccurrenceKeys ?? [])')
-    expect(branch).toContain('.filter((key) => !restoredOccurrenceKeys.has(key))')
-    expect(branch).toContain('if (restoredOccurrenceKeys.has(occurrenceKey)) continue')
+    // 段 4 監査 重大-1（2026-11-05）: 抑止キーの組み立てを純関数 resolveHolidayReleaseSuppressedOccurrences へ移した（中の 2 つの守りはそのまま）。
+    expect(branch).toContain('resolveHolidayReleaseSuppressedOccurrences({')
+    const fnIndex = BOARD_TSX.indexOf('export function resolveHolidayReleaseSuppressedOccurrences(')
+    expect(fnIndex).toBeGreaterThan(0)
+    const fn = BOARD_TSX.slice(fnIndex, BOARD_TSX.indexOf('\n}\n', fnIndex))
+    expect(fn).toContain('.filter((key) => !restoredOccurrenceKeys.has(key))')
+    expect(fn).toContain('if (restoredOccurrenceKeys.has(occurrenceKey)) continue')
   })
 
   it('実行前に件数を確認し、キャンセルなら何も変えない', () => {

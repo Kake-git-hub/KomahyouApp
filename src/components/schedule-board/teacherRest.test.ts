@@ -2,7 +2,11 @@
 // INV-01（講師帰属の一意）・INV-02（休みの記録は反映で消えない）・INV-03（同じ保存 2 回・再マージ 2 回で不変）。
 // 機能フラグ templateDiffApply が ON の教室の再マージ（templateOriginRules を渡す）と差分反映（computeTemplateDiffApplyForBoard）の両方を通す。
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { computePendingTeacherChoice } from './templatePendingResolution'
+import type { TemplatePendingDeskMap } from './templatePendingDesks'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
@@ -355,5 +359,29 @@ describe('§9-19 休んだ講師本人を手で置き直すと休みを自動で
   it('再マージ・テンプレの反映（自動配置）では解除しない（田中は戻らず記録も残る）', () => {
     const weeks = save(restedBoard()).nextWeeks
     expect(cellOf(remerge(weeks)).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+  })
+})
+
+// 段 4 監査 要確認-6（§9-19）: 保留の「下段(手入力)の講師を採用する」でも、休んだ講師本人（呼び名の対応表で同じ講師）なら休みを解除する。
+describe('§9-19 × 保留の講師の採用: 休んだ講師本人を採用したら休みを解除する（呼び名の対応表を通す）', () => {
+  const aliasTeachers: TeacherRow[] = [{ id: 't1', name: '田中 一郎', displayName: '田中', email: '', entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [] }]
+  const pendingWeeks = (): SlotCell[][] => [[{
+    id: 'c1', dateKey: '2026-10-07', dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: 5, timeLabel: '', isOpenDay: true,
+    desks: [{ id: 'd1', teacher: '', teacherRest: { teacher: '田中 一郎', teacherId: 't1' } }],
+  }]]
+  const pendingMap = (): TemplatePendingDeskMap => ({ 'c1::d1': { lower: { teacher: { teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' } }, effectiveStartDate: '2026-10-07', createdAt: '2026-10-01T00:00:00.000Z' } })
+  it('対応表あり: 表示名「田中」で採用しても登録名「田中 一郎」の休みが解除される／対応表なし（名前の一致だけ）では残る', () => {
+    const withAliases = computePendingTeacherChoice({ weeks: pendingWeeks(), templatePendingDesks: pendingMap(), cellId: 'c1', deskId: 'd1', choice: 'manual', teacherAliases: buildTeacherAliasResolver(aliasTeachers) })
+    if (withAliases.status !== 'applied') throw new Error(withAliases.message)
+    expect(withAliases.nextWeeks[0][0].desks[0]).toMatchObject({ teacher: '田中' })
+    expect(withAliases.nextWeeks[0][0].desks[0].teacherRest).toBeUndefined()
+    const withoutAliases = computePendingTeacherChoice({ weeks: pendingWeeks(), templatePendingDesks: pendingMap(), cellId: 'c1', deskId: 'd1', choice: 'manual' })
+    if (withoutAliases.status !== 'applied') throw new Error(withoutAliases.message)
+    expect(withoutAliases.nextWeeks[0][0].desks[0].teacherRest).toEqual({ teacher: '田中 一郎', teacherId: 't1' })
+  })
+  it('配線: 盤面の保留の解決は呼び名の対応表を渡す', () => {
+    const board = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+    expect(board).toContain('teacherAliases: params.teacherAliases })')
+    expect(board).toContain('      teacherAliases: buildTeacherAliasResolver(teachers),\n    })')
   })
 })

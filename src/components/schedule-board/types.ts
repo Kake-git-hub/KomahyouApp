@@ -75,6 +75,12 @@ export type StudentEntry = {
    * 別の日へ動かすと外れる（prepareStudentForMove）。読み手は wholeDayTransferPair.ts の isWholeDayPairExpandedStudent を通す。
    */
   wholeDayPairSourceDate?: string
+  /**
+   * §9-20（2026-11-05）: 付け替えの作成で移動元 D から D' の同じ席へ移した手入力の印。解除でこの印のものだけ D の元の席へ戻す
+   * （D' で後から手で置いた手入力は D' に残す）。restore は移す前の区分・振替元・印（prepareStudentForMove が書き換える項目だけ）。
+   * 別の席・別の日へ動かすと外れる（prepareStudentForMove）。
+   */
+  wholeDayPairMovedFrom?: { dateKey: string; restore: Partial<Pick<StudentEntry, 'origin' | 'lessonType' | 'makeupSourceDate' | 'makeupSourceLabel' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>> }
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -152,6 +158,8 @@ export type StudentStatusEntry = {
    * 解除で外す。会計を持たない。出欠記録としては数えない（解除・付け替えの判定・cellsHaveNonDerivedStatusEntries）。
    */
   wholeDayPairDerived?: boolean
+  /** 付け替えの記録が属する組の移動先 D'（在庫の自動発生が D' 自身のテンプレを数えない判定に使う・§9-21 の休みは振替先を持たないのでここだけで読む）。 */
+  wholeDayPairTargetDate?: string
   sourceLessonId: string
   sourceLessonNote?: string
   sourceLessonWarning?: string
@@ -195,6 +203,10 @@ export type DeskCell = {
   teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
+  /** §9-20: 付け替えの作成で移動元 D から移したメモの席（値は D）。解除で D の同じ席へ戻す。 */
+  wholeDayPairMovedMemoFrom?: [string | null, string | null]
+  /** §9-20: 付け替えの作成で移動元 D から移した手置き講師（値は D）。解除で D の同じ机へ戻す。 */
+  wholeDayPairMovedTeacherFrom?: string
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   lesson?: DeskLesson
 }

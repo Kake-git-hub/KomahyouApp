@@ -20,6 +20,8 @@
 // ★予定数は移動元 D の月で数える（4-8・決定記録 3）。読み手は isWholeDayPairExpandedStudent の印で D の日付に寄せる。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { isManualOriginStudent } from './placementOrigin'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 const WHOLE_DAY_PAIR_PREFIX = 'WHOLE_DAY_PAIR__'
 
@@ -89,10 +91,10 @@ export function resolveWholeDayTransferPairWeekdayBlock(sourceDateKey: string, t
  * 付け替えで D' に展開した生徒か（§1-1 #17・出自＝テンプレ（付け替え））。印 `wholeDayPairSourceDate` があり、科目・時間の手直しなどで
  * 手入力（origin='manual'）になっていないもの。別の日へ動かすと印は外れる（prepareStudentForMove）。
  */
-export function isWholeDayPairExpandedStudent(student: Pick<StudentEntry, 'wholeDayPairSourceDate' | 'origin' | 'manualAdded' | 'editedToMakeup' | 'editedFromRegular'> | null | undefined): boolean {
+export function isWholeDayPairExpandedStudent(student: Pick<StudentEntry, 'wholeDayPairSourceDate' | 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'> | null | undefined): boolean {
   if (!student?.wholeDayPairSourceDate) return false
-  if (student.origin === 'manual' || student.manualAdded || student.editedToMakeup || student.editedFromRegular) return false
-  return true
+  // 手入力かどうかは出自の権威関数（placementOrigin.ts）で決める（ここで判定を写さない）。
+  return !isManualOriginStudent(student)
 }
 
 /**
@@ -103,19 +105,17 @@ export function resolveWholeDayPairCountDateKey(student: Pick<StudentEntry, 'who
   return student?.wholeDayPairSourceDate || cellDateKey
 }
 
-function formatPairOriginLabel(dateKey: string, slotNumber: number) {
-  const [year, month, day] = dateKey.split('-').map(Number)
-  return `${year}/${month}/${day}(${WEEKDAY_LABELS[weekdayOf(dateKey)]}) ${slotNumber}限`
-}
+/** 振替元の表示ラベル（"2026/10/7(水) 5限"）の作り方。呼び出し側が在庫・移動と同じ formatStockOriginLabel を渡す（形を 2 か所で持たない）。 */
+export type WholeDayPairOriginLabelFormatter = (dateKey: string, slotNumber: number) => string
 
 /** D のテンプレの生徒を D' の付け替えの生徒にする（「振)」・出自 template・振替元 D の時限つき）。 */
-export function convertToWholeDayPairStudent(student: StudentEntry, sourceDateKey: string, slotNumber: number): StudentEntry {
+export function convertToWholeDayPairStudent(student: StudentEntry, sourceDateKey: string, slotNumber: number, formatOriginLabel: WholeDayPairOriginLabelFormatter): StudentEntry {
   return {
     ...student,
     origin: 'template',
     lessonType: 'makeup',
     makeupSourceDate: sourceDateKey,
-    makeupSourceLabel: formatPairOriginLabel(sourceDateKey, slotNumber),
+    makeupSourceLabel: formatOriginLabel(sourceDateKey, slotNumber),
     sameDayMoveSourceDate: undefined,
     sameDayMoveSourceLabel: undefined,
     wholeDayPairSourceDate: sourceDateKey,
@@ -132,8 +132,7 @@ export function convertToWholeDayPairStudent(student: StudentEntry, sourceDateKe
 export function applyWholeDayTransferPairToManagedCell(cell: SlotCell, params: {
   pair: WholeDayTransferPair & { role: 'source' | 'target' }
   sourceCellsBySlot: ReadonlyMap<number, SlotCell>
-  /** D の日付の明示の抑止キー（D で削除した授業は付け替えにも出さない）。 */
-  isSuppressedOnSource: (student: StudentEntry, slotNumber: number) => boolean
+  formatOriginLabel: WholeDayPairOriginLabelFormatter
 }): SlotCell {
   const emptyDesk = (desk: DeskCell): DeskCell => ({ id: desk.id, teacher: '' })
   if (params.pair.role === 'source') {
@@ -148,7 +147,7 @@ export function applyWholeDayTransferPairToManagedCell(cell: SlotCell, params: {
     if (sourceDesk.teacherAssignmentTeacherId) next.teacherAssignmentTeacherId = sourceDesk.teacherAssignmentTeacherId
     if (sourceDesk.lesson) {
       const slots = sourceDesk.lesson.studentSlots.map((student) => (
-        student && !params.isSuppressedOnSource(student, cell.slotNumber) ? convertToWholeDayPairStudent(student, params.pair.sourceDateKey, cell.slotNumber) : null
+        student ? convertToWholeDayPairStudent(student, params.pair.sourceDateKey, cell.slotNumber, params.formatOriginLabel) : null
       )) as [StudentEntry | null, StudentEntry | null]
       if (slots[0] || slots[1]) next.lesson = { ...sourceDesk.lesson, id: `${sourceDesk.lesson.id}__pair_${params.pair.targetDateKey}`, studentSlots: slots }
     }
@@ -192,6 +191,7 @@ export function deriveWholeDayPairSourceRecords(cell: SlotCell, params: {
         moveDestinationDateKey: params.pair.targetDateKey,
         moveDestinationSlotNumber: cell.slotNumber,
         wholeDayPairDerived: true,
+        wholeDayPairTargetDate: params.pair.targetDateKey,
       }
     })
     const nextSlots = next[0] || next[1] ? next : undefined
@@ -224,7 +224,75 @@ export function stripWholeDayPairDerivedRecords(cell: SlotCell): SlotCell {
   return changed ? { ...cell, desks } : cell
 }
 
+/**
+ * 盤面から読む「付け替えの移動先 D' の日付」（在庫の自動発生が D' 自身のテンプレを数えないため・監査 重大-2）。
+ * 在庫の計算は抑止キーを受け取らないので、盤面に残る印（D の「休)」記録の移動先・D' の付け替えの授業）から読む。
+ * D' を休日設定して付け替えの授業が D' から消えても、D の「休)」記録が移動先を持ち続ける。
+ */
+export function collectWholeDayPairTargetDates(weeks: readonly (readonly SlotCell[])[]): Set<string> {
+  const dates = new Set<string>()
+  for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
+    for (const entry of desk.statusSlots ?? []) if (entry?.wholeDayPairDerived && entry.wholeDayPairTargetDate) dates.add(entry.wholeDayPairTargetDate)
+    for (const student of desk.lesson?.studentSlots ?? []) if (student?.wholeDayPairSourceDate && student.lessonType === 'makeup') dates.add(cell.dateKey)
+  }
+  return dates
+}
+
 /** 出欠記録（付け替えの「休)」記録は数えない）がその日のセル群にあるか。 */
 export function cellsHaveNonDerivedStatusEntries(cells: readonly SlotCell[]) {
   return cells.some((cell) => cell.desks.some((desk) => desk.statusSlots?.some((entry) => entry != null && !isWholeDayPairDerivedRecord(entry))))
+}
+
+/**
+ * §9-21（オーナー決定 2026-11-05・監査 要確認-4）: D' の同じ時限に同じ生徒 S の手入力（上段・保留の下段）があり、§2-2 で D の S の授業を D' に置かない
+ * ときは、D の S の記録を表示専用の「休)→D'」ではなく**休み**（absent・会計は通常の休みと同じ +1・在庫は記録から算出＝makeupStock の
+ * collectAbsentMakeupOrigins）にし、振替先を持たせない。置けるようになったら「休)→D'」へ戻す。D と D' は別の週にあるので、週ごとの
+ * 再マージの後に盤面全体で 1 回当てる（remergeBoardWeeksWithManagedData・テンプレの保存・付け替えの作成/解除の 3 か所）。何度当てても同じ（不動点）。
+ */
+export function settleWholeDayPairBlockedRecords(weeks: SlotCell[][], keys: readonly string[], pendingDesks?: TemplatePendingDeskMap | null): SlotCell[][] {
+  const pairs = parseWholeDayTransferPairs(keys)
+  if (pairs.length === 0) return weeks
+  const cellsByDate = new Map<string, SlotCell[]>()
+  for (const week of weeks) for (const cell of week) cellsByDate.set(cell.dateKey, [...(cellsByDate.get(cell.dateKey) ?? []), cell])
+  const sameStudent = (left: Pick<StudentEntry, 'managedStudentId' | 'name'>, right: Pick<StudentEntry, 'managedStudentId' | 'name'>) => (
+    left.managedStudentId && right.managedStudentId ? left.managedStudentId === right.managedStudentId : left.name === right.name
+  )
+  const manualOnTarget = (pair: WholeDayTransferPair, slotNumber: number, entry: StudentStatusEntry) => {
+    const cell = (cellsByDate.get(pair.targetDateKey) ?? []).find((item) => item.slotNumber === slotNumber)
+    if (!cell) return false
+    return cell.desks.some((desk) => [
+      ...(desk.lesson?.studentSlots ?? []),
+      ...(pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []),
+    ].some((student) => Boolean(student) && !isWholeDayPairExpandedStudent(student) && isManualOriginStudent(student) && sameStudent(student!, entry)))
+  }
+  let changed = false
+  const next = weeks.map((week) => week.map((cell) => {
+    const pair = pairs.find((item) => item.sourceDateKey === cell.dateKey)
+    if (!pair) return cell
+    let cellChanged = false
+    const desks = cell.desks.map((desk) => {
+      if (!desk.statusSlots?.some(isWholeDayPairDerivedRecord)) return desk
+      const statusSlots = desk.statusSlots.map((entry) => {
+        if (!entry || !isWholeDayPairDerivedRecord(entry)) return entry
+        const blocked = manualOnTarget(pair, cell.slotNumber, entry)
+        if (blocked && entry.status !== 'absent') {
+          const { moveDestinationDateKey: _date, moveDestinationSlotNumber: _slot, ...rest } = entry
+          void _date
+          void _slot
+          cellChanged = true
+          return { ...rest, status: 'absent' as const, id: entry.id.replace(/^wholedaypair_/, 'wholedaypairabsent_') }
+        }
+        if (!blocked && entry.status === 'absent') {
+          cellChanged = true
+          return { ...entry, status: 'moved' as const, id: entry.id.replace(/^wholedaypairabsent_/, 'wholedaypair_'), moveDestinationDateKey: pair.targetDateKey, moveDestinationSlotNumber: cell.slotNumber }
+        }
+        return entry
+      }) as [StudentStatusEntry | null, StudentStatusEntry | null]
+      return cellChanged ? { ...desk, statusSlots } : desk
+    })
+    if (!cellChanged) return cell
+    changed = true
+    return { ...cell, desks }
+  }))
+  return changed ? next : weeks
 }

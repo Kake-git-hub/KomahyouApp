@@ -16,6 +16,7 @@ import type {
 } from './scheduleHtml'
 import type { GroupClassEntry } from '../components/schedule-board/groupClass'
 import { getJstTodayDateKey } from './jstDate'
+import { resolveWholeDayPairCountDateKey } from '../components/schedule-board/wholeDayTransferPair'
 
 export type ScheduleViewType = 'student' | 'teacher'
 
@@ -263,8 +264,9 @@ export function filterCells(payload: SchedulePayload, startDate: string, endDate
 // 段 4（丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3・4-8）: 付け替えの授業は移動元 D の月で数える。
 // 埋め込み版（scheduleHtml.ts の isWholeDayPairCountedOutside / countWholeDayPairLessonsFromOutside）と同じ規則。
 export function isWholeDayPairCountedOutside(lesson: SerializedStudentEntry | SerializedStudentStatusEntry, startDate: string, endDate: string) {
-  const sourceDateKey = 'wholeDayPairSourceDate' in lesson ? lesson.wholeDayPairSourceDate : undefined
-  return Boolean(sourceDateKey) && (sourceDateKey! < startDate || sourceDateKey! > endDate)
+  if (!lesson.wholeDayPairSourceDate) return false
+  const countDateKey = resolveWholeDayPairCountDateKey(lesson, '')
+  return countDateKey < startDate || countDateKey > endDate
 }
 
 /** 表示期間の外のコマにある付け替えの授業のうち、移動元 D が期間内のもの（科目の並び）。 */
@@ -273,8 +275,13 @@ export function countWholeDayPairLessonsFromOutside(payload: SchedulePayload, st
   if (outsideCells.length === 0) return []
   const assignmentMap = buildStudentAssignments(outsideCells)
   return getStudentAssignmentKeys(payload, student).flatMap((key) => assignmentMap.get(key) || [])
-    .filter((entry) => !isStatusEntry(entry.lesson) && entry.lesson.lessonType !== 'special' && Boolean(entry.lesson.wholeDayPairSourceDate)
-      && entry.lesson.wholeDayPairSourceDate! >= startDate && entry.lesson.wholeDayPairSourceDate! <= endDate)
+    // 出席・振無休の記録も数える（実績に入る記録だけ・休み／moved／holiday は数えない＝期間内の数え方と同じ・監査 要修正-A）。
+    .filter((entry) => (!isStatusEntry(entry.lesson) || entry.lesson.status === 'attended' || entry.lesson.status === 'absent-no-makeup')
+      && entry.lesson.lessonType !== 'special' && Boolean(entry.lesson.wholeDayPairSourceDate))
+    .filter((entry) => {
+      const countDateKey = resolveWholeDayPairCountDateKey(entry.lesson, entry.dateKey)
+      return countDateKey >= startDate && countDateKey <= endDate
+    })
     .map((entry) => entry.lesson.subject)
 }
 

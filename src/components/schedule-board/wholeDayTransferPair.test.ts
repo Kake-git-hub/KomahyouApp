@@ -1,5 +1,7 @@
 // 段 4「丸ごと振替の付け替え」（docs/spec-template-conflict-v2.md §3・§1-1 #17・§9 決定記録 2・3・12・受け入れ条件 4-1〜4-9）。
 // 在庫中立・休みで +1・不動点・解除・手入力 2 行・別曜日の拒否は INV-06 のマトリクス（inv06-whole-day-transfer.matrix.test.ts「第 2 版」）にも置く。
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SlotCell, StudentEntry } from './types'
 import {
@@ -10,11 +12,12 @@ import {
   isWholeDayPairExpandedStudent,
   parseWholeDayTransferPairs,
   removeWholeDayTransferPair,
+  resolveWholeDayPairCountDateKey,
   resolveWholeDayTransferPairWeekdayBlock,
   stripWholeDayPairDerivedRecords,
 } from './wholeDayTransferPair'
 import { inferStudentOrigin, resolveStudentOrigin } from './placementOrigin'
-import { buildStudentStatusEntry, buildWholeDayTransferPairConfirmMessage, computeStudentMove, prepareStudentForMove, resolveWholeDayTransferPairSourceBlockReason } from './ScheduleBoardScreen'
+import { buildStudentStatusEntry, buildWholeDayTransferPairConfirmMessage, canReleaseWholeDayTransferPair, formatStockOriginLabel, computeStudentMove, prepareStudentForMove, resolveWholeDayTransferPairSourceBlockReason } from './ScheduleBoardScreen'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import { collectOrphanedMakeups } from './templateTransferFollow'
 import { buildParentScheduleView } from '../../utils/parentSchedule'
@@ -22,11 +25,12 @@ import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../
 import { buildStudentPayload } from '../../utils/scheduleHtml'
 import { buildStudentSheetViewModel, countWholeDayPairLessonsFromOutside, isWholeDayPairCountedOutside } from '../../utils/scheduleViewData'
 import {
-  buildBoard, cellAt, D, D2, MONTH_CROSS_WEEKS, pairedOrThrow, pairOf, recordIds, releaseOf, remerge, row, ROWS, save, seatIds, settings, snapshot, SLOT, students, teachers,
+  balances, buildBoard, cellAt, D, D2, MONTH_CROSS_WEEKS, pairedOrThrow, pairOf, recordIds, releaseOf, remerge, row, ROWS, save, seatIds, settings, snapshot, SLOT, students, teachers,
 } from './wholeDayTransferPair.fixture'
 
 const KEY = buildWholeDayTransferPairKey(D, D2)
 const baseBoard = () => remerge(buildBoard(), ROWS, [])
+const balancesOf = (weeks: SlotCell[][]) => balances(weeks, ROWS)
 /** テンプレの変更: 水 5限 机 0 に生徒 2＝千葉を足す。 */
 const ROWS_WITH_C = [row('r0', 't1', 'sA', 'sC'), ROWS[1], ROWS[2]]
 
@@ -53,7 +57,7 @@ describe('組の置き場（純関数・抑止キーに相乗り）', () => {
 
   it('§1-1 #17: 付け替えの授業は出自テンプレ（青字にしない）。科目・時間の手直しで手入力になると印は効かない', () => {
     const base: StudentEntry = { id: 'x', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }
-    const paired = convertToWholeDayPairStudent(base, D, SLOT)
+    const paired = convertToWholeDayPairStudent(base, D, SLOT, formatStockOriginLabel)
     expect(paired).toMatchObject({ lessonType: 'makeup', makeupSourceDate: D, makeupSourceLabel: '2026/10/7(水) 5限', wholeDayPairSourceDate: D, origin: 'template' })
     expect(inferStudentOrigin(paired)).toBe('template')
     expect(resolveStudentOrigin(paired)).toBe('template')
@@ -65,7 +69,7 @@ describe('組の置き場（純関数・抑止キーに相乗り）', () => {
   })
 
   it('動かすと印が外れて手入力になる（同じ日の中でも・別の日でも）', () => {
-    const paired = convertToWholeDayPairStudent({ id: 'x', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }, D, SLOT)
+    const paired = convertToWholeDayPairStudent({ id: 'x', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }, D, SLOT, formatStockOriginLabel)
     for (const targetDateKey of [D2, '2026-10-21']) {
       const moved = prepareStudentForMove(paired, D2, SLOT, targetDateKey)
       expect(moved.wholeDayPairSourceDate).toBeUndefined()
@@ -204,7 +208,7 @@ describe('組を作る（computeWholeDayTransferPair）', () => {
     if (blocked.status === 'blocked') expect(blocked.message).toContain('5限 2机目')
   })
 
-  it('付け替えの授業を D\' で消す・別の日へ動かすと、D\' に削除記録が積まれ再マージで生き返らない（印は外れる）', () => {
+  it('付け替えの授業を D\' で消す・別の日へ動かすと、移動元 D の日付で削除記録が積まれ再マージで生き返らない（印は外れる・監査 要修正-B）', () => {
     const paired = pairedOrThrow(pairOf(baseBoard()))
     const d2 = cellAt(paired.nextWeeks, D2)
     const moved = computeStudentMove({
@@ -215,7 +219,8 @@ describe('組を作る（computeWholeDayTransferPair）', () => {
       templateOriginRules: true,
     })
     if (moved.status !== 'moved') throw new Error(moved.message)
-    expect(moved.nextSuppressedRegularLessonOccurrences).toContain(`sA__数__${D2}__${SLOT}`)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toContain(`sA__数__${D}__${SLOT}`)
+    expect(moved.nextSuppressedRegularLessonOccurrences).not.toContain(`sA__数__${D2}__${SLOT}`)
     expect(d2.id).toBeTruthy()
     const remerged = remerge(moved.nextWeeks, ROWS, moved.nextSuppressedRegularLessonOccurrences)
     expect(seatIds(remerged, D2)).toEqual([[], ['sB', null]])
@@ -311,5 +316,110 @@ describe('INV-03: 作成・保存・解除は再マージの不動点', () => {
     const released = releaseOf(saved.nextWeeks, paired.nextSuppressedRegularLessonOccurrences, { rows: ROWS_WITH_C })
     if (released.status !== 'transferred') throw new Error(released.message)
     expect(snapshot(remerge(released.nextWeeks, ROWS_WITH_C, released.nextSuppressedRegularLessonOccurrences, settings(), released.nextTemplatePendingDesks))).toBe(snapshot(released.nextWeeks))
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 段 4 監査（2026-11-05・HEAD d0f8283）の要修正・要確認と §9-20 / §9-21
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('監査 重大-1(b): D の日付の抑止キーは再マージと差分反映で同じ結果', () => {
+  it('D の日付の削除記録（青木）があると、再マージでもテンプレの保存でも D\' の付け替えから青木だけ外れる（ほかは残る・在庫 0）', () => {
+    const paired = pairedOrThrow(pairOf(baseBoard()))
+    const keys = [...paired.nextSuppressedRegularLessonOccurrences, `sA__数__${D}__${SLOT}`]
+    const remerged = remerge(paired.nextWeeks, ROWS, keys)
+    const saved = save(paired.nextWeeks, ROWS, keys)
+    expect(seatIds(remerged, D2)).toEqual([[], ['sB', null]])
+    expect(seatIds(saved.nextWeeks, D2)).toEqual(seatIds(remerged, D2))
+    expect(snapshot(remerge(saved.nextWeeks, ROWS, keys, settings(), saved.nextPendingDesks))).toBe(snapshot(saved.nextWeeks))
+    expect(Object.keys(saved.nextPendingDesks)).toEqual([])
+    expect(balancesOf(saved.nextWeeks)).toEqual({})
+  })
+})
+
+describe('監査 要修正-A / 4-8: 付け替えの授業を出席・振無休にしても D の月で数える', () => {
+  const SRC = '2026-10-28'
+  const DST = '2026-11-04'
+  const crossSettings = settings({ templateFreezeBeforeDate: SRC })
+  const count = (weeks: SlotCell[][], startDate: string, endDate: string) => {
+    const payload = buildStudentPayload({
+      cells: weeks.flat(), defaultStartDate: startDate, defaultEndDate: endDate, titleLabel: '段4', classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] },
+      students, teachers, regularLessons: ROWS, boardBasedPlannedCountEnabled: true,
+    })
+    const vm = buildStudentSheetViewModel(payload, { startDate, endDate, studentId: 'sA', todayKey: '2026-10-01' })!
+    return { actual: vm.regularCountRows.reduce((sum, item) => sum + item.count, 0), planned: vm.regularCountRows.reduce((sum, item) => sum + item.desired, 0), payload }
+  }
+  for (const status of ['attended', 'absent-no-makeup'] as const) {
+    it(`${status}: 記録にしても 10 月に 1 回・11 月に 0 回（画面版）。書き出しに振替元 D が載る（埋め込み版が読む）`, () => {
+      const board = remerge(buildBoard(ROWS, crossSettings, MONTH_CROSS_WEEKS), ROWS, [], crossSettings)
+      const paired = pairedOrThrow(pairOf(board, { source: SRC, target: DST, classroomSettings: crossSettings }))
+      const weeks = structuredClone(paired.nextWeeks)
+      const cell = cellAt(weeks, DST)
+      const record = buildStudentStatusEntry(cell.desks[0].lesson!.studentSlots[0]!, cell, cell.desks[0], status)
+      cell.desks[0].lesson = undefined
+      cell.desks[0].statusSlots = [record, null]
+      expect(record.wholeDayPairSourceDate).toBe(SRC)
+      const october = count(weeks, '2026-10-01', '2026-10-31')
+      expect(october).toMatchObject({ actual: 1, planned: 1 })
+      expect(count(weeks, '2026-11-01', '2026-11-30')).toMatchObject({ actual: 0, planned: 0 })
+      const serialized = october.payload.cells.find((item) => item.dateKey === DST && item.slotNumber === SLOT)!.desks[0].statuses![0]!
+      expect(serialized.wholeDayPairSourceDate).toBe(SRC)
+      expect(resolveWholeDayPairCountDateKey(serialized, DST)).toBe(SRC)
+      expect(resolveWholeDayPairCountDateKey({}, DST)).toBe(DST)
+    })
+  }
+})
+
+describe('§9-20: 作成 → 解除で元の形へ戻る（D から移した手入力も D へ戻る）', () => {
+  it('体験・メモを D に置いた盤面で、作成 → 解除の盤面・保留・抑止キー・在庫が作成前と同じ', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[1].lesson!.studentSlots[1] = { id: 'trial-1', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }
+    cellAt(before, D).desks[0].memoSlots = [null, '自習']
+    const settledBefore = remerge(before, ROWS, [])
+    const paired = pairedOrThrow(pairOf(settledBefore))
+    expect(studentAt(paired.nextWeeks, D2, 1, 1)?.wholeDayPairMovedFrom).toMatchObject({ dateKey: D })
+    expect(cellAt(paired.nextWeeks, D2).desks[0].wholeDayPairMovedMemoFrom).toEqual([null, D])
+    const released = releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(released.nextWeeks).toEqual(settledBefore)
+    expect(released.nextSuppressedRegularLessonOccurrences).toEqual([])
+    expect(released.nextTemplatePendingDesks).toEqual({})
+    expect(balancesOf(released.nextWeeks)).toEqual(balancesOf(settledBefore))
+  })
+
+  it('D\' で後から手で置いた手入力は D\' に残す（移した印の無いもの）', () => {
+    const paired = pairedOrThrow(pairOf(baseBoard()))
+    const weeks = structuredClone(paired.nextWeeks)
+    cellAt(weeks, D2, 4).desks[1].lesson = { id: 'later', studentSlots: [{ id: 'trial-9', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }, null] }
+    const released = releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(studentAt(released.nextWeeks, D2, 1, 0, 4)?.id).toBe('trial-9')
+    expect(studentAt(released.nextWeeks, D, 1, 0, 4)).toBeNull()
+  })
+})
+
+describe('監査 要確認-3（収束）: 組の無い形で作り直された D\' の週に組のキーを当てても付け替えの形に収束する', () => {
+  it('D\' 自身の通常授業・D のテンプレの通常授業が残る盤面を、組のキーで再マージすると作成直後と同じ形', () => {
+    const paired = pairedOrThrow(pairOf(baseBoard()))
+    const regenerated = remerge(baseBoard(), ROWS, paired.nextSuppressedRegularLessonOccurrences)
+    expect(seatIds(regenerated, D2)).toEqual(seatIds(paired.nextWeeks, D2))
+    expect(studentAt(regenerated, D2, 0)).toMatchObject({ lessonType: 'makeup', wholeDayPairSourceDate: D, origin: 'template' })
+    expect(seatIds(regenerated, D)).toEqual([[], []])
+    expect(recordIds(regenerated, D)).toEqual(recordIds(paired.nextWeeks, D))
+    expect(snapshot(remerge(regenerated, ROWS, paired.nextSuppressedRegularLessonOccurrences))).toBe(snapshot(regenerated))
+  })
+})
+
+describe('監査 要確認-5: フラグを OFF に戻しても、組のある日には「丸ごと振替を解除」を出す', () => {
+  it('canReleaseWholeDayTransferPair は組の日だけ真・メニューはフラグで包まない', () => {
+    expect(canReleaseWholeDayTransferPair([KEY], D)).toBe(true)
+    expect(canReleaseWholeDayTransferPair([KEY], D2)).toBe(true)
+    expect(canReleaseWholeDayTransferPair([KEY], '2026-10-21')).toBe(false)
+    expect(canReleaseWholeDayTransferPair([], D)).toBe(false)
+    const board = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+    expect(board).toContain('{canReleaseWholeDayTransferPair(suppressedRegularLessonOccurrences, dayHeaderMenu.dateKey) ? (')
+    expect(board).not.toContain('templateDiffApplyEnabled && findWholeDayTransferPairForDate(')
+    // 作るのは ON の教室だけ（OFF は第 1 版の computeWholeDayTransfer のまま）。
+    expect(board).toContain('if (templateDiffApplyEnabled) {\n      handleWholeDayTransferPairTarget(sourceDateKey, targetDateKey)')
   })
 })

@@ -96,7 +96,9 @@ describe('3-1・3-5 講師欄のメニューの「休み」ボタン（ScheduleB
 describe('§9-19 講師メニューの「保存」（手で置く経路）: 休んだ講師本人を置くと休みを解除する', () => {
   it('講師メニューの保存が通る setManualTeacherAssignment が releaseTeacherRestIfSameTeacherPlaced を呼ぶ。D&D（computeTeacherMove）も同じ', () => {
     const setter = BOARD_TSX.slice(BOARD_TSX.indexOf('function setManualTeacherAssignment('), BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment('))
-    expect(setter).toContain('releaseTeacherRestIfSameTeacherPlaced(desk)')
+    // 監査 要確認-6: 呼び名の対応表（buildTeacherAliasResolver）を通す（D&D と同じ）。
+    expect(setter).toContain('releaseTeacherRestIfSameTeacherPlaced(desk, teacherAliases)')
+    expect(BOARD_TSX).toContain('setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))')
     const confirm = BOARD_TSX.slice(BOARD_TSX.indexOf('const handleConfirmTeacher = () => {'), BOARD_TSX.indexOf('const handleToggleTeacherRest = () => {'))
     expect(confirm).toContain('setManualTeacherAssignment(targetDesk')
     const move = BOARD_TSX.slice(BOARD_TSX.indexOf('export function computeTeacherMove('), BOARD_TSX.indexOf('export type WholeDayTransferSummary'))
