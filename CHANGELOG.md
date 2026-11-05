@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.688 (2026-11-05)
+
 - docs: **作業の進め方を Superpowers プラグインへ切り替え**(オーナー確定 2026-11-05)。ぶつかる 11 点の決定表を CLAUDE.md「Superpowers との使い分け」に追加(main 自動マージ継続・全変更テスト先行・実装は subagent-driven＋レビューは regression-reviewer 1 人・設計は docs/spec-*.md・計画は docs/plan-*.md・worktree 無し・軽い作業はスキル免除)。**staging での実機確認を必須から外し**、画面確認は本番反映後の確認リストに一本化(safe-release・release-checklist・PR テンプレ・dev-fix)。regression-reviewer に仕様適合・品質の観点、regression-guard に systematic-debugging との分担と INV 4 点を追記。memory `komahyou-superpowers-adoption`。アプリのコード・動作は変更なし。
 - chore: Claude Code のプラグイン設定を repo に追加。`.claude/settings.json` の `env` で security-guidance の毎ターン差分レビュー(最上位モデル)を止め(`ENABLE_STOP_REVIEW=0`)、commit 時のレビューを Sonnet 最新(別名 `sonnet`・モデルID固定なし)にしてトークン消費を抑える。Playwright MCP の作業フォルダ `.playwright-mcp/` を `.gitignore` に追加(誤コミット防止)。アプリのコード・動作は変更なし。
 
