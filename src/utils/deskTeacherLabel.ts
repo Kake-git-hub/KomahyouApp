@@ -28,7 +28,7 @@ export function formatDeskTeacherLabel(teacher: string | null | undefined): stri
 /**
  * テンプレ差分反映が同じコマの空き机へずらして置いたテンプレの講師か（Q41-13・オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）。
  * 印（templateTeacherShift）がこの机の今の講師と一致し、かつ非 manual のときだけ真。講師が替わった・手で置き直した・削除した後の古い印は無視する。
- * 表示専用（緑の講師欄とツールチップ）。操作の制限は無い。
+ * 盤面の表示（緑の講師欄とツールチップ）は 2026-11-05 のオーナー指示で廃止（緑は講師のぶつかりだけ）。今は templateDiffApply.ts が印の後始末の判定に使う。
  */
 export function isShiftedTemplateTeacherDesk(desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'templateTeacherShift'>): boolean {
   const shift = desk.templateTeacherShift
@@ -36,10 +36,4 @@ export function isShiftedTemplateTeacherDesk(desk: Pick<DeskCell, 'teacher' | 'm
   if (desk.manualTeacher) return false
   const teacher = desk.teacher.trim()
   return teacher !== '' && teacher === shift.teacher.trim()
-}
-
-/** ずらして置いた講師の講師欄のツールチップ。 */
-export function describeShiftedTemplateTeacher(desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'templateTeacherShift'>): string {
-  if (!isShiftedTemplateTeacherDesk(desk)) return ''
-  return `テンプレでは机 ${desk.templateTeacherShift!.fromDeskIndex + 1} の講師ですが、その机に手で置いた講師が居るため、この机へずらして置きました（保留ではありません。講師の変更・生徒の配置はできます）。`
 }

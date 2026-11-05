@@ -67,23 +67,6 @@ export function isManualOriginDeskTeacher(desk: Pick<DeskCell, 'teacher' | 'manu
   return resolveDeskTeacherOrigin(desk) === 'manual'
 }
 
-/**
- * 「テンプレ由来の机」か（§2-1・§9-5: コマ表の並び替えで動かさない机）。テンプレの生徒が 1 人でも居る机、
- * または生徒が居ずテンプレの講師だけが居る机（足場）。手入力だけの机・空き机は並び替えで動く。
- */
-export function isTemplateOriginDesk(desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'lesson'>): boolean {
-  const slots: ReadonlyArray<StudentEntry | null> = desk.lesson?.studentSlots ?? []
-  const students = slots.filter((student): student is StudentEntry => Boolean(student))
-  if (students.some((student) => resolveStudentOrigin(student) === 'template')) return true
-  if (students.length === 0 && resolveDeskTeacherOrigin(desk) === 'template') return true
-  return false
-}
-
-/** コマの中のテンプレ由来の机の ID（並び替えで位置を固定する・1-6）。 */
-export function collectTemplateOriginDeskIds(cell: Pick<SlotCell, 'desks'>): Set<string> {
-  return new Set(cell.desks.filter(isTemplateOriginDesk).map((desk) => desk.id))
-}
-
 function stampStudent(student: StudentEntry | null): StudentEntry | null {
   if (!student || student.origin) return student
   return { ...student, origin: inferStudentOrigin(student) }

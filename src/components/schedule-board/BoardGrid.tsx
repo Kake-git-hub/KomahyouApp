@@ -7,7 +7,6 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
-import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { isManualOriginDeskTeacher, isManualOriginStudent, MANUAL_ORIGIN_CLASS } from './placementOrigin'
 import { hasDeskTeacherRest, TEACHER_REST_CELL_CLASS, TEACHER_REST_LABEL_CLASS } from './teacherRest'
@@ -820,17 +819,17 @@ function BoardGridComponent({
                       const teacherUnavailableWarning = hasUnavailableTeacherWarning(desk)
                       const teacherWarning = teacherManualWarning || teacherUnavailableWarning
                       const teacherAssignmentHint = getTeacherAssignmentHint(desk)
-                      // Q41-13（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: テンプレ差分反映が同じコマの空き机へずらして置いた
-                      // 講師は講師欄を緑にする（sa-teacher-shifted）。保留（sa-pending）ではないので操作の制限は無い。PDF は stripTemplatePendingLowerForPdf が外す。
-                      const shiftedTeacher = !pendingEntry && cell.isOpenDay && isShiftedTemplateTeacherDesk(desk)
+                      // 講師欄の緑は講師のぶつかり（spec-template-conflict-v2 §2-3・§5＝下段に手置きの講師がある）ときだけ（2026-11-05 オーナー指示・確認リスト tp-64
+                      // 「講師がバッティングしていなければ講師のセルは緑表示しなくていい」）。席だけの保留では席番号・席が緑で、講師欄は緑にしない。
+                      // 旧 Q41-13 のずらしの緑（sa-teacher-shifted）も同じ指示で廃止（データの templateTeacherShift は templateDiffApply.ts が後始末する）。
+                      const teacherPending = Boolean(pendingEntry?.lower.teacher)
                       // 講師の休み（§2-4・§5）: 講師なしの机でだけグレーの「休」。別の講師を手で置いたら通常の表示（休みの記録は残る）。
                       const restedTeacher = showTeacherRest && cell.isOpenDay && !desk.teacher.trim() && hasDeskTeacherRest(desk) ? desk.teacherRest! : null
                       const teacherClassName = [
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
                         teacherWarning ? 'sa-warning' : '',
-                        pendingEntry ? 'sa-pending' : '',
-                        shiftedTeacher ? 'sa-teacher-shifted' : '',
+                        teacherPending ? 'sa-pending' : '',
                         restedTeacher ? TEACHER_REST_CELL_CLASS : '',
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null
@@ -866,7 +865,7 @@ function BoardGridComponent({
                         >
                           <div
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}${showManualOriginColor && cell.isOpenDay && isManualOriginDeskTeacher(desk) ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}
-                            title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : (shiftedTeacher ? describeShiftedTemplateTeacher(desk) : teacherAssignmentHint)))}
+                            title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint))}
                           >
                             {/* 講師未割当などの埋め草は表示だけ空白にする(deskTeacherLabel.ts・オーナー指示 2026-10-22)。データは変えない。 */}
                             {cell.isOpenDay ? formatDeskTeacherLabel(desk.teacher) : ''}

@@ -473,8 +473,6 @@ export function stripTemplatePendingLowerForPdf(root: HTMLElement) {
   // 2026-11-05: 保留メニューを開いている席の上段の枠（画面だけの印）も PDF には出さない。
   root.querySelectorAll<HTMLElement>('.sa-pending-upper-selected').forEach((node) => node.classList.remove('sa-pending-upper-selected'))
   root.querySelectorAll<HTMLElement>('.sa-pending-desk').forEach((node) => node.classList.remove('sa-pending-desk'))
-  // Q41-13: ずらして置いた講師の緑（盤面画面の印）も PDF には出さない。
-  root.querySelectorAll<HTMLElement>('.sa-teacher-shifted').forEach((node) => node.classList.remove('sa-teacher-shifted'))
   // A-12（2026-11-01・Q36）: 同日移動の写しの緑と注意の帯（盤面画面の印）も PDF には出さない。
   root.querySelectorAll<HTMLElement>('.sa-student-copy-note').forEach((node) => node.remove())
   root.querySelectorAll<HTMLElement>('.sa-student-copy-notice').forEach((node) => node.classList.remove('sa-student-copy-notice'))

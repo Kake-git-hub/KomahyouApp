@@ -2727,13 +2727,6 @@ tr.sa-group-row td {
   cursor: not-allowed;
 }
 
-/* Q41-13（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: テンプレ差分反映が同じコマの空き机へずらして置いた講師。
-   保留と同じ緑で見分け、左の点線で「ずらした」ことを示す。保留ではないので操作の制限は無い。盤面 PDF は stripTemplatePendingLowerForPdf が外す。 */
-.sa-teacher.sa-teacher-shifted {
-  background: #e3f4e6;
-  box-shadow: inset 3px 0 0 #2e7d32;
-}
-
 /* 講師の休み（docs/spec-template-conflict-v2.md §2-4・§5・段 3・機能フラグ templateDiffApply の教室の盤面だけ）。講師なしの机をグレーにし、
    「休」＋休みにした講師名を灰色で出す。別の講師を置けば通常の表示。盤面 PDF は stripTemplatePendingLowerForPdf がクラスと文字を外す。 */
 .sa-teacher.sa-teacher-rest {

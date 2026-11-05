@@ -65,7 +65,7 @@ import {
   TEMPLATE_PENDING_MESSAGES,
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
-import { collectTemplateOriginDeskIds, isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
+import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
@@ -16249,13 +16249,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     // spec-template-behavior Q31（Issue #72・第 1 段 (C)・フラグ ON の教室だけ）: 保留（2 行）の机は位置・机 ID・中身を固定し、
     // 他の机だけを並べ替える（保留マップのキーは机 ID）。フラグ OFF は activeTemplatePendingDesks が null＝従来どおり。
-    // 第 2 版（spec-template-conflict-v2 §2-1・§9-5・1-6）: テンプレ由来の机も並び替えで動かさない（動くのは手入力の机だけ。テンプレの並びはテンプレ編集の並び替えで変える）。
-    const resolveLockedDeskIds = (cellId: string) => {
-      const pendingIds = collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)
-      if (!templateDiffApplyEnabled) return pendingIds
-      const cell = nextCells.find((candidate) => candidate.id === cellId)
-      return new Set([...(pendingIds ?? []), ...(cell ? collectTemplateOriginDeskIds(cell) : [])])
-    }
+    // 第 2 版 §9-22（2026-11-05 オーナー決定）: テンプレ由来の机も並び替えで動かす（表示中の週だけ。次のテンプレ保存でテンプレの並びに戻る）。
+    // 固定するのは保留（2 行）の机だけ。再マージは授業 ID で突き合わせるので、並び替えた週は読み込みでも戻らない。
+    const resolveLockedDeskIds = (cellId: string) => collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)
     if (mode === 'seat') {
       const sorted = seatSortCells(nextCells, { skipStatusSlotPack: true, resolveLockedDeskIds })
       sorted.forEach((cell, index) => { nextCells[index].desks = cell.desks })

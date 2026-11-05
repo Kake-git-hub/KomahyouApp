@@ -95,7 +95,9 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     expect(html).toContain('持ち物')
     expect(html).toContain('保留 1')
     expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
-    expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
+    // 2026-11-05 オーナー指示（確認リスト tp-64 受付 20261105-185258693「講師がバッティングしていなければ講師のセルは緑表示しなくていい」）:
+    // 席だけの保留（下段に講師が無い）では講師欄を緑にしない。
+    expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
     // 保留でない机（机 2）には下段も緑も付かない
     expect(html).not.toContain(`pending-lower-${CELL_ID}-1-0`)
     // 下段は .sa-student-inner の外（盤面・PDF の文字サイズ合わせに混ざらない）
@@ -103,6 +105,31 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     container.innerHTML = html
     expect(container.querySelector('.sa-student-inner .sa-pending-lower')).toBeNull()
     expect(container.querySelectorAll('.sa-pending-lower')).toHaveLength(2)
+  })
+
+  // 2026-11-05 オーナー指示（確認リスト tp-64 受付 20261105-185258693）: 講師欄の緑は講師のぶつかり（§2-3 手置き × テンプレ）＝下段の講師があるときだけ。
+  it('下段に講師を持つ保留（講師のぶつかり）では講師欄が緑（sa-pending）になり、下段の講師を描き、席番号も緑', () => {
+    const teacherPending: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(CELL_ID, `${CELL_ID}_desk_1`)]: {
+        lower: { teacher: { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' } },
+        effectiveStartDate: '2026-10-07',
+        createdAt: '2026-09-29T10:00:00.000Z',
+      },
+    }
+    const container = document.createElement('div')
+    container.innerHTML = renderGrid(teacherPending)
+    const teacher1 = container.querySelector(`[data-testid="teacher-cell-${CELL_ID}-0"]`)!
+    const teacher2 = container.querySelector(`[data-testid="teacher-cell-${CELL_ID}-1"]`)!
+    expect(teacher1.classList.contains('sa-pending')).toBe(true)
+    expect(teacher2.classList.contains('sa-pending')).toBe(false)
+    expect(container.querySelector(`[data-testid="pending-lower-teacher-${CELL_ID}-0"]`)?.textContent).toContain('佐藤')
+    expect(container.querySelector(`[data-testid="seat-number-cell-${CELL_ID}-0"]`)!.classList.contains('sa-pending')).toBe(true)
+    // 盤面 PDF の複製では講師欄の緑も下段の講師も外れる（INV-13）
+    stripTemplatePendingLowerForPdf(container)
+    expect(container.querySelector('.sa-pending')).toBeNull()
+    expect(container.querySelector(`[data-testid="pending-lower-teacher-${CELL_ID}-0"]`)).toBeNull()
+    expect(container.textContent).not.toContain('佐藤')
+    expect(container.textContent).toContain('鈴木')
   })
 
   // 2026-10-14 オーナー指摘(確認リスト tp-38)「保留生徒の D&D 中、両者が白抜きになりどちらを D&D しているかわかりにくいので、掴んでいる方だけ白抜きにして」。
@@ -211,9 +238,9 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       const both = document.createElement('div')
       both.innerHTML = renderGrid(PENDING)
       expect(Array.from(both.querySelectorAll('.sa-pending-lower-band')).map((node) => node.textContent)).toEqual(['保留 1', '保留 1'])
-      // 机の番号・講師欄は机単位の印（講師は保留中は変更不可）のまま緑
+      // 机の番号は机単位の印のまま緑。講師欄は講師のぶつかり（下段の講師）が無いので緑にしない（2026-11-05 オーナー指示）
       expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
-      expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
+      expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
       // 保留の机の席には（下段の無い席も）上詰めの印 sa-pending-desk が付き、上段の高さが揃う
       expect(seat1.classList.contains('sa-pending-desk')).toBe(true)
       expect(seat2.classList.contains('sa-pending-desk')).toBe(true)
@@ -279,40 +306,27 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
   })
 })
 
-describe('Q41-13 ずらして置いた講師の緑（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）', () => {
+describe('Q41-13 のずらしの印は緑にしない（2026-11-05 オーナー指示「講師がバッティングしていなければ講師のセルは緑表示しなくていい」）', () => {
   const shiftedCell = (): SlotCell => {
     const cell = boardCell()
     cell.desks = [
       { id: `${CELL_ID}_desk_1`, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual' },
       { id: `${CELL_ID}_desk_2`, teacher: '田村', templateTeacherShift: { teacher: '田村', fromDeskIndex: 0 } },
-      // 古い印（講師が手で置き直された）は緑にしない
       { id: `${CELL_ID}_desk_3`, teacher: '藤井', manualTeacher: true, teacherAssignmentSource: 'manual', templateTeacherShift: { teacher: '田村', fromDeskIndex: 0 } },
     ]
     return cell
   }
-  it('ずらした先の講師欄だけ sa-teacher-shifted（緑）になり、保留の緑（sa-pending）は付かず、ツールチップに元の机番号が出る', () => {
+  it('templateTeacherShift の印があっても講師欄は緑にならず sa-teacher-shifted も出ない。ずらしのツールチップも出さない', () => {
     const html = renderGrid(undefined, { cells: [shiftedCell()] })
-    // 講師欄の <td> の開始タグ（class を含む）だけを切り出す
-    const teacherTag = (deskIndex: number) => {
-      const end = html.indexOf(`data-testid="teacher-cell-${CELL_ID}-${deskIndex}"`)
-      return html.slice(html.lastIndexOf('<td', end), end)
-    }
-    const desk1 = teacherTag(0)
-    const desk2 = teacherTag(1)
-    const desk3 = teacherTag(2)
-    expect(desk2).toContain('sa-teacher-shifted')
-    expect(desk2).not.toContain('sa-pending')
-    expect(desk3).not.toContain('sa-teacher-shifted')
-    expect(desk1).not.toContain('sa-teacher-shifted')
-    expect(html).toContain('テンプレでは机 1 の講師ですが、その机に手で置いた講師が居るため、この机へずらして置きました（保留ではありません。講師の変更・生徒の配置はできます）。')
+    expect(html).not.toContain('sa-teacher-shifted')
+    expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
+    expect(html).not.toContain('この机へずらして置きました')
+    expect(html).toContain('田村')
   })
-  it('盤面 PDF の複製からは緑（sa-teacher-shifted）を外す', () => {
-    const container = document.createElement('div')
-    container.innerHTML = renderGrid(undefined, { cells: [shiftedCell()] })
-    expect(container.querySelector('.sa-teacher-shifted')).not.toBeNull()
-    stripTemplatePendingLowerForPdf(container)
-    expect(container.querySelector('.sa-teacher-shifted')).toBeNull()
-    expect(container.textContent).toContain('田村')
+  it('CSS・PDF にもずらしの緑の規則が残っていない', () => {
+    const css = readFileSync(fileURLToPath(new NodeURL('../../App.css', import.meta.url)), 'utf8')
+    expect(css).not.toContain('sa-teacher-shifted')
+    expect(PDF_TS).not.toContain('sa-teacher-shifted')
   })
 })
 
