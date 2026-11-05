@@ -42,6 +42,7 @@ import { seatSortCells } from './deskSort'
 import { trimBoardWeeksForMemory } from './boardWeekTrim'
 import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import * as FX from './templateTransferFollow.fixture'
+import * as pairFx from './wholeDayTransferPair.fixture'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -2753,4 +2754,37 @@ describe('INV-02 × 編集（フラグ ON）: 印 template の授業を編集で
       }
     })
   }
+})
+
+// 第 2 版 段 4（spec-template-conflict-v2 §3・§2-1）: 丸ごと振替の付け替えでも手入力は消さない・動かさない。
+describe('INV-02 マトリクス: 丸ごと振替の付け替え（第 2 版・段 4）', () => {
+  const board = () => pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])
+  it('D\' の手入力（体験・メモ）は付け替えでも、その後のテンプレ保存・再マージでも同じ席に残る（重なる席は 2 行）', () => {
+    const withManual = structuredClone(board())
+    const target = pairFx.cellAt(withManual, pairFx.D2)
+    target.desks[0].lesson!.studentSlots[0] = { id: 'trial-1', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }
+    target.desks[1].memoSlots = [null, '自習']
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(withManual))
+    const key = buildTemplatePendingDeskKey(target.id, target.desks[0].id)
+    const check = (weeks: SlotCell[][], pending: TemplatePendingDeskMap) => {
+      expect(pending[key]?.lower.lesson?.studentSlots[0]?.id).toBe('trial-1')
+      expect(pairFx.cellAt(weeks, pairFx.D2).desks[1].memoSlots).toEqual([null, '自習'])
+    }
+    check(paired.nextWeeks, paired.nextTemplatePendingDesks)
+    const rows = [pairFx.row('r0', 't1', 'sA', 'sC'), pairFx.ROWS[1], pairFx.ROWS[2]]
+    const saved = pairFx.save(paired.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, { templatePendingDesks: paired.nextTemplatePendingDesks })
+    check(saved.nextWeeks, saved.nextPendingDesks)
+    check(pairFx.remerge(saved.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), saved.nextPendingDesks), saved.nextPendingDesks)
+  })
+
+  it('D の手入力は D\' の同じ席へ手入力のまま移り、解除しても D\' に残る（テンプレの授業だけが D へ戻る）', () => {
+    const withManual = structuredClone(board())
+    pairFx.cellAt(withManual, pairFx.D).desks[1].lesson!.studentSlots[1] = { id: 'trial-1', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(withManual))
+    expect(pairFx.cellAt(paired.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-1', origin: 'manual' })
+    const released = pairFx.releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1]).toMatchObject({ id: 'trial-1' })
+    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', null]])
+  })
 })

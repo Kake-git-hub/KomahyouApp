@@ -260,6 +260,24 @@ export function filterCells(payload: SchedulePayload, startDate: string, endDate
   return payload.cells.filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate)
 }
 
+// 段 4（丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3・4-8）: 付け替えの授業は移動元 D の月で数える。
+// 埋め込み版（scheduleHtml.ts の isWholeDayPairCountedOutside / countWholeDayPairLessonsFromOutside）と同じ規則。
+export function isWholeDayPairCountedOutside(lesson: SerializedStudentEntry | SerializedStudentStatusEntry, startDate: string, endDate: string) {
+  const sourceDateKey = 'wholeDayPairSourceDate' in lesson ? lesson.wholeDayPairSourceDate : undefined
+  return Boolean(sourceDateKey) && (sourceDateKey! < startDate || sourceDateKey! > endDate)
+}
+
+/** 表示期間の外のコマにある付け替えの授業のうち、移動元 D が期間内のもの（科目の並び）。 */
+export function countWholeDayPairLessonsFromOutside(payload: SchedulePayload, student: SerializedStudent, startDate: string, endDate: string): string[] {
+  const outsideCells = payload.cells.filter((cell) => cell.dateKey < startDate || cell.dateKey > endDate)
+  if (outsideCells.length === 0) return []
+  const assignmentMap = buildStudentAssignments(outsideCells)
+  return getStudentAssignmentKeys(payload, student).flatMap((key) => assignmentMap.get(key) || [])
+    .filter((entry) => !isStatusEntry(entry.lesson) && entry.lesson.lessonType !== 'special' && Boolean(entry.lesson.wholeDayPairSourceDate)
+      && entry.lesson.wholeDayPairSourceDate! >= startDate && entry.lesson.wholeDayPairSourceDate! <= endDate)
+    .map((entry) => entry.lesson.subject)
+}
+
 function normalizeStudentAssignmentName(value: string) {
   return String(value || '').replace(/\s+/g, '').trim()
 }
@@ -1465,6 +1483,8 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
     if (isStatusEntry(entry.lesson) && entry.lesson.status === 'absent') return
     // ★moved(移動元)/holiday(休日記録)は実績ではない(INV-05: 回数表示の実配置一致)。
     if (isStatusEntry(entry.lesson) && isRestRecordStatus(entry.lesson.status)) return
+    // 段 4: 付け替えの授業は移動元 D の月で数える（D が期間の外なら数えない・下で D の期間へ足す）。
+    if (isWholeDayPairCountedOutside(entry.lesson, startDate, endDate)) return
     if (entry.lesson.lessonType === 'special') {
       lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1
       const normalizedSubject = normalizeSubjectForStudent(entry.lesson.subject, student, startDate)
@@ -1474,6 +1494,9 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
     } else {
       subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1
     }
+  })
+  countWholeDayPairLessonsFromOutside(payload, student, startDate, endDate).forEach((subject) => {
+    subjectCounts[subject] = (subjectCounts[subject] || 0) + 1
   })
   const desiredLectureMinutes = buildDesiredLectureMinutesMap(payload, student, startDate, endDate)
   const lectureMinutesBySubject = resolveLectureMinutesBySubject(lectureMinutesBySubjectList, desiredLectureMinutes)

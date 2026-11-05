@@ -21,6 +21,7 @@ import {
 } from './templateTransferFollow.fixture'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import { computeToggleDeskTeacherRest, hasDeskTeacherRest } from './teacherRest'
+import * as pairFx from './wholeDayTransferPair.fixture'
 
 const RANGE = { fromDate: WED, toDate: WEEK_END }
 function audit(state: SavedState, rows: RegularLessonRow[]) {
@@ -422,4 +423,22 @@ describe('講師の休み × テンプレ保存の全ペア（INV-03・INV-01・
       }
     })
   }
+})
+
+// 第 2 版 段 4（spec-template-conflict-v2 §3・INV-03）: 丸ごと振替の付け替えのある盤面でも、保存は 1 回で決まる（2 回目の保存・再マージで変わらない）。
+describe('INV-03 シーケンス: 丸ごと振替の付け替え（第 2 版・段 4）', () => {
+  it('付け替え → テンプレ保存 → もう一度保存 → 再マージ で盤面が変わらず、同じ組を 2 回作れない（1 操作 1 適用）', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const rows = [pairFx.row('r0', 't1', 'sA', 'sC'), pairFx.ROWS[1], pairFx.ROWS[2]]
+    const first = pairFx.save(paired.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences)
+    const second = pairFx.save(first.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, { templatePendingDesks: first.nextPendingDesks, previousRegularLessons: rows })
+    expect(pairFx.snapshot(second.nextWeeks)).toBe(pairFx.snapshot(first.nextWeeks))
+    expect(pairFx.snapshot(pairFx.remerge(second.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), second.nextPendingDesks))).toBe(pairFx.snapshot(first.nextWeeks))
+    expect(pairFx.pairOf(first.nextWeeks, { rows, suppressed: paired.nextSuppressedRegularLessonOccurrences }).status).toBe('blocked')
+    const violations = auditTemplateLessonAccounting({
+      weeks: second.nextWeeks, regularLessons: rows, students: pairFx.students, classroomSettings: pairFx.settings(), scheduleCountAdjustments: [], manualMakeupAdjustments: {},
+      fromDate: pairFx.D, toDate: '2026-10-18', suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences,
+    })
+    expect(violations, describeLessonAccountingViolations(violations)).toEqual([])
+  })
 })

@@ -25,6 +25,7 @@ import { collectMakeupOriginCategoriesByKey, isClosedDate, originTokenDateKey, t
 import { resolveDayOfWeekFromDateKey } from './templateDefinitionDiff'
 import type { TemplatePendingDeskMap } from './templatePendingDesks'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
+import { parseWholeDayTransferPairs } from './wholeDayTransferPair'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate, lessonFactIdentity, type LessonExplanationBreakdown } from './templateLessonAccounting'
 
 export type LessonAccountingViolation = {
@@ -65,12 +66,16 @@ function rowInEffect(row: RegularLessonRow, seat: 1 | 2, dateKey: string) {
 }
 
 /** 新テンプレの期待: 生徒×科目×日付 → 授業数、と 生徒×科目×日付 → 時限の集合。 */
-export function collectExpectedTemplateLessons(params: Pick<LessonAccountingAuditParams, 'weeks' | 'regularLessons' | 'classroomSettings' | 'fromDate' | 'toDate'>) {
+export function collectExpectedTemplateLessons(params: Pick<LessonAccountingAuditParams, 'weeks' | 'regularLessons' | 'classroomSettings' | 'fromDate' | 'toDate' | 'suppressedRegularLessonOccurrences'>) {
   const expected = new Map<string, number>()
   const slotsByKey = new Map<string, Set<number>>()
   const dates = new Set<string>()
   for (const week of params.weeks) for (const cell of week) if (cell.dateKey >= params.fromDate && cell.dateKey <= params.toDate && cell.isOpenDay) dates.add(cell.dateKey)
+  // 段 4（spec-template-conflict-v2 §3・決定記録 2）: 丸ごと振替の移動先 D' 自身のテンプレの授業は、組がある間は展開しない（消去・在庫に入れない）＝期待に数えない。
+  // D の授業は期待に数え、D' の付け替えの振替（振替元＝D）が説明する（(b)・在庫中立）。
+  const pairTargetDates = new Set(parseWholeDayTransferPairs(params.suppressedRegularLessonOccurrences ?? []).map((pair) => pair.targetDateKey))
   for (const dateKey of dates) {
+    if (pairTargetDates.has(dateKey)) continue
     if (isClosedDate(dateKey, params.classroomSettings)) continue
     const dayOfWeek = resolveDayOfWeekFromDateKey(dateKey)
     for (const row of params.regularLessons) {

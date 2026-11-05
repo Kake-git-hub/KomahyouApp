@@ -7,6 +7,7 @@ import { buildStudentStatusEntry, buildTemplateTeacherSuppressionKey, resolveRem
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import * as FX from './templateTransferFollow.fixture'
+import * as pairFx from './wholeDayTransferPair.fixture'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 
 // ============================================================================
@@ -726,5 +727,20 @@ describe('INV-02 × 元の時限が読めない旧い写し（label 無し）× 
     const remerged = FX.remerge(saved.nextWeeks, FX.OLD_ROWS, suppressed, FX.settings(), saved.nextPendingDesks)
     expect(day(remerged)).toEqual([4])
     expect(day(FX.save(remerged, FX.OLD_ROWS, suppressed).nextWeeks)).toEqual([4])
+  })
+})
+
+// 第 2 版 段 4（spec-template-conflict-v2 §3・§2-2）: 付け替えで D のテンプレを D' に展開しても、同じ生徒は同じコマに 1 か所（手入力が勝つ）。
+describe('INV-12 マトリクス: 丸ごと振替の付け替え（第 2 版・段 4）', () => {
+  it('D\' に同じ生徒の手入力（在庫から置いた振替）が別の席にあると、付け替えのその生徒は置かない（作成・保存・再マージとも 1 か所）', () => {
+    const board = structuredClone(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []))
+    pairFx.cellAt(board, pairFx.D2).desks[1].lesson!.studentSlots[1] = { id: 'mk-a', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual' }
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(board))
+    const countA = (weeks: SlotCell[][]) => pairFx.cellAt(weeks, pairFx.D2).desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((student) => student?.managedStudentId === 'sA').length
+    expect(countA(paired.nextWeeks)).toBe(1)
+    expect(pairFx.cellAt(paired.nextWeeks, pairFx.D2).desks[1].lesson?.studentSlots[1]?.id).toBe('mk-a')
+    const saved = pairFx.save(paired.nextWeeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, { templatePendingDesks: paired.nextTemplatePendingDesks })
+    expect(countA(saved.nextWeeks)).toBe(1)
+    expect(countA(pairFx.remerge(saved.nextWeeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), saved.nextPendingDesks))).toBe(1)
   })
 })
