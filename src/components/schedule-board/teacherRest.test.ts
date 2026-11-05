@@ -11,6 +11,7 @@ import type { DeskCell, SlotCell } from './types'
 import {
   applyUserDeletedTeacherTombstone,
   buildManagedScheduleCellsForRange,
+  computeTeacherMove,
   computeTemplateDiffApplyForBoard,
   isDeletedTeacherTombstone,
   reconcileSubmittedTeacherPlacements,
@@ -27,6 +28,7 @@ import {
   hasDeskTeacherRest,
   isTeacherRestedInCell,
   releaseDeskTeacherRest,
+  releaseTeacherRestIfSameTeacherPlaced,
   restDeskTeacher,
 } from './teacherRest'
 import { buildTeacherPayload } from '../../utils/scheduleHtml'
@@ -322,5 +324,36 @@ describe('QR 提出講師の自己修復・講習の講師自動割当（reconci
     expect(countTeacher(result.nextWeeks, '高橋')).toBeGreaterThan(0)
     expect(countTeacher(result.nextWeeks, '高橋', CELL_ID)).toBe(0)
     expect(cellOf(result.nextWeeks).desks[0].teacherRest).toEqual({ teacher: '高橋', teacherId: 't4' })
+  })
+})
+
+describe('§9-19 休んだ講師本人を手で置き直すと休みを自動で解除する（別の講師なら残す・自動配置では解除しない）', () => {
+  const aliases = buildTeacherAliasResolver(teachers)
+  it('本人（ID でも表示名でも）を置き直すと記録が消える。別の講師なら記録は残る', () => {
+    const byId: DeskCell = { id: 'd', teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't1', teacherRest: { teacher: '田中', teacherId: 't1' } }
+    expect(releaseTeacherRestIfSameTeacherPlaced(byId)).toBe(true)
+    expect(byId.teacherRest).toBeUndefined()
+    const byName: DeskCell = { id: 'd', teacher: '田中', manualTeacher: true, teacherRest: { teacher: '', teacherId: 't1' } }
+    expect(releaseTeacherRestIfSameTeacherPlaced(byName, aliases)).toBe(true)
+    const other: DeskCell = { id: 'd', teacher: '高橋', manualTeacher: true, teacherAssignmentTeacherId: 't4', teacherRest: { teacher: '田中', teacherId: 't1' } }
+    expect(releaseTeacherRestIfSameTeacherPlaced(other, aliases)).toBe(false)
+    expect(other.teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+  })
+
+  it('講師の D&D（computeTeacherMove）で休みの机へ本人を戻すと解除・別の講師を入れると残る', () => {
+    // 机 0＝田中の休み（講師なし）・机 1＝鈴木。机 2 に田中を手で置いた形から、机 2 → 机 0 へ田中を動かす。
+    const rested = placeManualTeacher(restedBoard(), 2, '田中', 't1')
+    const back = computeTeacherMove({ weeks: rested, weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 2, targetDeskIndex: 0, teachers })
+    if (back.status !== 'moved') throw new Error(back.message)
+    expect(cellOf(back.nextWeeks).desks[0]).toMatchObject({ teacher: '田中' })
+    expect(cellOf(back.nextWeeks).desks[0].teacherRest).toBeUndefined()
+    const otherTeacher = computeTeacherMove({ weeks: restedBoard(), weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 1, targetDeskIndex: 0, teachers })
+    if (otherTeacher.status !== 'moved') throw new Error(otherTeacher.message)
+    expect(cellOf(otherTeacher.nextWeeks).desks[0]).toMatchObject({ teacher: '鈴木', teacherRest: { teacher: '田中' } })
+  })
+
+  it('再マージ・テンプレの反映（自動配置）では解除しない（田中は戻らず記録も残る）', () => {
+    const weeks = save(restedBoard()).nextWeeks
+    expect(cellOf(remerge(weeks)).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
   })
 })

@@ -92,3 +92,17 @@ describe('3-1・3-5 講師欄のメニューの「休み」ボタン（ScheduleB
     expect(BOARD_TSX).toContain('showTeacherRest={!isTemplateMode && templateDiffApplyEnabled}')
   })
 })
+
+describe('§9-19 講師メニューの「保存」（手で置く経路）: 休んだ講師本人を置くと休みを解除する', () => {
+  it('講師メニューの保存が通る setManualTeacherAssignment が releaseTeacherRestIfSameTeacherPlaced を呼ぶ。D&D（computeTeacherMove）も同じ', () => {
+    const setter = BOARD_TSX.slice(BOARD_TSX.indexOf('function setManualTeacherAssignment('), BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment('))
+    expect(setter).toContain('releaseTeacherRestIfSameTeacherPlaced(desk)')
+    const confirm = BOARD_TSX.slice(BOARD_TSX.indexOf('const handleConfirmTeacher = () => {'), BOARD_TSX.indexOf('const handleToggleTeacherRest = () => {'))
+    expect(confirm).toContain('setManualTeacherAssignment(targetDesk')
+    const move = BOARD_TSX.slice(BOARD_TSX.indexOf('export function computeTeacherMove('), BOARD_TSX.indexOf('export type WholeDayTransferSummary'))
+    expect(move).toContain('releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)')
+    // 自動配置（QR の講師・再マージ）の経路では呼ばない
+    const qr = BOARD_TSX.slice(BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment('), BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment(') + 400)
+    expect(qr).not.toContain('releaseTeacherRestIfSameTeacherPlaced')
+  })
+})

@@ -67,7 +67,7 @@ import {
 } from './templatePendingResolution'
 import { collectTemplateOriginDeskIds, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, resolveSameDayMoveSourceSlot } from './templateConflictRules'
-import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell } from './teacherRest'
+import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
@@ -5266,6 +5266,8 @@ function setManualTeacherAssignment(desk: DeskCell, teacherName: string, teacher
   desk.teacherAssignmentSource = assignmentSource
   desk.teacherAssignmentSessionId = undefined
   desk.teacherAssignmentTeacherId = teacherId
+  // §9-19: 休んだ講師本人を手で置き直したら休みを解除する（別の講師なら残す）。
+  releaseTeacherRestIfSameTeacherPlaced(desk)
 }
 
 function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: string, sessionId: string, teacherId: string) {
@@ -6423,6 +6425,10 @@ export function computeTeacherMove(params: {
   // 使い regularTeacherIds を無視する(buildTeacherAssignments の else-if)。既に id を持つ机は上書きしない。
   backfillDeskTeacherAssignmentId(sourceDesk, teachers)
   backfillDeskTeacherAssignmentId(targetDesk, teachers)
+  // §9-19: 休みの机へ休んだ講師本人を D&D／入れ替えで戻したら休みを解除する（別の講師なら残す）。
+  const restAliases = buildTeacherAliasResolver(teachers)
+  releaseTeacherRestIfSameTeacherPlaced(sourceDesk, restAliases)
+  releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)
 
   const message = swapMode === 'seat'
     ? (swappedName

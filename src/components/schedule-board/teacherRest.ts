@@ -89,6 +89,18 @@ export function releaseDeskTeacherRest(desk: DeskCell): DeskCell | null {
   return next
 }
 
+/**
+ * §9-19（オーナー決定 2026-11-05）: 休みの机に、休んだ講師本人を**手で**置き直したら休みを自動で解除する（記録を消す・グレーが消える・次の反映でテンプレどおり）。
+ * 別の講師を置いたときは記録を残す（§2-4）。呼ぶのは講師を手で置く経路だけ（講師メニューの「保存」・講師の D&D／入れ替え）。
+ * 再マージ・差分反映の自動配置では呼ばない。机をその場で書き換え、解除したら true。
+ */
+export function releaseTeacherRestIfSameTeacherPlaced(desk: DeskCell, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
+  if (!desk.teacherRest || !desk.teacher.trim()) return false
+  if (!doesTeacherRestMatch(desk.teacherRest, desk, aliases)) return false
+  delete desk.teacherRest
+  return true
+}
+
 export type ToggleDeskTeacherRestResult =
   | { status: 'rested' | 'released'; nextWeeks: SlotCell[][]; message: string; teacherName: string }
   | { status: 'blocked'; message: string }

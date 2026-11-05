@@ -23,7 +23,7 @@ import { buildTemplatePendingTeacherChoiceConfirm, isTemplatePendingTeacherOnly,
 import { buildTemplatePendingList, describeTemplatePendingTeacherReason } from './templatePendingList'
 import { buildTeacherPayload } from '../../utils/scheduleHtml'
 import { buildTeacherSheetViewModel } from '../../utils/scheduleViewData'
-import { releaseDeskTeacherRest, restDeskTeacher } from './teacherRest'
+import { releaseDeskTeacherRest, releaseTeacherRestIfSameTeacherPlaced, restDeskTeacher } from './teacherRest'
 
 const WEEK_START = '2026-10-05'
 const WEEK_END = '2026-10-11'
@@ -618,5 +618,14 @@ describe('講師の休み（§2-4）: 休みの記録は反映で消えない・
     expect(desk0(saved.nextWeeks)).toMatchObject({ teacher: '田村', manualTeacher: false })
     expect(desk0(saved.nextWeeks).teacherRest).toBeUndefined()
     expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toMatchObject({ teacher: '倉島' })
+  })
+  it('§9-19 休みの机に休んだ D 本人を手で置き直す → 休みは解除され、反映後は D の 1 行（保留なし）。再マージ 2 回で不変', () => {
+    const replaced = mutateDesk(restedBoard({ teacher: '田村', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 'tD' }), 0, (desk) => { const next = { ...desk }; releaseTeacherRestIfSameTeacherPlaced(next); return next })
+    expect(desk0([replaced]).teacherRest).toBeUndefined()
+    const saved = save(replaced, NEW_ROWS)
+    expect(desk0(saved.nextWeeks)).toMatchObject({ teacher: '田村' })
+    expect(desk0(saved.nextWeeks).teacherRest).toBeUndefined()
+    expect(saved.nextPendingDesks).toEqual({})
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, NEW_ROWS, [])
   })
 })
