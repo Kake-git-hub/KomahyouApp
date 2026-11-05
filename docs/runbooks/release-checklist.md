@@ -15,18 +15,14 @@
 - [ ] `npm run build`
 - [ ] バグ修正なら回帰防止テストを追加（修正なしで落ち・ありで通る）
 - [ ] **在庫数量ゴールデンが緑**（`makeupStockSnapshot.test.ts` / `lectureStockSnapshot.test.ts`）。落ちた＝在庫計算が変わった合図。→ §6
-- ※Playwright E2E は廃止（2026-06-29）。UI操作の回帰はユニット、実環境の通し動作は staging 実機確認で担保（`docs/test-strategy.md`）。
+- [ ] テストは実装より先に書き、今のコードで落ちるのを確認した（`superpowers:test-driven-development`・2026-11-05）
+- ※Playwright E2E は廃止（2026-06-29）。UI操作の回帰はユニット、実環境の通し動作は本番反映後に開発用教室の確認リストで担保（`docs/test-strategy.md`）。
 
-## 3. staging 実機確認（`komahyouapp-staging.web.app`）
-- [ ] 「Deploy to Staging」ワークフローが緑
-- [ ] ハードリロード（Ctrl+Shift+R）して開いた
-- [ ] **変更箇所**が期待どおり動く
-- [ ] 主要回帰観点が壊れていない:
-  - [ ] 複数教室の切替
-  - [ ] QR 提出 → 出席者一覧反映
-  - [ ] 自動割振（指定時限禁止・通常講師判定・振替同時割当）
-  - [ ] 手動保存（Cloud Function 経由）→ 再読込で保持
-  - [ ] 生徒日程表の通常授業カウント
+## 3. 画面での確認（確認リスト）
+- staging での実機確認は 2026-11-05 のオーナー指示で必須から外した（使いたいときだけ `staging-environment` スキル）。
+- [ ] 変更を開発用教室で確かめる項目を確認リスト（`src/utils/verificationChecklist.ts`）に足した。オーナーが本番反映後に確認する
+- [ ] 主要回帰観点に触れる変更なら、その観点も確認リストに入れた:
+  - 複数教室の切替 / QR 提出 → 出席者一覧反映 / 自動割振 / 手動保存 → 再読込で保持 / 生徒日程表の通常授業カウント
 
 ## 4. 記録
 - [ ] `CHANGELOG.md` の `## 未リリース` に1行追記
