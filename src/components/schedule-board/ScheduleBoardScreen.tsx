@@ -39,7 +39,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, resolveSameDayMoveCopyKeysToRemove, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -66,7 +66,7 @@ import {
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
 import { collectTemplateOriginDeskIds, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
-import { applyTemplateOriginRulesToManagedCell, resolveManualFirstCountAdjustments } from './templateConflictRules'
+import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate } from './templateConflictRules'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
@@ -2973,8 +2973,9 @@ export function computeTemplateDiffApplyForBoard(input: {
   // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
   // 第 2 版: 再マージは §2-2・§2-3・§2-4 を盤面の今の状態（上段＋保留の下段）から毎回当てる（templateOriginRules）。保存結果の保留マップを渡す。
   const nextWeeks = slotFollow.weeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed, templateOriginRules: { pendingDesks: slotFollow.nextPendingDesks } }))
-  // §4-2 規則 1: §2-2 で置かなかったテンプレの生徒の予定数 −1（予定数に数えない・2 回目の保存で二重に積まない）。
-  const manualFirstCountAdjustments = resolveManualFirstCountAdjustments({ skipped: run.diff.manualFirstSkipped, scheduleCountAdjustments: params.scheduleCountAdjustments, suppressedRegularLessonOccurrences: settledSuppressed })
+  // §4-2 規則 1・§2-2: 置かなかったテンプレの授業の予定数は**積まずに盤面の状態から導く**（templateConflictRules の collectManualFirstBlockedLessons・
+  // 回数表の予定数は盤面ベース〔実績＋未振替の休み〕なので置かれていない授業は元から数えない）。保存で −1 を積むと、読み込みでの遮断に −1 が付かず、
+  // 手入力を消してテンプレの授業が戻っても −1 が残る（INV-05 の穴）。
   void slotNumberByCellId
   {
     return {
@@ -3003,10 +3004,8 @@ export function computeTemplateDiffApplyForBoard(input: {
       nextPendingDesks: slotFollow.nextPendingDesks,
       /** 決定記録 46（Q40-9）: 時限の追従で新しい時限へ動かした振替。 */
       slotFollowMoves: slotFollow.moves,
-      /** 旧 Q35-8 の −1（丸ごと振替の日・段 4 まで今のまま）と、§4-2 規則 1 の −1（§2-2）。保存が単発削除と同じ形で積む。 */
-      wholeDayTransferCountAdjustments: [...wholeDayTransferCountAdjustments, ...manualFirstCountAdjustments],
-      /** §4-2 規則 1 の −1 だけ（確認・テスト用）。 */
-      manualFirstCountAdjustments,
+      /** 旧 Q35-8 の −1（丸ごと振替の日・段 4 まで今のまま）。§2-2 で置かなかった授業の −1 は積まない（盤面の状態から導く）。 */
+      wholeDayTransferCountAdjustments,
       /** Q36 で外した写しの、その日のその生徒×科目の抑止キー＋Q40-1 で外した振替の振替元の日の生徒×科目の抑止キー（2026-10-27）。保存が抑止から取り除く。 */
       removedSuppressedRegularLessonOccurrences: [...run.removedSuppressed, ...releasedOrphanSuppressed],
       /** Q39-9: 入口がその日を全コマにした日（昇順）。確認文に出す。 */
@@ -3069,7 +3068,12 @@ export function collectSameDayMovedTemplateOccurrenceKeys(params: { weeks: SlotC
   const consider = (student: StudentEntry | null | undefined, dateKey: string) => {
     if (!student || dateKey < params.effectiveStartDate) return
     if (student.lessonType !== 'regular' || student.sameDayMoveSourceDate !== dateKey || resolveStudentOrigin(student) !== 'template') return
-    for (const key of resolveSameDayMoveCopyKeysToRemove({ student, dateKey }, params.suppressedRegularLessonOccurrences, editedKeys)) keys.add(key)
+    // 外すのは写しの**元の時限**（sameDayMoveSourceLabel）のキーだけ。同じ日の別の時限のキーは単発削除の記録かもしれないので外さない
+    // （見分けられない旧データは削除の記録を守る側に倒す・元の時限が読めなければ何も外さない）。
+    const sourceSlot = parseOriginSlotNumberFromLabel(student.sameDayMoveSourceLabel)
+    if (!sourceSlot) return
+    const key = buildManagedOccurrenceKey(student, dateKey, sourceSlot)
+    if (params.suppressedRegularLessonOccurrences.includes(key) && !editedKeys.has(key)) keys.add(key)
   }
   const dateKeyByCellId = new Map<string, string>()
   for (const week of params.weeks) for (const cell of week) {
@@ -4629,6 +4633,8 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
 function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell }>, boardWeeks: SlotCell[][], teacherAliases?: TeacherAliasResolver, templateOriginRules?: TemplateOriginRemergeRules | null) {
   const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
   const managedCellIds = new Set(preparedCells.map(({ raw }) => raw.id))
+  // 第 2 版（フラグ ON の教室だけ）: 同じ日の中で動かしたテンプレの授業（写し）の元の時限には、テンプレの同じ授業を置き直さない（移動の抑止キーの代わり・§1-1 #2）。
+  const sameDayMoveSourcesByDate = templateOriginRules ? collectSameDayMoveSourcesByDate(boardWeeks, templateOriginRules.pendingDesks) : null
   const managedCellDateSlots = new Set(preparedCells.map(({ raw }) => buildCellDateSlotKey(raw)))
 
   const mergedCells = preparedCells.map(({ raw: managedCell, applied: adjustedManagedCell }) => {
@@ -4641,7 +4647,7 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
     // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
     // 第 2 版（機能フラグ templateDiffApply の教室だけ）: 手入力の同じ生徒・記録・別の机の手置き講師と同じ講師をテンプレから外してから重ねる（§2-2〜§2-4）。
     const ruledManagedCell = templateOriginRules
-      ? applyTemplateOriginRulesToManagedCell(adjustedManagedCell, boardCell, templateOriginRules.pendingDesks, teacherAliases)
+      ? applyTemplateOriginRulesToManagedCell(adjustedManagedCell, boardCell, templateOriginRules.pendingDesks, teacherAliases, undefined, sameDayMoveSourcesByDate?.get(boardCell.dateKey) ?? [])
       : adjustedManagedCell
     return mergeManagedWeek([boardCell], [ruledManagedCell], [managedCell], teacherAliases, templateOriginRules)[0] ?? ruledManagedCell
   })
@@ -5997,6 +6003,11 @@ export function computeStudentMove(params: {
   suppressedRegularLessonOccurrences: string[]
   managedStudentByAnyName: Map<string, StudentRow>
   resolveBoardStudentDisplayName: (name: string) => string
+  /**
+   * 第 2 版（spec-template-conflict-v2 §1-1 #2・機能フラグ templateDiffApply の教室だけ true）: テンプレ由来の授業を同じ日の中で動かすときは
+   * 移動の抑止キーを積まない（再マージは写しの元の時限にテンプレの同じ授業を置き直さない＝collectSameDayMoveSourcesByDate。次のテンプレ反映でテンプレの位置へ戻る）。
+   */
+  templateOriginRules?: boolean
 }): ComputeStudentMoveResult {
   const {
     weeks, weekIndex, cells, movingStudentId, cellId, deskIndex, studentIndex,
@@ -6074,7 +6085,8 @@ export function computeStudentMove(params: {
     return { status: 'cancelled', message: '移動先の机が見つかりませんでした。' }
   }
 
-  const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
+  const isSameDayTemplateMove = (student: StudentEntry, fromDateKey: string, toDateKey: string) => Boolean(params.templateOriginRules) && fromDateKey === toDateKey && resolveStudentOrigin(student) === 'template'
+  const suppressedOccurrenceKey = isSameDayTemplateMove(movedStudent, sourceDateKey, targetCell.dateKey) ? null : resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
 
   const movedStatusStudent = { ...movedStudent }
   movedStudent = prepareStudentForMove(movedStudent, sourceDateKey, sourceSlotNumber, targetCell.dateKey)
@@ -6197,7 +6209,7 @@ export function computeStudentMove(params: {
     : [...suppressedRegularLessonOccurrences]
 
   if (swapStudent) {
-    const swapSuppressedKey = resolveSuppressedRegularLessonOccurrenceKey(swapStudent, targetCell.dateKey ?? '', targetCell.slotNumber ?? 0)
+    const swapSuppressedKey = isSameDayTemplateMove(swapStudent, targetCell.dateKey, sourceDateKey) ? null : resolveSuppressedRegularLessonOccurrenceKey(swapStudent, targetCell.dateKey ?? '', targetCell.slotNumber ?? 0)
     if (swapSuppressedKey) {
       nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, swapSuppressedKey)
     }
@@ -12834,6 +12846,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedRegularLessonOccurrences,
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,
+      templateOriginRules: templateDiffApplyEnabled,
     })
 
     if (result.status === 'blocked') {
@@ -12959,6 +12972,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedRegularLessonOccurrences,
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,
+      templateOriginRules: templateDiffApplyEnabled,
     })
     if (result.status !== 'moved') {
       return { ok: false, message: result.message }

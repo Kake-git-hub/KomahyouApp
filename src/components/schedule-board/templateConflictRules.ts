@@ -13,6 +13,7 @@
 import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveStudentOrigin } from './placementOrigin'
+import { parseOriginSlotNumberFromLabel } from './makeupStock'
 import {
   buildTemplatePendingDeskKey,
   type TemplatePendingDesk,
@@ -126,14 +127,17 @@ export const noTemplateTeacherRest: TemplateTeacherRestPredicate = () => false
  * 「盤面の今の状態から毎回同じ結果」を出すための唯一の経路（§6 抑止キー）。
  * 生徒は全員取り除かれた机を抑止と同じ形（buildFullySuppressedManagedDesk）にする。
  */
-export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boardCell: Pick<SlotCell, 'id' | 'desks'>, pendingDesks: TemplatePendingDeskMap | null | undefined, aliases: TeacherAliasResolver = defaultTeacherAliases, isTeacherOnRest: TemplateTeacherRestPredicate = noTemplateTeacherRest): SlotCell {
+export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boardCell: Pick<SlotCell, 'id' | 'desks'>, pendingDesks: TemplatePendingDeskMap | null | undefined, aliases: TeacherAliasResolver = defaultTeacherAliases, isTeacherOnRest: TemplateTeacherRestPredicate = noTemplateTeacherRest, sameDayMoveSources: readonly SameDayMoveSource[] = []): SlotCell {
   const blockers = collectTemplateBlockersInCell(boardCell, pendingDesks)
-  if (blockers.students.length === 0 && blockers.teachers.length === 0) return managedCell
+  // §1-1 #2: 同じ日の中で手で動かしたテンプレの授業（写し）の元の時限には、次のテンプレ反映までテンプレの同じ授業を置き直さない（移動の抑止キーの代わり）。
+  const movedAway = sameDayMoveSources.filter((source) => source.slotNumber === managedCell.slotNumber)
+  if (blockers.students.length === 0 && blockers.teachers.length === 0 && movedAway.length === 0) return managedCell
+  const isMovedAway = (student: StudentEntry) => movedAway.some((source) => source.subject === student.subject && isSameTemplateStudent(source.student, student))
   let changed = false
   const desks = managedCell.desks.map((desk, deskIndex) => {
     let next = desk
-    if (desk.lesson && isTemplateManagedLesson(desk.lesson) && blockers.students.length > 0) {
-      const slots = desk.lesson.studentSlots.map((student) => (student && resolveTemplateStudentBlock(student, blockers.students) ? null : student)) as StudentPair
+    if (desk.lesson && isTemplateManagedLesson(desk.lesson) && (blockers.students.length > 0 || movedAway.length > 0)) {
+      const slots = desk.lesson.studentSlots.map((student) => (student && (resolveTemplateStudentBlock(student, blockers.students) || isMovedAway(student)) ? null : student)) as StudentPair
       if (slots[0] !== desk.lesson.studentSlots[0] || slots[1] !== desk.lesson.studentSlots[1]) {
         changed = true
         next = !slots[0] && !slots[1] ? buildFullySuppressedManagedDesk(desk) : { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }
@@ -146,6 +150,54 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
     return next
   })
   return changed ? { ...managedCell, desks } : managedCell
+}
+
+/** 同じ日の中で手で動かしたテンプレの授業（写し）の、元の時限（sameDayMoveSourceLabel の時限）。 */
+export type SameDayMoveSource = { student: Pick<StudentEntry, 'managedStudentId' | 'name'>; subject: string; slotNumber: number }
+
+/**
+ * 日付 → その日の写しの元の時限（上段・保留の下段）。出自＝テンプレで sameDayMoveSourceDate がその日の通常授業だけ。元の時限が読めない旧データは入れない
+ * （その授業は移動の抑止キーで守られている＝キーは外さない側に倒す・collectSameDayMovedTemplateOccurrenceKeys と対）。
+ */
+export function collectSameDayMoveSourcesByDate(weeks: SlotCell[][], pendingDesks?: TemplatePendingDeskMap | null): Map<string, SameDayMoveSource[]> {
+  const byDate = new Map<string, SameDayMoveSource[]>()
+  const consider = (student: StudentEntry | null | undefined, dateKey: string) => {
+    if (!student || student.lessonType !== 'regular' || student.sameDayMoveSourceDate !== dateKey || resolveStudentOrigin(student) !== 'template') return
+    const slotNumber = parseOriginSlotNumberFromLabel(student.sameDayMoveSourceLabel)
+    if (!slotNumber) return
+    byDate.set(dateKey, [...(byDate.get(dateKey) ?? []), { student, subject: student.subject, slotNumber }])
+  }
+  for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
+    for (const student of desk.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
+    for (const student of pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
+  }
+  return byDate
+}
+
+/**
+ * §4-2 規則 1・§2-2（INV-05）: 盤面の今の状態から、§2-2 でテンプレの授業が置かれていない回を導く（保存で −1 を積まない）。
+ * expected＝その日・その時限にテンプレが持つ授業（生徒 ID×科目）。その時限のコマに手入力の同じ生徒（上段・下段）が居て、テンプレの同じ生徒が
+ * そのコマに居ない回だけを返す。保存でも読み込みでも同じ結果、手入力を消せば自動で戻る、何回保存しても二重にならない。
+ * ★削除の記録（抑止キー）がある回は数えない: 「下段（手入力）を採用する」で室長が明示的に取り下げた授業（決定記録 62）や単発削除は、
+ *   単発削除と同じ −1（scheduleCountAdjustments）を操作の記録として積んでいるので、ここで引くと二重になる。
+ */
+export function collectManualFirstBlockedLessons(params: {
+  weeks: SlotCell[][]
+  pendingDesks?: TemplatePendingDeskMap | null
+  expected: ReadonlyArray<{ studentId: string; subject: string; dateKey: string; slotNumber: number }>
+  suppressedRegularLessonOccurrences?: readonly string[]
+}): Array<{ studentId: string; subject: string; dateKey: string; slotNumber: number }> {
+  const suppressed = new Set(params.suppressedRegularLessonOccurrences ?? [])
+  const cellByDateSlot = new Map<string, SlotCell>()
+  for (const week of params.weeks) for (const cell of week) cellByDateSlot.set(`${cell.dateKey}_${cell.slotNumber}`, cell)
+  return params.expected.filter((item) => {
+    if (suppressed.has(`${item.studentId}__${item.subject}__${item.dateKey}__${item.slotNumber}`)) return false
+    const cell = cellByDateSlot.get(`${item.dateKey}_${item.slotNumber}`)
+    if (!cell || !cell.isOpenDay) return false
+    const same = (student: StudentEntry) => (student.managedStudentId ?? student.name) === item.studentId
+    const live = cell.desks.flatMap((desk) => [...liveStudents(desk.lesson), ...liveStudents(params.pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson)]).filter(same)
+    return live.some((student) => resolveStudentOrigin(student) === 'manual') && !live.some((student) => resolveStudentOrigin(student) === 'template')
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -526,40 +578,4 @@ function deskChanged(before: DeskCell, after: DeskCell) {
   const right = liveStudents(after.lesson)
   if (left.length !== right.length) return true
   return left.some((student, index) => student.id !== right[index]?.id || student.subject !== right[index]?.subject)
-}
-
-/**
- * §4-2 規則 1（§2-2 で置かなかったテンプレの生徒）の予定数 −1。置かなかったテンプレの授業は**予定数に数えない**（§2-2）ので、
- * 手入力の同じ生徒が同じ科目でも −1 する（手入力の授業は手動追加として予定数に別に数える＝v1.5.468 の対称化。数えたままにすると予定 2・実績 1 になる）。
- * ★同じ保存を 2 回しても −1 を二重に積まない（INV-03）: その日のその生徒×科目にすでに積んである −1 の純減のうち、削除の記録
- *   （抑止キー）で説明できない分は前の保存の −1 とみなし、その分だけ差し引く。
- */
-export function resolveManualFirstCountAdjustments(params: {
-  skipped: readonly TemplateManualFirstSkip[]
-  scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[]
-  suppressedRegularLessonOccurrences: readonly string[]
-}): Array<{ student: StudentEntry; dateKey: string }> {
-  if (params.skipped.length === 0) return []
-  const netByKey = new Map<string, number>()
-  for (const entry of params.scheduleCountAdjustments) {
-    if (entry.countKind !== 'regular') continue
-    const key = `${entry.studentKey}__${entry.subject}__${entry.dateKey}`
-    netByKey.set(key, (netByKey.get(key) ?? 0) + entry.delta)
-  }
-  const deletionKeysByKey = new Map<string, number>()
-  for (const key of params.suppressedRegularLessonOccurrences) {
-    const parts = key.split('__')
-    if (parts.length !== 4) continue
-    const factKey = `${parts[0]}__${parts[1]}__${parts[2]}`
-    deletionKeysByKey.set(factKey, (deletionKeysByKey.get(factKey) ?? 0) + 1)
-  }
-  const used = new Map<string, number>()
-  return params.skipped.filter((item) => {
-    const studentKey = (item.student.managedStudentId ?? item.student.name).trim()
-    const key = `${studentKey}__${item.student.subject}__${item.dateKey}`
-    const previousSaves = Math.max(0, -(netByKey.get(key) ?? 0) - (deletionKeysByKey.get(key) ?? 0))
-    const consumed = used.get(key) ?? 0
-    if (consumed < previousSaves) { used.set(key, consumed + 1); return false }
-    return true
-  }).map((item) => ({ student: item.student, dateKey: item.dateKey }))
 }

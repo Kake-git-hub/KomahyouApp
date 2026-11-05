@@ -55,6 +55,8 @@ import {
 } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
+import { collectManualFirstBlockedLessons } from './templateConflictRules'
+import { auditTemplateLessonAccounting } from './templateLessonAccountingOracle'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // フィクスチャ（水曜 5 限・机 3 つ。反映日は水曜 2026-10-07。同じ週の月・火は反映日より前）
@@ -1597,12 +1599,15 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
   })
 
   // ── §2-2 生徒の一意（詳細は inv12 マトリクス）
-  it('§2-2（2-3）: 同じコマに手入力の A（振替）が居れば、テンプレの A はどの机にも置かず予定数 −1・確認の画面に名前', () => {
+  it('§2-2（2-3）: 同じコマに手入力の A（振替）が居れば、テンプレの A はどの机にも置かず（予定数に数えない＝盤面の状態から導く・−1 は積まない）・確認の画面に名前', () => {
     const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'hand', studentSlots: [entry('sA', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }))
     const saved = saveStable(week, OLD_ROWS)
     expect(liveNames(deskOf(saved.nextWeeks, 0))).toEqual([])
     expect(countLiveInCell(saved.nextWeeks, 'sA')).toBe(1)
-    expect(saved.manualFirstCountAdjustments).toHaveLength(1)
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(collectManualFirstBlockedLessons({ weeks: saved.nextWeeks, pendingDesks: saved.nextPendingDesks, expected: [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: SLOT }] })).toHaveLength(1)
+    // INV-06 の保存則の監査は、積んだ −1 が無くても状態から導いた遮断で説明できる（無言の消失にならない）
+    expect(auditTemplateLessonAccounting({ weeks: saved.nextWeeks, regularLessons: OLD_ROWS, students, classroomSettings: newSettings(), scheduleCountAdjustments: [], manualMakeupAdjustments: {}, templatePendingDesks: saved.nextPendingDesks, fromDate: DATE, toDate: DATE })).toEqual([])
     expect(buildTemplateDiffConfirmMessage(EFFECTIVE, saved.summary, { studentNotes: saved.studentNotes })).toContain('手入力の同じ生徒が先にあるため、テンプレのこの授業は置きません')
   })
 
@@ -1613,7 +1618,7 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
       const saved = saveStable(week, OLD_ROWS)
       expect(countLiveInCell(saved.nextWeeks, 'sA'), statusKind).toBe(0)
       // 記録は手入力の生徒ではないので −1 しない（実績は記録に残る・§4-2 規則 3）
-      expect(saved.manualFirstCountAdjustments, statusKind).toEqual([])
+      expect(saved.wholeDayTransferCountAdjustments, statusKind).toEqual([])
     }
   })
 

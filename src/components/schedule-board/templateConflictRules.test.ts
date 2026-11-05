@@ -2,15 +2,16 @@
 // 第 2 版の規則の権威関数（templateConflictRules.ts・docs/spec-template-conflict-v2.md §2-2〜§2-4・§4-2 規則 1）
 //   - applyTemplateOriginRulesToManagedCell: 再マージ（フラグ ON）が差分反映と同じ生徒・講師をテンプレから外す（不動点の要）
 //   - フラグ OFF の再マージ（templateOriginRules を渡さない）は従来どおり（本番 3 校の挙動は変えない）
-//   - resolveManualFirstCountAdjustments: §2-2 の −1 は 2 回目の保存で二重に積まない（INV-03）
+//   - collectManualFirstBlockedLessons: §2-2 で置かれていない回を盤面の状態から導く（−1 を積まない・INV-05）
+//   - 同日移動（フラグ ON）は抑止キーを積まず、写しの元の時限にテンプレを置き直さない
 // ============================================================================
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry } from './types'
-import { buildManagedScheduleCellsForRange, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
-import { applyTemplateOriginRulesToManagedCell, collectTemplateBlockersInCell, findManualTeacherDeskElsewhere, isTemplateBlockingRecordStatus, resolveManualFirstCountAdjustments, resolveTemplateStudentBlock } from './templateConflictRules'
+import { buildManagedScheduleCellsForRange, collectSameDayMovedTemplateOccurrenceKeys, computeStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { applyTemplateOriginRulesToManagedCell, collectTemplateBlockersInCell, findManualTeacherDeskElsewhere, isTemplateBlockingRecordStatus, collectManualFirstBlockedLessons, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 
 const DATE = '2026-10-07'
@@ -74,17 +75,78 @@ describe('再マージ: フラグ ON だけ規則を当てる（OFF＝本番 3 �
   })
 })
 
-describe('§4-2 規則 1 の −1（resolveManualFirstCountAdjustments）', () => {
-  const skipped = [{ student: student(), dateKey: DATE, slotNumber: 5, deskIndex: 0 }]
-  it('置かなかったテンプレの授業は予定数に数えない＝−1（手入力が同じ科目でも）', () => {
-    expect(resolveManualFirstCountAdjustments({ skipped, scheduleCountAdjustments: [], suppressedRegularLessonOccurrences: [] }).map((item) => item.dateKey)).toEqual([DATE])
+describe('§4-2 規則 1（collectManualFirstBlockedLessons）: 置かれていない回は積まずに盤面の状態から導く（INV-05）', () => {
+  const expected = [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: 5 }]
+  const withManual = cellWith([{ id: 'd1', teacher: '田中' }, { id: 'd2', teacher: '', lesson: { id: 'hand', studentSlots: [student({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }])
+  it('同じコマに手入力の A が居てテンプレの A が居ない回を数える（下段の手入力も数える）', () => {
+    expect(collectManualFirstBlockedLessons({ weeks: [[withManual]], expected })).toEqual(expected)
+    const lowerOnly = cellWith([{ id: 'd1', teacher: '田中' }])
+    const pending = { [buildTemplatePendingDeskKey(CELL_ID, 'd1')]: { lower: { lesson: { id: 'l', studentSlots: [student({ manualAdded: true }), null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: DATE, createdAt: 'x' } }
+    expect(collectManualFirstBlockedLessons({ weeks: [[lowerOnly]], pendingDesks: pending, expected })).toEqual(expected)
   })
-  it('前の保存で −1 済み（削除の記録で説明できない純減）なら積まない＝2 回目の保存で二重にしない', () => {
-    const previous = [{ studentKey: 'sA', subject: '数', countKind: 'regular' as const, dateKey: DATE, delta: -1 }]
-    expect(resolveManualFirstCountAdjustments({ skipped, scheduleCountAdjustments: previous, suppressedRegularLessonOccurrences: [] })).toEqual([])
+  it('数えない回: 手入力が無い・テンプレの A が置かれている・休日・削除の記録（室長が取り下げた授業・単発削除）がある', () => {
+    expect(collectManualFirstBlockedLessons({ weeks: [[cellWith([{ id: 'd1', teacher: '' }])]], expected })).toEqual([])
+    const both = cellWith([...withManual.desks, { id: 'd3', teacher: '', lesson: { id: 'managed_r0', studentSlots: [student({ id: 't', origin: 'template' }), null] } }])
+    expect(collectManualFirstBlockedLessons({ weeks: [[both]], expected })).toEqual([])
+    expect(collectManualFirstBlockedLessons({ weeks: [[{ ...withManual, isOpenDay: false }]], expected })).toEqual([])
+    expect(collectManualFirstBlockedLessons({ weeks: [[withManual]], expected, suppressedRegularLessonOccurrences: [`sA__数__${DATE}__5`] })).toEqual([])
   })
-  it('その日の −1 が削除の記録（抑止キー）の分なら、§2-2 の −1 は別に積む', () => {
-    const previous = [{ studentKey: 'sA', subject: '数', countKind: 'regular' as const, dateKey: DATE, delta: -1 }]
-    expect(resolveManualFirstCountAdjustments({ skipped, scheduleCountAdjustments: previous, suppressedRegularLessonOccurrences: [`sA__数__${DATE}__3`] })).toHaveLength(1)
+})
+
+// ============================================================================
+// §1-1 #2（2026-11-05 主セッション指示）: テンプレ由来の授業を同じ日の中で動かしても、フラグ ON の教室は移動の抑止キーを積まない。
+// 再マージは写しの元の時限（sameDayMoveSourceLabel）にテンプレの同じ授業を置き直さない（collectSameDayMoveSourcesByDate）。
+// 既存データのキーを外すのは写しの元の時限の分だけ（同じ日の別の時限の単発削除の記録は外さない）。
+// ============================================================================
+describe('同日移動（フラグ ON）: 抑止キーを積まず、写しの元の時限にはテンプレを置き直さない。テンプレ反映でキーを外すのは元の時限の分だけ', () => {
+  const students: StudentRow[] = [{ id: 'sA', name: '青木', displayName: '青木', email: 'a@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' }]
+  const teachers: TeacherRow[] = [{ id: 't1', name: '田中', email: 't1@example.com', entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }]
+  const rowAt = (id: string, slotNumber: number): RegularLessonRow => ({ id, schoolYear: 2026, teacherId: 't1', student1Id: 'sA', subject1: '数', startDate: '', endDate: '', student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber })
+  // A は水曜 3 限と 5 限に数を持つ
+  const rows = [rowAt('r3', 3), rowAt('r5', 5)]
+  const classroomSettings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2, templateFreezeBeforeDate: DATE } as unknown as ClassroomSettings
+  const buildWeek = () => buildManagedScheduleCellsForRange({ range: { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '', personId: '' }, fallbackStartDate: '2026-10-05', fallbackEndDate: '2026-10-11', classroomSettings, teachers, students, regularLessons: rows, boardWeeks: [] })
+  const managedStudentByAnyName = new Map(students.map((item) => [item.name, item]))
+  const remerge = (weeks: SlotCell[][], suppressed: string[], on: boolean) => remergeBoardWeeksWithManagedData(weeks, { classroomSettings, teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29', templateOriginRules: on ? { pendingDesks: {} } : null })
+  const aliveOnDay = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === DATE).flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA').map(() => cell.slotNumber)))
+  const moveFrom5To4 = (on: boolean) => {
+    // 時限ごとに生徒の id を分ける（同じ生徒の 3 限と 5 限を取り違えない）
+    const week = buildWeek().map((cell) => (cell.dateKey !== DATE ? cell : { ...cell, desks: cell.desks.map((desk) => (!desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: desk.lesson.studentSlots.map((item) => (item ? { ...item, id: `${item.id}_${cell.slotNumber}` } : null)) as [StudentEntry | null, StudentEntry | null] } })) }))
+    const source = week.find((cell) => cell.id === `${DATE}_5`)!
+    const moving = source.desks[0].lesson!.studentSlots[0]!
+    return computeStudentMove({ weeks: [week], weekIndex: 0, cells: week, movingStudentId: moving.id, cellId: `${DATE}_4`, deskIndex: 1, studentIndex: 0, suppressedRegularLessonOccurrences: [], managedStudentByAnyName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: on })
+  }
+
+  it('フラグ ON: 同じ日の 5 限 → 4 限の移動はキーを積まず、再マージしても A は 4 限（写し）と 3 限だけ（5 限に戻らない・二重にならない）', () => {
+    const moved = moveFrom5To4(true)
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([])
+    expect(aliveOnDay(remerge(moved.nextWeeks, [], true)).sort()).toEqual([3, 4])
+  })
+
+  it('フラグ OFF（本番 3 校）: 従来どおり移動元のキーを積む（積まないと再マージで 5 限にも戻る＝キーが要る証拠）', () => {
+    const moved = moveFrom5To4(false)
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([`sA__数__${DATE}__5`])
+    expect(aliveOnDay(remerge(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, false)).sort()).toEqual([3, 4])
+    expect(aliveOnDay(remerge(moved.nextWeeks, [], false)).sort()).toEqual([3, 4, 5])
+  })
+
+  it('テンプレ反映で外すキーは写しの元の時限（5 限）の分だけ。同じ日の 3 限で単発削除した記録は外さない＝写しを戻しても 3 限は復活しない', () => {
+    const moved = moveFrom5To4(false)
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    const deletion3 = `sA__数__${DATE}__3`
+    const suppressed = [...moved.nextSuppressedRegularLessonOccurrences, deletion3]
+    const weeks = remerge(moved.nextWeeks, suppressed, true)
+    expect([...collectSameDayMovedTemplateOccurrenceKeys({ weeks, templatePendingDesks: {}, suppressedRegularLessonOccurrences: suppressed, effectiveStartDate: DATE })]).toEqual([`sA__数__${DATE}__5`])
+    const saved = computeTemplateDiffApplyForBoard({ weeks, classroomSettings, teachers, students, regularLessons: rows, effectiveStartDate: DATE, suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {}, scheduleCountAdjustments: [] })
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([`sA__数__${DATE}__5`])
+    expect(aliveOnDay(saved.nextWeeks)).toEqual([5])
+  })
+
+  it('元の時限が読めない旧データの写しは何も外さない（削除の記録を守る側に倒す）', () => {
+    const copy = student({ id: 'c', sameDayMoveSourceDate: DATE, origin: 'template' })
+    const week = [[cellWith([{ id: 'd1', teacher: '', lesson: { id: 'm', studentSlots: [copy, null] } }])]]
+    expect([...collectSameDayMovedTemplateOccurrenceKeys({ weeks: week, templatePendingDesks: {}, suppressedRegularLessonOccurrences: [`sA__数__${DATE}__3`], effectiveStartDate: DATE })]).toEqual([])
   })
 })

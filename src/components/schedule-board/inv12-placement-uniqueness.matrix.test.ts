@@ -5,6 +5,7 @@ import type { ClassroomSettings, ScheduleCountAdjustmentEntry } from '../../type
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 
 // ============================================================================
@@ -421,7 +422,7 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     return remerged
   }
 
-  it('§2-2: 別の机（机 2）に A の振替（手入力）があれば、机 0 にテンプレの A を置かない。抑止キー 0・確認の画面に名前・予定数 −1。再マージ・再保存で形が変わらない', () => {
+  it('§2-2: 別の机（机 2）に A の振替（手入力）があれば、机 0 にテンプレの A を置かない。抑止キー 0・−1 も積まない・確認の画面に名前。再マージ・再保存で形が変わらない', () => {
     const saved = save(board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk))))
     expect(liveIdsAt(saved.nextWeeks, 0)).toEqual([])
     expect(cellOf(saved.nextWeeks).desks[0].teacher).toBe('田中')
@@ -429,18 +430,33 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     expect(saved.nextPendingDesks).toEqual({})
     expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
     expect(saved.studentNotes.filter((note) => note.kind === 'manual-first').map((note) => note.studentName)).toEqual(['青木'])
-    expect(saved.manualFirstCountAdjustments.map((item) => `${item.student.managedStudentId}:${item.dateKey}`)).toEqual([`sA:${DATE}`])
+    // §4-2 規則 1（INV-05）: 置かなかった回は保存で −1 を積まず、盤面の状態から導く（collectManualFirstBlockedLessons）。
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(collectManualFirstBlockedLessons({ weeks: saved.nextWeeks, pendingDesks: saved.nextPendingDesks, expected: [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: 5 }] })).toHaveLength(1)
     expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
     const remerged = expectStable(saved)
     expect(liveCount(remerged, 'sA')).toBe(1)
   })
 
-  it('§2-2 × §4-2 規則 1: 同じ保存を 2 回しても −1 は 1 回だけ（前の保存の −1 を数える）', () => {
+  // §4-2 規則 1（INV-05・2026-11-05 主セッション指示）: 予定数は積まずに状態から導く。保存でも読み込みでも同じ、手入力を消せば自動で戻る、何回保存しても二重にならない。
+  // 削除の記録（「下段(手入力)を採用」で室長が取り下げた授業・単発削除＝抑止キー＋単発削除と同じ −1）がある回は §2-2 の遮断に数えない（二重に引かない）。
+  it('§2-2 × §4-2 規則 1: 置かれていない回は盤面の状態から導く（2 回保存しても 1 回・読み込み直しても同じ・手入力を消すと 0・取り下げの記録がある回は数えない）', () => {
+    const expected = [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: 5 }]
     const saved = save(board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk))))
-    const minus = saved.manualFirstCountAdjustments.map((item): ScheduleCountAdjustmentEntry => ({ studentKey: 'sA', subject: item.student.subject, countKind: 'regular', dateKey: item.dateKey, delta: -1 }))
-    const again = save(saved.nextWeeks, { pendingDesks: saved.nextPendingDesks, scheduleCountAdjustments: minus })
-    expect(again.manualFirstCountAdjustments).toEqual([])
-    expect(again.studentNotes.filter((note) => note.kind === 'manual-first')).toHaveLength(1)
+    const blocked = (weeks: SlotCell[][], pendingDesks: TemplatePendingDeskMap, suppressed: string[] = []) => collectManualFirstBlockedLessons({ weeks, pendingDesks, expected, suppressedRegularLessonOccurrences: suppressed })
+    expect(blocked(saved.nextWeeks, saved.nextPendingDesks)).toHaveLength(1)
+    const again = save(saved.nextWeeks, { pendingDesks: saved.nextPendingDesks })
+    expect(again.wholeDayTransferCountAdjustments).toEqual([])
+    expect(blocked(again.nextWeeks, again.nextPendingDesks)).toHaveLength(1)
+    // 読み込み直し（再マージ・フラグ ON）でも同じ
+    expect(blocked(remergeOn(saved.nextWeeks, [], saved.nextPendingDesks), saved.nextPendingDesks)).toHaveLength(1)
+    // 手入力の A を消すと、再マージでテンプレの A が戻り、遮断の回は 0（予定数も自動で戻る）
+    const removed = saved.nextWeeks.map((week) => week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 2 ? { ...desk, lesson: undefined } : desk)) })))
+    const back = remergeOn(removed, [], {})
+    expect(liveIdsAt(back, 0)).toEqual(['sA'])
+    expect(blocked(back, {})).toEqual([])
+    // 取り下げの記録（抑止キー）がある回は数えない＝単発削除と同じ −1 の側だけで引く（二重にしない）
+    expect(blocked(saved.nextWeeks, saved.nextPendingDesks, [buildManagedOccurrenceKey(makeupA('x'), DATE, 5)])).toEqual([])
   })
 
   it('§2-2: 同じ机の生徒 2 の席に A の振替（テンプレの生徒 1 が A）→ テンプレの A を置かず、振替は 1 行のまま（2 行にしない）', () => {
