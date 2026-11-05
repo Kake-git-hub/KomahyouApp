@@ -6805,6 +6805,18 @@ export function removeTemplateDuplicatesElsewhereInCell(cell: SlotCell, deskId: 
   return removed.length === 0 ? { cell, removed } : { cell: { ...cell, desks }, removed }
 }
 
+/**
+ * 確認リスト tp-75（オーナー指示 2026-11-05）: 由来 same-slot-template-duplicate の保留で「下段(手入力)を採用する」を押したときの確認文。
+ * 実際に外れるのは、同じコマの別の机 T のテンプレの通常授業（removeTemplateDuplicatesElsewhereInCell と同じ判定）。以前は同じ机の上段の
+ * 生徒（押していない席のテンプレ生徒）の名前を「取り下げます」と出していた。同じ机の上の行の生徒名は出さない。純関数。
+ */
+export function buildTemplatePendingDuplicateAdoptConfirm(cell: SlotCell, deskId: string, seatLowerStudents: readonly StudentEntry[], resolveDisplayName: (name: string) => string): string {
+  const { removed } = removeTemplateDuplicatesElsewhereInCell(cell, deskId, seatLowerStudents)
+  if (removed.length === 0) return '下段(手入力)を採用します。外すテンプレの授業はありません。よろしいですか？'
+  const list = removed.map((item) => `机 ${item.deskIndex + 1} のテンプレの通常授業の ${resolveDisplayName(item.student.name)}`).join('・')
+  return `下段(手入力)を採用します。${list} を外します（予定数は 1 減ります）。よろしいですか？`
+}
+
 export function computePendingDeskResolution(params: {
   mode: TemplatePendingResolutionMode
   weeks: SlotCell[][]
@@ -6852,7 +6864,7 @@ export function computePendingDeskResolution(params: {
     const disposal = disposeTemplatePendingLowerStudents({ ...params, students: removed, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber })
     const names = templatePendingStudentNames(removed, params.resolveDisplayName)
     // 上の帯は 1 行（オーナー指示 2026-10-25）: 外した生徒と件数だけを括弧にまとめる。
-    const describe = (collapsedLabel: string, countAdjustment: { count: number }) => `テンプレ授業を採用しました${joinResultNotes([names ? `${names} を外す` : '', disposal.returnedCount > 0 ? `未消化へ ${disposal.returnedCount}件` : '', countAdjustment.count > 0 ? `希望回数 −${countAdjustment.count}` : ''])}。${collapsedLabel}`
+    const describe = (collapsedLabel: string, countAdjustment: { count: number }) => `上段(テンプレ)を採用しました${joinResultNotes([names ? `${names} を外す` : '', disposal.returnedCount > 0 ? `未消化へ ${disposal.returnedCount}件` : '', countAdjustment.count > 0 ? `希望回数 −${countAdjustment.count}` : ''])}。${collapsedLabel}`
     if (liveTemplatePendingStudents(nextEntry.lower.lesson).length > 0) {
       // もう一方の席の下段に生きている生徒が残る → 2 行のまま（押した席だけ片づいた）。残りの席は Q28 で戻れるなら戻す。
       const updatedMap = { ...params.templatePendingDesks, [key]: nextEntry }
@@ -7003,7 +7015,7 @@ export function computePendingDeskResolution(params: {
       collapsed: !stillPending,
       returnedCount: withdrawnMakeups.length,
       countAdjustedCount: countTargets.length,
-      message: `手入力データを採用しました${joinResultNotes([withdrawnNames ? `${withdrawnNames} を取り下げ` : '', duplicateRemoval.removed.length > 0 ? `${duplicateRemoval.removed.map((item) => `机 ${item.deskIndex + 1} のテンプレの ${params.resolveDisplayName(item.student.name)}`).join('・')} を外す` : '', withdrawnMakeups.length > 0 ? `未消化振替へ ${withdrawnMakeups.length}件` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${stillPending ? 'もう一方の席は保留のまま。' : teacherChoiceNote(nextTemplatePendingDesks)}`,
+      message: `下段(手入力)を採用しました${joinResultNotes([withdrawnNames ? `${withdrawnNames} を取り下げ` : '', duplicateRemoval.removed.length > 0 ? `${duplicateRemoval.removed.map((item) => `机 ${item.deskIndex + 1} のテンプレの ${params.resolveDisplayName(item.student.name)}`).join('・')} を外す` : '', withdrawnMakeups.length > 0 ? `未消化振替へ ${withdrawnMakeups.length}件` : '', countTargets.length > 0 ? `希望回数 −${countTargets.length}` : ''])}。${stillPending ? 'もう一方の席は保留のまま。' : teacherChoiceNote(nextTemplatePendingDesks)}`,
     }
   }
 
@@ -7139,7 +7151,7 @@ export function computePendingLowerStudentMove(params: {
     if (upperDesk.lesson?.studentSlots[params.studentIndex]) return { status: 'blocked', message: TEMPLATE_PENDING_MESSAGES.lowerMoveNeedsEmptySeat }
     // テンプレの管理授業に同居させると再マージで落ちる生徒（別日移動の通常授業）は置かない（Q34-3 と同じ条件）。
     if (upperDesk.lesson && isTemplateManagedLesson(upperDesk.lesson) && !shouldSeatSurviveRemerge(lowerStudent, sourceLocation.cell.dateKey)) {
-      return { status: 'blocked', message: '別日から移した通常授業はテンプレの机に置けません。「手入力データを採用」を選んでください。' }
+      return { status: 'blocked', message: '別日から移した通常授業はテンプレの机に置けません。「下段(手入力)を採用する」を選んでください。' }
     }
     const slots = [...(upperDesk.lesson?.studentSlots ?? [null, null])] as [StudentEntry | null, StudentEntry | null]
     slots[params.studentIndex] = { ...lowerStudent }
@@ -13100,7 +13112,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const hasMemo = (seatLower.memoSlots ?? []).some((memo) => typeof memo === 'string' && memo.trim() !== '')
       // 1 行（オーナー指示 2026-10-24）。ストックへの戻し方の内訳は結果のメッセージで出る。
       const dropped = [lowerNames, hasMemo ? 'メモ' : ''].filter(Boolean).join('・')
-      return `テンプレ授業を採用します。${dropped ? `下段の ${dropped} は外します。` : ''}よろしいですか？`
+      return `上段(テンプレ)を採用します。${dropped ? `下段の ${dropped} は外します。` : ''}よろしいですか？`
+    }
+    if (mode === 'adopt-existing' && context.entry.origin?.kind === 'same-slot-template-duplicate') {
+      // 決定記録 57（A-10）・tp-75: この由来は机 T のテンプレの通常授業を外す（上段の生徒は取り下げない）。確認文も外す相手を出す。
+      return buildTemplatePendingDuplicateAdoptConfirm(context.cell, context.desk.id, liveTemplatePendingStudents(seatLower.lesson), resolveBoardStudentDisplayName)
     }
     if (mode === 'adopt-existing') {
       // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
@@ -13109,7 +13125,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const upperNames = names(withdrawnStudents)
       // 2026-11-01: 上段が丸ごと振替の追従で置いた振替なら未消化振替へ戻す（消えない）ことを書く。
       const makeupNote = withdrawnStudents.some((student) => student.lessonType === 'makeup' && student.makeupSourceDate && !student.manualAdded) ? '（振替は未消化振替へ戻します）' : ''
-      return `手入力データを採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます${makeupNote}。` : ''}よろしいですか？`
+      return `下段(手入力)を採用します。${upperNames ? `テンプレ授業の ${upperNames} は取り下げます${makeupNote}。` : ''}よろしいですか？`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
@@ -15780,6 +15796,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
             dragMoveActive={isDragMoveActive}
             highlightedPendingLower={isTemplateMode ? null : templatePendingLowerMove}
+            openedPendingSeat={isTemplateMode || !templatePendingDeskMenu || templatePendingDeskMenu.target === 'teacher' ? null : templatePendingDeskMenu}
             onStudentMouseDown={isTemplateMode ? undefined : stableHandleStudentMouseDown}
             onTeacherMouseDown={isTemplateMode ? undefined : stableHandleTeacherMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}
@@ -15802,7 +15819,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               <div className="student-menu-head">
                 <strong>{templatePendingDeskMenu.target === 'teacher'
                   ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${templatePendingDeskMenuContext.desk.teacher.trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
-                  : `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（手入力データ＝生徒${templatePendingDeskMenu.lowerIndex + 1}の下段）`}</strong>
+                  : `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目・席 ${templatePendingDeskMenu.lowerIndex + 1}（上段＝テンプレ／下段＝手入力）`}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setTemplatePendingDeskMenu(null)}>x</button>
               </div>
               {/* 4 択だけ（確認リスト v1.5.576 その他欄「このメニューがわかりにくい。まず選択肢として テンプレ授業を採用／手入力データを採用／
@@ -15810,8 +15827,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               {templatePendingDeskMenu.target === 'teacher' ? (
                 // 講師と生徒を別々に採用（オーナー確定 2026-10-27・確認リスト tp-64）: 講師だけを決める 2 択。生徒の席には触れない。
                 <div className="student-menu-section template-pending-desk-menu-actions" data-testid="template-pending-teacher-menu-actions">
-                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template-teacher')} data-testid="template-pending-adopt-template-teacher-button">テンプレの講師を採用</button>
-                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing-teacher')} data-testid="template-pending-adopt-existing-teacher-button">手入力の講師を採用</button>
+                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template-teacher')} data-testid="template-pending-adopt-template-teacher-button">上段(テンプレ)の講師を採用する</button>
+                  <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing-teacher')} data-testid="template-pending-adopt-existing-teacher-button">下段(手入力)の講師を採用する</button>
                 </div>
               ) : (() => {
                 const lower = templatePendingDeskMenuContext.entry.lower
@@ -15821,15 +15838,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 return (
                   <div className="student-menu-section template-pending-desk-menu-actions" data-testid="template-pending-desk-menu-actions">
                     {/* 席ごと（オーナー指示 2026-10-03・Q26-10）: 採用の 2 つも押した席（index）の下段だけが対象。もう一方の席の下段は保留のまま。 */}
-                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template', index)} data-testid="template-pending-adopt-template-button">テンプレ授業を採用</button>
-                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing', index)} data-testid="template-pending-adopt-existing-button">手入力データを採用</button>
+                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template', index)} data-testid="template-pending-adopt-template-button">上段(テンプレ)を採用する</button>
+                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing', index)} data-testid="template-pending-adopt-existing-button">下段(手入力)を採用する</button>
                     {lowerStudent ? (
-                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-student', index)} data-testid={`template-pending-lower-delete-${index}`}>手入力データを削除</button>
-                    ) : lowerMemo && lowerMemo.trim() ? (
-                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-memo', index)} data-testid={`template-pending-lower-memo-delete-${index}`}>手入力データを削除</button>
+                      <button type="button" className="menu-link-button" onClick={() => handleStartTemplatePendingLowerMove(index)} data-testid={`template-pending-lower-move-${index}`}>下段(手入力)を移動する</button>
                     ) : null}
                     {lowerStudent ? (
-                      <button type="button" className="menu-link-button" onClick={() => handleStartTemplatePendingLowerMove(index)} data-testid={`template-pending-lower-move-${index}`}>手入力データを移動</button>
+                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-student', index)} data-testid={`template-pending-lower-delete-${index}`}>下段(手入力)を削除する</button>
+                    ) : lowerMemo && lowerMemo.trim() ? (
+                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-memo', index)} data-testid={`template-pending-lower-memo-delete-${index}`}>下段(手入力)を削除する</button>
                     ) : null}
                   </div>
                 )
