@@ -221,3 +221,44 @@ describe('buildStudentLessonLedger: 休日記録(holiday)は台帳に載せな�
     expect(row.absentNoMakeup).toEqual([])
   })
 })
+
+describe('第 2 版 段 4: 丸ごと振替の組(INV-06・最終確認の指摘 2026-11-05)', () => {
+  // 盤面に D の「休)」記録も D' の付け替えの授業も無い(週が無い)状態で D' が休日のとき、組のキーだけで D' 自身のテンプレの
+  // 休日振替を数えないこと(盤面の未消化一覧・App の未定判定と同じ入力)。渡し忘れると台帳だけ +1 ずれる。
+  it('組のキーがあれば、休日の D\' 自身のテンプレを未消化に数えない(盤面と同じ結果)', async () => {
+    const fixture = await import('../components/schedule-board/wholeDayTransferPair.fixture')
+    const { buildWholeDayTransferPairKey } = await import('../components/schedule-board/wholeDayTransferPair')
+    const build = (suppressed: string[]): AppSnapshotPayload => ({
+      screen: 'schedule-board',
+      classroomSettings: fixture.settings({ holidayDates: [fixture.D2] }),
+      managers: [],
+      teachers: fixture.teachers,
+      students: fixture.students,
+      regularLessons: fixture.ROWS,
+      groupLessons: [],
+      specialSessions: [],
+      autoAssignRules: [],
+      pairConstraints: [],
+      boardState: {
+        weeks: [],
+        weekIndex: 0,
+        selectedCellId: '',
+        selectedDeskIndex: 0,
+        suppressedRegularLessonOccurrences: suppressed,
+        scheduleCountAdjustments: [],
+        manualMakeupAdjustments: {},
+        suppressedMakeupOrigins: {},
+        fallbackMakeupStudents: {},
+        manualLectureStockCounts: {},
+        manualLectureStockOrigins: {},
+        fallbackLectureStockStudents: {},
+      },
+    } as unknown as AppSnapshotPayload)
+    const without = buildStudentLessonLedger({ payload: build([]), now: fixture.TODAY })!
+    const withPair = buildStudentLessonLedger({ payload: build([buildWholeDayTransferPairKey(fixture.D, fixture.D2)]), now: fixture.TODAY })!
+    // 対照: 組が無ければ D' の休日振替が 2 人分積まれる。
+    expect(without.totals.makeupBalance).toBe(2)
+    // 組があれば D' 自身のテンプレは数えない(0)。
+    expect(withPair.totals.makeupBalance).toBe(0)
+  })
+})

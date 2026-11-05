@@ -18,7 +18,8 @@ import { auditTemplateLessonAccounting, describeLessonAccountingViolations } fro
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { appendTemplateTransferMakeupOrigin, removeTemplateTransferMakeupOrigin, TEMPLATE_TRANSFER_STOCK_REASON } from './templateTransferFollow'
+import { appendTemplateTransferMakeupOrigin, isWholeDayTransferMappedMakeup, planFullDeskDisplacement, removeTemplateTransferMakeupOrigin, TEMPLATE_TRANSFER_STOCK_REASON } from './templateTransferFollow'
+import { buildTemplateDiffStudentNoteLines } from './templateDiffApply'
 
 const WEEK_START = '2026-10-05'
 const WEEK_END = '2026-10-11'
@@ -365,17 +366,26 @@ describe('INV-06 × Q40-1: テンプレから外した生徒の根拠を失っ�
     const savedLower = save(lower, newRows, board.suppressed, { manualMakeupAdjustments: board.ledgers, templatePendingDesks: pending, slotFilter: wedOnly })
     expect(savedLower.summary.orphanedMakeupsRemoved).toBe(0)
     expect(liveIds(savedLower.nextWeeks, FRI_CELL)).toContain('sA')
-    expect(Object.keys(savedLower.nextPendingDesks)).toEqual(Object.keys(pending))
+    // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止・§2-1・§4-2 規則 3）: 絞り込みは使わず木 5限も当て直す。テンプレの生徒が居ない席なので下段の D は上段へ戻り、
+    // 休みの記録も机の同じ席へ戻る（記録は消えない）＝保留は 1 行に戻る。根拠 (b) は記録が机に移っても同じに数える（振替は消えない）。
+    expect(savedLower.nextPendingDesks).toEqual({})
+    expect(cellOf(savedLower.nextWeeks, THU_CELL).desks[0].statusSlots?.[0]).toMatchObject({ id: absentMakeupA.id, status: 'absent' })
   })
 
-  it('範囲（変えたコマ）の外の振替元は触らない: 木 5限だけの絞り込みでは水 5限 由来の振替は消えず、置きもしない', () => {
+  // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止・2-9）: 「変えたコマだけ」の絞り込みは使わない。絞り込みを渡しても、渡さないときと同じ結果になる
+  // （旧「範囲の外の振替元は触らない」は廃止。手入力のある席は反映前後で変わらないことは 2-9 の行で固定する）。
+  it('絞り込み（変えたコマ）を渡しても全コマを当て直す: 木 5限だけの絞り込みでも水 5限 由来の A の振替は根拠を失って消え、C は振替先へ置く', () => {
     const board = transferredBoard()
     const newRows = [row('r0', 't1', '', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
-    const saved = save(board.weeks, newRows, board.suppressed, { slotFilter: { slotKeys: new Set([buildTemplateSlotKey(4, SLOT)]) } })
-    expect(saved.summary.orphanedMakeupsRemoved).toBe(0)
-    expect(saved.summary.wholeDayTransferPlacedStudents + saved.summary.wholeDayTransferStockedStudents).toBe(0)
-    expect(liveIds(saved.nextWeeks, THU_CELL).sort()).toEqual(['sA', 'sB'])
-    expect(cellOf(saved.nextWeeks, WED_CELL)).toBe(cellOf(board.weeks, WED_CELL))
+    const filtered = save(board.weeks, newRows, board.suppressed, { slotFilter: { slotKeys: new Set([buildTemplateSlotKey(4, SLOT)]) } })
+    const full = save(board.weeks, newRows, board.suppressed)
+    expect(filtered.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(filtered.summary.wholeDayTransferPlacedStudents).toBe(1)
+    // 記録の id は作った時刻を含むので、中身（生徒・種別・記録の種類）で比べる。
+    const project = (weeks: SlotCell[][]) => weeks.flat().map((cell) => cell.desks.map((desk) => [desk.teacher, (desk.lesson?.studentSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.lessonType}` : null)), (desk.statusSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.status}` : null))]))
+    expect(project(filtered.nextWeeks)).toEqual(project(full.nextWeeks))
+    expect(Object.keys(filtered.nextPendingDesks)).toEqual(Object.keys(full.nextPendingDesks))
+    expect(liveIds(filtered.nextWeeks, THU_CELL).sort()).toEqual(['sB', 'sC'])
   })
 })
 
@@ -1540,5 +1550,70 @@ describe('tp-51 科目変更 × 盤面の机の並びがテンプレの机番号
     expect(saved.summary.wholeDayTransferPlacedStudents).toBe(1)
     expect(seatsOf(saved.nextWeeks, THU_CELL, 'sC')).toEqual(['0#1:makeup:数'])
     expect(seatsOf(saved.nextWeeks, THU_CELL, 'sA')).toEqual(['2#0:makeup:数'])
+  })
+})
+
+// ============================================================================
+// tp-73（オーナー回答 2026-11-05「通常とはテンプレ由来のもの。手入力で置いたものは手入力扱い」・決定記録 65）: 満席の押し出しで「同じ組」（押し出さない）は
+// 手入力の印の無い振替（丸ごと振替の写像そのもの）だけ。同じ振替元の日でも手動追加の振替（manualAdded）は押し出す。
+// 実例: 開発用教室 11/27(金) 5限 机 13・14（テンプレ由来の振替＋手動追加の振替で満席なのに、追従の振替が下段に入り「席の生徒はテンプレの生徒なので」と出た）。
+// ============================================================================
+describe('決定記録 65（2026-11-05・tp-73）: 満席の押し出しの対象＝手入力の印のある占有者（同じ振替元の日の手動追加の振替も）', () => {
+  const rowsWithC = [row('r0', 't1', 'sA', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+  const sameSourceMakeup = (manualAdded: boolean): StudentEntry => ({
+    id: manualAdded ? 'd_manual_makeup' : 'd_mapped_makeup', name: '土屋', managedStudentId: 'sD', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal',
+    makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 5限', ...(manualAdded ? { manualAdded: true } : {}),
+  })
+  function withSeat2(weeks: SlotCell[][], occupant: StudentEntry): SlotCell[][] {
+    return weeks.map((week) => week.map((cell) => (cell.id !== THU_CELL ? cell : {
+      ...cell,
+      desks: cell.desks.map((desk, index) => (!desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: [desk.lesson.studentSlots[0], index === 0 ? occupant : MANUAL_E] as [StudentEntry | null, StudentEntry | null] } })),
+    })))
+  }
+
+  it('純関数 isWholeDayTransferMappedMakeup / planFullDeskDisplacement: 同じ振替元の日の振替でも manualAdded なら押し出し対象・印なしの写像は押し出さない', () => {
+    expect(isWholeDayTransferMappedMakeup(sameSourceMakeup(false), WED)).toBe(true)
+    expect(isWholeDayTransferMappedMakeup(sameSourceMakeup(true), WED)).toBe(false)
+    expect(isWholeDayTransferMappedMakeup(sameSourceMakeup(false), THU)).toBe(false)
+    const board = transferredBoard()
+    const manualCell = cellOf(withSeat2(board.weeks, sameSourceMakeup(true)), THU_CELL)
+    expect(planFullDeskDisplacement(manualCell, {}, 0, 1, WED)).toMatchObject({ seatIndex: 1, occupant: { id: 'd_manual_makeup' } })
+    // 席 0 は丸ごと振替の写像（A の振替・印なしの同じ組）、席 1 も印なしの同じ組 → 押し出さない（null＝従来の形）
+    const mappedCell = cellOf(withSeat2(board.weeks, sameSourceMakeup(false)), THU_CELL)
+    expect(planFullDeskDisplacement(mappedCell, {}, 0, 1, WED)).toBeNull()
+  })
+
+  it('保存: 手動追加の振替（同じ振替元の日）で満席 → 押し出して下段に残し、上段にテンプレの生徒 C の振替（displaced）。在庫は保存前後で不変', () => {
+    const board = transferredBoard()
+    const weeks = withSeat2(board.weeks, sameSourceMakeup(true))
+    const before = balances(weeks, OLD_ROWS, board.ledgers)
+    const saved = save(weeks, rowsWithC, board.suppressed, { manualMakeupAdjustments: board.ledgers })
+    expect(saved.wholeDayTransferPending.map((item) => item.shape)).toEqual(['displaced'])
+    const thu = cellOf(saved.nextWeeks, THU_CELL)
+    expect(thu.desks[0].lesson?.studentSlots[1]).toMatchObject({ managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: WED })
+    const lower = saved.nextPendingDesks[buildTemplatePendingDeskKey(THU_CELL, thu.desks[0].id)]?.lower.lesson?.studentSlots ?? []
+    expect(lower.filter(Boolean).map((student) => student!.id)).toEqual(['d_manual_makeup'])
+    expect(saved.studentNotes.find((note) => note.kind === 'transfer-pending')?.displacedName).toBe('土屋')
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    const after = balances(saved.nextWeeks, rowsWithC, board.ledgers, settings(), {}, saved.nextPendingDesks)
+    expect(after['sD__数'] ?? 0).toBe(before['sD__数'] ?? 0)
+  })
+
+  it('保存: 印なしの同じ組（丸ごと振替の写像）で満席 → 押し出さず、C の振替を下段へ（従来の形）。理由文は「席の 2 人ともテンプレ由来の生徒」', () => {
+    // D の振替の根拠（水の D の授業）を残すため、水 4限 に D の行を足す（足さないと Q40-1 が根拠の無い振替として外し、席が空く）。
+    const rowD4 = row('r4', 't3', 'sD', '', 3, { slotNumber: 4 })
+    const board = transferredBoard([...OLD_ROWS, rowD4])
+    const weeks = withSeat2(board.weeks, sameSourceMakeup(false))
+    const saved = save(weeks, [...rowsWithC, rowD4], board.suppressed, { manualMakeupAdjustments: board.ledgers })
+    expect(saved.orphanedMakeups).toEqual([])
+    expect(saved.wholeDayTransferPending.map((item) => item.shape)).toEqual(['lower'])
+    const thu = cellOf(saved.nextWeeks, THU_CELL)
+    expect(thu.desks[0].lesson?.studentSlots[1]?.id).toBe('d_mapped_makeup')
+    const pending = saved.nextPendingDesks[buildTemplatePendingDeskKey(THU_CELL, thu.desks[0].id)]
+    expect(pending?.lower.lesson?.studentSlots.find((student) => student?.managedStudentId === 'sC')).toMatchObject({ lessonType: 'makeup', makeupSourceDate: WED })
+    expect(pending?.origin?.note).toContain('席の 2 人ともテンプレ由来の生徒')
+    expect(pending?.origin?.note).not.toContain('テンプレの生徒なので')
+    const lines = buildTemplateDiffStudentNoteLines(saved.studentNotes).join('\n')
+    expect(lines).toContain('席の 2 人ともテンプレ由来の生徒のため')
   })
 })

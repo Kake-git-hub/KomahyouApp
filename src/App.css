@@ -2734,6 +2734,16 @@ tr.sa-group-row td {
   box-shadow: inset 3px 0 0 #2e7d32;
 }
 
+/* 講師の休み（docs/spec-template-conflict-v2.md §2-4・§5・段 3・機能フラグ templateDiffApply の教室の盤面だけ）。講師なしの机をグレーにし、
+   「休」＋休みにした講師名を灰色で出す。別の講師を置けば通常の表示。盤面 PDF は stripTemplatePendingLowerForPdf がクラスと文字を外す。 */
+.sa-teacher.sa-teacher-rest {
+  background: #eceff1;
+}
+.sa-teacher-rest-label {
+  color: #78909c;
+  font-weight: 600;
+}
+
 /* A-12（オーナー決定 2026-11-01・spec-template-behavior §H Q36）: 同日移動の写し（日の中で手で動かした通常授業）で、テンプレが同じ日の別のコマにも
    同じ授業を置く／テンプレに無くなったもの。手入力データとして残し、保留と同じ緑＋左の縦線で知らせる（保留ではないので操作の制限は無い）。
    名前の行の短い帯（.sa-student-copy-note）とツールチップに注意文。盤面 PDF は stripTemplatePendingLowerForPdf が両方外す。 */
@@ -2813,6 +2823,22 @@ tr.sa-group-row td {
 .sa-pending-lower-picked .sa-student-star,
 .sa-pending-lower-picked .sa-student-detail-prefix {
   color: #fff;
+}
+
+/* 保留メニューを開いている席(2026-11-05 オーナー指示): 上段・下段の両方に太い青枠。印刷/PDF には出さない(PDF は strip で外す・印刷は下の @media print で無効化)。 */
+.sa-student-inner.sa-pending-upper-selected,
+.sa-pending-lower.sa-pending-lower-selected {
+  outline: 3px solid #1a73e8;
+  outline-offset: -3px;
+  background-color: #dbeafe;
+}
+
+@media print {
+  .sa-student-inner.sa-pending-upper-selected,
+  .sa-pending-lower.sa-pending-lower-selected {
+    outline: none;
+    background-color: transparent;
+  }
 }
 
 .sa-pending-lower-band {
@@ -7495,4 +7521,11 @@ button.verification-checklist-attach:disabled {
   background: #e6f4ea;
   color: #137333;
   font-weight: 600;
+}
+
+/* 出自＝手入力の青字（docs/spec-template-conflict-v2.md §5・機能フラグ templateDiffApply の教室の盤面だけ）。
+   文字色は青が勝つ（警告の赤・休みの灰より後に書き、詳細度も上げる）。前置き（外)・振)・休)）と背景はそのまま。盤面 PDF はクラスごと外す。 */
+.slot-adjust-grid .sa-student-name.sa-manual-origin,
+.slot-adjust-grid .sa-teacher-name.sa-manual-origin {
+  color: #1d4ed8;
 }

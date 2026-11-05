@@ -29,8 +29,8 @@ import {
   computeStudentWithdrawSweep,
   computeTemplateDiffApplyForBoard,
   reconcileSubmittedTeacherPlacements,
-  repackTeacherOnlyDesks,
   remergeBoardWeeksWithManagedData,
+  repackTeacherOnlyDesks,
 } from './ScheduleBoardScreen'
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import { buildTemplatePendingDeskKey, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -164,15 +164,15 @@ function applyDiff(week: SlotCell[], newRows: RegularLessonRow[] = NEW_ROWS) {
 const QR_KEPT_ROWS = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
 
 // 机0 に在庫由来の振替 M（下段になる）・移動元の記録・メモ。机0 の講師は QR 自動割振り（田中・講習 ss1）。新テンプレは机0 に C（鈴木）。
-function pendingWithQrTeacher(newRows: RegularLessonRow[] = NEW_ROWS) {
+function pendingWithQrTeacher(newRows: RegularLessonRow[] = NEW_ROWS, qr: { name: string; id: string } = { name: '田中', id: 't1' }) {
   let week = buildWeek(OLD_ROWS)
   week = mutateDesk(week, 0, (desk) => ({
     ...desk,
-    teacher: '田中',
+    teacher: qr.name,
     manualTeacher: true,
     teacherAssignmentSource: 'schedule-registration',
     teacherAssignmentSessionId: 'ss1',
-    teacherAssignmentTeacherId: 't1',
+    teacherAssignmentTeacherId: qr.id,
     lesson: { id: `${desk.id}_makeup`, studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' }), null] },
     statusSlots: [null, status('sD', 'moved')],
     memoSlots: [null, '持ち物'],
@@ -292,14 +292,13 @@ describe('講習の講師自動割当（applyTeacherAutoAssignRequest）: 保留
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('QR 提出講師の起動時自己修復（reconcileSubmittedTeacherPlacements）: 保留の机の QR 講師は配置済み（Q31・Q21-9）', () => {
-  it('差分反映で保留になった机の QR 講師は机に残り、自己修復を何回通しても別の机へ置き直されない（講師が 2 か所に出ない）', () => {
-    // テンプレのどこにも田中が居ない形（2026-10-15 の例外 1 の絞り込みに掛からない）。
+  // 第 2 版（spec-template-conflict-v2 §9-13・§2-3）: QR 提出で自動で入った講師は手置き講師と同じ手入力。テンプレが同じ机に別の講師（鈴木）を置くと
+  // 講師欄だけ 2 行（上＝鈴木／下＝QR の田中）。自己修復は下段の QR 講師を「配置済み」と数え、別の机へ置き直さない（講師が 2 か所に出ない）。
+  it('差分反映で保留になった机の QR 講師は下段の講師欄に残り、自己修復を何回通しても別の机へ置き直されない（講師が 2 か所に出ない）', () => {
     const { diff, key } = pendingWithQrTeacher(QR_KEPT_ROWS)
     const pendingDesk = cellOf(diff.nextWeeks).desks[0]
-    // Q21-9 末尾: 机の講師は QR 講師のまま・下段に講師は入らない。
-    expect(pendingDesk.teacher).toBe('田中')
-    expect(pendingDesk.teacherAssignmentSource).toBe('schedule-registration')
-    expect(diff.nextPendingDesks[key].lower).not.toHaveProperty('teacher')
+    expect(pendingDesk).toMatchObject({ teacher: '鈴木', manualTeacher: false })
+    expect(diff.nextPendingDesks[key].lower.teacher).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
     const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: QR_KEPT_ROWS, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
     const first = reconcileSubmittedTeacherPlacements({ weeks: diff.nextWeeks, ...params })
     expect(first.hasChanges).toBe(false)
@@ -307,55 +306,60 @@ describe('QR 提出講師の起動時自己修復（reconcileSubmittedTeacherPla
     const second = reconcileSubmittedTeacherPlacements({ weeks: first.nextWeeks, ...params })
     expect(second.hasChanges).toBe(false)
     expect(second.nextWeeks).toEqual(diff.nextWeeks)
-    // QR の登録机（講習 ss1・田中）は保留の机の 1 か所だけ。
-    const qrDesks = second.nextWeeks.flat().flatMap((cell) => cell.desks).filter((desk) => desk.teacherAssignmentSource === 'schedule-registration' && desk.teacherAssignmentTeacherId === 't1')
-    expect(qrDesks.map((desk) => desk.id)).toEqual([pendingDesk.id])
+    expect(second.nextWeeks.flat().flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '田中')).toEqual([])
   })
 
-  // Q21-9 例外 1 の絞り込み（オーナー指示 2026-10-15「日程表からの講師追加はテンプレが入っていたら消えて良い」）: テンプレが同じコマの別の机に同じ講師（生徒つき）を置く
-  // → 保留になった QR 机の講師はテンプレのその机の講師に替わる。QR の登録机がその講習で 1 つも残らなくても、自己修復は「田中が既に居るコマ」に置き直さない
-  // （autoAssignTeacherToSpecialSession の alreadyAssigned）ので、二重化にも週の増殖にも戻らない。
-  it('テンプレが別の机に同じ講師（生徒つき）を置くなら、保留の机の QR 講師はテンプレのその机の講師に替わり、自己修復を通しても同じ講師が 2 か所に戻らない（2026-10-15）', () => {
+  // 第 2 版（§2-3・§9-1・§9-13）: テンプレが同じコマの別の机（机 1）に同じ講師（田中・生徒つき）を置いても、QR の田中が先にあるので机 1 には置かない
+  // （手入力が勝つ。旧 2026-10-15「QR 机の講師をテンプレに寄せて外す」は廃止＝寄せた記録 scheduleRegistrationSupersededByTemplate も作らない）。
+  it('テンプレが別の机に同じ講師（生徒つき）を置いても QR の講師が勝ち、その机は講師なし（生徒は置く）。自己修復を通しても同じ講師が 2 か所に出ない', () => {
     const { diff, key } = pendingWithQrTeacher(NEW_ROWS)
     const cell = cellOf(diff.nextWeeks)
-    expect(cell.desks[0]).toMatchObject({ teacher: '鈴木', manualTeacher: false })
-    expect(cell.desks[0].teacherAssignmentSource).toBeUndefined()
-    expect(cell.desks[1]).toMatchObject({ teacher: '田中', manualTeacher: false })
-    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
-    // 下段（振替 M・記録・メモ）はそのまま残る
-    expect(diff.nextPendingDesks[key].lower).not.toHaveProperty('teacher')
+    // §9-15: QR の田中はテンプレの机 1 にも居る → 机 0 は田中のまま（テンプレの鈴木は置かない・講師欄 1 行）、机 1 にも田中は置かない。
+    expect(cell.desks[0]).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration' })
+    expect(diff.nextPendingDesks[key].lower.teacher).toBeUndefined()
+    expect(cell.desks[1].teacher).toBe('')
+    expect((cell.desks[1].lesson?.studentSlots ?? []).filter(Boolean).map((student) => student!.managedStudentId)).toEqual(['sB'])
     expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sM')
-    expect(diff.summary.qrTeacherRemoved).toBe(1)
-    // 外した机には「テンプレに寄せた」記録が残る（自己修復が配置済みと数える根拠）
-    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+    expect(diff.summary.qrTeacherRemoved).toBe(0)
+    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toBeUndefined()
     const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: NEW_ROWS, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
     const first = reconcileSubmittedTeacherPlacements({ weeks: diff.nextWeeks, ...params })
     expect(first.hasChanges).toBe(false)
     expect(first.placedCount).toBe(0)
     expect(first.nextWeeks).toEqual(diff.nextWeeks)
-    expect(first.nextWeeks.flat().flatMap((item) => item.desks).filter((desk) => desk.teacherAssignmentSource === 'schedule-registration' && desk.teacherAssignmentTeacherId === 't1')).toEqual([])
-    // 回帰の確認: 記録を消すと「提出済みなのに未配置」とみなされ、同じ日の他の時限へ置き直される（＝記録が自己修復の巻き戻しを止めている証拠）
-    const stripped = diff.nextWeeks.map((week) => week.map((item) => ({ ...item, desks: item.desks.map((desk) => { const { scheduleRegistrationSupersededByTemplate: _omit, ...rest } = desk; return rest }) })))
-    const rerun = reconcileSubmittedTeacherPlacements({ weeks: stripped, ...params })
-    expect(rerun.placedCount).toBe(1)
   })
+  // フラグ OFF（本番 3 校）の保証は残す（regression-reviewer 要修正 B）: OFF の再マージ（templateOriginRules 無し）は今も、テンプレが同じコマの別の机に同じ講師を
+  // 生徒つきで置くと QR 机の講師を寄せて外し、記録 scheduleRegistrationSupersededByTemplate を残す（2026-10-15）。
+  describe('フラグ OFF の再マージ: QR 机の講師をテンプレに寄せて外した記録（scheduleRegistrationSupersededByTemplate）', () => {
+    const qrBoard = () => mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({
+      ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't1',
+      lesson: { id: `${desk.id}_makeup`, studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' }), null] },
+    }))
+    const remergeOff = (weeks: SlotCell[][], rows: RegularLessonRow[]) => remergeBoardWeeksWithManagedData(weeks, { classroomSettings: settings(), teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: [], todayKey: '2026-09-29' })
 
-  // regression-reviewer M-2（2026-10-15）: 記録が数えられるのは「そのコマに同じ講師がまだ居る間」だけ。後でテンプレからその講師が消えたら、
-  // 記録は無視され、従来どおり自己修復が QR を置き直す（出勤予定として使う QR がそのコマから消えたままにならない）。
-  it('寄せた後にテンプレからその講師が消えたら、記録は数えず自己修復がそのコマへ QR を置き直す', () => {
-    const { diff } = pendingWithQrTeacher(NEW_ROWS)
-    // テンプレから田中を外す（机1 を佐藤(B) に）→ 再マージで田中がコマから消え、記録だけが机0 に残る
-    const rowsWithoutTanaka = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
-    const remerged = remergeBoardWeeksWithManagedData(diff.nextWeeks, { classroomSettings: settings(), teachers, students, regularLessons: rowsWithoutTanaka, suppressedRegularLessonOccurrences: diff.addedSuppressedRegularLessonOccurrences, todayKey: '2026-09-29' })
-    const cell = cellOf(remerged)
-    expect(cell.desks.some((desk) => desk.teacher === '田中')).toBe(false)
-    expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
-    const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: rowsWithoutTanaka, classroomSettings: settings(), templatePendingDesks: diff.nextPendingDesks }
-    const repaired = reconcileSubmittedTeacherPlacements({ weeks: remerged, ...params })
-    expect(repaired.placedCount).toBe(1)
-    const repairedCell = cellOf(repaired.nextWeeks)
-    expect(repairedCell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
-    expect(repairedCell.desks.find((desk) => desk.teacher === '田中')).toMatchObject({ teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+    it('記録は自己修復の「配置済み」に数えられ、田中を同じ日の別の時限へ置き直さない（記録を消すと置き直す＝記録が巻き戻しを止めている証拠）', () => {
+      const remerged = remergeOff([qrBoard()], NEW_ROWS)
+      const cell = cellOf(remerged)
+      expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+      expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+      const params = { specialSessions: [session(['t1'])], teachers, students, regularLessons: NEW_ROWS, classroomSettings: settings() }
+      const first = reconcileSubmittedTeacherPlacements({ weeks: remerged, ...params })
+      expect(first.placedCount).toBe(0)
+      const stripped = remerged.map((week) => week.map((item) => ({ ...item, desks: item.desks.map((desk) => { const { scheduleRegistrationSupersededByTemplate: _omit, ...rest } = desk; void _omit; return rest }) })))
+      expect(reconcileSubmittedTeacherPlacements({ weeks: stripped, ...params }).placedCount).toBe(1)
+    })
+
+    it('M-2: 寄せた後にテンプレからその講師が消えたら、記録は数えず自己修復がそのコマへ QR を置き直す', () => {
+      const remerged = remergeOff([qrBoard()], NEW_ROWS)
+      const rowsWithoutTanaka = [row('r0', 't2', 'sC', '数'), row('r1', 't3', 'sB', '数')]
+      const again = remergeOff(remerged, rowsWithoutTanaka)
+      const cell = cellOf(again)
+      expect(cell.desks.some((desk) => desk.teacher === '田中')).toBe(false)
+      expect(cell.desks[0].scheduleRegistrationSupersededByTemplate).toEqual({ sessionId: 'ss1', teacherId: 't1' })
+      const repaired = reconcileSubmittedTeacherPlacements({ weeks: again, specialSessions: [session(['t1'])], teachers, students, regularLessons: rowsWithoutTanaka, classroomSettings: settings() })
+      expect(repaired.placedCount).toBe(1)
+      expect(repaired.nextWeeks.flat().flatMap((item) => item.desks).filter((desk) => desk.teacher === '田中' && desk.teacherAssignmentSource === 'schedule-registration' && desk.teacherAssignmentSessionId === 'ss1').length).toBeGreaterThan(0)
+    })
   })
 
   it('未配置の提出講師を置き直すときも、上段の空いた保留の机は置き先にしない（渡さないと置いてしまう＝回帰の確認）', () => {
@@ -459,7 +463,8 @@ describe('退塾スイープ: 保留の下段の生徒・記録も消す（在�
   })
 
   it('下段の振替を消し、振替元日を抑止へ積む（未消化へ戻さない）。下段に生きている生徒がいなくなった机は確定の中で 1 行へ戻る', () => {
-    const { diff, key } = pendingWithQrTeacher()
+    // QR の講師をテンプレの机 0 の講師（鈴木）と同じにして、講師欄は 1 行（席の下段だけの保留）にする（第 2 版 §2-3: 同じ講師なら 2 行にしない）。
+    const { diff, key } = pendingWithQrTeacher(NEW_ROWS, { name: '鈴木', id: 't2' })
     const sweep = computeStudentWithdrawSweep({
       weeks: diff.nextWeeks,
       students: withdrawn,

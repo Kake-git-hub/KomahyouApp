@@ -22,12 +22,13 @@ describe('時限の追従の配線（決定記録 46）', () => {
 
   it('入口は時限の追従の結果（盤面・保留・触ったコマ）を保存結果へ合流させる', () => {
     const start = BOARD_TSX.indexOf('export function computeTemplateDiffApplyForBoard(')
-    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('function runTemplateDiffApply(', start))
+    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('function runTemplateDiffApplyWithCopyReverts(', start))
     expect(body).toContain('const slotFollow = planSlotChangeTransferFollow({')
-    // 2026-11-01（A-12）: 追従の結果に同日移動の写しの注意の印を付けてから保存結果にする（weeks も保留も noticed 経由）。
-    expect(body).toContain('const settledWeeks = slotFollow.weeks.map(')
-    expect(body).toContain('applySameDayMoveCopyNotices({ weeks: settledWeeks, pendingDesks: slotFollow.nextPendingDesks, kept: keptCopies')
-    expect(body).toContain('nextPendingDesks: noticed.pendingDesks,')
+    // 2026-11-05（決定記録 63）: A-12 の注意の印は撤回。追従の結果をそのまま保存結果にする（Q36 の写しは反復で先に外す）。
+    // 段 4 §9-21: 盤面全体で付け替えの D の記録を当てる settleWholeDayPairBlockedRecords で包む（中は同じ）。
+    expect(body).toContain('slotFollow.weeks.map((week) => settleTemplateDiffWeekWithRemerge(')
+    expect(body).toContain('nextPendingDesks: slotFollow.nextPendingDesks,')
+    expect(body).not.toContain('applySameDayMoveCopyNotices(')
     expect(body).toContain('...slotFollow.touchedCellIds')
     // 省略できる手がかり・条件の渡し忘れは黙って効かなくなるので字面で固定（再監査 2026-10-26）。
     expect(body).toContain('templateCells: run.templateCells')

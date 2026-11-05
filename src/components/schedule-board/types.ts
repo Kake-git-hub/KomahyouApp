@@ -37,8 +37,16 @@ export type EditedFromRegular = {
   addedMakeupSuppressionKey?: string
 }
 
+/**
+ * 出自の印（docs/spec-template-conflict-v2.md §1-1）。置いた瞬間に付く 2 値。読み手は placementOrigin.ts の resolveStudentOrigin を通す
+ * （印の無い旧データは §7 の推定で読む）。テンプレ＝テンプレの展開で置いた授業（同じ日の中で動かしたものを含む）／手入力＝人の操作で置いたもの。
+ */
+export type PlacementOriginMark = 'template' | 'manual'
+
 export type StudentEntry = {
   id: string
+  /** 出自の印（§1-1・機能フラグ templateDiffApply の教室で付ける）。無ければ推定（placementOrigin.ts）。 */
+  origin?: PlacementOriginMark
   name: string
   managedStudentId?: string
   grade: GradeLabel
@@ -61,6 +69,27 @@ export type StudentEntry = {
   // spec-template-behavior §H Q36)。写しは手入力データとして残し、superseded＝同じ日の別のコマにテンプレが同じ授業を置く／stale＝テンプレでは
   // この日にこの授業が無い、を盤面で緑＋注意文で知らせる。テンプレ保存のたびに付け直す(状態が変われば消える)。日程表・PDF・回数には出ない。
   templateCopyNotice?: 'superseded' | 'stale'
+  /**
+   * 丸ごと振替の付け替え（docs/spec-template-conflict-v2.md §3・§1-1 #17・段 4）で、移動元 D のテンプレを移動先 D' に展開した授業の印（値は D）。
+   * 出自＝テンプレ（付け替え）＝青字にしない・再マージが D の新テンプレに追従させる。予定数は D の月で数える（決定記録 3）。
+   * 別の日へ動かすと外れる（prepareStudentForMove）。読み手は wholeDayTransferPair.ts の isWholeDayPairExpandedStudent を通す。
+   */
+  wholeDayPairSourceDate?: string
+  /**
+   * §9-20（2026-11-05）: 付け替えの作成で移動元 D から D' の同じ席へ移した手入力の印。解除でこの印のものだけ D の元の席へ戻す
+   * （D' で後から手で置いた手入力は D' に残す）。restore は移す前の区分・振替元・印（prepareStudentForMove が書き換える項目だけ）。
+   * 別の席・別の日へ動かすと外れる（prepareStudentForMove）。
+   */
+  wholeDayPairMovedFrom?: {
+    dateKey: string
+    /** 移した先（D' の時限・机番号・席）。解除は今の位置がこれと同じときだけ戻す（D' の中で動かした・並べ替えた授業は D' に残す・再監査 要修正-1）。 */
+    slotNumber?: number
+    deskIndex?: number
+    seat?: number
+    /** D の元の机の授業 ID（解除で机に授業が無ければこの ID で作り直す＝作成→解除で元の形）。 */
+    lessonId?: string
+    restore: Partial<Pick<StudentEntry, 'origin' | 'lessonType' | 'makeupSourceDate' | 'makeupSourceLabel' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>>
+  }
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -93,6 +122,8 @@ export type HolidayStockReturnStamp = {
 export type StudentStatusEntry = {
   id: string
   studentId: string
+  /** 記録を付けた生徒の出自の印（記録を外して席へ戻すときに生徒へ戻す。記録そのものは常に手入力）。 */
+  origin?: PlacementOriginMark
   sourceManagedLesson: boolean
   name: string
   managedStudentId?: string
@@ -129,6 +160,15 @@ export type StudentStatusEntry = {
    * 印の無い旧データは、振替の授業の ID（丸ごと振替が付ける `daymove_<振替元の日>_…`）で組を確かめる。
    */
   wholeDayTransfer?: boolean
+  /** 付け替えで展開した授業の印を、記録（D' で休みにしたなど）を外して席へ戻すときに戻すために控える（StudentEntry.wholeDayPairSourceDate）。 */
+  wholeDayPairSourceDate?: string
+  /**
+   * 丸ごと振替の付け替え（段 4）で移動元 D に作った表示専用の「休)」記録（status='moved'）。再マージのたびに D のテンプレから作り直し、
+   * 解除で外す。会計を持たない。出欠記録としては数えない（解除・付け替えの判定・cellsHaveNonDerivedStatusEntries）。
+   */
+  wholeDayPairDerived?: boolean
+  /** 付け替えの記録が属する組の移動先 D'（在庫の自動発生が D' 自身のテンプレを数えない判定に使う・§9-21 の休みは振替先を持たないのでここだけで読む）。 */
+  wholeDayPairTargetDate?: string
   sourceLessonId: string
   sourceLessonNote?: string
   sourceLessonWarning?: string
@@ -162,8 +202,23 @@ export type DeskCell = {
    * teacher がこの机の講師と一致し、かつ非 manual のときだけ有効（講師が替わった／手で置き直した後の古い印は表示に使わない＝isShiftedTemplateTeacherDesk）。
    */
   templateTeacherShift?: { teacher: string; fromDeskIndex: number }
+  /**
+   * 講師の休み（docs/spec-template-conflict-v2.md §2-4・段 3・機能フラグ templateDiffApply の教室だけ書く）。講師欄のメニューの「休み」で付ける手入力の記録。
+   * 休みにした講師の名前と ID を残し、机の teacher は空にする（講師日程表・PDF・保護者 QR は盤面の写しなので講師なしの机として出る・INV-13 の考え方）。
+   * そのコマ（日付×時限）のどの机にも、テンプレはこの講師を置かない（休みが勝つ・判定は teacherRest.ts の isTeacherRestedInCell）。
+   * 別の講師を手で置いても記録は残る（teacher にその講師）。解除は同じボタンをもう一度押す（記録を消す）。削除記録（teacherAssignmentSource='deleted'）とは別。
+   * sessionId: 日程表登録（QR）の講師を休みにしたときの講習 ID（起動時の自己修復が「室長が外した」と数え、置き直さないため）。
+   */
+  teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
+  /** §9-20: 付け替えの作成で移動元 D から移したメモ（席ごとに D と移した本文）。解除は今のメモが同じ本文のときだけ D の同じ席へ戻す（再監査 要修正-2）。 */
+  wholeDayPairMovedMemoFrom?: [{ dateKey: string; text: string } | null, { dateKey: string; text: string } | null]
+  /**
+   * §9-20: 付け替えの作成で移動元 D から移した手置き講師（D と移す前の講師欄の中身）。解除は今の講師が同じ講師（名前・ID）のときだけ D の同じ机へ
+   * 移す前の中身で戻す（D' で後から替えた講師は D' に残す・再監査 要修正-2）。
+   */
+  wholeDayPairMovedTeacherFrom?: { dateKey: string; teacher: string; teacherId?: string; block: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId' | 'teacherUnavailableWarning'> }
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   lesson?: DeskLesson
 }

@@ -11,19 +11,23 @@
 // ============================================================================
 import { describe, expect, it } from 'vitest'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { SlotCell } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { buildManagedOccurrenceKey, buildStudentStatusEntry, computePendingDeskResolution, computeStudentMove } from './ScheduleBoardScreen'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import {
-  applySaveToState, balances, cellOf, liveIds, OLD_ROWS, remerge, row, save, settings, slotFilterBetween, students, transferredBoard,
+  applySaveToState, balances, buildWeek, cellOf, liveIds, OLD_ROWS, remerge, row, save, settings, slotFilterBetween, students, transferredBoard,
   THU, THU_CELL, WED, WED_CELL, WEEK_END, type SavedState,
 } from './templateTransferFollow.fixture'
+import { buildTemplatePendingDeskKey } from './templatePendingDesks'
+import { computeToggleDeskTeacherRest, hasDeskTeacherRest } from './teacherRest'
+import * as pairFx from './wholeDayTransferPair.fixture'
 
 const RANGE = { fromDate: WED, toDate: WEEK_END }
 function audit(state: SavedState, rows: RegularLessonRow[]) {
   return auditTemplateLessonAccounting({
     weeks: state.weeks, regularLessons: rows, students, classroomSettings: settings(), scheduleCountAdjustments: state.scheduleCountAdjustments,
-    manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, ...RANGE,
+    manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, suppressedRegularLessonOccurrences: state.suppressed, ...RANGE,
   })
 }
 function expectNoViolation(state: SavedState, rows: RegularLessonRow[], label: string) {
@@ -31,7 +35,8 @@ function expectNoViolation(state: SavedState, rows: RegularLessonRow[], label: s
   expect(violations, `${label}\n${describeLessonAccountingViolations(violations)}`).toEqual([])
 }
 function expectFixpoint(state: SavedState, rows: RegularLessonRow[]) {
-  const once = remerge(state.weeks, rows, state.suppressed)
+  // 機能フラグ ON の再マージは保留の下段も規則の材料にする（regression-reviewer 要修正-4(a): 保留マップを渡す）。
+  const once = remerge(state.weeks, rows, state.suppressed, settings(), state.pendingDesks)
   expect(once.flat().map((cell) => cell.desks)).toEqual(state.weeks.flat().map((cell) => cell.desks))
 }
 /** 冪等性の比較に使う机の射影（講師名・生徒・記録）。講師の削除記録だけの空き机を全コマ保存が片づける（-3 の表）のは会計に無関係なので印は比べない。 */
@@ -244,4 +249,196 @@ describe('操作の全ペア（順序つき）で保存則・冪等・不動点�
       }
     })
   }
+})
+
+describe('Q36 同日移動の写し × 在庫（オーナー決定 2026-11-05・決定記録 63）', () => {
+  // A は水 5限 机 0 の通常授業。日の中で 4限 机 1 へ動かした（写し・抑止キー A × 水 5限）。新テンプレは A を水 3限へ移す。
+  // 写しはテンプレの位置へ戻す（外して抑止キーも外す）。希望回数・在庫は動かさない（Q36-5）。
+  it('写しを外してテンプレの 3限に戻しても、残数・希望回数・在庫台帳は動かず、保存則・再マージの不動点・再保存の冪等が成り立つ', () => {
+    const week = buildWeek(OLD_ROWS)
+    const copy = { ...cellOf([week], WED_CELL).desks[0].lesson!.studentSlots[0]!, id: 'sA_copy', sameDayMoveSourceDate: WED, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }
+    const moved = week.map((cell) => {
+      if (cell.id === WED_CELL) return { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) }
+      if (cell.id === `${WED}_4`) return { ...cell, desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '佐藤', lesson: { id: 'moved_sA', studentSlots: [copy, null] as [typeof copy | null, typeof copy | null] } } : desk)) }
+      return cell
+    })
+    const suppressed = [`sA__数__${WED}__5`]
+    const state0: SavedState = { weeks: [moved], suppressed, ledgers: {}, scheduleCountAdjustments: [], pendingDesks: {} }
+    const nextRows = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const before = balances(state0.weeks, OLD_ROWS, {})
+    const saved = save(state0.weeks, nextRows, state0.suppressed, { manualMakeupAdjustments: {}, templatePendingDesks: {}, scheduleCountAdjustments: [] })
+    expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([`sA__数__${WED}__5`])
+    expect(liveIds(saved.nextWeeks, `${WED}_4`)).toEqual([])
+    expect(liveIds(saved.nextWeeks, `${WED}_3`)).toEqual(['sA'])
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    expect(saved.manualMakeupOriginRemovals).toEqual([])
+    const state = applySaveToState(state0, saved)
+    expect(balances(state.weeks, nextRows, state.ledgers)).toEqual(before)
+    expectNoViolation(state, nextRows, 'Q36 保存後')
+    expectFixpoint(state, nextRows)
+    expectIdempotentResave(state, nextRows, 'Q36 再保存')
+  })
+})
+
+// ============================================================================
+// 第 2 版（regression-reviewer 要修正-4(a)）: 盤面の操作（手入力の振替を置く・同じ日の移動・休みの記録・下段(手入力)を採用）とテンプレの変更を
+// 全ペア（順序つき）で重ね、保存ごとに 保存則（無言の消失・説明の重複）・再マージ（フラグ ON・保留マップ込み）の不動点・再保存の冪等 を見る。
+// ============================================================================
+describe('第 2 版: 盤面の操作 × テンプレ保存の全ペアで、保存則・不動点・冪等', () => {
+  const ROWS = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+  const byName = new Map(students.map((item) => [item.name, item]))
+  const studentOf = (id: string, overrides: Partial<StudentEntry> = {}): StudentEntry => ({ id: `${id}_hand`, name: students.find((item) => item.id === id)!.name, managedStudentId: id, grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', ...overrides })
+  type BoardOp = { name: string; rows?: (rows: RegularLessonRow[]) => RegularLessonRow[]; board?: (state: SavedState) => SavedState }
+  const withDesk = (state: SavedState, cellId: string, deskIndex: number, update: (desk: DeskCell) => DeskCell): SavedState => ({
+    ...state, weeks: state.weeks.map((week) => week.map((cell) => (cell.id !== cellId ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === deskIndex ? update(desk) : desk)) }))),
+  })
+  const findLive = (state: SavedState, id: string) => {
+    for (const cell of state.weeks.flat()) if (cell.dateKey === WED) for (const [deskIndex, desk] of cell.desks.entries()) {
+      const seat = (desk.lesson?.studentSlots ?? []).findIndex((item) => item?.managedStudentId === id)
+      if (seat >= 0) return { cell, deskIndex, seat, student: desk.lesson!.studentSlots[seat]! }
+    }
+    return null
+  }
+  const OPS: BoardOp[] = [
+    { name: '手入力の振替（C）を A の机の空いた席に置く', board: (state) => withDesk(state, WED_CELL, 0, (desk) => (desk.lesson && !desk.lesson.studentSlots[1] ? { ...desk, lesson: { ...desk.lesson, studentSlots: [desk.lesson.studentSlots[0], studentOf('sC')] } } : desk)) },
+    { name: '手入力の振替（D）を B の席に重ねて置く（保存で 2 行）', board: (state) => withDesk(state, WED_CELL, 1, (desk) => ({ ...desk, lesson: { id: desk.lesson?.id ?? 'hand_d', studentSlots: [studentOf('sD'), desk.lesson?.studentSlots[1] ?? null] } })) },
+    {
+      name: 'A を同じ日の 4 限へ動かす（同日移動）', board: (state) => {
+        const found = findLive(state, 'sA')
+        if (!found || found.cell.slotNumber !== 5) return state
+        const moved = computeStudentMove({ weeks: state.weeks, weekIndex: 0, cells: state.weeks[0], movingStudentId: found.student.id, cellId: `${WED}_4`, deskIndex: 0, studentIndex: 0, suppressedRegularLessonOccurrences: state.suppressed, managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true })
+        return moved.status === 'moved' ? { ...state, weeks: moved.nextWeeks, suppressed: moved.nextSuppressedRegularLessonOccurrences } : state
+      },
+    },
+    {
+      name: 'B を休みにする（記録・台帳に origin）', board: (state) => {
+        const found = findLive(state, 'sB')
+        if (!found) return state
+        const desk = found.cell.desks[found.deskIndex]
+        const record = buildStudentStatusEntry(found.student, found.cell, desk, 'absent')
+        const next = withDesk(state, found.cell.id, found.deskIndex, (item) => {
+          const slots = [...item.lesson!.studentSlots] as [StudentEntry | null, StudentEntry | null]
+          slots[found.seat] = null
+          const statusSlots = [item.statusSlots?.[0] ?? null, item.statusSlots?.[1] ?? null] as [StudentStatusEntry | null, StudentStatusEntry | null]
+          statusSlots[found.seat] = record
+          return { ...item, lesson: slots[0] || slots[1] ? { ...item.lesson!, studentSlots: slots } : undefined, statusSlots }
+        })
+        return { ...next, suppressed: [...next.suppressed, buildManagedOccurrenceKey(found.student, found.cell.dateKey, found.cell.slotNumber)], ledgers: { ...next.ledgers, 'sB__数': [...(next.ledgers['sB__数'] ?? []), { dateKey: WED }] } }
+      },
+    },
+    {
+      name: '緑の机で「下段(手入力)を採用する」', board: (state) => {
+        const key = Object.keys(state.pendingDesks)[0]
+        if (!key) return state
+        const [cellId, deskId] = key.split('::')
+        const result = computePendingDeskResolution({
+          mode: 'adopt-existing', weeks: state.weeks, cellId, deskId, templatePendingDesks: state.pendingDesks,
+          ledgers: { manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: state.ledgers, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {}, suppressedMakeupOrigins: {}, suppressedRegularLessonOccurrences: state.suppressed, scheduleCountAdjustments: state.scheduleCountAdjustments },
+          managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: (student: StudentEntry) => student.managedStudentId ?? student.name, ledgerOriginDatesByKey: {},
+        })
+        if (result.status !== 'applied') return state
+        return { weeks: result.nextWeeks, pendingDesks: result.nextTemplatePendingDesks, suppressed: result.ledgers.suppressedRegularLessonOccurrences, ledgers: result.ledgers.manualMakeupAdjustments, scheduleCountAdjustments: result.ledgers.scheduleCountAdjustments }
+      },
+    },
+    { name: 'テンプレで B の科目を英へ', rows: (rows) => rows.map((item) => (item.id === 'r1' ? { ...item, subject1: '英' } : item)) },
+    { name: 'テンプレは何も変えない', rows: (rows) => rows },
+  ]
+  for (const first of OPS) for (const second of OPS) {
+    it(`${first.name} → ${second.name}`, () => {
+      let rows = ROWS
+      const initial = save([buildWeek(ROWS)], ROWS, [])
+      let state = applySaveToState({ weeks: [buildWeek(ROWS)], suppressed: [], ledgers: {}, scheduleCountAdjustments: [], pendingDesks: {} }, initial)
+      for (const [index, op] of [first, second].entries()) {
+        if (op.board) state = op.board(state)
+        const nextRows = op.rows ? op.rows(rows) : rows
+        const saved = save(state.weeks, nextRows, state.suppressed, { manualMakeupAdjustments: state.ledgers, templatePendingDesks: state.pendingDesks, scheduleCountAdjustments: state.scheduleCountAdjustments, previousRegularLessons: rows })
+        state = applySaveToState(state, saved)
+        rows = nextRows
+        const label = `${index + 1} 手目: ${op.name}`
+        expectNoViolation(state, rows, label)
+        expectFixpoint(state, rows)
+        expectIdempotentResave(state, rows, `${label} の再保存`)
+        for (const cell of state.weeks.flat()) {
+          const ids = liveIds(state.weeks, cell.id)
+          expect(new Set(ids).size, `${label} ${cell.id}`).toBe(ids.length)
+        }
+      }
+    })
+  }
+})
+
+// 第 2 版 段 3（spec-template-conflict-v2 §2-4・§9-4・§9-7・§9-8）: 講師の休み × テンプレ保存の全ペア（順序つき）。INV-03（同じ保存 2 回・再マージ 2 回で不変）と
+// INV-01（同じ講師はそのコマの 1 机まで）・INV-02（休みの記録は反映で消えない）を、操作の順に依らずに見る。丸ごと振替の無い水 5限（机 0=田中+A・机 1=鈴木+B）。
+// 盤面の操作は保留（2 行）の机では行わない（画面も講師メニューを開かない）。各操作の後にテンプレを保存（反映）する。
+describe('講師の休み × テンプレ保存の全ペア（INV-03・INV-01・INV-02）', () => {
+  type RestOp = { name: string; board?: (state: SavedState) => SavedState; rows?: (rows: RegularLessonRow[]) => RegularLessonRow[] }
+  const deskIndexWhere = (state: SavedState, predicate: (desk: SlotCell['desks'][number]) => boolean) => cellOf(state.weeks, WED_CELL).desks.findIndex((desk) => !state.pendingDesks[buildTemplatePendingDeskKey(WED_CELL, desk.id)] && predicate(desk))
+  const toggleAt = (state: SavedState, deskIndex: number): SavedState => {
+    if (deskIndex < 0) return state
+    const result = computeToggleDeskTeacherRest({ weeks: state.weeks, weekIndex: 0, cellId: WED_CELL, deskIndex, resolveTeacherId: (name) => (name === '田中' ? 't1' : undefined) })
+    return result.status === 'blocked' ? state : { ...state, weeks: result.nextWeeks }
+  }
+  const OPS: RestOp[] = [
+    { name: '田中を休みにする', board: (state) => toggleAt(state, deskIndexWhere(state, (desk) => desk.teacher === '田中' && !hasDeskTeacherRest(desk))) },
+    { name: '休みを解除する', board: (state) => toggleAt(state, deskIndexWhere(state, (desk) => hasDeskTeacherRest(desk))) },
+    {
+      name: '休みの机に高橋を手で置く',
+      board: (state) => {
+        const index = deskIndexWhere(state, (desk) => hasDeskTeacherRest(desk) && !desk.teacher.trim())
+        if (index < 0) return state
+        return { ...state, weeks: state.weeks.map((week) => week.map((cell) => (cell.id !== WED_CELL ? cell : { ...cell, desks: cell.desks.map((desk, deskIndex) => (deskIndex === index ? { ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual' as const, teacherAssignmentTeacherId: 't4' } : desk)) }))) }
+      },
+    },
+    { name: 'テンプレで田中と鈴木の机を入れ替える', rows: (rows) => rows.map((item) => (item.id === 'r0' ? { ...item, teacherId: item.teacherId === 't1' ? 't2' : 't1' } : item.id === 'r1' ? { ...item, teacherId: item.teacherId === 't2' ? 't1' : 't2' } : item)) },
+    { name: '何も変えない' },
+  ]
+  const upperTeachers = (state: SavedState) => cellOf(state.weeks, WED_CELL).desks.map((desk) => desk.teacher.trim()).filter(Boolean)
+  const restedTanaka = (state: SavedState) => cellOf(state.weeks, WED_CELL).desks.some((desk) => desk.teacherRest?.teacher === '田中')
+
+  for (const first of OPS) for (const second of OPS) {
+    it(`${first.name} → ${second.name}`, () => {
+      let rows = OLD_ROWS
+      let state: SavedState = { weeks: remerge([buildWeek(OLD_ROWS)], OLD_ROWS, []), suppressed: [], ledgers: {}, scheduleCountAdjustments: [], pendingDesks: {} }
+      for (const [index, op] of [first, second].entries()) {
+        const label = `${index + 1} 手目: ${op.name}`
+        const restedBefore = restedTanaka(state)
+        if (op.board) state = op.board(state)
+        const nextRows = op.rows ? op.rows(rows) : rows
+        const { state: nextState } = step(state, rows, nextRows)
+        // INV-02: 休みの記録は反映で消えない（解除の操作だけが消す）。
+        if (restedBefore && op.name !== '休みを解除する') expect(restedTanaka(nextState), label).toBe(true)
+        // §2-4: 休みがあれば田中はこのコマのどの机にも居ない。休みが無ければテンプレどおり 1 机（講師欄 2 行の上段を含む）。
+        expect(upperTeachers(nextState).filter((name) => name === '田中').length, label).toBe(restedTanaka(nextState) ? 0 : 1)
+        // INV-01: 同じ講師はこのコマの 1 机まで（上段）。
+        expect(new Set(upperTeachers(nextState)).size, label).toBe(upperTeachers(nextState).length)
+        // 生徒は休みでも残る（A・B の 2 人がこのコマに居る）。
+        expect(liveIds(nextState.weeks, WED_CELL).sort(), label).toEqual(['sA', 'sB'])
+        expectNoViolation(nextState, nextRows, label)
+        expectFixpoint(nextState, nextRows)
+        expectIdempotentResave(nextState, nextRows, `${label} の再保存`)
+        rows = nextRows
+        state = nextState
+      }
+    })
+  }
+})
+
+// 第 2 版 段 4（spec-template-conflict-v2 §3・INV-03）: 丸ごと振替の付け替えのある盤面でも、保存は 1 回で決まる（2 回目の保存・再マージで変わらない）。
+describe('INV-03 シーケンス: 丸ごと振替の付け替え（第 2 版・段 4）', () => {
+  it('付け替え → テンプレ保存 → もう一度保存 → 再マージ で盤面が変わらず、同じ組を 2 回作れない（1 操作 1 適用）', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const rows = [pairFx.row('r0', 't1', 'sA', 'sC'), pairFx.ROWS[1], pairFx.ROWS[2]]
+    const first = pairFx.save(paired.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences)
+    const second = pairFx.save(first.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, { templatePendingDesks: first.nextPendingDesks, previousRegularLessons: rows })
+    expect(pairFx.snapshot(second.nextWeeks)).toBe(pairFx.snapshot(first.nextWeeks))
+    expect(pairFx.snapshot(pairFx.remerge(second.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), second.nextPendingDesks))).toBe(pairFx.snapshot(first.nextWeeks))
+    expect(pairFx.pairOf(first.nextWeeks, { rows, suppressed: paired.nextSuppressedRegularLessonOccurrences }).status).toBe('blocked')
+    const violations = auditTemplateLessonAccounting({
+      weeks: second.nextWeeks, regularLessons: rows, students: pairFx.students, classroomSettings: pairFx.settings(), scheduleCountAdjustments: [], manualMakeupAdjustments: {},
+      fromDate: pairFx.D, toDate: '2026-10-18', suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences,
+    })
+    expect(violations, describeLessonAccountingViolations(violations)).toEqual([])
+  })
 })

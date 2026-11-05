@@ -267,7 +267,10 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
     // 2026-11-01（決定記録 57・A-10）: duplicateDemotions（テンプレ机に置くために別の机の下段へ移した手入力の生徒）も読み取り専用の説明。下段の講習は在庫の走査で消化に数え続ける（INV-06・台帳は触らない）。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    // 2026-11-05（決定記録 63）: sameDayMoveCopiesKeptByRecord（記録があるので戻さず残した同日移動の写し・Q36 H-1）も確認の画面の理由の行に使う読み取り専用の説明。
+    // 第 2 版（spec-template-conflict-v2 §2-2・§4-2 規則 1）: manualFirstSkipped（手入力が先にあるため置かなかったテンプレの生徒）・manualFirstCountAdjustments は 2026-11-05 に廃止（−1 は積まず盤面の状態から導く）・
+    // ）・discardedTemplateStudents（置き直したテンプレ由来の生徒）も読み取り専用の説明。講習の台帳には触れない。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'discardedTemplateStudents', 'duplicateDemotions', 'lowerPromotionNotes', 'manualFirstSkipped', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopiesKeptByRecord', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
@@ -313,7 +316,9 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
     // 2026-11-01（決定記録 57・A-10）: duplicateDemotions（テンプレ机に置くために別の机の下段へ移した手入力の生徒）も読み取り専用の説明。下段の講習は在庫の走査で消化に数え続ける（INV-06・台帳は触らない）。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    // 第 2 版（spec-template-conflict-v2 §2-2・§4-2 規則 1）: manualFirstSkipped（手入力が先にあるため置かなかったテンプレの生徒）・manualFirstCountAdjustments は 2026-11-05 に廃止（−1 は積まず盤面の状態から導く）・
+    // ）・discardedTemplateStudents（置き直したテンプレ由来の生徒）も読み取り専用の説明。講習の台帳には触れない。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'discardedTemplateStudents', 'duplicateDemotions', 'lowerPromotionNotes', 'manualFirstSkipped', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopiesKeptByRecord', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })
@@ -404,40 +409,20 @@ describe('INV-06 講習在庫 × 決定記録 57（テンプレ机に置くた�
   })
   const upperIds = (weeks: SlotCell[][], index: number) => (weeks[0].find((item) => item.id === CELL_ID)!.desks[index].lesson?.studentSlots ?? []).filter(Boolean).map((item) => `${item!.managedStudentId}:${item!.lessonType}`)
 
-  it('保存: 机 0 に M の通常授業・机 1 の講習は下段へ（由来 same-slot-template-duplicate）。講習の残数は保存前と同じ 1（台帳を触らない）', () => {
+  // 第 2 版（spec-template-conflict-v2 §2-2「手入力が勝つ」・§4-2 規則 1。決定記録 57 の A-10 は廃止）: 同じコマに手で置いた講習 M があるので、テンプレの M の通常授業は
+  // どの机にも置かない（予定数 −1）。講習は机 1 に 1 行のまま（保留にしない＝片づけは要らない）。講習の台帳は触らない（残数は保存前と同じ 1）。
+  it('保存: テンプレの M の通常授業は置かず（予定数 −1・確認の画面に理由）、机 1 の講習は 1 行のまま。講習の残数は保存前と同じ 1（台帳を触らない）', () => {
     const { diff, key } = board()
-    expect(upperIds(diff.nextWeeks, 0)).toEqual(['sM:regular'])
-    expect(upperIds(diff.nextWeeks, 1)).toEqual([])
-    expect(diff.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.id).toBe('lec_sM')
-    expect(diff.nextPendingDesks[key]?.origin?.kind).toBe('same-slot-template-duplicate')
-    expect(diff.duplicateDemotions.map((item) => item.student.id)).toEqual(['lec_sM'])
+    expect(upperIds(diff.nextWeeks, 0)).toEqual([])
+    expect(upperIds(diff.nextWeeks, 1)).toEqual(['sM:special'])
+    expect(diff.nextPendingDesks[key]).toBeUndefined()
+    expect(diff.duplicateDemotions).toEqual([])
+    expect(diff.manualFirstSkipped.map((item) => `${item.student.managedStudentId}:${item.student.lessonType}`)).toEqual(['sM:regular'])
+    expect(diff.studentNotes.map((note) => note.kind)).toEqual(['manual-first'])
+    // §4-2 規則 1: 置かなかった M の通常授業の予定数は積まずに盤面の状態から導く（保存の −1 は無い）。
+    expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(balances(PLACED)).toEqual({ sM: 1 })
-  })
-
-  it('テンプレ授業を採用: 下段の在庫由来の講習 M は未消化講習へ戻る（残 2）。M の通常授業は机 0 に残る', () => {
-    const { diff, deskId, key } = board()
-    const result = resolve('adopt-template', diff.nextWeeks, deskId, diff.nextPendingDesks)
-    if (result.status !== 'applied') throw new Error(result.message)
-    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
-    expect(result.returnedCount).toBe(1)
-    expect(result.ledgers.manualLectureStockCounts[SESSION_KEY]).toBe(0)
-    expect(balances(result.ledgers)).toEqual({ sM: 2 })
-    expect(upperIds(result.nextWeeks, 0)).toEqual(['sM:regular'])
-    expect(upperIds(result.nextWeeks, 1)).toEqual([])
-  })
-
-  it('手入力データを採用: 講習 M は机 1 の上段へ戻り、机 0 の M の通常授業は外れて抑止キー 1。講習の台帳は触らず残数は 1 のまま・通常授業は −1（決定記録 62）', () => {
-    const { diff, deskId, key } = board()
-    const result = resolve('adopt-existing', diff.nextWeeks, deskId, diff.nextPendingDesks)
-    if (result.status !== 'applied') throw new Error(result.message)
-    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
-    expect(upperIds(result.nextWeeks, 1)).toEqual(['sM:special'])
-    expect(upperIds(result.nextWeeks, 0)).toEqual([])
-    expect(result.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
-    expect(result.ledgers.manualLectureStockCounts).toEqual(PLACED.manualLectureStockCounts)
-    // 決定記録 62（2026-11-02）: 外した M の通常授業は単発削除と同じ −1（戻した講習は通常授業の代わりに数えない・講習の台帳は不変）。
-    expect(result.ledgers.scheduleCountAdjustments).toEqual([expect.objectContaining({ studentKey: 'sM', countKind: 'regular', delta: -1 })])
-    expect(balances(result.ledgers)).toEqual({ sM: 1 })
+    void resolve
   })
 })

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml , resolveDisplayedOverlappingSession } from './scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries, scheduleLessonTypeLabels } from './scheduleViewData'
 import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardScreen'
+import { resolveWholeDayPairCountDateKey } from '../components/schedule-board/wholeDayTransferPair'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -5351,5 +5352,55 @@ describe('transferSourceRestDisplay: 振替欄の行づくり(出荷スクリプ
       { dateKey: '2026-04-01', slotNumber: 1, lesson: { status: 'absent', lessonType: 'regular', subject: '英' } },
     ], student)
     expect(rows).toEqual(['英 4/1 1限 → 未定', '数 4/15 2限 → 未定'])
+  })
+})
+
+// 段 4（丸ごと振替の付け替え・spec-template-conflict-v2 §3・決定記録 3・4-8）: 埋め込み版（別タブの生徒日程表）も付け替えの授業を移動元 D の月で数える。
+// scheduleViewData の isWholeDayPairCountedOutside / countWholeDayPairLessonsFromOutside と同じ規則（そちらは wholeDayTransferPair.test.ts が固定）。
+describe('embedded student sheet: 丸ごと振替の付け替えは移動元の月で数える', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('期間の外の付け替えの授業を振替元の期間に足し、振替元が期間の外なら数えない', () => {
+    const write = vi.fn()
+    const popup = { closed: false, document: { open() {}, write, close() {} }, focus() {}, postMessage() {} } as unknown as Window
+    vi.stubGlobal('window', { open: () => popup, setTimeout: (callback: () => void) => { callback(); return 0 } })
+    openStudentScheduleHtml({
+      cells: [], students: [createStudent()], regularLessons: [], defaultStartDate: '2026-10-01', defaultEndDate: '2026-10-31', titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] }, targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('if (isWholeDayPairCountedOutside(entry.lesson, startDate, endDate)) return;')
+    expect(html).toContain('countWholeDayPairLessonsFromOutside(student, startDate, endDate).forEach')
+    const outsideMatch = html.match(/function isWholeDayPairCountedOutside\(lesson, startDate, endDate\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(outsideMatch).toBeTruthy()
+    const resolveBody = html.match(/function resolveWholeDayPairCountDateKey\(lesson, cellDateKey\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(resolveBody).toBeTruthy()
+    const embeddedResolveFn = new Function('lesson', 'cellDateKey', resolveBody![1])
+    const isOutsideRaw = new Function('resolveWholeDayPairCountDateKey', 'lesson', 'startDate', 'endDate', outsideMatch![1])
+    const isOutside = (lesson: unknown, startDate: string, endDate: string) => isOutsideRaw(embeddedResolveFn, lesson, startDate, endDate) as boolean
+    expect(isOutside({ wholeDayPairSourceDate: '2026-10-28' }, '2026-11-01', '2026-11-30')).toBe(true)
+    expect(isOutside({ wholeDayPairSourceDate: '2026-10-28' }, '2026-10-01', '2026-10-31')).toBe(false)
+    expect(isOutside({ makeupSourceDate: '2026-10-28' }, '2026-11-01', '2026-11-30')).toBe(false)
+    const countMatch = html.match(/function countWholeDayPairLessonsFromOutside\(student, startDate, endDate\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(countMatch).toBeTruthy()
+    const countRaw = new Function('resolveWholeDayPairCountDateKey', 'DATA', 'buildStudentAssignments', 'getStudentAssignmentKeys', 'student', 'startDate', 'endDate', countMatch![1])
+    const count = (...args: unknown[]) => countRaw(embeddedResolveFn, ...args) as string[]
+    const pairLesson = { lessonType: 'makeup', subject: '数', wholeDayPairSourceDate: '2026-10-28' }
+    const plainMakeup = { lessonType: 'makeup', subject: '英', makeupSourceDate: '2026-10-21' }
+    const DATA = { cells: [{ dateKey: '2026-11-04' }, { dateKey: '2026-10-28' }] }
+    const buildAssignments = (cells: Array<{ dateKey: string }>) => new Map([['s1', cells.flatMap((cell) => (cell.dateKey === '2026-11-04' ? [{ dateKey: cell.dateKey, lesson: pairLesson }, { dateKey: cell.dateKey, lesson: plainMakeup }] : []))]])
+    expect(count(DATA, buildAssignments, () => ['s1'], {}, '2026-10-01', '2026-10-31')).toEqual(['数'])
+    expect(count(DATA, buildAssignments, () => ['s1'], {}, '2026-12-01', '2026-12-31')).toEqual([])
+    // 監査 要修正-A: 付け替えの授業を出席・振無休にした記録も D の月で数える。休み・moved・holiday は数えない。
+    const recordAssignments = (status: string) => () => new Map([['s1', [{ dateKey: '2026-11-04', lesson: { status, lessonType: 'makeup', subject: '数', wholeDayPairSourceDate: '2026-10-28' } }]]])
+    for (const status of ['attended', 'absent-no-makeup']) expect(count(DATA, recordAssignments(status), () => ['s1'], {}, '2026-10-01', '2026-10-31'), status).toEqual(['数'])
+    for (const status of ['absent', 'moved', 'holiday']) expect(count(DATA, recordAssignments(status), () => ['s1'], {}, '2026-10-01', '2026-10-31'), status).toEqual([])
+    expect(isOutside({ status: 'attended', wholeDayPairSourceDate: '2026-10-28' }, '2026-11-01', '2026-11-30')).toBe(true)
+    // 「数える日」は画面版の権威関数 resolveWholeDayPairCountDateKey と同じ規則。
+    const resolveMatch = html.match(/function resolveWholeDayPairCountDateKey\(lesson, cellDateKey\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(resolveMatch).toBeTruthy()
+    const embeddedResolve = new Function('lesson', 'cellDateKey', resolveMatch![1]) as (lesson: unknown, cellDateKey: string) => string
+    for (const lesson of [{ wholeDayPairSourceDate: '2026-10-28' }, {}, { makeupSourceDate: '2026-10-21' }]) {
+      expect(embeddedResolve(lesson, '2026-11-04')).toBe(resolveWholeDayPairCountDateKey(lesson, '2026-11-04'))
+    }
   })
 })

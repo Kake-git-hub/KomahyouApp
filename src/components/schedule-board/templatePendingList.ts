@@ -34,11 +34,12 @@ export type TemplatePendingListRow = {
 
 const ORIGIN_KIND_LABELS: Record<TemplatePendingOriginKind, string> = {
   'whole-day-transfer-displaced': '丸ごと振替',
-  'transfer-follow-full': '振替先が満席',
+  // 決定記録 65（2026-11-05・tp-73）: 振替そのものを下段へ置いた形は上下の関係が逆（下段＝テンプレ由来の振替）なのが分かる見出しにする。
+  'transfer-follow-full': '振替先が満席（下段＝テンプレ由来の振替）',
   'transfer-follow-displaced': '振替先が満席（手入力を下段へ）',
   'holiday-release-seat-taken': '休日解除',
   'holiday-release-displaced': '休日解除（手入力を下段へ）',
-  'slot-follow-full': '時限変更の追従',
+  'slot-follow-full': '時限変更の追従（満席・下段＝テンプレ由来の振替）',
   'slot-follow-displaced': '時限変更の追従（手入力を下段へ）',
   'same-slot-template-duplicate': '同じコマにテンプレの授業',
 }

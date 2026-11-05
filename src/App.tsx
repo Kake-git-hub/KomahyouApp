@@ -4089,6 +4089,8 @@ function AuthenticatedApp() {
       resolveStudentKey: createBoardStudentStockIdResolver(students),
       // INV-06（2026-09-29 拡張）: 保留の下段の振替・欠席記録も消化・欠席由来の走査に含める（盤面画面と同じ入力）。
       templatePendingDesks: latestBoardState.templatePendingDesks,
+      // 第 2 版 段 4（INV-06・最終確認の指摘）: 丸ごと振替の組の D' は休日振替を積まない（盤面の rawMakeupStockEntries と同じ入力）。
+      wholeDayPairKeys: latestBoardState.suppressedRegularLessonOccurrences ?? [],
     }))
   }, [boardStateRef, classroomSettings, displayRegularLessons, students, teachers])
 

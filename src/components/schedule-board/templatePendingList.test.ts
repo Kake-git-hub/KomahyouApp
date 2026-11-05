@@ -138,7 +138,7 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
       kindLabel: TEMPLATE_SAVE_PENDING_KIND_LABEL,
       reason: `${TEMPLATE_SAVE_PENDING_REASON}${describeTemplatePendingTeacherReason('講師A', '手置き講師')}`,
     })
-    expect(follow).toMatchObject({ lowerLabels: ['追従生（英）'], upperLabels: ['上段三（数）'], kindLabel: '時限変更の追従', reason: '時限変更の追従で新しい時限が満席だったため、保留(下段)に置きました。' })
+    expect(follow).toMatchObject({ lowerLabels: ['追従生（英）'], upperLabels: ['上段三（数）'], kindLabel: '時限変更の追従（満席・下段＝テンプレ由来の振替）', reason: '時限変更の追従で新しい時限が満席だったため、保留(下段)に置きました。' })
     expect(displaced).toMatchObject({ deskId: '2026-10-14_2_desk_2', deskIndex: 1, lowerLabels: ['体験生（英）'], upperLabels: ['上段五（数）'], kindLabel: '丸ごと振替' })
     expect(displaced.reason).toContain('丸ごと振替(10/13 → 10/14)')
   })
@@ -155,7 +155,7 @@ describe('buildTemplatePendingList（保留の机の週をまたいだ一覧・�
   it('由来の種別ごとに見出しが決まる（振替先が満席・休日解除）', () => {
     const key = buildTemplatePendingDeskKey('2026-10-14_2', '2026-10-14_2_desk_1')
     const base = { lower: { lesson: { id: 'l', studentSlots: [student('x', '生徒X'), null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: '2026-10-14', createdAt: CREATED_AT }
-    expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-full', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席')
+    expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-full', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席（下段＝テンプレ由来の振替）')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'transfer-follow-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('振替先が満席（手入力を下段へ）')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-seat-taken', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除')
     expect(buildTemplatePendingList({ [key]: { ...base, origin: { kind: 'holiday-release-displaced', note: 'n' } } }, WEEKS)[0].kindLabel).toBe('休日解除（手入力を下段へ）')

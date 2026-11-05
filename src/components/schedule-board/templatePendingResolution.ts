@@ -11,7 +11,8 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell, type TeacherAliasResolver } from './templateDiffApply'
+import { releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -493,6 +494,8 @@ export function computePendingTeacherChoice(params: {
   cellId: string
   deskId: string
   choice: TemplatePendingTeacherChoice
+  /** 講師の呼び名の対応表（§9-19: 採用した手入力の講師が休んだ講師本人なら休みを解除する・監査 要確認-6）。 */
+  teacherAliases?: TeacherAliasResolver
 }): TemplatePendingTeacherChoiceResult {
   const found = findTemplatePendingDeskEntry(params.templatePendingDesks, params.cellId, params.deskId)
   const location = locateDesk(params.weeks, params.cellId, params.deskId)
@@ -507,7 +510,15 @@ export function computePendingTeacherChoice(params: {
     if (elsewhere !== null) {
       return { status: 'blocked', message: `手入力の講師を採用できません。講師 ${manualName} が同じコマの机 ${elsewhere} に居ます（同じ講師を 2 つの机に置けません）。「テンプレの講師を採用」を選ぶか、机 ${elsewhere} の講師を片づけてから選んでください。` }
     }
-    nextWeeks = replaceDesk(params.weeks, location, alignTeacherIdentityWithRemerge(applyTemplatePendingLowerTeacherToDesk(location.desk, teacher)))
+    const adopted = alignTeacherIdentityWithRemerge(applyTemplatePendingLowerTeacherToDesk(location.desk, teacher))
+    // §9-19: 休んだ講師本人を「下段(手入力)の講師を採用する」で置き直したら休みを解除する（別の講師なら残す）。
+    if (adopted.teacherRest) {
+      const released = { ...adopted }
+      if (releaseTeacherRestIfSameTeacherPlaced(released, params.teacherAliases)) nextWeeks = replaceDesk(params.weeks, location, released)
+      else nextWeeks = replaceDesk(params.weeks, location, adopted)
+    } else {
+      nextWeeks = replaceDesk(params.weeks, location, adopted)
+    }
   }
   const restLower = cloneTemplatePendingLower(found.entry.lower)
   delete restLower.teacher

@@ -37,6 +37,7 @@ import { buildStudentSheetViewModel, buildTeacherSheetViewModel } from '../../ut
 import { buildParentScheduleView } from '../../utils/parentSchedule'
 import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../../../functions/src/generated/parentSchedule'
 import { compactBoardSharePayload } from '../../integrations/firebase/boardShare'
+import * as pairFx from './wholeDayTransferPair.fixture'
 
 vi.mock('html2canvas', () => ({ default: vi.fn() }))
 vi.mock('jspdf', () => ({ default: class {} }))
@@ -84,6 +85,7 @@ const OLD_ROWS = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), ro
 // 机0 は講師交代（田中→鈴木）＋生徒 A→C。机1 は田中＋B。机2 は佐藤だけ。
 const NEW_ROWS = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
 // 席不足（Q21-10）の列: 机1 のテンプレが 2 人（B・A）。
+const NEW_ROWS_TWO_IN_DESK0 = [row('r0', 't2', 'sC', '数', 'sA', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
 const NEW_ROWS_TWO_IN_DESK1 = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数', 'sA', '数'), row('r2', 't3')]
 
 function buildWeek(rows: RegularLessonRow[]): SlotCell[] {
@@ -174,22 +176,22 @@ const COLUMNS: LowerColumn[] = [
     newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦'], upperStudentId: 'sC', lowerLessonType: 'special',
   },
   {
+    // 第 2 版（spec-template-conflict-v2 §4-2 規則 3「記録は動かさない」）: 移動元の記録は下段へ入らず机の元の席に残る（上段＝盤面の週データ・日程表に出るのは仕様）。
+    // 下段に入る振替 M だけが隠れる。
     label: '表示専用の記録（移動元 moved）',
     desks: { 0: (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [MAKEUP_M, null] }, statusSlots: [null, status('sD', 'moved', { moveDestinationDateKey: '2026-10-09' })] }) },
-    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM', 'sD'], hiddenTexts: ['三浦', '土屋'], upperStudentId: 'sC', lowerLessonType: 'makeup',
+    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦'], upperStudentId: 'sC', lowerLessonType: 'makeup',
   },
   {
+    // 第 2 版（§2-1）: メモは席を占める手入力。テンプレがメモの席に生徒を置くとその席が 2 行（メモは下段）。テンプレが生徒 2 の席も埋める形にする。
     label: 'メモ',
     desks: { 0: (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [MAKEUP_M, null] }, memoSlots: [null, '下段の持ち物メモ'] }) },
-    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦', '下段の持ち物メモ'], upperStudentId: 'sC', lowerLessonType: 'makeup',
+    newRows: NEW_ROWS_TWO_IN_DESK0, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦', '下段の持ち物メモ'], upperStudentId: 'sC', lowerLessonType: 'makeup',
   },
   // 「席不足で下段へ入った会計記録（欠席）」の列は Q37（オーナー指示 2026-10-03「休みと振無休みは空白と同じような扱い」）で消えた:
   // 休み・振無休の記録は席を確保せず、席が足りなくても机（上段の生徒の下）に残る＝保留中も日程表・在庫に出る（下の describe で固定）。
-  {
-    label: '席不足で下段へ入った会計記録（出席）',
-    desks: { 1: (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'attended', { teacherName: '田中' }), null] }) },
-    newRows: NEW_ROWS_TWO_IN_DESK1, pendingDeskIndex: 1, hiddenStudentIds: ['sD'], hiddenTexts: ['土屋'], upperStudentId: 'sB',
-  },
+  // 「席不足で下段へ入った会計記録（出席）」の列は第 2 版（spec-template-conflict-v2 §4-2 規則 3「記録は動かさない」・2026-11-05 オーナー承認）で消えた:
+  // 出席の記録も席を確保せず机の元の席（上段の生徒の下）に残る＝保存は記録を下段へ入れない。旧版の保留に残る下段の記録は下の「旧形式」の describe で固定する。
 ]
 
 function buildPendingBoard(column: LowerColumn) {
@@ -434,10 +436,8 @@ describe.each(COLUMNS)('INV-13 マトリクス: 下段＝$label', (column) => {
         // 盤面共有はメモを載せない（従来仕様）。
         if (text !== '下段の持ち物メモ') expect(json, text).toContain(text)
       }
-      if (displayOnly) {
-        expect(pdfText).not.toContain('土屋')
-        expect(json).not.toContain('土屋')
-      }
+      // 第 2 版（spec-template-conflict-v2 §4-2 規則 3）: 移動元の記録は保存でも解決でも動かさない＝初めから机に居て、解決の後も消えない（旧 Q28-3 の「捨てる」は下段の記録だけ）。
+      if (displayOnly) expect(pdfText).toContain('土屋')
     })
 
     it('生徒日程表・回数表（実績）に下段だった生徒が出る', () => {
@@ -591,5 +591,38 @@ describe('INV-13 旧形式（v1.5.572〜577）: 下段に欠席記録を持つ�
     expect(restoredDesk.statusSlots?.filter(Boolean).map((item) => [item!.managedStudentId, item!.status])).toEqual([['sD', 'absent']])
     expect(studentSheet(after, 'sD').cards.map((card) => card.main).join(' ')).toContain('休')
     expect(parentLessonsOn(after, 'sD').length).toBeGreaterThan(0)
+  })
+})
+
+// 第 2 版 段 4（spec-template-conflict-v2 §3・§5）: 付け替えの D' で手入力と重なった席の下段は盤面だけ。日程表・保護者 QR には上段（D のテンプレの振替）だけが出る。
+describe('INV-13 マトリクス: 丸ごと振替の付け替えの 2 行（第 2 版・段 4）', () => {
+  const pairedWithLower = () => {
+    const board = structuredClone(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []))
+    pairFx.cellAt(board, pairFx.D2).desks[0].lesson!.studentSlots[0] = { id: 'mk-c', name: '千葉', managedStudentId: 'sC', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual' }
+    return pairFx.pairedOrThrow(pairFx.pairOf(board))
+  }
+  it('前提: 下段に手入力の振替（千葉）・上段に付け替えの青木', () => {
+    const paired = pairedWithLower()
+    const cell = pairFx.cellAt(paired.nextWeeks, pairFx.D2)
+    expect(paired.nextTemplatePendingDesks[buildTemplatePendingDeskKey(cell.id, cell.desks[0].id)]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+    expect(cell.desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', wholeDayPairSourceDate: pairFx.D })
+  })
+  it('保護者向け表示（本体と functions 複製が一致）: 下段の千葉の D\' は出ず、上段の青木は振替で出る', () => {
+    const paired = pairedWithLower()
+    const payload = { students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), boardState: { weeks: paired.nextWeeks, suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences } }
+    const range = { from: '2026-10-05', to: '2026-10-18' }
+    for (const studentId of ['sA', 'sC']) expect(buildGeneratedParentScheduleView(payload, studentId, range)).toEqual(buildParentScheduleView(payload, studentId, range))
+    expect(buildParentScheduleView(payload, 'sC', range)?.days.find((day) => day.dateKey === pairFx.D2)).toBeUndefined()
+    expect(buildParentScheduleView(payload, 'sA', range)?.days.find((day) => day.dateKey === pairFx.D2)?.lessons).toEqual([expect.objectContaining({ kind: 'makeup' })])
+  })
+  it('生徒日程表: 下段の千葉は実績 0・上段の青木は 1', () => {
+    const paired = pairedWithLower()
+    const payload = buildStudentPayload({ cells: paired.nextWeeks.flat(), defaultStartDate: '2026-10-12', defaultEndDate: '2026-10-18', titleLabel: 'INV-13', classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] }, students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, boardBasedPlannedCountEnabled: true })
+    const count = (studentId: string) => buildStudentSheetViewModel(payload, { startDate: '2026-10-12', endDate: '2026-10-18', studentId, todayKey: '2026-10-01' })!.regularCountRows.reduce((sum, item) => sum + item.count, 0)
+    expect(count('sC')).toBe(0)
+    // 青木の 10/14 の振替は振替元 10/7 の週（表示期間の外）で数える（4-8）＝この週は 0、10/7 の週で 1。
+    expect(count('sA')).toBe(0)
+    const october7 = buildStudentPayload({ cells: paired.nextWeeks.flat(), defaultStartDate: '2026-10-05', defaultEndDate: '2026-10-11', titleLabel: 'INV-13', classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] }, students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, boardBasedPlannedCountEnabled: true })
+    expect(buildStudentSheetViewModel(october7, { startDate: '2026-10-05', endDate: '2026-10-11', studentId: 'sA', todayKey: '2026-10-01' })!.regularCountRows.reduce((sum, item) => sum + item.count, 0)).toBe(1)
   })
 })

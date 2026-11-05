@@ -4,11 +4,21 @@ import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
+import * as pairFx from './wholeDayTransferPair.fixture'
+import { buildWholeDayTransferPairKey } from './wholeDayTransferPair'
+import { buildParentScheduleView } from '../../utils/parentSchedule'
+import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../../../functions/src/generated/parentSchedule'
 import {
+  buildStudentStatusEntry,
   buildWholeDayTransferConfirmMessage,
+  computeHolidayReleaseRestoration,
+  convertHolidayDeskEntriesToRecords,
+  reconcileHolidayDeskStockReturns,
+  resolveHolidayReleaseSuppressedOccurrences,
   computeWholeDayTransfer,
   disposeDayDeskEntries,
   overlayBoardWeeksOnScheduleCells,
+  removeStudentFromDeskLesson,
   resolveWholeDayTransferSourceBlockReason,
   type WholeDayTransferSummary,
 } from './ScheduleBoardScreen'
@@ -1013,4 +1023,224 @@ describe('INV-06 マトリクス: 丸ごと振替の移動元記録(D4・振替�
     const sourceCells = outcome.result.nextWeeks.flat().filter((cell) => cell.dateKey === SOURCE_DATE)
     expect(resolveWholeDayTransferSourceBlockReason(sourceCells)).toContain('出欠記録')
   })
+})
+
+// ============================================================================
+// 第 2 版（docs/spec-template-conflict-v2.md §3・段 4・機能フラグ templateDiffApply の教室だけ）: 丸ごと振替の付け替え。
+// 正本は「D → D'」の組 1 本（抑止キーに相乗り）。D' には D のテンプレを展開し（振)・出自テンプレ）、D には「休)」の記録だけ。
+// 在庫: 付け替えそのものは中立（D' の振替は振替元 D・台帳に origin が無い振替は消化と使用済み origin が打ち消し合う／D が休日なら休日の自動発生を消化）。
+// D' で休みにすると振替を休んだ記録で +1（通常の休みと同じ）。上の第 1 版（computeWholeDayTransfer・フラグ OFF）の行は 1 つも変えない。
+// ============================================================================
+describe('INV-06 マトリクス: 丸ごと振替の付け替え（第 2 版・段 4）', () => {
+  const paired = () => pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+  const markAbsent = (weeks: SlotCell[][], dateKey: string, deskIndex: number) => {
+    const next = structuredClone(weeks)
+    const cell = pairFx.cellAt(next, dateKey)
+    const target = cell.desks[deskIndex].lesson!.studentSlots[0]!
+    const record = buildStudentStatusEntry(target, cell, cell.desks[deskIndex], 'absent')
+    removeStudentFromDeskLesson(cell.desks[deskIndex], 0)
+    cell.desks[deskIndex].statusSlots = [record, null]
+    return next
+  }
+
+  it('別の曜日は選べない（第 1 版は従来どおり別の曜日へも移せる）', () => {
+    const blocked = pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []), { target: '2026-10-15' })
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') expect(blocked.message).toContain('同じ曜日')
+    // 対照: 第 1 版（フラグ OFF・本番 3 校）は今のまま＝水 8/5 → 木 8/20 へも移せる（曜日の判定を持ち込んでいない）。
+    const thursday = '2026-08-20'
+    const legacy = computeWholeDayTransfer({
+      weeks: [[dayCell(SOURCE_DATE, deskWithStudent(boardStudent())), dayCell(thursday, emptyDesk())]], sourceDateKey: SOURCE_DATE, targetDateKey: thursday,
+      manualMakeupAdjustments: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackMakeupStudents: {}, fallbackLectureStockStudents: {},
+      suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, scheduleCountAdjustments: [], students: [student], teachers: [teacher], regularLessons: [regularLesson],
+      managedStudentByAnyName: new Map([[student.name, student]]), resolveDisplayName: (name: string) => name, resolveStockId: resolveStudentKey, ledgerOriginDatesByKey: {},
+    })
+    expect(legacy.status).toBe('transferred')
+  })
+
+  it('在庫中立: 作っても台帳は渡さず・残数も 0 のまま（作る前と同じ）', () => {
+    const before = pairFx.balances(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []), pairFx.ROWS)
+    const result = paired()
+    expect(pairFx.balances(result.nextWeeks, pairFx.ROWS)).toEqual(before)
+    expect(before).toEqual({})
+    expect(result.nextSuppressedRegularLessonOccurrences).toEqual([buildWholeDayTransferPairKey(pairFx.D, pairFx.D2)])
+  })
+
+  it('在庫中立: 振替元 D を休日設定しても残数は 0（対照: 組が無ければ休日振替で +1）', () => {
+    const late = new Date('2026-10-20T00:00:00')
+    const holiday = pairFx.settings({ holidayDates: [pairFx.D] })
+    const control = pairFx.remerge(pairFx.buildBoard(pairFx.ROWS, holiday), pairFx.ROWS, [], holiday)
+    expect(pairFx.balances(control, pairFx.ROWS, {}, holiday, late)).toMatchObject({ sA__数: 1, sB__数: 1 })
+    const result = paired()
+    const remerged = pairFx.remerge(result.nextWeeks, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences, holiday)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.balances(remerged, pairFx.ROWS, {}, holiday, late)).toEqual({})
+  })
+
+  it('D\' で休みにすると +1（通常の休みと同じ会計）・その生徒は D\' に展開し直さない', () => {
+    const result = paired()
+    const absent = markAbsent(result.nextWeeks, pairFx.D2, 0)
+    const remerged = pairFx.remerge(absent, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([[], ['sB', null]])
+    expect(pairFx.recordIds(remerged, pairFx.D2)).toEqual([['absent:sA', null], [null, null]])
+    expect(pairFx.balances(remerged, pairFx.ROWS)).toEqual({ sA__数: 1 })
+  })
+
+  it('不動点: 作った直後の盤面は再マージ・2 回目の再マージで変わらない（INV-03）', () => {
+    const result = paired()
+    const once = pairFx.remerge(result.nextWeeks, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences)
+    expect(pairFx.snapshot(once)).toBe(pairFx.snapshot(result.nextWeeks))
+    expect(pairFx.snapshot(pairFx.remerge(once, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences))).toBe(pairFx.snapshot(result.nextWeeks))
+  })
+
+  it('解除: 組が消え、D にテンプレの通常授業・D\' に D\' 自身のテンプレが戻る（在庫は動かない）・D\' に記録があれば止める', () => {
+    const result = paired()
+    const released = pairFx.releaseOf(result.nextWeeks, result.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(released.nextSuppressedRegularLessonOccurrences).toEqual([])
+    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter(Boolean).every((student) => student!.lessonType === 'regular')).toBe(true)
+    expect(pairFx.balances(released.nextWeeks, pairFx.ROWS)).toEqual({})
+    const absent = markAbsent(result.nextWeeks, pairFx.D2, 0)
+    expect(pairFx.releaseOf(absent, result.nextSuppressedRegularLessonOccurrences).status).toBe('blocked')
+  })
+
+  it('手入力 2 行: D\' に先にあった手入力（体験）は消さず・動かさず、同じ席の上段に D のテンプレ（下段＝手入力）', () => {
+    const board = pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])
+    const withTrial = structuredClone(board)
+    const target = pairFx.cellAt(withTrial, pairFx.D2)
+    target.desks[0].lesson!.studentSlots[0] = { id: 'trial-1', name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }
+    const result = pairFx.pairedOrThrow(pairFx.pairOf(withTrial))
+    const key = `${target.id}::${target.desks[0].id}`
+    expect(result.nextTemplatePendingDesks[key]?.lower.lesson?.studentSlots[0]).toMatchObject({ id: 'trial-1', lessonType: 'trial' })
+    expect(pairFx.seatIds(result.nextWeeks, pairFx.D2)[0]).toEqual(['sA', null])
+    expect(result.summary.pendingCount).toBe(1)
+    // 体験は在庫・希望回数を持たない＝台帳は動かない。再マージの不動点（保留込み）。
+    expect(pairFx.balances(result.nextWeeks, pairFx.ROWS)).toEqual({})
+    expect(pairFx.snapshot(pairFx.remerge(result.nextWeeks, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences, pairFx.settings(), result.nextTemplatePendingDesks))).toBe(pairFx.snapshot(result.nextWeeks))
+  })
+})
+
+// 段 4 監査（2026-11-05・HEAD d0f8283）: 休日設定・休日解除と付け替え（重大-1・重大-2）、§9-21（D' に同じ生徒の手入力）。
+describe('INV-06 マトリクス: 丸ごと振替の付け替え × 休日設定（段 4 監査）', () => {
+  const late = new Date('2026-10-20T00:00:00')
+  const byName = new Map(pairFx.students.map((row) => [row.name, row]))
+  const stockId = (entry: StudentEntry) => entry.managedStudentId ?? entry.name
+  const emptyLedgers = () => ({ manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} })
+  // 休日設定（handleToggleHolidayDate の設定側と同じ 2 手: 在庫へ返す → 机を休日の記録に変える）。
+  const setHoliday = (weeks: SlotCell[][], dateKey: string) => {
+    const next = structuredClone(weeks)
+    let ledgers: Parameters<typeof reconcileHolidayDeskStockReturns>[0]['ledgers'] = emptyLedgers()
+    for (const cell of next.flat()) {
+      if (cell.dateKey !== dateKey) continue
+      for (const desk of cell.desks) {
+        const result = reconcileHolidayDeskStockReturns({ desk, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: stockId, ledgerOriginDatesByKey: {}, includeManualAddedLessons: true })
+        ledgers = result.ledgers
+        convertHolidayDeskEntriesToRecords({ desk, cell, enabled: true, stockReturns: result.stockReturnStamps })
+      }
+    }
+    return { weeks: next, ledgers }
+  }
+  // 休日解除（handleToggleHolidayDate の解除側と同じ 2 手: 席へ戻す＋在庫の巻き戻し → 抑止キー）。
+  const releaseHoliday = (weeks: SlotCell[][], dateKey: string, ledgers: ReturnType<typeof emptyLedgers>, suppressed: string[]) => {
+    const restoration = computeHolidayReleaseRestoration({ weeks, dateKey, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: stockId, templatePendingDesks: {} })
+    const keys = resolveHolidayReleaseSuppressedOccurrences({ dateKey, regularLessons: pairFx.ROWS, students: pairFx.students, teachers: pairFx.teachers, suppressedRegularLessonOccurrences: suppressed, restoredOccurrenceKeys: new Set(restoration.restoredOccurrenceKeys) })
+    return { weeks: restoration.nextWeeks, ledgers: restoration.ledgers, keys }
+  }
+
+  it('段4: D を休日設定→解除しても D\' の付け替えは残り在庫 0・再マージ＝保存の不動点', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const holiday = pairFx.settings({ holidayDates: [pairFx.D] })
+    const set = setHoliday(paired.nextWeeks, pairFx.D)
+    const onHoliday = pairFx.remerge(set.weeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, holiday)
+    expect(pairFx.seatIds(onHoliday, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.balances(onHoliday, pairFx.ROWS, set.ledgers.manualMakeupAdjustments, holiday, late)).toEqual({})
+    const released = releaseHoliday(onHoliday, pairFx.D, set.ledgers, paired.nextSuppressedRegularLessonOccurrences)
+    // 組の日には休日解除の抑止キーを積まない（積むと D' の付け替えが抑止され、再マージは残し保存で消える）。
+    expect(released.keys).toEqual(paired.nextSuppressedRegularLessonOccurrences)
+    const remerged = pairFx.remerge(released.weeks, pairFx.ROWS, released.keys)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    const saved = pairFx.save(remerged, pairFx.ROWS, released.keys, { manualMakeupAdjustments: released.ledgers.manualMakeupAdjustments })
+    expect(pairFx.snapshot(saved.nextWeeks)).toBe(pairFx.snapshot(remerged))
+    expect(pairFx.balances(saved.nextWeeks, pairFx.ROWS, released.ledgers.manualMakeupAdjustments, pairFx.settings(), late)).toEqual({})
+  })
+
+  it('段4: D\' を休日設定しても +1（D の 1 回分）だけ・休日解除で 0 に戻る', () => {
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, [])))
+    const holiday = pairFx.settings({ holidayDates: [pairFx.D2] })
+    const set = setHoliday(paired.nextWeeks, pairFx.D2)
+    const onHoliday = pairFx.remerge(set.weeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, holiday)
+    // 対照: 組が無ければ D' を休日にしても 1 人 +1。
+    const control = pairFx.remerge(pairFx.buildBoard(pairFx.ROWS, holiday), pairFx.ROWS, [], holiday)
+    expect(pairFx.balances(control, pairFx.ROWS, {}, holiday, late)).toEqual({ sA__数: 1, sB__数: 1 })
+    expect(pairFx.balances(onHoliday, pairFx.ROWS, set.ledgers.manualMakeupAdjustments, holiday, late)).toEqual({ sA__数: 1, sB__数: 1 })
+    const released = releaseHoliday(onHoliday, pairFx.D2, set.ledgers, paired.nextSuppressedRegularLessonOccurrences)
+    expect(released.keys).toEqual(paired.nextSuppressedRegularLessonOccurrences)
+    const remerged = pairFx.remerge(released.weeks, pairFx.ROWS, released.keys)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.balances(remerged, pairFx.ROWS, released.ledgers.manualMakeupAdjustments, pairFx.settings(), late)).toEqual({})
+  })
+
+  it('段4: D\' に同じ生徒の手入力 → D の S は休みで +1（振替先なし）・解除で 0', () => {
+    const board = structuredClone(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []))
+    pairFx.cellAt(board, pairFx.D2).desks[1].lesson!.studentSlots[1] = { id: 'mk-a', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual', manualAdded: true }
+    const before = pairFx.balances(board, pairFx.ROWS)
+    const paired = pairFx.pairedOrThrow(pairFx.pairOf(board))
+    expect(pairFx.recordIds(paired.nextWeeks, pairFx.D)).toEqual([['absent:sA', null], ['moved:sB', null]])
+    const absent = pairFx.cellAt(paired.nextWeeks, pairFx.D).desks[0].statusSlots![0]!
+    expect(absent.moveDestinationDateKey).toBeUndefined()
+    expect(pairFx.balances(paired.nextWeeks, pairFx.ROWS)).toEqual({ ...before, sA__数: (before.sA__数 ?? 0) + 1 })
+    expect(pairFx.snapshot(pairFx.remerge(paired.nextWeeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), paired.nextTemplatePendingDesks))).toBe(pairFx.snapshot(paired.nextWeeks))
+    // 保護者ページ: D は「お休み」だけ（振替先なし）。本体と Functions の複製が同じ。
+    const payload = { students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), boardState: { weeks: paired.nextWeeks, suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences } }
+    const range = { from: '2026-10-05', to: '2026-10-18' }
+    const view = buildParentScheduleView(payload, 'sA', range)
+    expect(buildGeneratedParentScheduleView(payload, 'sA', range)).toEqual(view)
+    expect(view?.days.find((day) => day.dateKey === pairFx.D)?.lessons).toEqual([expect.objectContaining({ kind: 'absent', makeupDestination: null })])
+    const released = pairFx.releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+    if (released.status !== 'transferred') throw new Error(released.message)
+    expect(pairFx.seatIds(released.nextWeeks, pairFx.D)).toEqual([['sA', null], ['sB', null]])
+    expect(pairFx.recordIds(released.nextWeeks, pairFx.D)).toEqual([[null, null], [null, null]])
+    expect(pairFx.balances(released.nextWeeks, pairFx.ROWS)).toEqual(before)
+  })
+})
+
+// 段 4 再監査 重大-A（2026-11-05・4d548b7）: §9-21 の「置かない」は §2-2・§2-4 本体と同じ根拠（手入力の S と、その記録）で決める。
+describe('INV-06 マトリクス: 丸ごと振替の付け替え §9-21 × D\' の手入力の記録（段 4 再監査）', () => {
+  const manualMakeup = (): StudentEntry => ({ id: 'mk-a', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限', origin: 'manual', manualAdded: true })
+  const boardWithManual = () => {
+    const board = structuredClone(pairFx.remerge(pairFx.buildBoard(), pairFx.ROWS, []))
+    pairFx.cellAt(board, pairFx.D2).desks[1].lesson!.studentSlots[1] = manualMakeup()
+    return board
+  }
+  // D' の手入力の青木を記録にする（上段の記録 or 保留の下段の記録）。
+  const recordManual = (weeks: SlotCell[][], status: 'absent' | 'absent-no-makeup' | 'attended', inLower: boolean) => {
+    const next = structuredClone(weeks)
+    const cell = pairFx.cellAt(next, pairFx.D2)
+    const desk = cell.desks[1]
+    const record = buildStudentStatusEntry(desk.lesson!.studentSlots[1]!, cell, desk, status)
+    desk.lesson!.studentSlots[1] = null
+    const pendingDesks = inLower ? { [`${cell.id}::${desk.id}`]: { lower: { statusSlots: [null, record] as [StudentStatusEntry | null, StudentStatusEntry | null] }, effectiveStartDate: pairFx.D, createdAt: '2026-10-01T10:00:00.000Z' } } : {}
+    if (!inLower) desk.statusSlots = [null, record]
+    return { weeks: next, pendingDesks }
+  }
+  for (const inLower of [false, true]) {
+    for (const status of ['absent', 'absent-no-makeup', 'attended'] as const) {
+      it(`段4 §9-21: D' の同じ生徒の手入力を${status}${inLower ? '（保留の下段の記録）' : ''}にしても D の S は休みのまま（在庫は組なしの対照 +1）`, () => {
+        const paired = pairFx.pairedOrThrow(pairFx.pairOf(boardWithManual()))
+        expect(pairFx.recordIds(paired.nextWeeks, pairFx.D)[0]).toEqual(['absent:sA', null])
+        const recorded = recordManual(paired.nextWeeks, status, inLower)
+        const remerged = pairFx.remerge(recorded.weeks, pairFx.ROWS, paired.nextSuppressedRegularLessonOccurrences, pairFx.settings(), recorded.pendingDesks)
+        // D' に付け替えの青木は出ない（記録が勝つ・§2-4）＝D の青木は休みのまま（「休)→D'」に戻すと 1 回分が会計なしで消える）。
+        expect(pairFx.recordIds(remerged, pairFx.D)[0]).toEqual(['absent:sA', null])
+        expect(pairFx.cellAt(remerged, pairFx.D2).desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).some((student) => student?.managedStudentId === 'sA')).toBe(false)
+        // 対照: 組の無い盤面で同じ手入力を同じ記録にしたときの在庫に、D の 1 回分（休み）が +1。
+        const control = recordManual(boardWithManual(), status, inLower)
+        const scanned = buildMakeupStockEntries({ students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), weeks: remerged, manualAdjustments: {}, resolveStudentKey: (entry) => entry.managedStudentId ?? entry.name, today: pairFx.TODAY, templatePendingDesks: recorded.pendingDesks })
+        const controlScanned = buildMakeupStockEntries({ students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), weeks: pairFx.remerge(control.weeks, pairFx.ROWS, [], pairFx.settings(), control.pendingDesks), manualAdjustments: {}, resolveStudentKey: (entry) => entry.managedStudentId ?? entry.name, today: pairFx.TODAY, templatePendingDesks: control.pendingDesks })
+        const balanceOf = (entries: ReturnType<typeof buildMakeupStockEntries>) => entries.find((entry) => entry.key === 'sA__数')?.balance ?? 0
+        expect(balanceOf(scanned)).toBe(balanceOf(controlScanned) + 1)
+      })
+    }
+  }
 })

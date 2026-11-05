@@ -72,6 +72,8 @@ export type VanishedMakeupReportParams = {
    * 盤面の未消化振替とレポートの残数が食い違う。
    */
   templatePendingDesks?: TemplatePendingDeskMap | null
+  /** 第 2 版 段 4: 丸ごと振替の組のキー（`WHOLE_DAY_PAIR__`）。組の D' は休日振替を積まない（盤面と同じ入力）。 */
+  wholeDayPairKeys?: readonly string[]
 }
 
 export const VANISHED_MAKEUP_REASONS = {
@@ -164,6 +166,8 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     fallbackStudents: params.fallbackStudents,
     resolveStudentKey: params.resolveStudentKey,
     today: params.today,
+    // 第 2 版 段 4: 丸ごと振替の組の D' は休日振替を積まない（盤面と同じ入力）。
+    wholeDayPairKeys: params.wholeDayPairKeys,
   }
 
   const afterEntries = buildMakeupStockEntries({ ...stockParams, weeks: params.weeks, templatePendingDesks: params.templatePendingDesks })

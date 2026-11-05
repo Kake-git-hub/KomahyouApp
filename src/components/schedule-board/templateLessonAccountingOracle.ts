@@ -24,17 +24,20 @@ import type { SlotCell, StudentEntry } from './types'
 import { collectMakeupOriginCategoriesByKey, isClosedDate, originTokenDateKey, type ManualMakeupOrigin } from './makeupStock'
 import { resolveDayOfWeekFromDateKey } from './templateDefinitionDiff'
 import type { TemplatePendingDeskMap } from './templatePendingDesks'
+import { collectManualFirstBlockedLessons } from './templateConflictRules'
+import { parseWholeDayTransferPairs } from './wholeDayTransferPair'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate, lessonFactIdentity, type LessonExplanationBreakdown } from './templateLessonAccounting'
 
 export type LessonAccountingViolation = {
-  kind: 'missing' | 'surplus-makeup'
+  /** excess＝§2-2 の遮断（盤面の状態から導いた回）と希望回数の −1 が同じ授業を二重に説明している（積む方式と導く方式の重複・regression-reviewer 要修正-4）。 */
+  kind: 'missing' | 'surplus-makeup' | 'excess'
   studentId: string
   subject: string
   dateKey: string
   expected: number
   explained: number
-  /** 説明の内訳（どこで数えたか）。 */
-  breakdown: LessonExplanationBreakdown
+  /** 説明の内訳（どこで数えたか）。manualFirst＝第 2 版 §2-2 で手入力が先にあるため置かれていない回（盤面の状態から導く）。 */
+  breakdown: LessonExplanationBreakdown & { manualFirst?: number }
 }
 
 export type LessonAccountingAuditParams = {
@@ -50,6 +53,8 @@ export type LessonAccountingAuditParams = {
   fromDate: string
   toDate: string
   today?: Date
+  /** 削除の記録（抑止キー）。§2-2 の遮断に数えない回（室長が明示的に取り下げた授業・単発削除）の判定に使う。省略時は無し。 */
+  suppressedRegularLessonOccurrences?: readonly string[]
 }
 
 function rowInEffect(row: RegularLessonRow, seat: 1 | 2, dateKey: string) {
@@ -61,12 +66,16 @@ function rowInEffect(row: RegularLessonRow, seat: 1 | 2, dateKey: string) {
 }
 
 /** 新テンプレの期待: 生徒×科目×日付 → 授業数、と 生徒×科目×日付 → 時限の集合。 */
-export function collectExpectedTemplateLessons(params: Pick<LessonAccountingAuditParams, 'weeks' | 'regularLessons' | 'classroomSettings' | 'fromDate' | 'toDate'>) {
+export function collectExpectedTemplateLessons(params: Pick<LessonAccountingAuditParams, 'weeks' | 'regularLessons' | 'classroomSettings' | 'fromDate' | 'toDate' | 'suppressedRegularLessonOccurrences'>) {
   const expected = new Map<string, number>()
   const slotsByKey = new Map<string, Set<number>>()
   const dates = new Set<string>()
   for (const week of params.weeks) for (const cell of week) if (cell.dateKey >= params.fromDate && cell.dateKey <= params.toDate && cell.isOpenDay) dates.add(cell.dateKey)
+  // 段 4（spec-template-conflict-v2 §3・決定記録 2）: 丸ごと振替の移動先 D' 自身のテンプレの授業は、組がある間は展開しない（消去・在庫に入れない）＝期待に数えない。
+  // D の授業は期待に数え、D' の付け替えの振替（振替元＝D）が説明する（(b)・在庫中立）。
+  const pairTargetDates = new Set(parseWholeDayTransferPairs(params.suppressedRegularLessonOccurrences ?? []).map((pair) => pair.targetDateKey))
   for (const dateKey of dates) {
+    if (pairTargetDates.has(dateKey)) continue
     if (isClosedDate(dateKey, params.classroomSettings)) continue
     const dayOfWeek = resolveDayOfWeekFromDateKey(dateKey)
     for (const row of params.regularLessons) {
@@ -93,6 +102,7 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
     students: params.students, regularLessons: [...params.regularLessons], classroomSettings: params.classroomSettings, weeks: params.weeks,
     manualAdjustments: params.manualMakeupAdjustments, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey,
     today: params.today ?? new Date(`${params.fromDate}T00:00:00`), includeAbsentMakeupOrigins: true, templatePendingDesks: params.templatePendingDesks,
+    wholeDayPairKeys: params.suppressedRegularLessonOccurrences,
   })
   const originDatesByKey = originCategories.effective
   const originsOn = (studentId: string, subject: string, dateKey: string) => {
@@ -104,13 +114,29 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
   }
   const facts = collectLessonExplanationFacts({ weeks: params.weeks, pendingDesks: params.templatePendingDesks })
   const adjustments = collectCountAdjustmentsByKey(params.scheduleCountAdjustments)
+  // 第 2 版 §2-2（INV-05・spec-template-conflict-v2 §4-2 規則 1）: 手入力の同じ生徒が先にあるため置かれていないテンプレの授業は、盤面の状態から導いて説明に数える
+  // （保存で −1 を積まない）。削除の記録がある回は数えない＝室長が取り下げた分は countAdjusted 側（二重にしない）。
+  const manualFirstByKey = new Map<string, number>()
+  for (const item of collectManualFirstBlockedLessons({
+    weeks: params.weeks, pendingDesks: params.templatePendingDesks, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, includeRecordBlocked: true,
+    // 同一性は isSameTemplateStudent（管理生徒 ID が無い旧データは名前で突き合わせる・ID の作り方の違いで二重に説明しない）。
+    expected: [...slotsByKey].flatMap(([key, slots]) => { const [studentId, subject, dateKey] = key.split('__'); const name = params.students.find((item) => item.id === studentId)?.name; return [...slots].map((slotNumber) => ({ studentId, name, subject, dateKey, slotNumber })) }),
+  })) {
+    const key = buildLessonFactKey(item.studentId, item.subject, item.dateKey)
+    manualFirstByKey.set(key, (manualFirstByKey.get(key) ?? 0) + 1)
+  }
   const violations: LessonAccountingViolation[] = []
   for (const [key, want] of expected) {
     const [studentId, subject, dateKey] = key.split('__')
-    const { explained, breakdown } = countLessonExplanations(facts, {
+    const counted = countLessonExplanations(facts, {
       studentId, subject, dateKey, origins: originsOn(studentId, subject, dateKey), countAdjusted: adjustments.get(key) ?? 0, slotsForOtherLesson: slotsByKey.get(key) ?? [],
     })
+    const manualFirst = manualFirstByKey.get(key) ?? 0
+    const explained = counted.explained + manualFirst
+    const breakdown = { ...counted.breakdown, manualFirst }
     if (explained < want) violations.push({ kind: 'missing', studentId, subject, dateKey, expected: want, explained, breakdown })
+    // 説明が多すぎる（excess）: 遮断の回と −1 の合計が期待を超える＝同じ授業を「置かれていない」と「−1 済み」の両方で引いている（予定数が二重に減る）。
+    else if (manualFirst > 0 && manualFirst + counted.breakdown.countAdjusted > want) violations.push({ kind: 'excess', studentId, subject, dateKey, expected: want, explained, breakdown })
   }
   // 根拠の無い振替（Q40-1 の定義と同じ: 振替元の日に 新テンプレの授業・在庫の正本の origin・休みの記録 のどれも無い）。盤面のどこにあっても見る（上段＋保留の下段）。
   const seenSurplus = new Set<string>()
@@ -137,5 +163,5 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
 
 /** 違反を 1 行ずつの文にする（テストの失敗メッセージ用）。 */
 export function describeLessonAccountingViolations(violations: readonly LessonAccountingViolation[]) {
-  return violations.map((item) => `${item.kind === 'missing' ? '無言の消失' : '根拠の無い振替'} ${item.dateKey} ${item.studentId}×${item.subject}: 期待 ${item.expected} に対し説明 ${item.explained}（${JSON.stringify(item.breakdown)}）`).join('\n')
+  return violations.map((item) => `${item.kind === 'missing' ? '無言の消失' : item.kind === 'excess' ? '説明の重複（予定数の二重の減算）' : '根拠の無い振替'} ${item.dateKey} ${item.studentId}×${item.subject}: 期待 ${item.expected} に対し説明 ${item.explained}（${JSON.stringify(item.breakdown)}）`).join('\n')
 }
