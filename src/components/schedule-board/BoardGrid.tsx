@@ -279,6 +279,9 @@ type BoardGridProps = {
   // 上段を掴んだときは td の .sa-student-picked（下段は緑のまま・CSS で .sa-student-inner に限定）、下段を掴んだときはこの席の
   // .sa-pending-lower だけに .sa-pending-lower-picked を付ける＝掴んでいる方だけ白抜き。
   highlightedPendingLower?: { cellId: string; deskId: string; lowerIndex: number } | null
+  // 保留メニューを開いている席（2026-11-05 オーナー指示「上段をクリックしたら上段を、下段も同様にハイライト」）。上段(.sa-student-inner に
+  // sa-pending-upper-selected)と下段(.sa-pending-lower に sa-pending-lower-selected)の両方に選択中の枠を付ける。画面専用(PDF は strip で外す)。
+  openedPendingSeat?: { cellId: string; deskId: string; lowerIndex: number } | null
 }
 
 function BoardGridComponent({
@@ -308,6 +311,7 @@ function BoardGridComponent({
   onTemplatePendingLowerTeacherClick,
   onTemplatePendingLowerMouseDown,
   highlightedPendingLower,
+  openedPendingSeat,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -339,6 +343,9 @@ function BoardGridComponent({
     // 上段のサイズを合わせ直す・regression-reviewer 低-4・2026-10-02)。
   }, [cells, linkResolutionCells, groupClassEntries, templatePendingDesks])
 
+  const isOpenedPendingSeat = (cellId: string, deskId: string | undefined, seat: number) => Boolean(
+    openedPendingSeat && deskId && openedPendingSeat.cellId === cellId && openedPendingSeat.deskId === deskId && openedPendingSeat.lowerIndex === seat,
+  )
   const renderStudentCell = (
     cell: SlotCell,
     deskIndex: number,
@@ -439,7 +446,7 @@ function BoardGridComponent({
         data-slot-number={cell.slotNumber}
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >
-        <div className="sa-student-inner">
+        <div className={`sa-student-inner${pendingLowerNode && isOpenedPendingSeat(cell.id, cell.desks[deskIndex]?.id, studentIndex) ? ' sa-pending-upper-selected' : ''}`}>
           {hasMemo ? (
             <span
               className={`sa-student-name sa-student-name-note${hasWarning ? ' sa-student-name-warning' : ''}`}
@@ -567,7 +574,7 @@ function BoardGridComponent({
     )
     return (
       <div
-        className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}`}
+        className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}${isOpenedPendingSeat(cell.id, desk?.id, studentIndex) ? ' sa-pending-lower-selected' : ''}`}
         // 決定記録 48（2026-10-25）: テンプレ保存以外（丸ごと振替の押し出しなど）が作った保留は理由文を添える。色は同じ緑（種別の区別は文だけ）。
         title={pending.origin?.note ? `保留中の下段（${pending.origin.note}）。押すと保留の机のメニューを開きます。` : '保留中の下段（既存）。押すと保留の机のメニューを開きます。'}
         data-testid={`pending-lower-${cell.id}-${deskIndex}-${studentIndex}`}

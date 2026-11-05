@@ -18,6 +18,7 @@ import {
   buildManagedScheduleCellsForRange,
   computePendingDeskResolution,
   computePendingLowerStudentMove,
+  buildTemplatePendingDuplicateAdoptConfirm,
   computeTemplateDiffApplyForBoard,
   planTemplatePendingAdoptExisting,
   remergeBoardWeeksWithManagedData,
@@ -1070,5 +1071,33 @@ describe('席ごとの採用（Q26-10）: もう一方の席に下段が残る�
     const whole = resolve('adopt-existing', { diff, deskId, key, newRows })
     if (whole.status !== 'applied') throw new Error(whole.message)
     expect(deskOf(whole.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', 'sD'])
+  })
+})
+
+// 確認リスト tp-75（オーナー指示 2026-11-05）: 由来 same-slot-template-duplicate の「下段(手入力)を採用する」の確認文は、
+// 実際に外れる机 T のテンプレの通常授業を出し、同じ机の上の行（押していない席）の生徒名は出さない。
+describe('同じコマのテンプレ重複の採用確認文（tp-75）', () => {
+  const display = (name: string) => name
+  const mkDesk = (id: string, lessonId: string, slots: [StudentEntry | null, StudentEntry | null]): DeskCell => ({ id, teacher: '先生', lesson: { id: lessonId, studentSlots: slots } })
+  it('席 2 の下段を採用: 机 T の同じ生徒×科目のテンプレを出し、机 D の上段（席 1）の生徒名は出さない', () => {
+    // 机 D（index 1）: 上段 [C(席1), 空き]・下段の対象は A の振替（席 2）。机 T（index 0）にテンプレの A。
+    const cell: SlotCell = {
+      id: CELL_ID, dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: SLOT, timeLabel: '', isOpenDay: true,
+      desks: [mkDesk('t0', 'managed_r0', [entry('sA'), null]), mkDesk('d1', 'managed_r1', [entry('sC'), null])],
+    }
+    const text = buildTemplatePendingDuplicateAdoptConfirm(cell, 'd1', [entry('sA', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })], display)
+    const nameA = students.find((student) => student.id === 'sA')!.name
+    const nameC = students.find((student) => student.id === 'sC')!.name
+    expect(text).toBe(`下段(手入力)を採用します。机 1 のテンプレの通常授業の ${nameA} を外します（予定数は 1 減ります）。よろしいですか？`)
+    expect(text).not.toContain(nameC)
+    expect(text).not.toContain('取り下げ')
+  })
+  it('外すテンプレが無ければ「外すテンプレの授業はありません」', () => {
+    const cell: SlotCell = {
+      id: CELL_ID, dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: SLOT, timeLabel: '', isOpenDay: true,
+      desks: [mkDesk('t0', 'managed_r0', [entry('sB'), null]), mkDesk('d1', 'managed_r1', [entry('sC'), null])],
+    }
+    const text = buildTemplatePendingDuplicateAdoptConfirm(cell, 'd1', [entry('sA', { lessonType: 'makeup' })], display)
+    expect(text).toContain('外すテンプレの授業はありません')
   })
 })

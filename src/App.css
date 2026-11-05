@@ -2815,6 +2815,22 @@ tr.sa-group-row td {
   color: #fff;
 }
 
+/* 保留メニューを開いている席(2026-11-05 オーナー指示): 上段・下段の両方に太い青枠。印刷/PDF には出さない(PDF は strip で外す・印刷は下の @media print で無効化)。 */
+.sa-student-inner.sa-pending-upper-selected,
+.sa-pending-lower.sa-pending-lower-selected {
+  outline: 3px solid #1a73e8;
+  outline-offset: -3px;
+  background-color: #dbeafe;
+}
+
+@media print {
+  .sa-student-inner.sa-pending-upper-selected,
+  .sa-pending-lower.sa-pending-lower-selected {
+    outline: none;
+    background-color: transparent;
+  }
+}
+
 .sa-pending-lower-band {
   display: none;
   padding: 0 6px;

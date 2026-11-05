@@ -131,6 +131,28 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       expect(toContainer(renderGrid(PENDING, { highlightedPendingLower: null })).querySelector('.sa-pending-lower-picked')).toBeNull()
     })
 
+    // 2026-11-05 オーナー指示(フリーメモ 20261105-052334430): メニューを開いている席は上段・下段の両方に選択中の枠を付ける。
+    it('保留メニューを開いている席(openedPendingSeat)は上段(.sa-student-inner)と下段の両方にだけ選択中のクラスが付く', () => {
+      const container = toContainer(renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 0 } }))
+      expect(container.querySelectorAll('.sa-pending-upper-selected')).toHaveLength(1)
+      expect(container.querySelectorAll('.sa-pending-lower-selected')).toHaveLength(1)
+      const td = container.querySelector(`[data-testid="student-cell-${CELL_ID}-0-0"]`)!
+      expect(td.querySelector('.sa-student-inner')!.className).toContain('sa-pending-upper-selected')
+      expect(container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!.className).toContain('sa-pending-lower-selected')
+      expect(container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-1"]`)!.className).not.toContain('sa-pending-lower-selected')
+      expect(td.className).not.toContain('sa-student-picked')
+      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: null })).querySelector('.sa-pending-upper-selected, .sa-pending-lower-selected')).toBeNull()
+      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_2`, lowerIndex: 0 } })).querySelector('.sa-pending-upper-selected, .sa-pending-lower-selected')).toBeNull()
+    })
+
+    it('盤面 PDF のクローンから上段の選択中の印も外れる(下段は丸ごと外れる)', () => {
+      const root = document.createElement('div')
+      root.innerHTML = renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 0 } })
+      stripTemplatePendingLowerForPdf(root)
+      expect(root.querySelector('.sa-pending-upper-selected')).toBeNull()
+      expect(root.querySelector('.sa-pending-lower')).toBeNull()
+    })
+
     it('上段の生徒を掴んでいる(selectedStudentId)ときは td が sa-student-picked になるが、下段には picked を付けない', () => {
       const container = toContainer(renderGrid(PENDING, { selectedStudentId: 'c1' }))
       const td = container.querySelector('.sa-student-picked')!
@@ -445,7 +467,15 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
   // 確認リスト v1.5.576 その他欄「このメニューがわかりにくい。まず選択肢として テンプレ授業を採用／手入力データを採用／手入力データを削除／手入力データを移動 だけを表示して」
   it('保留の席のメニューは 4 択だけ（上段・下段の一覧と説明文は出さない）。押した席の下段（lowerIndex）が対象', () => {
     const menu = sliceBody(BOARD_TSX, 'data-testid="template-pending-desk-menu"', '{wholeDayTransferSourceDate && !isTemplateMode ? (')
-    for (const label of ['テンプレ授業を採用', '手入力データを採用', '手入力データを削除', '手入力データを移動']) expect(menu).toContain(label)
+    const labels = ['上段(テンプレ)を採用する', '下段(手入力)を採用する', '下段(手入力)を移動する', '下段(手入力)を削除する']
+    for (const label of labels) expect(menu).toContain(label)
+    // 順番はオーナー指示 2026-11-05 のとおり（採用 上段 → 採用 下段 → 移動 → 削除）
+    const positions = labels.map((label) => menu.indexOf(label))
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(menu).toContain('席 ${templatePendingDeskMenu.lowerIndex + 1}（上段＝テンプレ／下段＝手入力）')
+    expect(menu).toContain('上段(テンプレ)の講師を採用する')
+    expect(menu).toContain('下段(手入力)の講師を採用する')
+    expect(menu).not.toContain('>手入力データを')
     expect(menu).not.toContain('template-pending-lower-items')
     expect(menu).not.toContain('上段（実配置')
     expect(menu).not.toContain('元に戻す」で戻せます')
