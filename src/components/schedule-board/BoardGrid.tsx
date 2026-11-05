@@ -830,6 +830,8 @@ function BoardGridComponent({
                         !cell.isOpenDay ? 'sa-inactive' : '',
                         teacherWarning ? 'sa-warning' : '',
                         teacherPending ? 'sa-pending' : '',
+                        // 席だけの保留でも講師メニューは開かない（Q26-5）ので、緑は付けずに押せない印（カーソル）だけ残す（監査 要確認-3）。
+                        pendingEntry ? 'sa-teacher-locked' : '',
                         restedTeacher ? TEACHER_REST_CELL_CLASS : '',
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null

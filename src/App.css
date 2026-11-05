@@ -2723,7 +2723,10 @@ tr.sa-group-row td {
   background: #e3f4e6;
 }
 
-.sa-teacher.sa-pending {
+/* 保留の机では講師メニューを開かない（Q26-5）。緑（sa-pending）は講師のぶつかりだけ（2026-11-05・tp-64）なので、
+   席だけの保留の机は sa-teacher-locked でカーソルだけ「押せない」にする。 */
+.sa-teacher.sa-pending,
+.sa-teacher.sa-teacher-locked {
   cursor: not-allowed;
 }
 

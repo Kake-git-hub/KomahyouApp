@@ -2,6 +2,7 @@
 // パネルは開発用教室でしか出ないが、書式・下書き・分割は純関数なのでここで固定する。
 
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { DEVELOPER_REPORT_NOTE_LIMIT } from './developerReport'
@@ -975,13 +976,16 @@ describe('第111版(2026-11-05・v1.5.691): 11/5 深夜の送信(受付 20261105
     for (const okId of ['v2-2', 'v2-4']) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, okId).not.toContain(okId)
   })
 
-  it('v2-1 要改善「コマ表での並び替えはテンプレの並びを破棄して並び替えてほしい。その週だけでよい」→ 並び替えはテンプレ由来の机も動かす確認へ書き換え(決定記録 22)', () => {
+  it('v2-1 要改善「コマ表での並び替えはテンプレの並びを破棄して並び替えてほしい。その週だけでよい」→ 固定を外すと次のテンプレ保存で穴(監査で再現)。案 A/B/C をオーナーに問う項目に書き換え、並び替えの動きは今のまま', () => {
     const item = byId.get('v2-1')!
     expect(item.introducedIn).toBe('v1.5.691')
-    expect(item.ownerDecision).toContain('テンプレ由来の机も動かす')
-    expect(item.title).not.toContain('テンプレ由来の机を動かさない')
-    expect(item.check!.join('\n')).toContain('テンプレの生徒が居る机も')
-    expect(item.check!.join('\n')).not.toContain('同じ番号のまま動かず')
+    expect(item.ownerDecision).toContain('【並び替えはオーナー判断待ち】')
+    expect(item.ownerDecision).toContain('案 A')
+    expect(item.title).toContain('オーナー判断待ち')
+    // 並び替えの確認は外した(今の動きはテンプレ由来の机を動かさないまま)
+    expect(item.check!.join('\n')).not.toContain('並び替え')
+    const source = readFileSync(path.resolve(process.cwd(), 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    expect(source).toContain('collectTemplateOriginDeskIds(cell)')
   })
 
   it('tp-64 要改善「講師がバッティングしていなければ講師のセルは緑表示しなくていい」→ 講師欄の緑は講師のぶつかりだけ', () => {

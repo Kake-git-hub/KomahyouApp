@@ -6,7 +6,7 @@
 //   1-3 保存・読み込み・記録を付けて外す往復で印が変わらない
 //   1-4 印の無い旧データは推定で 1 回だけ付き、2 回目は何も変えない
 //   1-5 手入力の生徒名・講師名・メモが盤面で青字（PDF には出ない）
-//   1-6(改・§9-22) コマ表の並び替えはテンプレ由来の机も動かす（その週だけ。保留の机だけ固定）
+//   1-6 コマ表の並び替えはテンプレ由来の机を動かさない
 // ============================================================================
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -26,7 +26,9 @@ import {
   prepareStudentForMove,
 } from './ScheduleBoardScreen'
 import {
+  collectTemplateOriginDeskIds,
   inferStudentOrigin,
+  isTemplateOriginDesk,
   MANUAL_ORIGIN_CLASS,
   resolveDeskTeacherOrigin,
   resolveMovedStudentOrigin,
@@ -185,7 +187,7 @@ describe('1-4: 読み込み（createInitialBoardSnapshot）はフラグ ON の�
   })
 })
 
-describe('1-6(改・§9-22): コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）', () => {
+describe('1-6: コマ表の並び替えはテンプレ由来の机を動かさない', () => {
   const cell: SlotCell = {
     id: CELL_ID, dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: 5, timeLabel: '', isOpenDay: true,
     desks: [
@@ -194,18 +196,29 @@ describe('1-6(改・§9-22): コマ表の並び替えはテンプレ由来の机
       { id: `${CELL_ID}_desk_3`, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'hand', studentSlots: [base({ id: 'm', managedStudentId: 'sM', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), base({ id: 'n', managedStudentId: 'sN', lessonType: 'special' })] } },
     ],
   }
-  it('詰めて並び替え: 固定しなければテンプレの机も手入力の机も上に詰まる（テンプレの机 2 は机 2 に居座らない）', () => {
-    const sorted = packSortCellDesks(cell)
-    // 空き机 1 が最後へ動き、テンプレの机も手入力の机も上に詰まる
-    expect(sorted.map((desk) => desk.teacher)).toEqual(['佐藤', '田中', ''])
-    expect(sorted[0].lesson?.id).toBe('hand')
+  it('テンプレ由来の机（テンプレの生徒・足場講師）だけを固定する机に数える', () => {
+    expect(isTemplateOriginDesk(cell.desks[1])).toBe(true)
+    expect(isTemplateOriginDesk(cell.desks[2])).toBe(false)
+    expect(isTemplateOriginDesk({ teacher: '鈴木' })).toBe(true)
+    expect(isTemplateOriginDesk({ teacher: '' })).toBe(false)
+    expect([...collectTemplateOriginDeskIds(cell)]).toEqual([`${CELL_ID}_desk_2`])
   })
-  it('配線: 盤面の並び替えはテンプレ由来の机を固定しない（固定するのは保留の机だけ・フラグ ON/OFF とも同じ）', () => {
+  it('詰めて並び替え: テンプレの机 2 は位置も ID もそのまま、手入力の机だけが残りの位置へ詰まる（固定しないとテンプレの机も動く＝回帰の確認）', () => {
+    const locked = packSortCellDesks(cell, { lockedDeskIds: collectTemplateOriginDeskIds(cell) })
+    expect(locked[1]).toBe(cell.desks[1])
+    expect(locked[0].teacher).toBe('佐藤')
+    const unlocked = packSortCellDesks(cell)
+    expect(unlocked[0].teacher).toBe('佐藤')
+    expect(unlocked[1].lesson?.id).toBe('managed_a')
+    expect(unlocked[1].id).toBe(`${CELL_ID}_desk_2`)
+    // 机 1（空）と机 3（手入力 2 人）を入れ替えるだけで、テンプレの机 2 には触れない
+    expect(locked.map((desk) => desk.teacher)).toEqual(['佐藤', '田中', ''])
+  })
+  it('配線: 盤面の並び替えはフラグ ON の教室だけテンプレ由来の机も固定する（テンプレ編集の並び替えは今どおり）', () => {
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
     const sort = source.slice(source.indexOf('  const handleBoardSort = (mode: BoardSortMode) => {'), source.indexOf('  const handleApplySortMode = (mode: BoardSortMode) => {'))
-    expect(sort.length).toBeGreaterThan(200)
-    expect(sort).not.toContain('collectTemplateOriginDeskIds')
-    expect(sort).toContain('collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)')
+    expect(sort).toContain('if (!templateDiffApplyEnabled) return pendingIds')
+    expect(sort).toContain('collectTemplateOriginDeskIds(cell)')
   })
 })
 

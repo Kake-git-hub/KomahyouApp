@@ -98,6 +98,8 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     // 2026-11-05 オーナー指示（確認リスト tp-64 受付 20261105-185258693「講師がバッティングしていなければ講師のセルは緑表示しなくていい」）:
     // 席だけの保留（下段に講師が無い）では講師欄を緑にしない。
     expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
+    // 席だけの保留でも講師メニューは開かない（Q26-5）ので、押せない印（sa-teacher-locked・カーソルだけ）は付く（監査 要確認-3）
+    expect(html).toMatch(/class="sa-teacher[^"]*sa-teacher-locked/)
     // 保留でない机（机 2）には下段も緑も付かない
     expect(html).not.toContain(`pending-lower-${CELL_ID}-1-0`)
     // 下段は .sa-student-inner の外（盤面・PDF の文字サイズ合わせに混ざらない）
@@ -241,6 +243,8 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       // 机の番号は机単位の印のまま緑。講師欄は講師のぶつかり（下段の講師）が無いので緑にしない（2026-11-05 オーナー指示）
       expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
       expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
+      // 席だけの保留でも講師メニューは開かない（Q26-5）ので、押せない印（sa-teacher-locked・カーソルだけ）は付く（監査 要確認-3）
+      expect(html).toMatch(/class="sa-teacher[^"]*sa-teacher-locked/)
       // 保留の机の席には（下段の無い席も）上詰めの印 sa-pending-desk が付き、上段の高さが揃う
       expect(seat1.classList.contains('sa-pending-desk')).toBe(true)
       expect(seat2.classList.contains('sa-pending-desk')).toBe(true)
@@ -320,6 +324,7 @@ describe('Q41-13 のずらしの印は緑にしない（2026-11-05 オーナー�
     const html = renderGrid(undefined, { cells: [shiftedCell()] })
     expect(html).not.toContain('sa-teacher-shifted')
     expect(html).not.toMatch(/class="sa-teacher[^"]*sa-pending/)
+    expect(html).not.toMatch(/class="sa-teacher[^"]*sa-teacher-locked/)
     expect(html).not.toContain('この机へずらして置きました')
     expect(html).toContain('田村')
   })

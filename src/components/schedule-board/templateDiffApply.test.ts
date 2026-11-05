@@ -59,7 +59,6 @@ import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { auditTemplateLessonAccounting } from './templateLessonAccountingOracle'
 import { resolveStudentOrigin } from './placementOrigin'
-import { packSortCellDesks } from './deskSort'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // フィクスチャ（水曜 5 限・机 3 つ。反映日は水曜 2026-10-07。同じ週の月・火は反映日より前）
@@ -1693,25 +1692,6 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
     const saved = saveStable(week, [row('r0', 't1', 'sC', '数', 'sB', '数'), row('r1', 't2')])
     expect(deskOf(saved.nextWeeks, 0).statusSlots?.map((item) => item?.status ?? null)).toEqual([null, 'attended'])
     expect(lowerOf(saved, 0)?.statusSlots).toBeUndefined()
-  })
-
-  it('§9-22 安全の証拠: コマ表の並び替えでテンプレ由来の机が別の机番号へ動いた週に、テンプレを変えず保存しても、テンプレの生徒は各 1 か所・テンプレの机番号に戻り、2 行にも消える授業にもならない', () => {
-    const base0 = buildWeek(OLD_ROWS)
-    // 先頭に空き机を置いて（テンプレの生徒 2 人を 1 つずつ下の机へずらしてから）詰めて並び替える＝テンプレの机が動く週を作る
-    const cell0 = cellOf([base0])
-    const shifted: SlotCell = { ...cell0, desks: [{ id: cell0.desks[0].id, teacher: '' }, { ...cell0.desks[0], id: cell0.desks[1].id }, { ...cell0.desks[1], id: cell0.desks[2].id }] }
-    const sortedCell: SlotCell = { ...shifted, desks: packSortCellDesks(shifted, { skipStatusSlotPack: true }) }
-    expect(sortedCell.desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
-    const week = base0.map((cell) => (cell.id === CELL_ID ? sortedCell : cell))
-    const saved = saveStable(week, OLD_ROWS)
-    for (const studentId of ['sA', 'sB']) expect(countLiveInCell(saved.nextWeeks, studentId)).toBe(1)
-    const templateCell = cellOf([buildWeek(OLD_ROWS)])
-    expect(cellOf(saved.nextWeeks).desks.map((desk) => seats(desk))).toEqual(templateCell.desks.map((desk) => seats(desk)))
-    expect(saved.nextPendingDesks).toEqual({})
-    // discardedTemplateStudents は「テンプレ由来の席を置き直した」説明（並び替え無しの週でも同じ人が並ぶ）。消えたのではなく同じ人が再配置される。
-    expect(saved.discardedTemplateStudents.map((item) => item.student.managedStudentId).sort()).toEqual(['sA', 'sB'])
-    expect(saved.manualFirstSkipped).toEqual([])
-    expect(applyDiff({ week: buildWeek(OLD_ROWS), newRows: OLD_ROWS }).discardedTemplateStudents.map((item) => item.student.managedStudentId).sort()).toEqual(['sA', 'sB'])
   })
 
   it('抑止キーは新しく積まない（§6）: 丸ごと振替の日以外の保存は addedSuppressedRegularLessonOccurrences が空', () => {
