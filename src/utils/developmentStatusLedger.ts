@@ -96,10 +96,10 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   {
     id: 'template-conflict-v2',
     title: 'テンプレ反映と手入力のぶつかりを、出自の印で単純に作り直す',
-    stage: 'awaiting-owner',
-    who: 'owner',
+    stage: 'in-progress',
+    who: 'claude',
     summary: '反映先に手入力があれば 2 行、同じ生徒なら手入力が勝つ、休みは常に勝つ、手入力は青字、丸ごと振替は同じ曜日だけで日付の付け替えとして残す、という短い規則に作り直す。講師の休みボタンも足す。',
-    nextAction: 'Claude が新仕様の下書き docs/spec-template-conflict-v2.md を書き、オーナー確認の項目に答えてもらってから実装に入る。',
+    nextAction: '新仕様はオーナー確認済み(13 項目)。Claude が段 1(出自の印)と段 2(反映の規則)から実装し、開発用教室の確認リストで見てもらう。',
     notes: '2026-11-05 オーナー決定: 今の §H(Q21〜Q42・決定記録 66 本)は場合分けが多すぎるので置き換える。実運用で別の曜日への丸ごと振替は無い。手入力の生徒とテンプレの同じ生徒が同じコマで 2 か所になったら手入力が勝つ。生徒・講師とも休みはテンプレより勝つ(講師は休みボタンを新設・グレー表示・他の講師で上書き可)。検討点(出自の印・講師の一意性・移動先に同じ曜日のテンプレがある件・会計 3 規則・Functions のパリティ・既存データの凍結か作り直しか)は仕様の「オーナー確認」に載せる。',
     references: ['docs/spec-template-conflict-v2.md', 'docs/spec-template-behavior.md §H(旧仕様)', 'src/components/schedule-board/templateDiffApply.ts'],
     updatedOn: '2026-11-05',
