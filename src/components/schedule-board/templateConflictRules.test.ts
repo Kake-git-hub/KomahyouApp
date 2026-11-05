@@ -52,7 +52,9 @@ describe('判定の材料（§2-2〜§2-4）', () => {
     const ruled = applyTemplateOriginRulesToManagedCell(managed, board, {})
     expect(ruled.desks[0].lesson).toBeUndefined()
     expect(ruled.desks[0].teacher).toBe('')
-    expect(ruled.desks[1]).toBe(managed.desks[1])
+    // §9-15: 机 2（index 1）の手置き 佐藤 はテンプレの机 1 にも居るので、机 2 のテンプレの講師 田中 は置かない（生徒 C は置く）。
+    expect(ruled.desks[1].teacher).toBe('')
+    expect(ruled.desks[1].lesson).toBe(managed.desks[1].lesson)
     expect(applyTemplateOriginRulesToManagedCell(managed, cellWith([{ id: 'd1', teacher: '' }]), {})).toBe(managed)
   })
 })
@@ -78,11 +80,15 @@ describe('再マージ: フラグ ON だけ規則を当てる（OFF＝本番 3 �
 describe('§4-2 規則 1（collectManualFirstBlockedLessons）: 置かれていない回は積まずに盤面の状態から導く（INV-05）', () => {
   const expected = [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: 5 }]
   const withManual = cellWith([{ id: 'd1', teacher: '田中' }, { id: 'd2', teacher: '', lesson: { id: 'hand', studentSlots: [student({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }])
-  it('同じコマに手入力の A が居てテンプレの A が居ない回を数える（下段の手入力も数える）', () => {
+  it('同じコマに手入力の A（上段）が居てテンプレの A が居ない回を数える。下段だけの A は「置いてある」に数えない（§9-14・差分反映は下段だけの A をテンプレの席へ上げる）', () => {
     expect(collectManualFirstBlockedLessons({ weeks: [[withManual]], expected })).toEqual(expected)
     const lowerOnly = cellWith([{ id: 'd1', teacher: '田中' }])
     const pending = { [buildTemplatePendingDeskKey(CELL_ID, 'd1')]: { lower: { lesson: { id: 'l', studentSlots: [student({ manualAdded: true }), null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: DATE, createdAt: 'x' } }
-    expect(collectManualFirstBlockedLessons({ weeks: [[lowerOnly]], pendingDesks: pending, expected })).toEqual(expected)
+    expect(collectManualFirstBlockedLessons({ weeks: [[lowerOnly]], pendingDesks: pending, expected })).toEqual([])
+  })
+  it('同一性は isSameTemplateStudent: 盤面の生徒に管理生徒 ID が無い旧データは名前で突き合わせる（ID の作り方の違いで取りこぼさない）', () => {
+    const legacy = cellWith([{ id: 'd2', teacher: '', lesson: { id: 'hand', studentSlots: [student({ managedStudentId: undefined, lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }])
+    expect(collectManualFirstBlockedLessons({ weeks: [[legacy]], expected: [{ ...expected[0], name: '青木' }] })).toHaveLength(1)
   })
   it('数えない回: 手入力が無い・テンプレの A が置かれている・休日・削除の記録（室長が取り下げた授業・単発削除）がある', () => {
     expect(collectManualFirstBlockedLessons({ weeks: [[cellWith([{ id: 'd1', teacher: '' }])]], expected })).toEqual([])

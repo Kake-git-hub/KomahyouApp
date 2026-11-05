@@ -40,6 +40,8 @@ import { collectEditedFromRegularOccurrenceKeys, resolveSameDayMoveCopyKeysToRem
 import { buildTemplatePendingDeskKey, collectTemplatePendingCellIds, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { seatSortCells } from './deskSort'
 import { trimBoardWeeksForMemory } from './boardWeekTrim'
+import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
+import * as FX from './templateTransferFollow.fixture'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -1869,14 +1871,22 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     it.each([
       ['手置き（manual）', { manualTeacher: true, teacherAssignmentSource: 'manual' as const }],
       ['入替（manual-replaced）', { manualTeacher: true, teacherAssignmentSource: 'manual-replaced' as const }],
-    ])('講師 %s だけの机 → 生徒はテンプレで置き換わり（印なし）、講師はテンプレ机の講師が上段・手置き講師は下段に講師だけの保留（旧: 黙って揃う）', (_label, teacherFields) => {
-      const { desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '佐藤', ...teacherFields })), ROWS_WITH_C)
+    ])('講師 %s だけの机 → 生徒はテンプレで置き換わり（印なし）。佐藤はテンプレの机 2 にも居るので §9-15: 机 0 は佐藤のまま（鈴木を置かない・講師欄 1 行）・机 2 に佐藤は置かない', (_label, teacherFields) => {
+      const { saved, desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '佐藤', ...teacherFields })), ROWS_WITH_C)
       expect(liveIds(desk0.lesson)).toEqual(['sC'])
-      expect(desk0.teacher).toBe('鈴木')
-      expect(desk0.manualTeacher).toBe(false)
-      expect(lower?.lesson).toBeUndefined()
-      expect(lower?.teacher?.teacher).toBe('佐藤')
-      expect(lower?.teacher?.teacherAssignmentSource).toBe(teacherFields.teacherAssignmentSource)
+      expect([desk0.teacher, desk0.manualTeacher, desk0.teacherAssignmentSource]).toEqual(['佐藤', true, teacherFields.teacherAssignmentSource])
+      expect(lower).toBeUndefined()
+      const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+      expect(cell.desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+      expect(saved.studentNotes.filter((note) => note.kind === 'teacher-kept').map((note) => [note.studentName, note.detail])).toEqual([['鈴木', '佐藤']])
+      expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => note.studentName)).toEqual(['佐藤'])
+    })
+    // 手置き講師がテンプレの別の机に居ないなら（§2-3 表の 2 行目）講師欄だけ 2 行（上＝テンプレ／下＝手置き）。
+    it('講師 手置き（manual） だけの机・その講師がテンプレのどこにも居ない → 講師欄だけ 2 行（上＝鈴木／下＝高橋）', () => {
+      const { desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual' })), ROWS_WITH_C)
+      expect(liveIds(desk0.lesson)).toEqual(['sC'])
+      expect([desk0.teacher, desk0.manualTeacher]).toEqual(['鈴木', false])
+      expect(lower?.teacher?.teacher).toBe('高橋')
     })
 
     // 第 2 版（§9-13・旧 Q21-9 例外 1 は廃止）: QR の講師は手置き講師と同じ手入力 → テンプレの別の講師と講師欄だけ 2 行（下段に QR の講師が残る＝消えない）。
@@ -1964,12 +1974,12 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
     })
     // 新テンプレ: 机 0＝佐藤（講師だけ）・机 1＝鈴木（B）・机 2＝田中（講師だけ）→ 机 0 の QR 講師 田中と同名の足場講師が机 2 に来る。
-    // 第 2 版（§2-3・§9-13）: 机 2 の田中（テンプレ）は QR の田中が先にあるので置かない。机 0 はテンプレの佐藤と QR の田中で講師欄 2 行。講習の M は席に 1 行（決定 6）。
+    // 第 2 版（§2-3・§9-13・§9-15）: QR の田中はテンプレの机 2 にも居る → 机 0 は田中のまま（テンプレの佐藤は置かない・講師欄 1 行）、机 2 に田中は置かない。講習の M は席に 1 行。
     const { saved, desk0, lower } = saveAndRemerge(board(qrDesk), ROWS_TEACHER_ONLY)
-    expect(desk0).toMatchObject({ teacher: '佐藤', manualTeacher: false })
-    expect(lower?.teacher).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+    expect(desk0).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+    expect(lower).toBeUndefined()
     expect(liveIds(desk0.lesson)).toEqual(['sM'])
-    expect(saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(0)
+    expect(saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
   })
 
   // Q21-9 例外 1 の絞り込み（オーナー指示 2026-10-15・確認リスト v1.5.596 その他「一コマに同じ講師が 2 人いる。日程表からの講師追加はテンプレが入っていたら
@@ -1984,12 +1994,13 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     })
     // 新テンプレ: 机 0＝佐藤（講師だけ）・机 1＝鈴木（B）・机 2＝田中（A）
     const rows = [row('r0', 't3'), row('r1', 't2', 'sB'), row('r2', 't1', 'sA')]
+    // §9-15: QR の田中はテンプレの机 2 にも居る → 机 0 は田中のまま（佐藤は置かない）・机 2 に田中は置かない（A は置く）。田中はこのコマに 1 机（2-12）。
     const { saved, desk0, lower } = saveAndRemerge(board(qrDesk), rows)
-    expect(desk0).toMatchObject({ teacher: '佐藤', manualTeacher: false })
-    expect(lower?.teacher).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration' })
+    expect(desk0).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration' })
+    expect(lower).toBeUndefined()
     expect(liveIds(desk0.lesson)).toEqual(['sM'])
     const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
-    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(0)
+    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
     expect(cell.desks[2].teacher).toBe('')
     expect(liveIds(cell.desks[2].lesson)).toEqual(['sA'])
     expect(saved.summary.qrTeacherRemoved).toBe(0)
@@ -2709,4 +2720,37 @@ describe('INV-02 × 休日のコマへの配置: 再マージで残れない配�
       expectGuardBefore(body, 'resolveClosedDayStudentPlacementBlock(emptyMenuContext.cell)', 'commitWeeks(')
     })
   })
+})
+
+// ============================================================================
+// INV-02 × 列「編集」（第 2 版・フラグ ON・regression-reviewer 重大-2）: 読み込み時に印 template が付いた授業を「編集」で振替・増コマに変えても、
+// テンプレ保存で捨てられない（その席に 1 件のまま・青字）。applyStudentEditDraft が区分の変更でも印 manual を付け、resolveStudentOrigin が
+// 既存の手入力の印（editedToMakeup・editedFromRegular・区分）を印 template より優先する（二重の守り）。
+// ============================================================================
+describe('INV-02 × 編集（フラグ ON）: 印 template の授業を編集で振替・増コマにしても、テンプレ保存・再マージ・再保存の後もその席に 1 件・青字', () => {
+  for (const [label, lessonType, stampOrigin] of [['振替', 'makeup', true], ['増コマ', 'extra', true], ['振替（印の付け忘れ＝二重の守り）', 'makeup', false]] as const) {
+    it(label, () => {
+      const stamped = stampPlacementOrigins([FX.buildWeek(FX.OLD_ROWS)]).weeks
+      const cell = FX.cellOf(stamped, FX.WED_CELL)
+      const target = cell.desks[0].lesson!.studentSlots[0]!
+      expect(target.origin).toBe('template')
+      const edited = applyStudentEdit({
+        student: target, draft: { subject: target.subject, lessonType, teacherType: target.teacherType, noteSuffix: '' }, cellDateKey: FX.WED, cellSlotNumber: FX.SLOT,
+        suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, resolveStockId: FX.resolveStudentKey, stampOrigin,
+      })
+      expect(resolveStudentOrigin(edited.student)).toBe('manual')
+      const weeks = stamped.map((week) => week.map((item) => (item.id !== FX.WED_CELL ? item : { ...item, desks: item.desks.map((desk, index) => (index !== 0 ? desk : { ...desk, lesson: { ...desk.lesson!, studentSlots: [edited.student, desk.lesson!.studentSlots[1]] as [StudentEntry | null, StudentEntry | null] } })) })))
+      const suppressed = edited.suppressedRegularLessonOccurrences
+      const saved = FX.save(FX.remerge(weeks, FX.OLD_ROWS, suppressed), FX.OLD_ROWS, suppressed)
+      const after = FX.suppressedAfter(suppressed, saved)
+      const remerged = FX.remerge(saved.nextWeeks, FX.OLD_ROWS, after, FX.settings(), saved.nextPendingDesks)
+      const again = FX.save(remerged, FX.OLD_ROWS, after, { templatePendingDesks: saved.nextPendingDesks })
+      for (const result of [saved.nextWeeks, remerged, again.nextWeeks]) {
+        const seat = FX.cellOf(result, FX.WED_CELL).desks[0].lesson?.studentSlots[0]
+        expect(seat).toMatchObject({ managedStudentId: 'sA', lessonType })
+        expect(resolveStudentOrigin(seat!)).toBe('manual')
+        expect(result.flat().filter((item) => item.dateKey === FX.WED).flatMap((item) => item.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((item) => item?.managedStudentId === 'sA')).toHaveLength(1)
+      }
+    })
+  }
 })

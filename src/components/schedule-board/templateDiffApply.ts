@@ -2500,7 +2500,7 @@ export type TemplateDiffConfirmContext = {
  * 名前つきで出すことで、黙って消える形（改定前の M-1 の誤認など）が確認の画面の時点で見える。
  */
 export type TemplateDiffStudentNote = {
-  kind: 'manual-first' | 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
+  kind: 'manual-first' | 'lower-promoted' | 'teacher-kept' | 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
     | 'copy-kept-record' | 'copy-kept-vanish'
   /** 生徒の名前（講師の行では講師の名前）。 */
   studentName: string
@@ -2529,7 +2529,7 @@ export type TemplateDiffStudentNote = {
 /** Q41: 確認の画面に出す講師ごとの理由。 */
 export type TemplateDiffTeacherNote = {
   /** teacher-elsewhere（決定記録 66・2026-11-05）: 手置き講師がテンプレで同じコマの別の机に入るので、この机では講師を保留にした（templateTeacher＝その机の番号〔1 始まり〕）。 */
-  kind: 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
+  kind: 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere' | 'teacher-kept'
   teacherName: string
   templateTeacher: string
   dateKey: string
@@ -2566,6 +2566,10 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
       // 第 2 版 §2-3（講師の一意・手置き講師が勝つ・§9-1）: studentName＝テンプレの講師・detail＝手置きの机の番号（1 始まり）。
       return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は空のままです）。`
     }
+    // 第 2 版 §9-14: 下段だけに居た手入力の生徒をテンプレの席へ上げた（detail＝机の番号）。
+    case 'lower-promoted': return `${where} ${who}: 緑の下の行にだけ居た手入力のこの生徒を、テンプレの席${note.detail ? `（机 ${note.detail}）` : ''}へ上げて 1 行にします（テンプレの同じ授業は置きません）。`
+    // 第 2 版 §9-15: studentName＝置かなかったテンプレの講師 W・detail＝この机に残す手置き講師 X。
+    case 'teacher-kept': return `${where} ${who}: この机の手で置いた講師${note.detail ? ` ${note.detail}` : ''}は同じコマの別の机にもテンプレで入るため、この机は${note.detail ? ` ${note.detail}` : '手で置いた講師'}のままにし、テンプレの講師は置きません（別の机にも${note.detail ? ` ${note.detail}` : 'その講師'}は置きません）。`
     // 第 2 版 §2-2（生徒の一意・手入力が勝つ）。
     case 'manual-first': return `${where} ${who}: 同じコマに手入力の同じ生徒が先にあるため、テンプレのこの授業は置きません（予定数に数えません）。`
     case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があり、その机の下の行に空きが無いため、テンプレの通常授業は置きません。`

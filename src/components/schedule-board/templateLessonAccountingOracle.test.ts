@@ -21,6 +21,17 @@ const audit = (weeks: SlotCell[][], rows: RegularLessonRow[], extra: Partial<Par
   auditTemplateLessonAccounting({ weeks, regularLessons: rows, students, classroomSettings: settings, scheduleCountAdjustments: [], manualMakeupAdjustments: {}, fromDate: WED, toDate: THU, today: new Date('2026-10-01T00:00:00'), ...extra })
 
 describe('auditTemplateLessonAccounting（保存則の監査）', () => {
+  // 第 2 版 §2-2・§4-2 規則 1（regression-reviewer 要修正-4(b)）: 手入力の C が同じコマに居てテンプレの C が置かれていない回は、盤面の状態から導いて説明する。
+  // その回に −1 も積んである（積む方式の名残・削除の記録の無い −1）と同じ授業を二重に引いている＝excess。削除の記録（抑止キー）がある回は遮断に数えない＝重ならない。
+  it('§2-2 の遮断は説明に数える（−1 が無くても違反なし）。同じ回に記録の無い −1 も積むと excess（二重の減算）。削除の記録がある −1 なら重ならない', () => {
+    const manualC: StudentEntry = { ...C, id: 'sC_mk', lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 5限' }
+    const weeks = [[cell(WED, 5, [desk('w5a', '田中'), desk('w5b', '', [manualC, null])])]]
+    expect(audit(weeks, [row('r5', 5)])).toEqual([])
+    const minus = [{ studentKey: 'sC', subject: '数', countKind: 'regular' as const, dateKey: WED, delta: -1 }]
+    expect(audit(weeks, [row('r5', 5)], { scheduleCountAdjustments: minus }).map((item) => item.kind)).toEqual(['excess'])
+    expect(audit(weeks, [row('r5', 5)], { scheduleCountAdjustments: minus, suppressedRegularLessonOccurrences: [`sC__数__${WED}__5`] })).toEqual([])
+  })
+
   it('説明が揃っていれば違反なし: 置いた通常授業／移動元の記録＋その振替／−1', () => {
     const weeks = [[
       cell(WED, 3, [desk('w3', '田中', [C, null])]),

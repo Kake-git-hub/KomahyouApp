@@ -31,9 +31,14 @@ export function inferStudentOrigin(student: Pick<StudentEntry, 'lessonType' | 'm
   return 'template'
 }
 
-/** 生徒の出自（印があれば印・無ければ §7 の推定）。 */
+/**
+ * 生徒の出自。既存の手入力の印（手動追加・振替／講習などの区分・在庫由来・編集で振替にした印）があれば手入力（印 template より優先＝印の付け忘れ・
+ * 読み込み時に template と付いた後の「編集」での区分の変更に対する二重の守り・regression-reviewer 重大-2）。無ければ印、印も無ければテンプレ。
+ * ＝印が効くのは「推定ではテンプレだが手入力」（科目・授業時間の手直し §9-11 など）の形だけ。
+ */
 export function resolveStudentOrigin(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'>): PlacementOrigin {
-  return student.origin ?? inferStudentOrigin(student)
+  if (inferStudentOrigin(student) === 'manual') return 'manual'
+  return student.origin ?? 'template'
 }
 
 export function isManualOriginStudent(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular'> | null | undefined): boolean {

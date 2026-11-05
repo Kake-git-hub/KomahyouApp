@@ -62,9 +62,14 @@ describe('§7 の推定（印の無い旧データ）と印の優先', () => {
     expect(resolveStudentOrigin(base(overrides as Partial<StudentEntry>))).toBe(expected)
   })
 
-  it('印があれば印が正本（推定より勝つ）', () => {
+  it('印 manual は推定（テンプレ）より勝つ。既存の手入力の印（区分・手動追加・在庫由来・編集で振替にした印）は印 template より勝つ（二重の守り・regression-reviewer 重大-2）', () => {
     expect(resolveStudentOrigin(base({ origin: 'manual' }))).toBe('manual')
-    expect(resolveStudentOrigin(base({ lessonType: 'makeup', makeupSourceDate: '2026-09-30', origin: 'template' }))).toBe('template')
+    expect(resolveStudentOrigin(base({ origin: 'template' }))).toBe('template')
+    expect(resolveStudentOrigin(base({ lessonType: 'makeup', makeupSourceDate: '2026-09-30', origin: 'template' }))).toBe('manual')
+    expect(resolveStudentOrigin(base({ lessonType: 'extra', origin: 'template' }))).toBe('manual')
+    expect(resolveStudentOrigin(base({ manualAdded: true, origin: 'template' }))).toBe('manual')
+    expect(resolveStudentOrigin(base({ editedToMakeup: true, lessonType: 'makeup', origin: 'template' }))).toBe('manual')
+    expect(resolveStudentOrigin(base({ editedFromRegular: { subject: '数', dateKey: DATE, slotNumber: 5 }, lessonType: 'extra', origin: 'template' }))).toBe('manual')
   })
 
   it('講師の出自: 手置き・入替・QR（§9-13）・操作で名前を固定した講師は手入力、足場はテンプレ、講師なし・削除記録は null', () => {
@@ -120,11 +125,22 @@ describe('1-1・1-2: 置く経路の印', () => {
     expect(resolveMovedStudentOrigin({ origin: 'manual' }, DATE, DATE)).toBe('manual')
   })
 
-  it('§9-11: テンプレの授業の科目・授業時間を「編集」で変えると手入力。変えなければ印は付かない', () => {
+  it('§9-11: テンプレの授業の科目・授業時間・区分を「編集」で変えると手入力（フラグ ON）。科目も時間も区分も同じまま確定しても印は変わらない', () => {
+    const on = { stampOrigin: true }
     const template = base({ origin: 'template' })
-    expect(applyStudentEditDraft(template, { subject: '英', lessonType: 'regular', teacherType: 'normal', noteSuffix: '' }).origin).toBe('manual')
-    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'regular', teacherType: 'normal', noteSuffix: '60' }).origin).toBe('manual')
-    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'regular', teacherType: 'substitute', noteSuffix: '' }).origin).toBe('template')
+    expect(applyStudentEditDraft(template, { subject: '英', lessonType: 'regular', teacherType: 'normal', noteSuffix: '' }, on).origin).toBe('manual')
+    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'regular', teacherType: 'normal', noteSuffix: '60' }, on).origin).toBe('manual')
+    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'makeup', teacherType: 'normal', noteSuffix: '' }, on).origin).toBe('manual')
+    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'extra', teacherType: 'normal', noteSuffix: '' }, on).origin).toBe('manual')
+    expect(applyStudentEditDraft(template, { subject: '数', lessonType: 'regular', teacherType: 'substitute', noteSuffix: '' }, on).origin).toBe('template')
+    // 何も変えずに確定（授業時間は両側を同じ正規化で比べる: 未設定と '' と 90 分扱いは同じ）
+    expect(applyStudentEditDraft(base({ origin: 'template', noteSuffix: undefined }), { subject: '数', lessonType: 'regular', teacherType: 'normal', noteSuffix: '' }, on).origin).toBe('template')
+    expect(applyStudentEditDraft(base({ origin: 'template', noteSuffix: '60' }), { subject: '数', lessonType: 'regular', teacherType: 'normal', noteSuffix: '60' }, on).origin).toBe('template')
+  })
+
+  it('要修正 A: フラグ OFF（本番 3 校）の「編集」は印を付けない（保存データに origin を入れない）', () => {
+    expect(applyStudentEditDraft(base(), { subject: '英', lessonType: 'makeup', teacherType: 'normal', noteSuffix: '60' })).not.toHaveProperty('origin')
+    expect(applyStudentEditDraft(base(), { subject: '英', lessonType: 'makeup', teacherType: 'normal', noteSuffix: '60' }, { stampOrigin: false })).not.toHaveProperty('origin')
   })
 
   it('1-3: 記録を付けて外す（休み → 解除）往復で生徒の印が戻る', () => {

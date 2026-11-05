@@ -28,7 +28,8 @@ import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate, lessonFactIdentity, type LessonExplanationBreakdown } from './templateLessonAccounting'
 
 export type LessonAccountingViolation = {
-  kind: 'missing' | 'surplus-makeup'
+  /** excess＝§2-2 の遮断（盤面の状態から導いた回）と希望回数の −1 が同じ授業を二重に説明している（積む方式と導く方式の重複・regression-reviewer 要修正-4）。 */
+  kind: 'missing' | 'surplus-makeup' | 'excess'
   studentId: string
   subject: string
   dateKey: string
@@ -111,8 +112,9 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
   // （保存で −1 を積まない）。削除の記録がある回は数えない＝室長が取り下げた分は countAdjusted 側（二重にしない）。
   const manualFirstByKey = new Map<string, number>()
   for (const item of collectManualFirstBlockedLessons({
-    weeks: params.weeks, pendingDesks: params.templatePendingDesks, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
-    expected: [...slotsByKey].flatMap(([key, slots]) => { const [studentId, subject, dateKey] = key.split('__'); return [...slots].map((slotNumber) => ({ studentId, subject, dateKey, slotNumber })) }),
+    weeks: params.weeks, pendingDesks: params.templatePendingDesks, suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences, includeRecordBlocked: true,
+    // 同一性は isSameTemplateStudent（管理生徒 ID が無い旧データは名前で突き合わせる・ID の作り方の違いで二重に説明しない）。
+    expected: [...slotsByKey].flatMap(([key, slots]) => { const [studentId, subject, dateKey] = key.split('__'); const name = params.students.find((item) => item.id === studentId)?.name; return [...slots].map((slotNumber) => ({ studentId, name, subject, dateKey, slotNumber })) }),
   })) {
     const key = buildLessonFactKey(item.studentId, item.subject, item.dateKey)
     manualFirstByKey.set(key, (manualFirstByKey.get(key) ?? 0) + 1)
@@ -127,6 +129,8 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
     const explained = counted.explained + manualFirst
     const breakdown = { ...counted.breakdown, manualFirst }
     if (explained < want) violations.push({ kind: 'missing', studentId, subject, dateKey, expected: want, explained, breakdown })
+    // 説明が多すぎる（excess）: 遮断の回と −1 の合計が期待を超える＝同じ授業を「置かれていない」と「−1 済み」の両方で引いている（予定数が二重に減る）。
+    else if (manualFirst > 0 && manualFirst + counted.breakdown.countAdjusted > want) violations.push({ kind: 'excess', studentId, subject, dateKey, expected: want, explained, breakdown })
   }
   // 根拠の無い振替（Q40-1 の定義と同じ: 振替元の日に 新テンプレの授業・在庫の正本の origin・休みの記録 のどれも無い）。盤面のどこにあっても見る（上段＋保留の下段）。
   const seenSurplus = new Set<string>()
@@ -153,5 +157,5 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
 
 /** 違反を 1 行ずつの文にする（テストの失敗メッセージ用）。 */
 export function describeLessonAccountingViolations(violations: readonly LessonAccountingViolation[]) {
-  return violations.map((item) => `${item.kind === 'missing' ? '無言の消失' : '根拠の無い振替'} ${item.dateKey} ${item.studentId}×${item.subject}: 期待 ${item.expected} に対し説明 ${item.explained}（${JSON.stringify(item.breakdown)}）`).join('\n')
+  return violations.map((item) => `${item.kind === 'missing' ? '無言の消失' : item.kind === 'excess' ? '説明の重複（予定数の二重の減算）' : '根拠の無い振替'} ${item.dateKey} ${item.studentId}×${item.subject}: 期待 ${item.expected} に対し説明 ${item.explained}（${JSON.stringify(item.breakdown)}）`).join('\n')
 }

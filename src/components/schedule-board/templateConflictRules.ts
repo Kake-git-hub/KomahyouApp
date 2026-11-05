@@ -39,6 +39,7 @@ import {
   type ComputeTemplateDiffApplyResult,
   type TeacherAliasResolver,
   type TemplateDiffApplySummary,
+  type TemplateDiffStudentNote,
   type TemplateDiffTeacherNote,
   type TemplateDiffTemplateCell,
 } from './templateDiffApply'
@@ -83,7 +84,7 @@ export type TemplateTeacherBlocker = {
  * そのコマで「テンプレのこの生徒を置かない」根拠（§2-4 の記録 → §2-2 の手入力の生徒の順）と、「テンプレのこの講師を別の机に置かない」根拠
  * （§2-3 の手置き講師）。盤面の上段（机）と保留の下段の両方を見る（下段の手入力も手入力・INV-12 を下段込みで保つ）。
  */
-export function collectTemplateBlockersInCell(cell: Pick<SlotCell, 'id' | 'desks'>, pendingDesks?: TemplatePendingDeskMap | null): { students: TemplateStudentBlocker[]; teachers: TemplateTeacherBlocker[] } {
+export function collectTemplateBlockersInCell(cell: Pick<SlotCell, 'id' | 'desks' | 'dateKey'>, pendingDesks?: TemplatePendingDeskMap | null): { students: TemplateStudentBlocker[]; teachers: TemplateTeacherBlocker[] } {
   const students: TemplateStudentBlocker[] = []
   const teachers: TemplateTeacherBlocker[] = []
   cell.desks.forEach((desk, deskIndex) => {
@@ -91,8 +92,10 @@ export function collectTemplateBlockersInCell(cell: Pick<SlotCell, 'id' | 'desks
     for (const entry of [...(desk.statusSlots ?? []), ...(pending?.lower.statusSlots ?? [])]) {
       if (entry && isTemplateBlockingRecordStatus(entry.status)) students.push({ student: entry, reason: 'record' })
     }
+    // 下段の手入力も根拠に数える（§9-14: 差分反映は下段だけの S をテンプレの席へ先に上げる＝上げた後は上段の根拠になる。上げる席が無い S は
+    // 下段のまま根拠として残り、差分反映と再マージの両方でテンプレの S を置かない＝不動点）。
     for (const student of [...liveStudents(desk.lesson), ...liveStudents(pending?.lower.lesson)]) {
-      if (isManualOriginStudent(student)) students.push({ student, reason: 'manual' })
+      if (isManualOriginStudent(student) || isUnresolvableSameDayMoveCopy(student, cell.dateKey)) students.push({ student, reason: 'manual' })
     }
     if (pending?.lower.teacher?.teacher.trim()) teachers.push({ deskIndex, teacher: pending.lower.teacher })
     else if (isManualOriginDeskTeacher(desk)) teachers.push({ deskIndex, teacher: desk })
@@ -115,6 +118,15 @@ export function findManualTeacherDeskElsewhere(deskIndex: number, teacher: Pick<
 }
 
 /**
+ * §9-15（オーナー決定 2026-11-05）: 手置き講師 X の机にテンプレが別の講師 W を置き、テンプレが同じコマの別の机にも X を置く形では、その机の講師は X のまま
+ * （W を置かず講師欄は 1 行・別の机にも X を置かない）。X がテンプレの別の机に居るかを見る（差分反映と再マージが同じこの関数で判定する）。
+ */
+export function isManualTeacherAlsoInTemplateElsewhere(deskIndex: number, manualTeacher: Pick<DeskCell, 'teacher'>, templateDesks: ReadonlyArray<Pick<DeskCell, 'teacher'>>, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
+  if (!manualTeacher.teacher.trim()) return false
+  return templateDesks.some((templateDesk, index) => index !== deskIndex && templateDesk.teacher.trim() !== '' && isSameTeacherByAliases(templateDesk.teacher, manualTeacher.teacher, aliases))
+}
+
+/**
  * 講師の休み（§2-4・段 3 で足す）の差し込み口。段 2 では常に「休みでない」。段 3 は盤面の休みの記録（日付×時限×講師 ID）をここで引く。
  * 差分反映と再マージの両方がこの関数を通す（片方だけ休みを見ると不動点が崩れる）。
  */
@@ -127,7 +139,7 @@ export const noTemplateTeacherRest: TemplateTeacherRestPredicate = () => false
  * 「盤面の今の状態から毎回同じ結果」を出すための唯一の経路（§6 抑止キー）。
  * 生徒は全員取り除かれた机を抑止と同じ形（buildFullySuppressedManagedDesk）にする。
  */
-export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boardCell: Pick<SlotCell, 'id' | 'desks'>, pendingDesks: TemplatePendingDeskMap | null | undefined, aliases: TeacherAliasResolver = defaultTeacherAliases, isTeacherOnRest: TemplateTeacherRestPredicate = noTemplateTeacherRest, sameDayMoveSources: readonly SameDayMoveSource[] = []): SlotCell {
+export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boardCell: Pick<SlotCell, 'id' | 'desks' | 'dateKey'>, pendingDesks: TemplatePendingDeskMap | null | undefined, aliases: TeacherAliasResolver = defaultTeacherAliases, isTeacherOnRest: TemplateTeacherRestPredicate = noTemplateTeacherRest, sameDayMoveSources: readonly SameDayMoveSource[] = []): SlotCell {
   const blockers = collectTemplateBlockersInCell(boardCell, pendingDesks)
   // §1-1 #2: 同じ日の中で手で動かしたテンプレの授業（写し）の元の時限には、次のテンプレ反映までテンプレの同じ授業を置き直さない（移動の抑止キーの代わり）。
   const movedAway = sameDayMoveSources.filter((source) => source.slotNumber === managedCell.slotNumber)
@@ -143,7 +155,9 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
         next = !slots[0] && !slots[1] ? buildFullySuppressedManagedDesk(desk) : { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }
       }
     }
-    if (next.teacher.trim() && (findManualTeacherDeskElsewhere(deskIndex, next, blockers.teachers, aliases) >= 0 || isTeacherOnRest(managedCell, next))) {
+    const ownManual = blockers.teachers.find((blocker) => blocker.deskIndex === deskIndex)
+    const keptByManualX = Boolean(ownManual) && !isSameTeacherByAliases(ownManual!.teacher.teacher, next.teacher, aliases) && isManualTeacherAlsoInTemplateElsewhere(deskIndex, ownManual!.teacher, managedCell.desks, aliases)
+    if (next.teacher.trim() && (keptByManualX || findManualTeacherDeskElsewhere(deskIndex, next, blockers.teachers, aliases) >= 0 || isTeacherOnRest(managedCell, next))) {
       changed = true
       next = { ...next, teacher: '', teacherAssignmentTeacherId: undefined }
     }
@@ -152,24 +166,50 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
   return changed ? { ...managedCell, desks } : managedCell
 }
 
-/** 同じ日の中で手で動かしたテンプレの授業（写し）の、元の時限（sameDayMoveSourceLabel の時限）。 */
-export type SameDayMoveSource = { student: Pick<StudentEntry, 'managedStudentId' | 'name'>; subject: string; slotNumber: number }
+/**
+ * 同じ日の中で手で動かしたテンプレの授業の「元の時限」を決める**唯一の権威関数**（regression-reviewer 重大-1）。
+ * 再マージ（collectSameDayMoveSourcesByDate）・保存のキー外し（collectSameDayMovedTemplateOccurrenceKeys）・削除／格納の削除記録の時限
+ * （ScheduleBoardScreen の resolveRemovedLessonOccurrenceKey）がこれを通す。生きている写し（StudentEntry）と、写しに付けた記録
+ * （StudentStatusEntry・buildStudentStatusEntry が sameDayMoveSourceDate／Label を写す）の両方に使える。
+ * 通常授業で sameDayMoveSourceDate がその日・出自＝テンプレ・元の時限（sameDayMoveSourceLabel）が読めるときだけ時限を返す。
+ */
+export function resolveSameDayMoveSourceSlot(entry: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>, dateKey: string): number | null {
+  if (entry.lessonType !== 'regular' || entry.sameDayMoveSourceDate !== dateKey || resolveStudentOrigin(entry) !== 'template') return null
+  return parseOriginSlotNumberFromLabel(entry.sameDayMoveSourceLabel) || null
+}
 
 /**
- * 日付 → その日の写しの元の時限（上段・保留の下段）。出自＝テンプレで sameDayMoveSourceDate がその日の通常授業だけ。元の時限が読めない旧データは入れない
- * （その授業は移動の抑止キーで守られている＝キーは外さない側に倒す・collectSameDayMovedTemplateOccurrenceKeys と対）。
+ * 元の時限が読めない旧い写し（同じ日の中で動かしたテンプレの授業で sameDayMoveSourceLabel が無い・読めない）。キーを外せない（削除の記録を守る側に倒す）ので、
+ * テンプレ反映で捨てると、その日のその授業がどこにも無くなる（regression-reviewer 要修正-3・INV-02）。手入力として残す。
+ */
+export function isUnresolvableSameDayMoveCopy(student: Pick<StudentEntry, 'origin' | 'lessonType' | 'manualAdded' | 'makeupSourceDate' | 'editedToMakeup' | 'editedFromRegular' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>, dateKey: string): boolean {
+  return student.lessonType === 'regular' && student.sameDayMoveSourceDate === dateKey && resolveStudentOrigin(student) === 'template' && resolveSameDayMoveSourceSlot(student, dateKey) == null
+}
+
+/** その日に置いた場所での出自（元の時限が読めない旧い写しは手入力として扱う）。差分反映の席・§2-2 の根拠の両方がこれを使う。 */
+export function resolveStudentOriginOnDate(student: StudentEntry, dateKey: string) {
+  return isUnresolvableSameDayMoveCopy(student, dateKey) ? 'manual' : resolveStudentOrigin(student)
+}
+
+/** 同じ日の中で手で動かしたテンプレの授業の元の時限。kind: copy＝生きている写し／record＝写しに付けた記録（休み・振無休・出席・移)）。 */
+export type SameDayMoveSource = { student: Pick<StudentEntry, 'managedStudentId' | 'name'>; subject: string; slotNumber: number; kind: 'copy' | 'record' }
+
+/**
+ * 日付 → その日の写し・写しの記録の元の時限（上段・保留の下段）。判定は resolveSameDayMoveSourceSlot。
+ * 再マージ（フラグ ON）は両方の元の時限にテンプレの同じ授業を置き直さない。差分反映は記録の元の時限にだけ置かない（写しはテンプレの位置へ戻す）。
  */
 export function collectSameDayMoveSourcesByDate(weeks: SlotCell[][], pendingDesks?: TemplatePendingDeskMap | null): Map<string, SameDayMoveSource[]> {
   const byDate = new Map<string, SameDayMoveSource[]>()
-  const consider = (student: StudentEntry | null | undefined, dateKey: string) => {
-    if (!student || student.lessonType !== 'regular' || student.sameDayMoveSourceDate !== dateKey || resolveStudentOrigin(student) !== 'template') return
-    const slotNumber = parseOriginSlotNumberFromLabel(student.sameDayMoveSourceLabel)
+  const consider = (entry: StudentEntry | StudentStatusEntry | null | undefined, dateKey: string, kind: SameDayMoveSource['kind']) => {
+    if (!entry) return
+    const slotNumber = resolveSameDayMoveSourceSlot(entry, dateKey)
     if (!slotNumber) return
-    byDate.set(dateKey, [...(byDate.get(dateKey) ?? []), { student, subject: student.subject, slotNumber }])
+    byDate.set(dateKey, [...(byDate.get(dateKey) ?? []), { student: entry, subject: entry.subject, slotNumber, kind }])
   }
   for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
-    for (const student of desk.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
-    for (const student of pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []) consider(student, cell.dateKey)
+    const lower = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower
+    for (const student of [...(desk.lesson?.studentSlots ?? []), ...(lower?.lesson?.studentSlots ?? [])]) consider(student, cell.dateKey, 'copy')
+    for (const record of [...(desk.statusSlots ?? []), ...(lower?.statusSlots ?? [])]) consider(record, cell.dateKey, 'record')
   }
   return byDate
 }
@@ -184,9 +224,11 @@ export function collectSameDayMoveSourcesByDate(weeks: SlotCell[][], pendingDesk
 export function collectManualFirstBlockedLessons(params: {
   weeks: SlotCell[][]
   pendingDesks?: TemplatePendingDeskMap | null
-  expected: ReadonlyArray<{ studentId: string; subject: string; dateKey: string; slotNumber: number }>
+  expected: ReadonlyArray<{ studentId: string; name?: string; subject: string; dateKey: string; slotNumber: number }>
   suppressedRegularLessonOccurrences?: readonly string[]
-}): Array<{ studentId: string; subject: string; dateKey: string; slotNumber: number }> {
+  /** §2-4 の記録（別の科目）でテンプレの授業が置かれていない回も数える（保存則の監査が使う）。 */
+  includeRecordBlocked?: boolean
+}): Array<{ studentId: string; name?: string; subject: string; dateKey: string; slotNumber: number }> {
   const suppressed = new Set(params.suppressedRegularLessonOccurrences ?? [])
   const cellByDateSlot = new Map<string, SlotCell>()
   for (const week of params.weeks) for (const cell of week) cellByDateSlot.set(`${cell.dateKey}_${cell.slotNumber}`, cell)
@@ -194,9 +236,16 @@ export function collectManualFirstBlockedLessons(params: {
     if (suppressed.has(`${item.studentId}__${item.subject}__${item.dateKey}__${item.slotNumber}`)) return false
     const cell = cellByDateSlot.get(`${item.dateKey}_${item.slotNumber}`)
     if (!cell || !cell.isOpenDay) return false
-    const same = (student: StudentEntry) => (student.managedStudentId ?? student.name) === item.studentId
-    const live = cell.desks.flatMap((desk) => [...liveStudents(desk.lesson), ...liveStudents(params.pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson)]).filter(same)
-    return live.some((student) => resolveStudentOrigin(student) === 'manual') && !live.some((student) => resolveStudentOrigin(student) === 'template')
+    const same = (student: StudentEntry) => isSameTemplateStudent({ managedStudentId: item.studentId, name: item.name ?? item.studentId }, student)
+    // §9-14: 下段は「置いてある」に数えない（上段＝実配置の手入力の S だけ・同一性は isSameTemplateStudent）。
+    const live = cell.desks.flatMap((desk) => liveStudents(desk.lesson)).filter(same)
+    if (live.some((student) => resolveStudentOrigin(student) === 'template')) return false
+    if (live.some((student) => resolveStudentOrigin(student) === 'manual')) return true
+    // §2-4（includeRecordBlocked）: そのコマに同じ生徒の別の科目の記録（休み・振無休・出席・移)）があるとテンプレの S は置かない（記録が勝つ）。
+    // 同じ科目の記録はその授業そのものの説明なので数えない（監査の statusRecord と重ねない）。
+    if (!params.includeRecordBlocked) return false
+    return cell.desks.some((desk) => [...(desk.statusSlots ?? []), ...(params.pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.statusSlots ?? [])]
+      .some((entry) => entry && isTemplateBlockingRecordStatus(entry.status) && entry.subject !== item.subject && isSameTemplateStudent({ managedStudentId: item.studentId, name: item.name ?? item.studentId }, entry)))
   })
 }
 
@@ -245,13 +294,13 @@ function cloneStatus(entry: StudentStatusEntry): StudentStatusEntry {
 }
 
 /** 机の手入力（生徒・メモ）を席ごとに集める。上段→下段の順（上段のものが元の席を先に取る）。テンプレ由来の生徒は入れない（新テンプレで置き直す）。 */
-function collectManualSeatItems(desk: DeskCell, pending: TemplatePendingDesk | undefined): { items: ManualSeatItem[]; discardedTemplateStudents: StudentEntry[] } {
+function collectManualSeatItems(desk: DeskCell, pending: TemplatePendingDesk | undefined, dateKey: string): { items: ManualSeatItem[]; discardedTemplateStudents: StudentEntry[] } {
   const items: ManualSeatItem[] = []
   const discardedTemplateStudents: StudentEntry[] = []
   const take = (lesson: DeskLesson | undefined, memos: MemoPair | undefined) => {
     ;(lesson?.studentSlots ?? []).forEach((student, seat) => {
       if (!student) return
-      if (resolveStudentOrigin(student) === 'manual') items.push({ kind: 'student', student: { ...student }, seat })
+      if (resolveStudentOriginOnDate(student, dateKey) === 'manual') items.push({ kind: 'student', student: { ...student }, seat })
       else discardedTemplateStudents.push(student)
     })
     ;(memos ?? []).forEach((memo, seat) => { if (hasMemoText(memo)) items.push({ kind: 'memo', memo, seat }) })
@@ -301,7 +350,7 @@ function applyRulesToDesk(params: {
 }): DeskApplyOutcome {
   const { cell, desk, deskIndex, templateDesk, pending } = params
   const templateLesson = templateDesk.lesson && liveStudents(templateDesk.lesson).length > 0 ? templateDesk.lesson : undefined
-  const { items, discardedTemplateStudents } = collectManualSeatItems(desk, pending)
+  const { items, discardedTemplateStudents } = collectManualSeatItems(desk, pending, cell.dateKey)
   params.discarded.push(...discardedTemplateStudents)
 
   // ── 席（§2-1）: 上段＝テンプレの生徒の席。手入力は元の席の上段が空いていれば上段（1 行）、テンプレの生徒が居れば下段（2 行）、
@@ -348,7 +397,11 @@ function applyRulesToDesk(params: {
   const hasUpperStudents = Boolean(upperSlots[0] || upperSlots[1])
   if (manualTeacher) {
     if (!placeableTemplateTeacher || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
-    else {
+    else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases)) {
+      // §9-15: X がテンプレの別の机にも居る → この机は X のまま（W を置かない・講師欄は 1 行）。別の机の X は §2-3 で置かない。
+      upperTeacher = pickTeacher(manualTeacher)
+      params.teacherNotes.push({ kind: 'teacher-kept', teacherName: placeableTemplateTeacher.teacher, templateTeacher: manualTeacher.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+    } else {
       upperTeacher = templateTeacherFields(placeableTemplateTeacher)
       lowerTeacher = pickTeacher(manualTeacher)
       const keptStudentNames = upperSlots.filter((student): student is StudentEntry => Boolean(student) && resolveStudentOrigin(student!) === 'manual').map((student) => student.name)
@@ -430,7 +483,7 @@ function seatOfStudentIn(lesson: DeskLesson | undefined, student: StudentEntry) 
  * テンプレ保存の差分反映（第 2 版）。保存本体と確認の画面の件数（試し実行）の両方が同じ入力で呼ぶ（Q32-1）。
  * 反映日より前のセル・週は参照ごとそのまま返す（INV-10・Q1）。範囲は反映日以降の生成済みの全コマ（旧 Q39 の絞り込みは使わない・§6）。
  */
-export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams & { isTeacherOnRest?: TemplateTeacherRestPredicate; scheduleCountAdjustments?: readonly ScheduleCountAdjustmentEntry[] }): ComputeTemplateDiffApplyResult & { manualFirstSkipped: TemplateManualFirstSkip[]; discardedTemplateStudents: Array<{ student: StudentEntry; dateKey: string; cellId: string }> } {
+export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams & { isTeacherOnRest?: TemplateTeacherRestPredicate; scheduleCountAdjustments?: readonly ScheduleCountAdjustmentEntry[] }): ComputeTemplateDiffApplyResult & { manualFirstSkipped: TemplateManualFirstSkip[]; discardedTemplateStudents: Array<{ student: StudentEntry; dateKey: string; cellId: string }>; lowerPromotionNotes: TemplateDiffStudentNote[] } {
   const summary: TemplateDiffApplySummary = createEmptyTemplateDiffApplySummary()
   const aliases = params.teacherAliases ?? defaultTeacherAliases
   const isTeacherOnRest = params.isTeacherOnRest ?? noTemplateTeacherRest
@@ -441,10 +494,13 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
   const teacherNotes: TemplateDiffTeacherNote[] = []
   const manualFirstSkipped: TemplateManualFirstSkip[] = []
   const discardedTemplateStudents: Array<{ student: StudentEntry; dateKey: string; cellId: string }> = []
+  const sameDayMoveSourcesByDate = collectSameDayMoveSourcesByDate(params.weeks, params.pendingDesks)
   const templateById = new Map(params.templateCells.map((entry) => [entry.applied.id, entry]))
   const templateByDateSlot = new Map(params.templateCells.map((entry) => [`${entry.applied.dateKey}_${entry.applied.slotNumber}`, entry]))
 
-  const applyCell = (cell: SlotCell, templateCell: TemplateDiffTemplateCell): SlotCell => {
+  const studentNotes: TemplateDiffStudentNote[] = []
+  const applyCell = (inputCell: SlotCell, templateCell: TemplateDiffTemplateCell): SlotCell => {
+    let cell = inputCell
     // 休日（Q21-6）: 休日のコマは再マージが記録だけを残す（carryBoardStatusRecordsOntoClosedDayCell）。差分反映は触らない。
     // ただし丸ごと振替した日を休日設定した振替元（Q40-2・段 4 まで今のまま）は、足した生徒を振替先へ置く対象に拾う。
     if (!templateCell.applied.isOpenDay) {
@@ -462,7 +518,17 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
       }
       return cell
     }
-    const blockers = collectTemplateBlockersInCell(cell, params.pendingDesks)
+    // §9-14（オーナー決定 2026-11-05・受け入れ条件 2-11）: 手入力の S が緑の下の行にしか居ない（上の行には居ない）ときにテンプレが S を置こうとしたら、
+    // 下の行の S をテンプレの席へ上げて 1 行にする（テンプレの S は置かない・その席は手入力の S）。上げる席が無い（その席に手入力・メモ・下段がある）ときは
+    // 上げず、テンプレの S も置かない（§2-2・確認の画面に理由）。上げた後の盤面で残りの規則を当てる。
+    const promoted = promoteLowerOnlyManualStudents(cell, templateCell, params.pendingDesks)
+    cell = promoted.cell
+    const cellPending = promoted.pendingDesks
+    for (const item of promoted.promotions) studentNotes.push({ kind: 'lower-promoted', studentName: item.student.name, subject: item.student.subject, dateKey: cell.dateKey, slotNumber: cell.slotNumber, detail: String(item.deskIndex + 1) })
+    const blockers = collectTemplateBlockersInCell(cell, cellPending)
+    // 重大-1（regression-reviewer）: 同じ日の中で動かしたテンプレの授業に記録（休み・振無休・出席・移)）を付けた生徒は、記録が勝つ（§2-4）＝元の時限にも
+    // テンプレの同じ授業を置かない（置くと休んだ授業が元の時限に生き返る）。生きている写しはテンプレの位置へ戻す（§1-1 #2）ので数えない。
+    const recordMovedAway = (sameDayMoveSourcesByDate.get(cell.dateKey) ?? []).filter((source) => source.kind === 'record' && source.slotNumber === cell.slotNumber)
     // ── テンプレの机（丸ごと振替の日・§2-4・§2-2 を当てる）
     const templateDesks = cell.desks.map((_, deskIndex) => {
       const templateDesk = templateCell.applied.desks[deskIndex] ?? { id: '', teacher: '' }
@@ -479,6 +545,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
           slots[seat] = null
           return
         }
+        if (recordMovedAway.some((source) => source.subject === student.subject && isSameTemplateStudent(source.student, student))) { slots[seat] = null; return }
         const reason = resolveTemplateStudentBlock(student, blockers.students)
         if (!reason) return
         slots[seat] = null
@@ -494,7 +561,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
     const cellDiscarded: StudentEntry[] = []
     const desks = cell.desks.map((desk, deskIndex) => {
       const pendingKey = buildTemplatePendingDeskKey(cell.id, desk.id)
-      const pending = params.pendingDesks[pendingKey]
+      const pending = cellPending[pendingKey]
       const outcome = applyRulesToDesk({
         cell, desk, deskIndex, templateDesk: templateDesks[deskIndex], pending,
         cellTemplateTeachers: templateCell.raw.desks, onDeletedTeacherDeskReassigned: () => { summary.deletedTeacherDeskReassigned += 1 },
@@ -569,7 +636,59 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
     sameDayMoveCopiesKeptByRecord: [],
     manualFirstSkipped,
     discardedTemplateStudents,
+    /** §9-14: 下段だけの手入力の生徒をテンプレの席へ上げた行（確認の画面）。 */
+    lowerPromotionNotes: studentNotes,
   }
+}
+
+/**
+ * §9-14: 下段にしか居ない手入力の生徒 S を、テンプレが S を置く席（机・席）へ上げる（純関数・入力は変えない）。上げる席の上段に手入力の生徒・メモがある／
+ * その席の下段に何かある／丸ごと振替の日／休日は上げない。上段の同じ席に居るテンプレ由来の生徒は、どのみち新テンプレで置き直すので上書きしてよい。
+ */
+export function promoteLowerOnlyManualStudents(cell: SlotCell, templateCell: Pick<TemplateDiffTemplateCell, 'applied' | 'scaffoldTeachersStripped'>, pendingDesks: TemplatePendingDeskMap): { cell: SlotCell; pendingDesks: TemplatePendingDeskMap; promotions: Array<{ student: StudentEntry; deskIndex: number; seat: number }> } {
+  const promotions: Array<{ student: StudentEntry; deskIndex: number; seat: number }> = []
+  if (!templateCell.applied.isOpenDay || templateCell.scaffoldTeachersStripped) return { cell, pendingDesks, promotions }
+  let desks = cell.desks
+  let pending = pendingDesks
+  const upperManual = (student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => desks.some((desk) => liveStudents(desk.lesson).some((other) => isSameTemplateStudent(other, student) && resolveStudentOriginOnDate(other, cell.dateKey) === 'manual'))
+  templateCell.applied.desks.forEach((templateDesk, deskIndex) => {
+    if (deskIndex >= desks.length || !templateDesk.lesson || !isTemplateManagedLesson(templateDesk.lesson)) return
+    templateDesk.lesson.studentSlots.forEach((templateStudent, seat) => {
+      if (!templateStudent || upperManual(templateStudent)) return
+      // 下段だけに居る手入力の S（どの机の下段でもよい）
+      let found: { key: string; lowerSeat: number; student: StudentEntry } | null = null
+      for (const desk of desks) {
+        const key = buildTemplatePendingDeskKey(cell.id, desk.id)
+        const lower = pending[key]?.lower
+        ;(lower?.lesson?.studentSlots ?? []).forEach((student, lowerSeat) => {
+          if (found || !student || !isSameTemplateStudent(student, templateStudent) || resolveStudentOriginOnDate(student, cell.dateKey) !== 'manual') return
+          found = { key, lowerSeat, student }
+        })
+        if (found) break
+      }
+      if (!found) return
+      const hit = found as { key: string; lowerSeat: number; student: StudentEntry }
+      const target = desks[deskIndex]
+      const occupant = target.lesson?.studentSlots[seat]
+      const targetLower = pending[buildTemplatePendingDeskKey(cell.id, target.id)]?.lower
+      if ((occupant && resolveStudentOriginOnDate(occupant, cell.dateKey) === 'manual') || hasMemoText(target.memoSlots?.[seat])) return
+      if (buildTemplatePendingDeskKey(cell.id, target.id) !== hit.key && (targetLower?.lesson?.studentSlots[seat] || hasMemoText(targetLower?.memoSlots?.[seat]))) return
+      // 下段から外す
+      const entry = pending[hit.key]
+      const lowerSlots = [...entry.lower.lesson!.studentSlots] as StudentPair
+      lowerSlots[hit.lowerSeat] = null
+      const nextLower: TemplatePendingLower = { ...entry.lower }
+      if (lowerSlots[0] || lowerSlots[1]) nextLower.lesson = { ...entry.lower.lesson!, studentSlots: lowerSlots }
+      else delete nextLower.lesson
+      pending = { ...pending, [hit.key]: { ...entry, lower: nextLower } }
+      // テンプレの席へ上げる
+      const upperSlots = [target.lesson?.studentSlots[0] ?? null, target.lesson?.studentSlots[1] ?? null] as StudentPair
+      upperSlots[seat] = { ...hit.student }
+      desks = desks.map((desk, index) => (index !== deskIndex ? desk : { ...desk, lesson: { ...(desk.lesson ?? { id: `${desk.id}_manual` }), studentSlots: upperSlots } }))
+      promotions.push({ student: hit.student, deskIndex, seat })
+    })
+  })
+  return promotions.length > 0 ? { cell: { ...cell, desks }, pendingDesks: pending, promotions } : { cell, pendingDesks, promotions }
 }
 
 function deskChanged(before: DeskCell, after: DeskCell) {

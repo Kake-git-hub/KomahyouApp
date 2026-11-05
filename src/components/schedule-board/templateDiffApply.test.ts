@@ -22,6 +22,7 @@ import {
   buildTemplateTeacherSuppressionKey,
   computeTemplateDiffApplyForBoard,
   isDeletedTeacherTombstone,
+  prepareStudentForMove,
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import {
@@ -57,6 +58,7 @@ import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './temp
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { auditTemplateLessonAccounting } from './templateLessonAccountingOracle'
+import { resolveStudentOrigin } from './placementOrigin'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // フィクスチャ（水曜 5 限・机 3 つ。反映日は水曜 2026-10-07。同じ週の月・火は反映日より前）
@@ -769,8 +771,11 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
       // 差分反映（旧テンプレ OLD_ROWS → rows）でも同じ机の講師は鈴木
       let old = buildWeek(OLD_ROWS)
       old = mutateDesk(old, 2, (desk) => ({ ...desk, ...qr('佐藤', special(`${desk.id}_special`)) }))
+      // 第 2 版（フラグ ON の差分反映・§9-13・§9-15）: QR の佐藤は手入力で、テンプレの別の机（机 1）にも佐藤が居る → 机 2 は佐藤のまま（テンプレの鈴木は置かない）、
+      // 机 1 にも佐藤は置かない。上の「再マージ」はフラグ OFF の教室の動き（従来どおり）。
       const applied = applyDiff({ week: old, newRows: rows })
-      expect(deskOf(applied.nextWeeks, 2)).toMatchObject({ teacher: '鈴木', manualTeacher: false })
+      expect(deskOf(applied.nextWeeks, 2)).toMatchObject({ teacher: '佐藤', teacherAssignmentSource: 'schedule-registration' })
+      expect(deskOf(applied.nextWeeks, 1).teacher).toBe('')
       expect(liveNames(deskOf(applied.nextWeeks, 2))).toEqual(['sM'])
     })
 
@@ -1634,10 +1639,34 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
     expect(saved.summary.sameDayMoveCopiesReverted).toBe(0)
   })
 
+  // §9-16（オーナー決定 2026-11-05）: 休みの記録が勝つのはそのコマだけ。同じ日の別の時限にテンプレがその生徒を置くのは止めない。
+  it('§9-16: 同じ日の別の時限（4 限）にある A の休みの記録は、5 限のテンプレの A を止めない（記録はそのコマだけ）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, statusSlots: [status('sA', 'absent'), null] }), `${DATE}_4`)
+    const saved = saveStable(week, OLD_ROWS)
+    expect(liveNames(deskOf(saved.nextWeeks, 0))).toEqual(['sA'])
+    expect(deskOf(saved.nextWeeks, 2, `${DATE}_4`).statusSlots?.[0]?.status).toBe('absent')
+  })
+
+  // §9-17（オーナー決定 2026-11-05）: 別の日へ動かして元の日へ戻した授業は手入力のまま（テンプレの授業には戻らない・青字・反映で残る）。
+  it('§9-17: テンプレの A を別の日へ動かして元の日へ戻すと手入力のまま。テンプレ保存でもその席に残り、テンプレの A は置かない（§2-2）', () => {
+    const template = { ...deskOf([buildWeek(OLD_ROWS)], 0).lesson!.studentSlots[0]!, origin: 'template' as const }
+    const away = prepareStudentForMove(template, DATE, SLOT, '2026-10-08')
+    const back = prepareStudentForMove(away, '2026-10-08', SLOT, DATE)
+    expect(resolveStudentOrigin(back)).toBe('manual')
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: undefined }))
+    const placed = mutateDesk(week, 2, (desk) => ({ ...desk, lesson: { id: 'back', studentSlots: [back, null] } }))
+    const saved = saveStable(placed, OLD_ROWS)
+    expect(liveNames(deskOf(saved.nextWeeks, 2))).toEqual(['sA'])
+    expect(liveNames(deskOf(saved.nextWeeks, 0))).toEqual([])
+    expect(countLiveInCell(saved.nextWeeks, 'sA')).toBe(1)
+  })
+
   // ── §2-3 講師の一意（詳細は inv01・inv02 手置き講師マトリクス）
   it('§2-3 表: 空・テンプレ由来 → テンプレの講師／手置き Y × X → 講師欄 2 行／手置き Y × なし → Y／削除記録 X × X → 置かない', () => {
     const manualY = { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' as const, teacherAssignmentTeacherId: 't3' }
-    const overlap = saveStable(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...manualY })), OLD_ROWS)
+    // 佐藤がテンプレの別の机（机 2）にも居ると §9-15（机 0 は佐藤のまま）になるので、ここでは佐藤の居ないテンプレで見る。
+    const ROWS_NO_SATO = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数')]
+    const overlap = saveStable(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...manualY })), ROWS_NO_SATO)
     expect(deskOf(overlap.nextWeeks, 0).teacher).toBe('田中')
     expect(lowerOf(overlap, 0)?.teacher).toMatchObject({ teacher: '佐藤', manualTeacher: true })
     expect(liveNames(deskOf(overlap.nextWeeks, 0))).toEqual(['sA'])

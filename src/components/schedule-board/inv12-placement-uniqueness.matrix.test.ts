@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings, ScheduleCountAdjustmentEntry } from '../../types/appState'
-import type { DeskCell, SlotCell, StudentEntry } from './types'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { buildStudentStatusEntry, buildTemplateTeacherSuppressionKey, resolveRemovedLessonOccurrenceKeyFor, buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
+import * as FX from './templateTransferFollow.fixture'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
 
 // ============================================================================
@@ -372,6 +373,7 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     { id: 'sA', name: '青木', displayName: '青木', email: 'a@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
     { id: 'sB', name: '馬場', displayName: '馬場', email: 'b@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
     { id: 'sC', name: '千葉', displayName: '千葉', email: 'c@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+    { id: 'sD', name: '土屋', displayName: '土屋', email: 'd@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
   ]
   const teacherRows: TeacherRow[] = ['田中', '鈴木', '佐藤'].map((name, index) => ({
     id: `t${index + 1}`, name, email: `t${index + 1}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
@@ -476,15 +478,29 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     expectStable(saved)
   })
 
-  it('§2-2: 保留の下段にだけ居る手入力の A も手入力（下段も数える）→ テンプレの A は上段に置かない。上段＋下段で A は 1 か所', () => {
+  // §9-14（オーナー決定 2026-11-05・受け入れ条件 2-11）: 手入力の A が緑の下の行にしか居ない（上の行はテンプレの B）ときにテンプレが机 0 に A を置こうとしたら、
+  // 下の行の A をテンプレの席（机 0 の生徒 1）へ上げて 1 行にする（テンプレの A は置かない・元の下段は空になり 2 行が解ける）。A は日程表と回数から消えない。
+  it('§9-14: 保留の下段にだけ居る手入力の A は、テンプレが A を置く席（机 0）へ上がって 1 行。テンプレの A は置かず、机 1 の 2 行は解ける。A は上段に 1 か所', () => {
     const week = board((desks) => desks)
     const desk1Id = cellOf([week]).desks[1].id
     const pending: TemplatePendingDeskMap = { [buildTemplatePendingDeskKey(CELL, desk1Id)]: { lower: { lesson: { id: 'lower_a', studentSlots: [makeupA('a-lower'), null] } }, effectiveStartDate: DATE, createdAt: 'x' } }
     const saved = save(week, { pendingDesks: pending })
-    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual([])
-    // 下段の A は、テンプレの B と同じ席なので 2 行のまま（§2-1）。
+    expect(cellOf(saved.nextWeeks).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup', id: 'a-lower' })
+    expect(liveIdsAt(saved.nextWeeks, 1)).toEqual(['sB'])
+    expect(saved.nextPendingDesks).toEqual({})
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
+    expect(saved.studentNotes.filter((note) => note.kind === 'lower-promoted').map((note) => [note.studentName, note.detail])).toEqual([['青木', '1']])
+    expectStable(saved)
+  })
+
+  it('§9-14 の上げる席が無い形: テンプレが A を置く席に手入力の C が居る → 上げず、テンプレの A も置かない（下段の A は保留のまま・理由の行）', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [mkStudent('c-manual', '千葉', { managedStudentId: 'sC', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } } : desk)))
+    const desk1Id = cellOf([week]).desks[1].id
+    const pending: TemplatePendingDeskMap = { [buildTemplatePendingDeskKey(CELL, desk1Id)]: { lower: { lesson: { id: 'lower_a', studentSlots: [makeupA('a-lower'), null] } }, effectiveStartDate: DATE, createdAt: 'x' } }
+    const saved = save(week, { pendingDesks: pending })
+    expect(liveIdsAt(saved.nextWeeks, 0)).not.toContain('sA')
     expect(saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL, desk1Id)]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
-    expect(liveCount(saved.nextWeeks, 'sA', saved.nextPendingDesks)).toBe(1)
+    expect(saved.studentNotes.filter((note) => note.kind === 'manual-first').map((note) => note.studentName)).toEqual(['青木'])
     expectStable(saved)
   })
 
@@ -510,11 +526,205 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     expect(day).toHaveLength(1)
   })
 
+  // 丸ごと振替の日（旧 Q35・段 4 まで今のまま・regression-reviewer 要修正-4(c) で戻した 4 行）: テンプレの生徒は置かず、手入力（振替）は 1 行のまま。
+  // 保存 → 再マージ（フラグ ON）→ 再保存でセルは丸ごと変わらない。
+  const makeupBAt0 = (desks: DeskCell[]) => desks.map((desk, index) => (index === 0
+    ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] as [StudentEntry | null, StudentEntry | null] } }
+    : desk))
+  const saveOn = (week: SlotCell[], options: { rows?: RegularLessonRow[]; suppressed?: string[]; pendingDesks?: TemplatePendingDeskMap } = {}) => {
+    const rows = options.rows ?? ROWS
+    const saved = computeTemplateDiffApplyForBoard({
+      scheduleCountAdjustments: [], weeks: [week], classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rows,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: options.pendingDesks ?? {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
+    })
+    const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
+    const suppressed = [...(options.suppressed ?? []).filter((key) => !removed.has(key)), ...saved.addedSuppressedRegularLessonOccurrences]
+    const remerged = remergeBoardWeeksWithManagedData(saved.nextWeeks, { classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29', templateOriginRules: { pendingDesks: saved.nextPendingDesks } })
+    const again = computeTemplateDiffApplyForBoard({
+      scheduleCountAdjustments: [], weeks: saved.nextWeeks, classroomSettings: savedSettings, teachers: teacherRows, students: studentRows, regularLessons: rows,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: saved.nextPendingDesks, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
+    })
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+    expect(cellOf(again.nextWeeks)).toEqual(cellOf(saved.nextWeeks))
+    return saved
+  }
+
+  it('不動点（L-7 兄弟 1・Q35）: 丸ごと振替の日にテンプレの生徒を外して講師だけになった机も、保存 → 再マージ → 再保存でセルは丸ごと変わらない', () => {
+    const saved = saveOn(board(makeupBAt0), { suppressed: [buildTemplateTeacherSuppressionKey(DATE)] })
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(2)
+    expect(cellOf(saved.nextWeeks).desks[1].lesson).toBeUndefined()
+    expect(liveCount(saved.nextWeeks, 'sB')).toBe(1)
+  })
+
+  it('不動点（L-7 兄弟 1・Q35）: 丸ごと振替の日 × メモの机 1。テンプレの B を外してもメモは残り、保存 → 再マージ → 再保存でセルは丸ごと変わらない', () => {
+    const week = board((desks) => makeupBAt0(desks).map((desk, index) => (index === 1 ? { ...desk, memoSlots: ['連絡あり', null] as [string | null, string | null] } : desk)))
+    const saved = saveOn(week, { suppressed: [buildTemplateTeacherSuppressionKey(DATE)] })
+    expect(saved.summary.wholeDayTransferSkippedStudents).toBe(2)
+    expect(cellOf(saved.nextWeeks).desks[1].memoSlots).toEqual(['連絡あり', null])
+  })
+
+  it('不動点（Q35・tp-22）: 丸ごと振替の日にテンプレの生徒を A → D に変えても、D は置かず A の振替が 1 行のまま（保留 0）。D は 0 か所', () => {
+    const rows = [row('r0', 't1', 'sD'), row('r1', 't2', 'sB'), row('r2', 't3')]
+    const week = board((desks) => desks.map((desk, index) => (index === 0
+      ? { ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' as const, lesson: { id: `${desk.id}_moved`, studentSlots: [mkStudent('a-moved', '青木', { managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-10-05' }), null] as [StudentEntry | null, StudentEntry | null] } }
+      : { id: desk.id, teacher: '' })))
+    const suppressed = [buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5), buildManagedOccurrenceKey(mkStudent('b', '馬場', { managedStudentId: 'sB' }), DATE, 5), buildTemplateTeacherSuppressionKey(DATE)]
+    const saved = saveOn(week, { rows, suppressed })
+    expect(saved.summary.pending).toBe(0)
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveCount(saved.nextWeeks, 'sD')).toBe(0)
+  })
+
+  it('不動点（Q35・regression-reviewer 中-1）: 丸ごと振替の日の旧い保留（上段 D／下段 A振）を再保存すると 1 行 [A振] に戻り講師が残る。D は 0 か所', () => {
+    const rows = [row('r0', 't1', 'sD'), row('r1', 't2', 'sB'), row('r2', 't3')]
+    const week = board((desks) => desks.map((desk, index) => (index === 0
+      ? { ...desk, teacher: '田中', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: 't1', lesson: { id: 'managed_r0_x', studentSlots: [mkStudent('d', '土屋', { managedStudentId: 'sD' }), null] as [StudentEntry | null, StudentEntry | null] } }
+      : { id: desk.id, teacher: '' })))
+    const pendingKey = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+    const pendingDesks: TemplatePendingDeskMap = {
+      [pendingKey]: { lower: { lesson: { id: 'moved', studentSlots: [mkStudent('a-moved', '青木', { managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-10-05' }), null] } }, effectiveStartDate: DATE, createdAt: '2026-10-01T10:00:00.000Z' },
+    }
+    const suppressed = [buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5), buildManagedOccurrenceKey(mkStudent('b', '馬場', { managedStudentId: 'sB' }), DATE, 5), buildTemplateTeacherSuppressionKey(DATE)]
+    const saved = saveOn(week, { rows, suppressed, pendingDesks })
+    expect(saved.nextPendingDesks[pendingKey]).toBeUndefined()
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(cellOf(saved.nextWeeks).desks[0].teacher).toBe('田中')
+    expect(liveCount(saved.nextWeeks, 'sD')).toBe(0)
+  })
+
   it('不動点（2-7）: メモのある机・講師のいない行・同じ講師の 2 机があっても、保存 → 再マージ（フラグ ON）→ 再保存でセルは丸ごと変わらない', () => {
     const memoBoard = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, memoSlots: ['連絡', null] } : index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))
     const memoSaved = save(memoBoard)
     // メモの席にテンプレの B → 机 1 は 2 行（上＝B／下＝メモ）。
     expect(memoSaved.nextPendingDesks[buildTemplatePendingDeskKey(CELL, cellOf(memoSaved.nextWeeks).desks[1].id)]?.lower.memoSlots).toEqual(['連絡', null])
     expectStable(memoSaved)
+  })
+})
+
+// ============================================================================
+// INV-12 / INV-03 / INV-06 × 同日移動の写し（第 2 版・フラグ ON・regression-reviewer 重大-1）
+//   同じ日の中の移動は抑止キーを積まない（§1-1 #2）。写しを 休み・振無休・出席・単発削除 にしても、元の時限にテンプレの授業が生き返らない
+//   （元の時限の権威関数 resolveSameDayMoveSourceSlot が、生きている写しだけでなく写しの記録も拾う。単発削除は元の時限に削除の記録を積む）。
+//   入れ替え（swap）で動いた相手側も同じ。テンプレ保存 → 再マージ → 再保存でも形が変わらない。
+// ============================================================================
+describe('INV-12 × 同日移動の写し（フラグ ON）: 写しを休み・振無休・出席・削除にしても元の時限にテンプレの授業が生き返らない', () => {
+  // 水 5限 机 0＝A・机 1＝B、水 4限 机 0＝C
+  const ROWS = [...FX.OLD_ROWS, FX.row('r9', 't3', 'sC', '', 3, { slotNumber: 4 })]
+  const CELL5 = `${FX.WED}_5`
+  const CELL4 = `${FX.WED}_4`
+  const byName = new Map(FX.students.map((item) => [item.name, item]))
+  const onDay = (weeks: SlotCell[][], id: string) => weeks.flat().filter((cell) => cell.dateKey === FX.WED)
+    .flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === id).map(() => cell.slotNumber)))
+  const recordsOnDay = (weeks: SlotCell[][], id: string) => weeks.flat().filter((cell) => cell.dateKey === FX.WED)
+    .flatMap((cell) => cell.desks.flatMap((desk) => (desk.statusSlots ?? []).filter((item) => item?.managedStudentId === id).map((item) => item!.status)))
+  function moveAFrom5To4(seatIndex: 0 | 1) {
+    const week = FX.buildWeek(ROWS)
+    const moving = FX.cellOf([week], CELL5).desks[0].lesson!.studentSlots[0]!
+    const moved = computeStudentMove({ weeks: [week], weekIndex: 0, cells: week, movingStudentId: moving.id, cellId: CELL4, deskIndex: seatIndex === 0 ? 0 : 1, studentIndex: 0, suppressedRegularLessonOccurrences: [], managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    return moved
+  }
+  // 盤面の「休み・振無休・出席」と同じ形: 席の生徒を記録へ移し、今の時限に通常授業の抑止キーを積む（handleMarkStudentAbsent / Attended と同じ）。
+  function markAt(weeks: SlotCell[][], suppressed: string[], cellId: string, managedId: string, status: StudentStatusEntry['status']) {
+    const next = weeks.map((week) => week.map((cell) => ({ ...cell, desks: cell.desks.map((desk) => ({ ...desk, lesson: desk.lesson ? { ...desk.lesson, studentSlots: [...desk.lesson.studentSlots] as [StudentEntry | null, StudentEntry | null] } : undefined })) })))
+    const cell = FX.cellOf(next, cellId)
+    let key = ''
+    for (const desk of cell.desks) {
+      const seat = (desk.lesson?.studentSlots ?? []).findIndex((item) => item?.managedStudentId === managedId)
+      if (seat < 0) continue
+      const target = desk.lesson!.studentSlots[seat]!
+      const record = buildStudentStatusEntry(target, cell, desk, status)
+      desk.lesson!.studentSlots[seat] = null
+      if (!desk.lesson!.studentSlots.some(Boolean)) desk.lesson = undefined
+      desk.statusSlots = seat === 0 ? [record, desk.statusSlots?.[1] ?? null] : [desk.statusSlots?.[0] ?? null, record]
+      key = buildManagedOccurrenceKey(target, cell.dateKey, cell.slotNumber)
+    }
+    return { weeks: next, suppressed: [...suppressed, key] }
+  }
+  function deleteAt(weeks: SlotCell[][], suppressed: string[], cellId: string, managedId: string) {
+    const cell = FX.cellOf(weeks, cellId)
+    const target = cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).find((item) => item?.managedStudentId === managedId)!
+    const key = resolveRemovedLessonOccurrenceKeyFor(target, cell.dateKey, cell.slotNumber, true)!
+    const next = weeks.map((week) => week.map((item) => (item.id !== cellId ? item : { ...item, desks: item.desks.map((desk) => (!desk.lesson?.studentSlots.some((s) => s?.managedStudentId === managedId) ? desk : { ...desk, lesson: undefined })) })))
+    return { weeks: next, suppressed: [...suppressed, key] }
+  }
+  const expectStableUnderSave = (weeks: SlotCell[][], suppressed: string[]) => {
+    const saved = FX.save(weeks, ROWS, suppressed)
+    const after = FX.suppressedAfter(suppressed, saved)
+    const remerged = FX.remerge(saved.nextWeeks, ROWS, after, FX.settings(), saved.nextPendingDesks)
+    expect(remerged.flat().map((cell) => cell.desks)).toEqual(saved.nextWeeks.flat().map((cell) => cell.desks))
+    const again = FX.save(saved.nextWeeks, ROWS, after, { templatePendingDesks: saved.nextPendingDesks })
+    expect(again.nextWeeks.flat().map((cell) => cell.desks)).toEqual(saved.nextWeeks.flat().map((cell) => cell.desks))
+    return saved
+  }
+
+  it('前提: 同日移動（5 限 → 4 限の空き席）はキーを積まず、再マージしても A は 4 限の 1 か所', () => {
+    const moved = moveAFrom5To4(1)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([])
+    expect(onDay(FX.remerge(moved.nextWeeks, ROWS, [], FX.settings(), {}), 'sA')).toEqual([4])
+  })
+
+  for (const status of ['absent', 'absent-no-makeup', 'attended'] as const) {
+    it(`写しを ${status} にする → 再マージで元の 5 限に A は 0（記録の 1 件だけ）・未消化振替は ${status === 'absent' ? '+1' : '±0'}。テンプレ保存 → 再マージ → 再保存でも同じ`, () => {
+      const moved = moveAFrom5To4(1)
+      const before = FX.balances(moved.nextWeeks, ROWS, {})['sA__数'] ?? 0
+      const marked = markAt(FX.remerge(moved.nextWeeks, ROWS, [], FX.settings(), {}), [], CELL4, 'sA', status)
+      const remerged = FX.remerge(marked.weeks, ROWS, marked.suppressed, FX.settings(), {})
+      expect(onDay(remerged, 'sA')).toEqual([])
+      expect(recordsOnDay(remerged, 'sA')).toEqual([status])
+      // 盤面の「休み」は通常授業の休みで未消化振替の origin を台帳へ 1 件積む（handleMarkStudentAbsent と同じ）。生き返った 5 限の A が消化すると +0 になる。
+      const ledger: Record<string, Array<{ dateKey: string }>> = status === 'absent' ? { 'sA__数': [{ dateKey: FX.WED }] } : {}
+      expect((FX.balances(remerged, ROWS, ledger)['sA__数'] ?? 0) - before).toBe(status === 'absent' ? 1 : 0)
+      const saved = expectStableUnderSave(remerged, marked.suppressed)
+      expect(onDay(saved.nextWeeks, 'sA')).toEqual([])
+      expect(recordsOnDay(saved.nextWeeks, 'sA')).toEqual([status])
+    })
+  }
+
+  it('写しを単発削除する → 削除の記録は元の 5 限に積まれ、再マージ・テンプレ保存でも A は 0（生き返らない）', () => {
+    const moved = moveAFrom5To4(1)
+    const deleted = deleteAt(FX.remerge(moved.nextWeeks, ROWS, [], FX.settings(), {}), [], CELL4, 'sA')
+    expect(deleted.suppressed).toEqual([`sA__数__${FX.WED}__5`])
+    const remerged = FX.remerge(deleted.weeks, ROWS, deleted.suppressed, FX.settings(), {})
+    expect(onDay(remerged, 'sA')).toEqual([])
+    const saved = expectStableUnderSave(remerged, deleted.suppressed)
+    expect(onDay(saved.nextWeeks, 'sA')).toEqual([])
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
+  })
+
+  it('入れ替え（5 限の A ⇄ 4 限の C）: 相手の C（5 限へ来た写し）を休みにしても、C の元の 4 限にテンプレの C は生き返らない。A は 4 限の 1 か所', () => {
+    const moved = moveAFrom5To4(0)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([])
+    const base = FX.remerge(moved.nextWeeks, ROWS, [], FX.settings(), {})
+    expect(onDay(base, 'sA')).toEqual([4])
+    expect(onDay(base, 'sC')).toEqual([5])
+    const marked = markAt(base, [], CELL5, 'sC', 'absent')
+    const remerged = FX.remerge(marked.weeks, ROWS, marked.suppressed, FX.settings(), {})
+    expect(onDay(remerged, 'sC')).toEqual([])
+    expect(onDay(remerged, 'sA')).toEqual([4])
+    expectStableUnderSave(remerged, marked.suppressed)
+  })
+})
+
+// regression-reviewer 要修正-3（INV-02）: 元の時限（sameDayMoveSourceLabel）が読めない旧い写しは、キーを外せない（削除の記録を守る側に倒す）ので、
+// テンプレ反映で捨てるとその日の授業が 0 件になる。読めない写しは手入力として残す。
+describe('INV-02 × 元の時限が読めない旧い写し（label 無し）× 旧い移動キー', () => {
+  it('テンプレ保存でも写しは残り、A はその日に 1 か所（移動キーは外さない）。再マージ・再保存で変わらない', () => {
+    const week = FX.buildWeek(FX.OLD_ROWS).map((cell) => {
+      if (cell.id === FX.WED_CELL) return { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) }
+      if (cell.id === `${FX.WED}_4`) {
+        const copy = mkStudent('a-old-copy', '青木', { managedStudentId: 'sA', sameDayMoveSourceDate: FX.WED })
+        return { ...cell, desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '鈴木', lesson: mkLesson('old-move', [copy, null]) } : desk)) }
+      }
+      return cell
+    })
+    const suppressed = [`sA__数__${FX.WED}__5`]
+    const saved = FX.save([week], FX.OLD_ROWS, suppressed)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([])
+    const day = (weeks: SlotCell[][]) => weeks.flat().filter((cell) => cell.dateKey === FX.WED).flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA').map(() => cell.slotNumber)))
+    expect(day(saved.nextWeeks)).toEqual([4])
+    const remerged = FX.remerge(saved.nextWeeks, FX.OLD_ROWS, suppressed, FX.settings(), saved.nextPendingDesks)
+    expect(day(remerged)).toEqual([4])
+    expect(day(FX.save(remerged, FX.OLD_ROWS, suppressed).nextWeeks)).toEqual([4])
   })
 })

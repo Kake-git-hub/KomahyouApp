@@ -542,6 +542,26 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
   })
 
+  // §9-15（オーナー決定 2026-11-05・受け入れ条件 2-12）: 手置き講師 倉島の机 0 にテンプレが別の講師 田村を置き、さらに別の机 1 にテンプレの倉島が来る形は、
+  // 机 0 は倉島のまま（田村を置かず講師欄は 1 行）・机 1 にも倉島を置かない。理由の行は 2 つ。倉島は講師日程表に 1 回だけ。
+  it('§9-15: 手置き 倉島の机 0 × テンプレが机 0 に田村＋C・机 1 に倉島＋X → 机 0 は倉島のまま（講師欄 1 行）・机 1 は講師なし。理由の行 2 つ・倉島は日程表に 1 回', () => {
+    const rows = [row('r0', 'tD', 'sC'), row('r1', 'tB', 'sX')]
+    const saved = save(boardWith(MAKEUP_A, 0), rows)
+    const cell = cellOf(saved.nextWeeks)
+    expect([cell.desks[0].teacher, cell.desks[0].manualTeacher]).toEqual(['倉島', true])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.teacher).toBeUndefined()
+    // 席は §2-1: 生徒 1 の席は上＝テンプレの C／下＝手入力の A
+    expect(ids(cell.desks[0])).toEqual(['sC', null])
+    expect(saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect([cell.desks[1].teacher, ids(cell.desks[1])]).toEqual(['', ['sX', null]])
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-kept' || note.kind === 'teacher-elsewhere').map((note) => [note.kind, note.studentName])).toEqual([['teacher-kept', '田村'], ['teacher-elsewhere', '倉島']])
+    expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+    expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual(['千葉'])
+    expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    const again = resaveSame(saved, rows)
+    expect(cellOf(again.nextWeeks).desks).toEqual(cell.desks)
+  })
+
   it('§9-1 × QR（§9-13）: QR の倉島の机 1 があるコマで、テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（QR の講師も手入力が勝つ）', () => {
     const rows = [row('r0', 'tB', 'sC')]
     const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 'tB' }))
