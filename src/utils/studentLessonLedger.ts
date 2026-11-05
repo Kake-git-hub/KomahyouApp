@@ -129,6 +129,8 @@ export function buildStudentLessonLedger(params: { payload: AppSnapshotPayload; 
     today: now,
     // INV-06（2026-09-29 拡張）: 保留の下段も消化・欠席由来の走査に含める（盤面の未消化一覧と同じ入力）。
     templatePendingDesks: boardState.templatePendingDesks,
+    // 第 2 版 段 4（INV-06・最終確認の指摘）: 丸ごと振替の組の D' は休日振替を積まない（盤面の未消化一覧と同じ入力）。
+    wholeDayPairKeys: boardState.suppressedRegularLessonOccurrences ?? [],
   })
 
   const rowByKey = new Map<string, StudentLessonLedgerRow>()

@@ -99,7 +99,7 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     stage: 'in-progress',
     who: 'claude',
     summary: '反映先に手入力があれば 2 行、同じ生徒なら手入力が勝つ、休みは常に勝つ、手入力は青字、丸ごと振替は同じ曜日だけで日付の付け替えとして残す、という短い規則に作り直す。講師の休みボタンも足す。',
-    nextAction: '段 1〜4(出自の印・反映の規則・講師の休み・丸ごと振替の付け替え)を作業ブランチで作った。レビューの後、開発用教室の確認リストで見てもらい、段 5(既存データの作り直し)へ進む。',
+    nextAction: '段 1〜4 を開発用・テスト教室に出した(回帰の監査 3 回・指摘は全部修正)。オーナーが確認リストの第 2 版の項目を見る。既存の保留の作り直しは確認リストの手順で進める。',
     notes: '2026-11-05 オーナー決定: 今の §H(Q21〜Q42・決定記録 66 本)は場合分けが多すぎるので置き換える。実運用で別の曜日への丸ごと振替は無い。手入力の生徒とテンプレの同じ生徒が同じコマで 2 か所になったら手入力が勝つ。生徒・講師とも休みはテンプレより勝つ(講師は休みボタンを新設・グレー表示・他の講師で上書き可)。検討点(出自の印・講師の一意性・移動先に同じ曜日のテンプレがある件・会計 3 規則・Functions のパリティ・既存データの凍結か作り直しか)は仕様の「オーナー確認」に載せる。2026-11-05 午後: 段 1・段 2 を実装(placementOrigin.ts・templateConflictRules.ts。再マージはフラグ ON の教室だけ同じ規則を当てる＝抑止キーを新しく積まない。丸ごと振替の追従 Q40 は段 4 まで今のまま)。同日夕方: 段 3 講師の休みを実装(teacherRest.ts・DeskCell.teacherRest・差分反映と再マージが同じ述語を通す・確認リスト v2-2)。同日夜: 段 4 丸ごと振替の付け替えを実装(wholeDayTransferPair.ts・組は抑止キーに相乗り・管理セルの準備で振替元のテンプレを振替先へ展開・確認リスト v2-4)。以前の形の丸ごと振替は段 5 まで今のまま。',
     references: ['docs/spec-template-conflict-v2.md', 'docs/spec-template-behavior.md §H(旧仕様)', 'src/components/schedule-board/templateDiffApply.ts'],
     updatedOn: '2026-11-05',
