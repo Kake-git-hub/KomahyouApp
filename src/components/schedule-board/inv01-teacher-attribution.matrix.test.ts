@@ -15,6 +15,7 @@ import {
 } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import { restDeskTeacher } from './teacherRest'
+import { packSortCellDesks, seatSortCells } from './deskSort'
 import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries } from '../../utils/scheduleViewData'
 
@@ -1076,5 +1077,69 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(saved.nextPendingDesks).toEqual({})
     expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '落合')).toHaveLength(0)
     expect(pagesOf('井上')).toEqual(['加藤'])
+  })
+})
+
+// ============================================================================
+// INV-01 × 並び替えた週の再マージ（§9-22 案 A・オーナー決定 2026-11-06・確認リスト v2-1）
+//
+// コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）。並び替えた週では管理机 i と盤面机 i が対応しない。再マージ（フラグ ON の第 2 版の規則
+// applyTemplateOriginRulesToManagedCell）が「自分の机の手置き講師」を机番号で引くと、手置き講師 X の机がテンプレの W の番号に来たとき §9-15 で
+// 無関係な W を消し、mergeManagedWeek（授業 ID で突き合わせ・非 manual の講師は管理机の講師）で W が盤面から消えていた。
+// 修正: 自分の机は授業 ID の対応（授業の無いテンプレの机は同じテンプレ講師の机）で引き、見つからないときだけ机番号。
+// 行: { 上に詰めて / 同席番 } × { W の机に授業あり / W は講師だけ（足場） } × { フラグ ON 2 回 / フラグ OFF 2 回 }。修正前: フラグ ON の行が落ちる。
+// ============================================================================
+describe('INV-01 × 並び替えた週の再マージ: 同じ講師が 2 机に出ず、テンプレの講師も消えない（§9-22 案 A）', () => {
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const studentRows: StudentRow[] = [['sA', '青木'], ['sB', '馬場'], ['sM', '三浦'], ['sD', '土屋']].map(([id, name]) => createStudent({ id, name, displayName: name }))
+  const teacherRows: TeacherRow[] = [['t1', '田中'], ['t2', '鈴木'], ['t3', '佐藤']].map(([id, name]) => createTeacher({ id, name, displayName: name, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }))
+  const row = (id: string, teacherId: string, studentId = ''): RegularLessonRow => createRegularLesson({ id, teacherId, student1Id: studentId, subject1: studentId ? '数' : '', dayOfWeek: 3, slotNumber: 5 })
+  const settings: ClassroomSettings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 3 }
+  const range = { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '' }
+  const ROW_SETS = [
+    // W（田中）の机に授業あり: 机0=田中(青木)・机1=鈴木(馬場)・机2=佐藤(講師だけ)
+    ['W の机に授業あり', [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]],
+    // W（田中）は講師だけ（足場）: 机0=田中(講師だけ)・机1=鈴木(馬場)・机2=佐藤(講師だけ)
+    ['W は講師だけ（足場）', [row('r0', 't1'), row('r1', 't2', 'sB'), row('r2', 't3')]],
+  ] as const
+  const SORTS = [
+    ['上に詰めて', (cell: SlotCell) => packSortCellDesks(cell, { skipStatusSlotPack: true })],
+    ['同席番', (cell: SlotCell) => seatSortCells([cell], { skipStatusSlotPack: true })[0].desks],
+  ] as const
+  const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+  const manualDesk = (desk: DeskCell): DeskCell => ({
+    ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3',
+    lesson: { id: 'hand', studentSlots: [mkStudentEntry({ id: 'm', name: '三浦', managedStudentId: 'sM', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), mkStudentEntry({ id: 'd', name: '土屋', managedStudentId: 'sD', lessonType: 'special' })] },
+  })
+
+  describe.each(ROW_SETS)('%s', (_label, rows) => {
+    // 手置き講師 X（佐藤）が手入力 2 人と机 2 に居る（テンプレの X は机 2 の講師だけ）。並び替えで X の机が机 0（テンプレの W の番号）へ動く。
+    const boardWeek = () => buildManagedScheduleCellsForRange({
+      range, fallbackStartDate: range.startDate, fallbackEndDate: range.endDate, classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: [...rows], boardWeeks: [],
+    }).map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 2 ? manualDesk(desk) : desk)) }))
+    const remerge = (weeks: SlotCell[][], flagOn: boolean) => remergeBoardWeeksWithManagedData(weeks, {
+      classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: [...rows], suppressedRegularLessonOccurrences: [], todayKey: '2026-10-05',
+      templateOriginRules: flagOn ? { pendingDesks: {} } : null,
+    })
+    describe.each(SORTS)('%s', (_sortLabel, sortDesks) => {
+      it.each([['フラグ ON', true], ['フラグ OFF', false]] as const)('%s: 再マージ 2 回で並び替えた形のまま（W も鈴木も 1 机ずつ・X は手入力のまま 1 机）', (_flag, flagOn) => {
+        const sorted = boardWeek().map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: sortDesks(cell) }))
+        expect(cellOf([sorted]).desks[0].teacher).toBe('佐藤')
+        const once = remerge([sorted], flagOn)
+        const twice = remerge(once, flagOn)
+        for (const weeks of [once, twice]) {
+          const teachersInCell = cellOf(weeks).desks.map((desk) => desk.teacher)
+          expect(teachersInCell.filter((name) => name === '田中')).toHaveLength(1)
+          expect(teachersInCell.filter((name) => name === '鈴木')).toHaveLength(1)
+          expect(teachersInCell.filter((name) => name === '佐藤')).toHaveLength(1)
+          const xDesk = cellOf(weeks).desks.find((desk) => desk.teacher === '佐藤')!
+          expect(xDesk.manualTeacher).toBe(true)
+          expect(xDesk.lesson?.id).toBe('hand')
+          expect(cellOf(weeks).desks.map((desk) => desk.teacher)).toEqual(cellOf([sorted]).desks.map((desk) => desk.teacher))
+        }
+        expect(cellOf(twice)).toEqual(cellOf(once))
+      })
+    })
   })
 })

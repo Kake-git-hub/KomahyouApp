@@ -59,6 +59,7 @@ import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { auditTemplateLessonAccounting } from './templateLessonAccountingOracle'
 import { resolveStudentOrigin } from './placementOrigin'
+import { packSortCellDesks, seatSortCells } from './deskSort'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // フィクスチャ（水曜 5 限・机 3 つ。反映日は水曜 2026-10-07。同じ週の月・火は反映日より前）
@@ -190,6 +191,8 @@ function applyDiff(params: {
   classroomSettings?: ClassroomSettings
   /** Q40-3（2026-10-21）: 希望回数の補正（精算済み判定が −1 の純減を説明に数える）。 */
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
+  /** 保存前のテンプレの行（盤面の保存は必ず渡す・§9-22 案 A の並びの戻しの基準）。 */
+  previousRows?: RegularLessonRow[]
 }) {
   const result = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: params.scheduleCountAdjustments ?? [],
     weeks: [params.week],
@@ -201,6 +204,7 @@ function applyDiff(params: {
     suppressedRegularLessonOccurrences: params.suppressed ?? [],
     templatePendingDesks: params.pending ?? {},
     createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
+    ...(params.previousRows ? { previousRegularLessons: params.previousRows } : {}),
   })
   return result
 }
@@ -1521,14 +1525,14 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
   const remergeOn = (weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], pendingDesks: TemplatePendingDeskMap) => remergeBoardWeeksWithManagedData(weeks, {
     classroomSettings: newSettings(), teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: TODAY_KEY, templateOriginRules: { pendingDesks },
   })
-  function saveStable(week: SlotCell[], newRows: RegularLessonRow[], options: { suppressed?: string[]; pending?: TemplatePendingDeskMap } = {}) {
-    const saved = applyDiff({ week, newRows, suppressed: options.suppressed, pending: options.pending })
+  function saveStable(week: SlotCell[], newRows: RegularLessonRow[], options: { suppressed?: string[]; pending?: TemplatePendingDeskMap; previousRows?: RegularLessonRow[] } = {}) {
+    const saved = applyDiff({ week, newRows, suppressed: options.suppressed, pending: options.pending, previousRows: options.previousRows })
     const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
     const suppressed = [...(options.suppressed ?? []).filter((key) => !removed.has(key)), ...saved.addedSuppressedRegularLessonOccurrences]
     // 2-7: 保存の結果は再マージの不動点・同じテンプレの再保存でも変わらない
     const remerged = remergeOn(saved.nextWeeks, newRows, suppressed, saved.nextPendingDesks)
     expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
-    const again = applyDiff({ week: saved.nextWeeks[0], newRows, suppressed, pending: saved.nextPendingDesks })
+    const again = applyDiff({ week: saved.nextWeeks[0], newRows, suppressed, pending: saved.nextPendingDesks, previousRows: options.previousRows ? newRows : undefined })
     expect(cellOf(again.nextWeeks)).toEqual(cellOf(saved.nextWeeks))
     expect(again.nextPendingDesks).toEqual(saved.nextPendingDesks)
     return saved
@@ -1692,6 +1696,79 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
     const saved = saveStable(week, [row('r0', 't1', 'sC', '数', 'sB', '数'), row('r1', 't2')])
     expect(deskOf(saved.nextWeeks, 0).statusSlots?.map((item) => item?.status ?? null)).toEqual([null, 'attended'])
     expect(lowerOf(saved, 0)?.statusSlots).toBeUndefined()
+  })
+
+  // ── §9-22 案 A（オーナー決定 2026-11-06・確認リスト v2-1）: コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）。次のテンプレ保存の直前に
+  //    並び替えた週を「テンプレの並び」へ戻してから机番号で突き合わせる（restoreTemplateDeskOrder）。テンプレを変えずに保存しても 2 行・講師の入れ替わり・
+  //    手入力の分散が起きない（INV-02）。
+  describe('§9-22 案 A: 並び替えた週はテンプレ保存の直前にテンプレの並びへ戻る', () => {
+    const SPECIAL_D = entry('sD', { lessonType: 'special' })
+    // 机 3（佐藤・テンプレは講師だけ）に手入力の振替 sM と講習 sD
+    const withManualOnSato = () => mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, lesson: { id: 'hand', studentSlots: [MAKEUP_M, SPECIAL_D] } }))
+    const packWeek = (week: SlotCell[]) => week.map((cell) => (cell.id === CELL_ID ? { ...cell, desks: packSortCellDesks(cell, { skipStatusSlotPack: true }) } : cell))
+    const teachersOf = (weeks: SlotCell[][]) => cellOf(weeks).desks.map((desk) => desk.teacher)
+
+    it('(a) 詰めて並び替え → テンプレを変えず保存: 田中・鈴木はテンプレの机番号へ戻り、佐藤の机に sM・sD が揃ったまま（2 行にならない・講師は佐藤）', () => {
+      const sorted = packWeek(withManualOnSato())
+      // 並び替えで佐藤の机（手入力 2 人）が机 1 へ動いた（＝テンプレの机番号と盤面の机がずれた週）
+      expect(cellOf([sorted]).desks[0].teacher).toBe('佐藤')
+      const saved = saveStable(sorted, OLD_ROWS, { previousRows: OLD_ROWS })
+      expect(saved.nextPendingDesks).toEqual({})
+      expect(saved.manualFirstSkipped).toEqual([])
+      expect(teachersOf(saved.nextWeeks)).toEqual(['田中', '鈴木', '佐藤'])
+      expect(seats(deskOf(saved.nextWeeks, 0))).toEqual(['sA:regular', null])
+      expect(seats(deskOf(saved.nextWeeks, 1))).toEqual(['sB:regular', null])
+      expect(seats(deskOf(saved.nextWeeks, 2))).toEqual(['sM:makeup', 'sD:special'])
+      // 並び替えずに保存したときと同じ形
+      const unsorted = saveStable(withManualOnSato(), OLD_ROWS, { previousRows: OLD_ROWS })
+      expect(cellOf(saved.nextWeeks).desks.map(seats)).toEqual(cellOf(unsorted.nextWeeks).desks.map(seats))
+    })
+
+    it('(b) テンプレが全部の机を使う（空いた番号が無い）: 手入力だけの机は残りの番号に入り、§2-1 で 2 行（並び替えずに保存したときと同じ）', () => {
+      const rows = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), row('r2', 't3', 'sC', '数')]
+      // 机 3 は手で置いた講師 佐藤と手入力 2 人（テンプレの sC はこの週の盤面に居ない）
+      const build = () => mutateDesk(buildWeek(rows), 2, (desk) => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'hand', studentSlots: [MAKEUP_M, SPECIAL_D] } }))
+      const sorted = packWeek(build())
+      expect(cellOf([sorted]).desks[0].lesson?.id).toBe('hand')
+      const saved = saveStable(sorted, rows, { previousRows: rows })
+      const unsorted = saveStable(build(), rows, { previousRows: rows })
+      expect(cellOf(saved.nextWeeks).desks.map(seats)).toEqual(cellOf(unsorted.nextWeeks).desks.map(seats))
+      expect(seats(deskOf(saved.nextWeeks, 2))).toEqual(['sC:regular', 'sD:special'])
+      expect(lowerOf(saved, 2)?.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', null])
+      expect(Object.keys(saved.nextPendingDesks)).toHaveLength(1)
+    })
+
+    it('(c) テンプレの生徒＋手入力の振替が同じ机（混在）を並び替え → 保存でその机はテンプレの番号へ戻り、振替は同じ机に残って 2 行にならない', () => {
+      const build = () => mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], MAKEUP_M] } }))
+      const sorted = packWeek(build())
+      expect(cellOf([sorted]).desks[0].teacher).toBe('鈴木')
+      const saved = saveStable(sorted, OLD_ROWS, { previousRows: OLD_ROWS })
+      expect(saved.nextPendingDesks).toEqual({})
+      expect(teachersOf(saved.nextWeeks)).toEqual(['田中', '鈴木', '佐藤'])
+      expect(seats(deskOf(saved.nextWeeks, 1))).toEqual(['sB:regular', 'sM:makeup'])
+      expect(seats(deskOf(saved.nextWeeks, 0))).toEqual(['sA:regular', null])
+    })
+
+    it('(d) 並び替えていない週は、戻しを通しても保存の結果が今までと同じ（基準の行を渡しても渡さなくても同じ）', () => {
+      const withPrevious = saveStable(withManualOnSato(), OLD_ROWS, { previousRows: OLD_ROWS })
+      const withoutPrevious = saveStable(withManualOnSato(), OLD_ROWS)
+      expect(cellOf(withPrevious.nextWeeks)).toEqual(cellOf(withoutPrevious.nextWeeks))
+      expect(withPrevious.nextPendingDesks).toEqual(withoutPrevious.nextPendingDesks)
+    })
+
+    it('(e) 同席番で並び替え（seatSortCells）でも (a) と同じく戻る', () => {
+      const base0 = withManualOnSato()
+      // 同じ日の別のコマに佐藤を机 1 で置き、同席番の並び替えで 5 限の佐藤の机も机 1 へ寄せる
+      const otherCellId = `${DATE}_4`
+      const week = mutateDesk(base0, 0, (desk) => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' }), otherCellId)
+      const sortedWeek = seatSortCells(week, { skipStatusSlotPack: true })
+      expect(cellOf([sortedWeek]).desks[0].teacher).toBe('佐藤')
+      const saved = saveStable(sortedWeek, OLD_ROWS, { previousRows: OLD_ROWS })
+      expect(saved.nextPendingDesks).toEqual({})
+      expect(saved.manualFirstSkipped).toEqual([])
+      expect(teachersOf(saved.nextWeeks)).toEqual(['田中', '鈴木', '佐藤'])
+      expect(seats(deskOf(saved.nextWeeks, 2))).toEqual(['sM:makeup', 'sD:special'])
+    })
   })
 
   it('抑止キーは新しく積まない（§6）: 丸ごと振替の日以外の保存は addedSuppressedRegularLessonOccurrences が空', () => {

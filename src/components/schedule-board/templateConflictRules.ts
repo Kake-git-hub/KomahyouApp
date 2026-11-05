@@ -157,15 +157,42 @@ export function applyTemplateOriginRulesToManagedCell(managedCell: SlotCell, boa
         next = !slots[0] && !slots[1] ? buildFullySuppressedManagedDesk(desk) : { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }
       }
     }
-    const ownManual = blockers.teachers.find((blocker) => blocker.deskIndex === deskIndex)
+    // §9-22 案 A（2026-11-06）: 並び替えた週では管理机 i と盤面机 i が対応しない（再マージは授業 ID で突き合わせる）。「自分の机」は授業 ID の対応
+    // （授業の無いテンプレの机は同じテンプレ講師の机）で引き、見つからないときだけ机番号（差分反映の直後は番号が揃っているので結果は今までと同じ）。
+    const boardDeskIndex = resolveBoardDeskIndexForManagedDesk(managedCell.desks, deskIndex, boardCell.desks, aliases)
+    const ownManual = blockers.teachers.find((blocker) => blocker.deskIndex === boardDeskIndex)
     const keptByManualX = Boolean(ownManual) && !isSameTeacherByAliases(ownManual!.teacher.teacher, next.teacher, aliases) && isManualTeacherAlsoInTemplateElsewhere(deskIndex, ownManual!.teacher, managedCell.desks, aliases, (templateDesk) => isTeacherOnRest(managedCell, templateDesk))
-    if (next.teacher.trim() && (keptByManualX || findManualTeacherDeskElsewhere(deskIndex, next, blockers.teachers, aliases) >= 0 || isTeacherOnRest(managedCell, next))) {
+    if (next.teacher.trim() && (keptByManualX || findManualTeacherDeskElsewhere(boardDeskIndex, next, blockers.teachers, aliases) >= 0 || isTeacherOnRest(managedCell, next))) {
       changed = true
       next = { ...next, teacher: '', teacherAssignmentTeacherId: undefined }
     }
     return next
   })
   return changed ? { ...managedCell, desks } : managedCell
+}
+
+/**
+ * 管理机（テンプレの机・deskIndex）に対応する盤面の机の番号（§9-22 案 A・並び替えた週の再マージ）。mergeManagedWeek と同じく授業 ID で突き合わせる。
+ * 授業の無いテンプレの机（足場講師）は、同じ講師の非 manual の盤面の机（テンプレの授業を持たない）へ。同じ講師の講師だけの机がテンプレに 2 つ以上あると
+ * どれか決められないので机番号。どれも見つからなければ机番号（並び替えていない週・差分反映の直後と同じ）。
+ */
+export function resolveBoardDeskIndexForManagedDesk(managedDesks: ReadonlyArray<Pick<DeskCell, 'teacher' | 'lesson'>>, deskIndex: number, boardDesks: ReadonlyArray<Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'lesson'>>, aliases: TeacherAliasResolver = defaultTeacherAliases): number {
+  const managedDesk = managedDesks[deskIndex]
+  if (!managedDesk) return deskIndex
+  if (managedDesk.lesson && isTemplateManagedLesson(managedDesk.lesson)) {
+    const lessonId = managedDesk.lesson.id
+    if (boardDesks[deskIndex]?.lesson?.id === lessonId) return deskIndex
+    const hit = boardDesks.findIndex((desk) => desk.lesson?.id === lessonId)
+    return hit >= 0 ? hit : deskIndex
+  }
+  const name = managedDesk.teacher.trim()
+  if (!name || managedDesk.lesson) return deskIndex
+  const sameTeacherOnly = managedDesks.filter((desk) => !desk.lesson && isSameTeacherByAliases(desk.teacher, name, aliases)).length
+  if (sameTeacherOnly !== 1) return deskIndex
+  const isScaffoldOf = (desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'lesson'>) => !isManualOriginDeskTeacher(desk) && !(desk.lesson && isTemplateManagedLesson(desk.lesson)) && isSameTeacherByAliases(desk.teacher, name, aliases)
+  if (boardDesks[deskIndex] && isScaffoldOf(boardDesks[deskIndex])) return deskIndex
+  const hit = boardDesks.findIndex(isScaffoldOf)
+  return hit >= 0 ? hit : deskIndex
 }
 
 /**

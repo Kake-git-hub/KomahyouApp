@@ -65,7 +65,8 @@ import {
   TEMPLATE_PENDING_MESSAGES,
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
-import { collectTemplateOriginDeskIds, isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
+import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
+import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
@@ -3151,13 +3152,24 @@ function runTemplateDiffApplyV2(params: {
   templatePendingDesks: TemplatePendingDeskMap
   createdAt: string
   wholeDayTransferSettlement: { originDatesByKey: Record<string, string[]>; scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[] }
+  /** 保存前のテンプレの行（盤面の元になったテンプレ）。§9-22 案 A の並びの戻しの基準。省略時は戻さない。 */
+  previousRegularLessons?: readonly RegularLessonRow[] | null
 }) {
   const removedSuppressed = collectSameDayMovedTemplateOccurrenceKeys(params)
   const suppressed = removedSuppressed.size > 0 ? params.suppressedRegularLessonOccurrences.filter((key) => !removedSuppressed.has(key)) : params.suppressedRegularLessonOccurrences
   const templateCells = buildTemplateDiffTemplateCells({ ...params, suppressedRegularLessonOccurrences: suppressed })
   const teacherAliases = buildTeacherAliasResolver(params.teachers)
+  // §9-22 案 A（オーナー決定 2026-11-06・確認リスト v2-1）: コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）。差分反映は机番号でテンプレと
+  // 突き合わせるので、突き合わせる前に並び替えた週の机を「テンプレの並び」へ戻す（中身は変えない・反映日より前と並び替えていないコマは参照ごとそのまま＝INV-10）。
+  // 基準は保存前の行で作ったテンプレの机（保存前と同じ行なら作り直さず templateCells の raw を使う＝試し実行の時間を増やさない）。
+  const anchorCells = !params.previousRegularLessons
+    ? null
+    : JSON.stringify(params.previousRegularLessons) === JSON.stringify(params.regularLessons)
+      ? templateCells
+      : buildTemplateDiffTemplateCells({ ...params, regularLessons: [...params.previousRegularLessons], suppressedRegularLessonOccurrences: suppressed })
+  const weeks = restoreTemplateDeskOrderForDiff({ weeks: params.weeks, templateCells, effectiveStartDate: params.effectiveStartDate, templatePendingDesks: params.templatePendingDesks, teacherAliases, anchorCells })
   const diff = computeTemplateDiffApply({
-    weeks: params.weeks,
+    weeks,
     templateCells,
     effectiveStartDate: params.effectiveStartDate,
     suppressedRegularLessonOccurrences: suppressed,
@@ -3167,9 +3179,51 @@ function runTemplateDiffApplyV2(params: {
     slotFilter: null,
     wholeDayTransferSettlement: params.wholeDayTransferSettlement,
     // §2-4 講師の休み（休みが勝つ）: 休みの講師はそのコマのどの机にも置かない。再マージ（overlayPreparedManagedCells）と同じ述語。
-    isTeacherOnRest: buildTemplateTeacherRestPredicate(params.weeks, teacherAliases) ?? undefined,
+    isTeacherOnRest: buildTemplateTeacherRestPredicate(weeks, teacherAliases) ?? undefined,
   })
   return { diff, suppressed, removedSuppressed, templateCells }
+}
+
+/**
+ * §9-22 案 A: 差分反映の直前に、反映日以降のコマの机をテンプレの並びへ戻す（restoreTemplateDeskOrder）。基準（anchorCells）は盤面の元になったテンプレ
+ * （保存前の行・抑止前の raw）。手入力だけの机を寄せる「テンプレが使わない番号」は反映するテンプレ（templateCells の applied）で決める。
+ * 休日のコマ・丸ごと振替の日（足場講師を外す日）・基準の無いコマは戻さない。変えないコマ・週は参照ごとそのまま返す（INV-10）。
+ */
+export function restoreTemplateDeskOrderForDiff(params: {
+  weeks: SlotCell[][]
+  templateCells: readonly TemplateDiffTemplateCell[]
+  anchorCells: readonly TemplateDiffTemplateCell[] | null
+  effectiveStartDate: string
+  templatePendingDesks: TemplatePendingDeskMap
+  teacherAliases?: TeacherAliasResolver
+}): SlotCell[][] {
+  if (!params.anchorCells || params.anchorCells.length === 0) return params.weeks
+  const anchorByDateSlot = new Map(params.anchorCells.map((entry) => [buildCellDateSlotKey(entry.raw), entry]))
+  const templateByDateSlot = new Map(params.templateCells.map((entry) => [buildCellDateSlotKey(entry.applied), entry]))
+  let changedAny = false
+  const weeks = params.weeks.map((week) => {
+    const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
+    if (lastDateKey < params.effectiveStartDate) return week
+    let changed = false
+    const nextWeek = week.map((cell) => {
+      if (cell.dateKey < params.effectiveStartDate) return cell
+      const key = buildCellDateSlotKey(cell)
+      const templateCell = templateByDateSlot.get(key)
+      const anchor = anchorByDateSlot.get(key)
+      if (!templateCell || !anchor || !templateCell.applied.isOpenDay || templateCell.scaffoldTeachersStripped || anchor.scaffoldTeachersStripped) return cell
+      const restored = restoreTemplateDeskOrder(cell, anchor.raw.desks, {
+        usedDesks: templateCell.applied.desks,
+        lockedDeskIds: collectTemplatePendingDeskIdsInCell(params.templatePendingDesks, cell.id),
+        aliases: params.teacherAliases,
+      })
+      if (restored !== cell) changed = true
+      return restored
+    })
+    if (!changed) return week
+    changedAny = true
+    return nextWeek
+  })
+  return changedAny ? weeks : params.weeks
 }
 
 /** 反映日以降の、同じ日の中で手で動かしたテンプレの授業（上段・保留の下段）の、その日のその生徒×科目の抑止キー（外すもの）。 */
@@ -16249,13 +16303,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     // spec-template-behavior Q31（Issue #72・第 1 段 (C)・フラグ ON の教室だけ）: 保留（2 行）の机は位置・机 ID・中身を固定し、
     // 他の机だけを並べ替える（保留マップのキーは机 ID）。フラグ OFF は activeTemplatePendingDesks が null＝従来どおり。
-    // 第 2 版（spec-template-conflict-v2 §2-1・§9-5・1-6）: テンプレ由来の机も並び替えで動かさない（動くのは手入力の机だけ。テンプレの並びはテンプレ編集の並び替えで変える）。
-    const resolveLockedDeskIds = (cellId: string) => {
-      const pendingIds = collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)
-      if (!templateDiffApplyEnabled) return pendingIds
-      const cell = nextCells.find((candidate) => candidate.id === cellId)
-      return new Set([...(pendingIds ?? []), ...(cell ? collectTemplateOriginDeskIds(cell) : [])])
-    }
+    // 第 2 版 §9-22 案 A（オーナー決定 2026-11-06・確認リスト v2-1）: テンプレ由来の机も手入力の机も動かす（表示中の週だけ）。固定するのは保留の机だけ。
+    // 再マージは授業 ID で突き合わせるので並び替えた形は読み込みでも残り、次のテンプレ保存の直前に runTemplateDiffApplyV2 が
+    // restoreTemplateDeskOrder でテンプレの並びへ戻してから机番号で突き合わせる（戻さないと 2 行・講師の入れ替わりになる）。
+    const resolveLockedDeskIds = (cellId: string) => collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)
     if (mode === 'seat') {
       const sorted = seatSortCells(nextCells, { skipStatusSlotPack: true, resolveLockedDeskIds })
       sorted.forEach((cell, index) => { nextCells[index].desks = cell.desks })
