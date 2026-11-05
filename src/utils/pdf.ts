@@ -480,6 +480,9 @@ export function stripTemplatePendingLowerForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-copy-notice').forEach((node) => node.classList.remove('sa-student-copy-notice'))
   // 第 2 版（spec-template-conflict-v2 §5・1-5）: 手入力の青字（盤面画面の印）も PDF には出さない。
   root.querySelectorAll<HTMLElement>('.sa-manual-origin').forEach((node) => node.classList.remove('sa-manual-origin'))
+  // 第 2 版 段 3（§2-4・§5）: 講師の休みのグレーと「休」＋講師名（盤面画面だけ）も PDF には出さない（講師なしの机として出す）。
+  root.querySelectorAll<HTMLElement>('.sa-teacher-rest-label').forEach((node) => node.remove())
+  root.querySelectorAll<HTMLElement>('.sa-teacher-rest').forEach((node) => node.classList.remove('sa-teacher-rest'))
 }
 
 // 盤面PDFの本体。selection が null のときは従来の「表示週まるごと」出力(exportBoardPdf)と完全に同じ。

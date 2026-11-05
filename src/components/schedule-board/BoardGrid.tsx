@@ -10,6 +10,7 @@ import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { isManualOriginDeskTeacher, isManualOriginStudent, MANUAL_ORIGIN_CLASS } from './placementOrigin'
+import { hasDeskTeacherRest, TEACHER_REST_CELL_CLASS, TEACHER_REST_LABEL_CLASS } from './teacherRest'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
 
@@ -276,6 +277,11 @@ type BoardGridProps = {
    * ★盤面画面だけ（日程表・PDF・保護者 QR には出さない。盤面 PDF は stripTemplatePendingLowerForPdf がクローンから外す＝INV-13）。
    */
   showManualOriginColor?: boolean
+  /**
+   * 講師の休み（docs/spec-template-conflict-v2.md §2-4・§5・段 3）: 休みの机の講師欄をグレーにし「休」＋休みにした講師名を出す。機能フラグ templateDiffApply の
+   * 教室のライブ盤面だけ true。別の講師を置いた机（teacher が空でない）は通常の表示。★盤面画面だけ（PDF は stripTemplatePendingLowerForPdf が外す）。
+   */
+  showTeacherRest?: boolean
   onTemplatePendingLowerClick?: (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => void
   /** 緑の下の行の講師欄（下段の手置き講師）を押したとき。講師の選択（テンプレの講師を採用／手入力の講師を採用）を開く（tp-64・2026-10-27）。 */
   onTemplatePendingLowerTeacherClick?: (cellId: string, deskIndex: number, x: number, y: number) => void
@@ -315,6 +321,7 @@ function BoardGridComponent({
   transferSourceRestDisplayEnabled = false,
   templatePendingDesks,
   showManualOriginColor = false,
+  showTeacherRest = false,
   onTemplatePendingLowerClick,
   onTemplatePendingLowerTeacherClick,
   onTemplatePendingLowerMouseDown,
@@ -816,12 +823,15 @@ function BoardGridComponent({
                       // Q41-13（オーナー指示 2026-10-22「詰めた講師は緑色で分かるように。保留ではない」）: テンプレ差分反映が同じコマの空き机へずらして置いた
                       // 講師は講師欄を緑にする（sa-teacher-shifted）。保留（sa-pending）ではないので操作の制限は無い。PDF は stripTemplatePendingLowerForPdf が外す。
                       const shiftedTeacher = !pendingEntry && cell.isOpenDay && isShiftedTemplateTeacherDesk(desk)
+                      // 講師の休み（§2-4・§5）: 講師なしの机でだけグレーの「休」。別の講師を手で置いたら通常の表示（休みの記録は残る）。
+                      const restedTeacher = showTeacherRest && cell.isOpenDay && !desk.teacher.trim() && hasDeskTeacherRest(desk) ? desk.teacherRest! : null
                       const teacherClassName = [
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
                         teacherWarning ? 'sa-warning' : '',
                         pendingEntry ? 'sa-pending' : '',
                         shiftedTeacher ? 'sa-teacher-shifted' : '',
+                        restedTeacher ? TEACHER_REST_CELL_CLASS : '',
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null
                       const secondStudent = lesson?.studentSlots[1] ?? null
@@ -860,6 +870,15 @@ function BoardGridComponent({
                           >
                             {/* 講師未割当などの埋め草は表示だけ空白にする(deskTeacherLabel.ts・オーナー指示 2026-10-22)。データは変えない。 */}
                             {cell.isOpenDay ? formatDeskTeacherLabel(desk.teacher) : ''}
+                            {restedTeacher ? (
+                              <span
+                                className={TEACHER_REST_LABEL_CLASS}
+                                title={`講師 ${restedTeacher.teacher} は休みです（このコマにテンプレの ${restedTeacher.teacher} を置きません）。押すと別の講師を置くか、休みを解除できます。`}
+                                data-testid={`teacher-rest-${cell.id}-${deskIndex}`}
+                              >
+                                休 {formatDeskTeacherLabel(restedTeacher.teacher)}
+                              </span>
+                            ) : null}
                           </div>
                           {/* Q41（2026-10-21・オーナー決定 B）: 下段の手置き講師。生徒の下段と同じ緑・同じクラス（PDF はクローンから .sa-pending-lower を外す＝INV-13）。 */}
                           {cell.isOpenDay && pendingEntry?.lower.teacher ? (

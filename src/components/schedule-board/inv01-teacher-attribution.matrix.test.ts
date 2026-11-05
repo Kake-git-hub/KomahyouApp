@@ -14,6 +14,7 @@ import {
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
+import { restDeskTeacher } from './teacherRest'
 import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries } from '../../utils/scheduleViewData'
 
@@ -1040,5 +1041,38 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(pagesOf('三好')).toEqual(['加藤'])
     expect(pagesOf('青木')).toEqual([])
     expect(pagesOf('井上')).toEqual(['落合'])
+  })
+
+  // 第 2 版 段 3（spec-template-conflict-v2 §2-4・§9-7・§9-8）: 講師の休み。休みの講師はそのコマのどの机にも置かれず（テンプレの反映・再マージ 2 回）、
+  // 休みの机の生徒はどの講師のページにも出ない（講師なしの机）。別の講師を手で置いたらその講師のページにだけ出る。削除記録とは別の記録。
+  const restDesk0 = (extra: Partial<DeskCell> = {}) => board((desks) => desks.map((desk, index) => (index === 0 ? { ...restDeskTeacher(desk)!, ...extra } : desk)))
+  it('(h) 落合を休みにした机 0 × 同じテンプレの反映 → 机 0 は講師なし（休みの記録は残る）。井上はどの講師のページにも出ず、落合はこのコマのどの机にも居ない', () => {
+    const { boardDesk, fri5, pagesOf } = saveToSchedule(restDesk0(), oldRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '', teacherRest: { teacher: '落合' } })
+    expect(boardDesk(0).teacherAssignmentSource).toBeUndefined()
+    expect(liveIdsOf(boardDesk(0))).toEqual(['student-inoue'])
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '落合')).toHaveLength(0)
+    expect(pagesOf('井上')).toEqual([])
+    expect(pagesOf('青木')).toEqual(['山本'])
+  })
+
+  it("(h') 落合の休み × テンプレが落合を別の机（机 1・青木）へ動かす → 落合はどの机にも置かれない（休みが勝つ）。青木はどの講師のページにも出ず、井上は山本のページにだけ出る", () => {
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(restDesk0(), newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '山本', teacherRest: { teacher: '落合' } })
+    expect(boardDesk(1).teacher).toBe('')
+    expect(liveIdsOf(boardDesk(1))).toEqual(['student-aoki'])
+    expect(saved.nextPendingDesks).toEqual({})
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '落合')).toHaveLength(0)
+    expect(pagesOf('井上')).toEqual(['山本'])
+    expect(pagesOf('青木')).toEqual([])
+  })
+
+  it("(h'') 落合の休みの机 0 に加藤を手で置く → 加藤（手入力）で 1 行のまま、休みの記録は残る。井上は加藤のページにだけ出て、落合・山本には出ない", () => {
+    const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(restDesk0({ teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't_kato' }), oldRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '加藤', manualTeacher: true, teacherRest: { teacher: '落合' } })
+    expect(saved.nextPendingDesks).toEqual({})
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '落合')).toHaveLength(0)
+    expect(pagesOf('井上')).toEqual(['加藤'])
   })
 })
