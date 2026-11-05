@@ -15,7 +15,7 @@ import type { SlotCell } from './types'
 import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import {
-  applySaveToState, balances, cellOf, liveIds, OLD_ROWS, remerge, row, save, settings, slotFilterBetween, students, transferredBoard,
+  applySaveToState, balances, buildWeek, cellOf, liveIds, OLD_ROWS, remerge, row, save, settings, slotFilterBetween, students, transferredBoard,
   THU, THU_CELL, WED, WED_CELL, WEEK_END, type SavedState,
 } from './templateTransferFollow.fixture'
 
@@ -244,4 +244,35 @@ describe('操作の全ペア（順序つき）で保存則・冪等・不動点�
       }
     })
   }
+})
+
+describe('Q36 同日移動の写し × 在庫（オーナー決定 2026-11-05・決定記録 63）', () => {
+  // A は水 5限 机 0 の通常授業。日の中で 4限 机 1 へ動かした（写し・抑止キー A × 水 5限）。新テンプレは A を水 3限へ移す。
+  // 写しはテンプレの位置へ戻す（外して抑止キーも外す）。希望回数・在庫は動かさない（Q36-5）。
+  it('写しを外してテンプレの 3限に戻しても、残数・希望回数・在庫台帳は動かず、保存則・再マージの不動点・再保存の冪等が成り立つ', () => {
+    const week = buildWeek(OLD_ROWS)
+    const copy = { ...cellOf([week], WED_CELL).desks[0].lesson!.studentSlots[0]!, id: 'sA_copy', sameDayMoveSourceDate: WED, sameDayMoveSourceLabel: '2026/10/7(水) 5限' }
+    const moved = week.map((cell) => {
+      if (cell.id === WED_CELL) return { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined } : desk)) }
+      if (cell.id === `${WED}_4`) return { ...cell, desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '佐藤', lesson: { id: 'moved_sA', studentSlots: [copy, null] as [typeof copy | null, typeof copy | null] } } : desk)) }
+      return cell
+    })
+    const suppressed = [`sA__数__${WED}__5`]
+    const state0: SavedState = { weeks: [moved], suppressed, ledgers: {}, scheduleCountAdjustments: [], pendingDesks: {} }
+    const nextRows = [row('r0', 't1', 'sA', '', 3, { slotNumber: 3 }), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
+    const before = balances(state0.weeks, OLD_ROWS, {})
+    const saved = save(state0.weeks, nextRows, state0.suppressed, { manualMakeupAdjustments: {}, templatePendingDesks: {}, scheduleCountAdjustments: [] })
+    expect(saved.summary.sameDayMoveCopiesReverted).toBe(1)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual([`sA__数__${WED}__5`])
+    expect(liveIds(saved.nextWeeks, `${WED}_4`)).toEqual([])
+    expect(liveIds(saved.nextWeeks, `${WED}_3`)).toEqual(['sA'])
+    expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+    expect(saved.manualMakeupOriginAdditions).toEqual([])
+    expect(saved.manualMakeupOriginRemovals).toEqual([])
+    const state = applySaveToState(state0, saved)
+    expect(balances(state.weeks, nextRows, state.ledgers)).toEqual(before)
+    expectNoViolation(state, nextRows, 'Q36 保存後')
+    expectFixpoint(state, nextRows)
+    expectIdempotentResave(state, nextRows, 'Q36 再保存')
+  })
 })

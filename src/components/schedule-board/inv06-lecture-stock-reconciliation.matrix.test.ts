@@ -267,7 +267,8 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
     // 2026-11-01（決定記録 57・A-10）: duplicateDemotions（テンプレ机に置くために別の机の下段へ移した手入力の生徒）も読み取り専用の説明。下段の講習は在庫の走査で消化に数え続ける（INV-06・台帳は触らない）。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    // 2026-11-05（決定記録 63）: sameDayMoveCopiesKeptByRecord（記録があるので戻さず残した同日移動の写し・Q36 H-1）も確認の画面の理由の行に使う読み取り専用の説明。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopiesKeptByRecord', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
@@ -313,7 +314,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     // この盤面（丸ごと振替なし）では空。講習の台帳には一切触れない。
     // 2026-10-21: skippedDuplicates（Q21-11 で置かなかった生徒）と studentNotes（確認の画面の生徒ごとの理由）は読み取り専用の説明で、保存が台帳・在庫へ書く依頼ではない。
     // 2026-11-01（決定記録 57・A-10）: duplicateDemotions（テンプレ机に置くために別の机の下段へ移した手入力の生徒）も読み取り専用の説明。下段の講習は在庫の走査で消化に数え続ける（INV-06・台帳は触らない）。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'duplicateDemotions', 'manualMakeupOriginAdditions', 'manualMakeupOriginRemovals', 'nextPendingDesks', 'nextWeeks', 'orphanedMakeups', 'removedSuppressedRegularLessonOccurrences', 'sameDayMoveCopiesKeptByRecord', 'sameDayMoveCopyReverts', 'scopedFullDates', 'skippedDuplicates', 'slotFollowMoves', 'studentNotes', 'summary', 'teacherNotes', 'wholeDayTransferCountAdjustments', 'wholeDayTransferPending', 'wholeDayTransferPlaced', 'wholeDayTransferSettled', 'wholeDayTransferSkipped', 'wholeDayTransferStocked'])
     expect(diff.manualMakeupOriginAdditions).toEqual([])
     expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })

@@ -1013,4 +1013,19 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(empty.boardDesk(1).teacher).toBe('')
     expect(empty.pagesOf('井上')).toEqual(['落合'])
   })
+
+  // 決定記録 66（オーナー決定 2026-11-05・確認リスト tp-59）: 手置き講師 加藤 の机 2（三好の振替）があるコマで、テンプレが同じコマの机 1 に加藤を生徒つき（青木）で置く。
+  // 旧: 机 1・机 2 の両方に加藤が 1 行で出て、加藤の講師日程表に同じコマが 2 机分出た。新: 机 1 は加藤で確定、机 2 は「上＝講師なし＋三好／下＝加藤」の保留（緑）。
+  it('(g) 手置き講師 加藤 の机 2 × テンプレが机 1 に加藤＋青木 → 加藤はこのコマで机 1 だけ。青木は加藤のページに出て、三好はどの講師のページにも出ない（講師なしの机）', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't_kato', lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const newRows = [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_kato', 'student-aoki', '数')]
+    const { saved, boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(1)).toMatchObject({ teacher: '加藤', manualTeacher: false })
+    expect(boardDesk(2).teacher).toBe('')
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(1)
+    expect(saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, boardDesk(2).id)]?.lower.teacher).toMatchObject({ teacher: '加藤', manualTeacher: true })
+    expect(pagesOf('青木')).toEqual(['加藤'])
+    expect(pagesOf('三好')).toEqual([])
+    expect(pagesOf('井上')).toEqual(['落合'])
+  })
 })

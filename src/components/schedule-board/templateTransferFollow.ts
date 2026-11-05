@@ -631,7 +631,19 @@ export function planWholeDayTransferPlacements(params: {
 
 /** 下段の理由文（Q40-2 の満席・決定記録 48・従来の形＝振替そのものを下段へ置いた。席の生徒がテンプレの通常生徒か、机が既に保留のとき）。 */
 export function buildTransferFollowPendingNote(sourceDateKey: string, targetDateKey: string) {
-  return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました（席の生徒はテンプレの生徒なので下段にできません）。室長が動かすか採用で片づけてください。`
+  return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、保留（下段）に振替として置きました（${TEMPLATE_DERIVED_SEATS_REASON}）。室長が動かすか採用で片づけてください。`
+}
+
+/**
+ * 満席で振替そのものを下段へ置く形の理由（tp-73・オーナー回答 2026-11-05「通常とはテンプレ由来のもの。手入力で置いたものは手入力扱い」・決定記録 65）。
+ * 上段＝テンプレ由来／下段＝手入力 の関係が逆になる（下段がテンプレ由来の振替）ので、そう分かる文にする。旧文「席の生徒はテンプレの生徒なので」は誤解を招いた
+ * （手動追加の振替で満席でも出ていた）。押し出せない席には出欠記録のある席・既に保留の机もある。
+ */
+export const TEMPLATE_DERIVED_SEATS_REASON = '席の 2 人ともテンプレ由来の生徒（または出欠の記録がある席・既に保留の机）のため、手入力として下段へ回せません'
+
+/** 時限変更の追従の満席で振替そのものを下段へ置いた理由文（slot-follow-full・決定記録 46 → 65 で文を改定）。 */
+export function buildSlotFollowPendingNote(oldSlot: number, newSlot: number) {
+  return `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため保留（下段）に置きました（${TEMPLATE_DERIVED_SEATS_REASON}）。下段がテンプレ由来の振替です。室長が動かすか採用で片づけてください。`
 }
 
 /** 下段の理由文（時限変更の追従の満席・決定記録 59・2026-11-01）: 席に居た手入力の生徒を下段へ残し、その席に追従の振替を置いた形。 */
@@ -644,11 +656,19 @@ export function buildTransferFollowDisplacedNote(sourceDateKey: string, targetDa
   return `テンプレ保存で丸ごと振替した日（${sourceDateKey}）に足した生徒の振替先（${targetDateKey}）が満席だったため、この席に居た手入力の生徒を下段（保留）に残し、上段にテンプレの生徒の振替を置きました。室長が採用か移動で片づけてください。`
 }
 
+/** 丸ごと振替の写像そのもの（同じ振替元の日から来た、手入力の印の無い振替）か。押し出さない「同じ組」（決定記録 65・2026-11-05）。 */
+export function isWholeDayTransferMappedMakeup(student: StudentEntry, sourceDateKey: string) {
+  return student.lessonType === 'makeup' && student.makeupSourceDate === sourceDateKey && !student.manualAdded
+}
+
 /**
  * Q40-2 の満席で「上段＝テンプレ／下段＝手入力」を保つための押し出し先（オーナー決定 2026-11-01）。純関数。
  * 同じ机番号の机がまだ保留でなく、望みの席 → もう一方の席の順に、手入力の印（Q22・studentHasManualMark）を持つ生きている生徒が居て
  * その席に出欠記録が無ければ、その席と生徒を返す。同じ振替元の日から丸ごと振替で来た振替（同じ組の写像＝テンプレ由来）は押し出さない。
  * 無ければ null（従来の形＝振替そのものを下段へ）。
+ * ★2026-11-05（tp-73・決定記録 65・オーナー回答「通常とはテンプレ由来のもの。手入力で置いたものは手入力扱い」）: 「同じ組の振替」は**手入力の印の無い**
+ *   振替（丸ごと振替の写像そのもの＝manualAdded でない）だけ。同じ振替元の日でも、手動追加の振替（manualAdded）は手入力なので押し出す（実例: 開発用教室
+ *   11/27(金) 5限 机 13・14 で、テンプレ由来の振替＋手動追加の振替の満席に、追従の振替が下段に入っていた）。
  */
 export function planFullDeskDisplacement(cell: SlotCell, pendingDesks: TemplatePendingDeskMap, deskIndex: number, preferredSeat: number, sourceDateKey: string): { desk: DeskCell; seatIndex: number; occupant: StudentEntry } | null {
   const desk = cell.desks[deskIndex]
@@ -659,7 +679,7 @@ export function planFullDeskDisplacement(cell: SlotCell, pendingDesks: TemplateP
     const occupant = desk.lesson?.studentSlots[seatIndex] ?? null
     if (!occupant || desk.statusSlots?.[seatIndex]) continue
     if (!studentHasManualMark(occupant)) continue
-    if (occupant.lessonType === 'makeup' && occupant.makeupSourceDate === sourceDateKey) continue
+    if (isWholeDayTransferMappedMakeup(occupant, sourceDateKey)) continue
     return { desk, seatIndex, occupant }
   }
   return null
@@ -986,7 +1006,7 @@ export function planSlotChangeTransferFollow(params: {
       lowerPlacement = placeIntoPendingLower({
         cell: newTargetCell, pendingDesks: nextPendingDesks, preferredDeskIndex: item.deskIndex, preferredSeat: item.seatIndex, student: moved,
         effectiveStartDate: targetDateKey, createdAt: params.createdAt, kind: 'slot-follow-full',
-        note: `テンプレで時限を変えた（${oldSlot}限 → ${newSlot}限）ので丸ごと振替の振替を新しい時限へ移しましたが、満席だったため保留（下段）に置きました（席の生徒はテンプレの生徒なので下段にできません）。室長が動かすか採用で片づけてください。`,
+        note: buildSlotFollowPendingNote(oldSlot, newSlot),
       })
       if (!lowerPlacement) continue
     }
