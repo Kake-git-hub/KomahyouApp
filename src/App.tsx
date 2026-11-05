@@ -6,7 +6,7 @@ import type { StudentDeletionStockSummary } from './components/basic-data/delete
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { autoAssignRuleDefinitions, backfillMissingAutoAssignRules, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type StudentWithdrawRemovedLesson, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { appendReopenedSlots, buildSchedulePublishedMap, groupClassSubmissionSubjects, initialSpecialSessions, isTeacherOnlySpecialSession, removedDefaultSpecialSessionIds, resolveSubmissionSchedulePublished, selectSchedulePublishChangedSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
@@ -66,7 +66,7 @@ import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFuncti
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
-import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
+import { appendStudentWithdrawSweepRemovedLessons, preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
 import { SAVE_PROGRESS_LABELS, SAVE_RESULT_MESSAGES, SNAPSHOT_TOO_LARGE_GUIDANCE_MESSAGE, SNAPSHOT_TOO_LARGE_STATUS_MESSAGE, formatCloudSaveNotFinishedMessage, formatSaveProgressClassroomLabel, formatSaveProgressStatus, isSnapshotTooLargeError, isTransientFirebaseSyncError, SNAPSHOT_TOO_LARGE_GUIDANCE_WITHOUT_BACKUP_MESSAGE } from './utils/saveProgressMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
@@ -3402,6 +3402,14 @@ function AuthenticatedApp() {
     studentDeletionStockSignatureRef.current = signature
     setStudentDeletionStockSummary(summary)
   }, [])
+  // 退塾取消(オーナー確定 2026-11-05・withdrawGuard.ts): 盤面の退塾スイープが消した席・出欠記録を、名簿行の
+  // withdrawSweepRemovedLessons へ追記する(「退塾取消」の確認画面の「戻らない授業」)。高3卒業の退塾日 自動入力と同じく
+  // 盤面の外から students を書くので、編集 state の出所が開いている教室と一致するときだけ書く(INV-08)。
+  // 追記するものが無ければ同じ配列が返る(=未保存にならない)。保存は盤面の掃除と同じ手動保存に載る。
+  const handleStudentWithdrawSweepApplied = useCallback((results: Array<{ studentId: string; removedLessons: StudentWithdrawRemovedLesson[] }>) => {
+    if (!actingClassroomId || loadedEditingClassroomIdRef.current !== actingClassroomId) return
+    setStudents((current) => appendStudentWithdrawSweepRemovedLessons(current, results))
+  }, [actingClassroomId, setStudents])
   // 削除時のログインアカウント再認証（本番=firebase のみ。ローカル開発はログインアカウントが無いので不要）。
   // 教室削除(deleteClassroom)と同じ reauthenticateFirebaseUser を流用する。
   const verifyDeletePassword = useCallback(async (password: string) => {
@@ -6497,6 +6505,7 @@ function AuthenticatedApp() {
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
       onDeletionStockSummaryChange={handleDeletionStockSummaryChange}
+      onStudentWithdrawSweepApplied={handleStudentWithdrawSweepApplied}
     />
     {developerReport.target ? null : developerReportContent}
     </>

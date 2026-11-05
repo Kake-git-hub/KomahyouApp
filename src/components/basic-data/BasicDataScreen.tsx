@@ -28,7 +28,8 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, applyLockedStudentBirthDateCorrection, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp } from './withdrawGuard'
+import { applyStudentWithdrawCancel, applyStudentWithdrawToday, buildStudentWithdrawCancelConfirmation, buildStudentWithdrawConfirmation, canCancelStudentWithdrawal, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, applyLockedStudentBirthDateCorrection, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp } from './withdrawGuard'
+import { recordOperationTrace } from '../../utils/operationTrace'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -936,6 +937,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const [deleteModalState, setDeleteModalState] = useState<{ scope: DeleteScope; id: string; name: string; stock?: StudentDeletionStock } | null>(null)
   // 生徒は削除せず「退塾」(押した日を退塾日として記録・データは残す)。オーナー指示 2026-09-13・withdrawGuard.ts。
   const [withdrawModalState, setWithdrawModalState] = useState<{ id: string; name: string; currentWithdrawDate: string; stock?: StudentDeletionStock } | null>(null)
+  // 「退塾生徒」一覧の「退塾取消」(オーナー確定 2026-11-05・withdrawGuard.ts)。確認の画面は退塾と同じ作法(1 行＋畳んだ詳細)。
+  const [withdrawCancelModalState, setWithdrawCancelModalState] = useState<{ id: string; name: string; removedLessons: StudentRow['withdrawSweepRemovedLessons'] } | null>(null)
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteError, setDeleteError] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -1248,11 +1251,33 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     // 記録する日は「押した日」。画面を開いたまま日付をまたいでも正しい日になるよう、確定時に取り直す。
     const today = getReferenceDateKey(new Date())
     onUpdateStudents((current) => applyStudentWithdrawToday(current, withdrawModalState.id, today))
+    // 操作痕跡(「質問・要望」に同梱する端末内の記録)にも残す。誤って退塾にした件を後から追えるように(2026-11-05)。
+    recordOperationTrace('navigation', `基本データ: 退塾 ${withdrawModalState.name}#${withdrawModalState.id} 退塾日=${today}`)
     // ★盤面の痕跡(今日以降の手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)は、盤面側が
     //   「退塾日を過ぎているのに痕跡が残る生徒」を検出して消す(オーナー確定 2026-09-20 夜)。ここから命令は送らない
     //   (日付入力で退塾日を入れた場合と同じ経路にするため)。未消化へは戻さない。昨日以前は触らない。
     setStatusMessage(`${withdrawModalState.name || '生徒'} を ${today} 付けで退塾にしました。`)
     setWithdrawModalState(null)
+  }
+
+  const openStudentWithdrawCancel = (id: string) => {
+    const student = students.find((row) => row.id === id)
+    setWithdrawCancelModalState({ id, name: student ? getStudentDisplayName(student) : '', removedLessons: student?.withdrawSweepRemovedLessons })
+  }
+
+  const closeStudentWithdrawCancel = () => {
+    setWithdrawCancelModalState(null)
+    setStatusMessage('退塾取消をやめました。')
+  }
+
+  const confirmStudentWithdrawCancel = () => {
+    if (!withdrawCancelModalState) return
+    // 名簿の退塾日を未入力へ戻すだけ。盤面・在庫台帳には触らない(通常授業は再マージで、未消化は一覧の絞り込みが外れて戻る)。
+    // 退塾スイープが消した手置きのコマ・記録は戻らない(確認の画面で一覧にした)。保存はいつもの手動保存。
+    onUpdateStudents((current) => applyStudentWithdrawCancel(current, withdrawCancelModalState.id))
+    recordOperationTrace('navigation', `基本データ: 退塾取消 ${withdrawCancelModalState.name}#${withdrawCancelModalState.id} 戻らない授業=${withdrawCancelModalState.removedLessons ? `${withdrawCancelModalState.removedLessons.length}件` : '記録なし'}`)
+    setStatusMessage(`${withdrawCancelModalState.name || '生徒'} の退塾を取り消し、在籍に戻しました。「保存」で確定してください。`)
+    setWithdrawCancelModalState(null)
   }
 
   const cancelDelete = () => {
@@ -1441,7 +1466,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const renderStudents = () => {
     const visibleStudents = studentRosterView === 'active' ? activeStudentRows : withdrawnStudentRows
     // 退塾後(非在籍)の行は**一切編集できない**(オーナー確定 2026-09-20 夜)。退塾すると今日以降の盤面の痕跡が消える
-    // ＝元に戻せないため、退塾日も含めて入力を出さない(「編集」ボタンも出さない)。残す操作は「削除」だけ。
+    // ため、退塾日も含めて入力を出さない(「編集」ボタンも出さない)。在籍へ戻すのは「退塾取消」だけ(2026-11-05・
+    // 消えて戻らない授業を確認の画面で必ず案内する)。ほかに残す操作は「削除」。
     // 在籍中(退塾日が未来)の生徒は従来どおり退塾予定日を早める/遅らせる/消すのが自由(まだ何も消えていない)。
     const isStudentRowLocked = (row: StudentRow) => isStudentRowLockedByWithdrawal(row, todayReferenceDate)
     const isStudentRowInputVisible = (row: StudentRow) => isRowEditing('student', row.id) && !isStudentRowLocked(row)
@@ -1598,6 +1624,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       {canWithdrawStudentToday(row, todayReferenceDate) ? (
                         <button className="secondary-button slim" type="button" onClick={() => openStudentWithdraw(row.id)} data-testid={`basic-data-withdraw-student-${row.id}`}>退塾</button>
                       ) : null}
+                      {/* 退塾取消(2026-11-05): 退塾生徒の一覧だけ。退塾日を外せば在籍になる生徒(高3卒業済みは除く・削除済みは一覧に出ない)。 */}
+                      {studentRosterView === 'withdrawn' && canCancelStudentWithdrawal(row, todayReferenceDate) ? (
+                        <button className="secondary-button slim" type="button" onClick={() => openStudentWithdrawCancel(row.id)} data-testid={`basic-data-cancel-withdraw-student-${row.id}`}>退塾取消</button>
+                      ) : null}
                       {/* 削除は非在籍一覧の退塾済み生徒だけ(アプリ上から消える・データは deletedAt 付きで残る)。 */}
                       {studentRosterView === 'withdrawn' && canDeleteStudentFromApp(row, todayReferenceDate) ? (
                         <button className="secondary-button slim" type="button" onClick={() => removeStudent(row.id)} data-testid={`basic-data-delete-student-${row.id}`}>削除</button>
@@ -1724,6 +1754,35 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               <div className="auto-assign-modal-actions">
                 <button className="secondary-button" type="button" onClick={cancelStudentWithdraw}>キャンセル</button>
                 <button className="primary-button" type="button" onClick={confirmStudentWithdraw} data-testid="basic-data-withdraw-confirm-button">退塾にする</button>
+              </div>
+            </div>
+          </div>
+        )
+      })() : null}
+
+      {withdrawCancelModalState ? (() => {
+        const confirmation = buildStudentWithdrawCancelConfirmation({
+          name: withdrawCancelModalState.name,
+          removedLessons: withdrawCancelModalState.removedLessons,
+        })
+        return (
+          <div className="auto-assign-modal-overlay" role="presentation">
+            <div className="auto-assign-modal basic-data-delete-modal" role="dialog" aria-modal="true" aria-label={confirmation.title}>
+              <div className="auto-assign-modal-title">{confirmation.title}</div>
+              <p className="basic-data-delete-warning" data-testid="basic-data-withdraw-cancel-summary">{confirmation.summary}</p>
+              <p className="basic-data-delete-stock-warning" data-testid="basic-data-withdraw-cancel-removed-heading">{confirmation.removedLessonsHeading}</p>
+              {confirmation.removedLessonLines.length > 0 ? (
+                <ul className="basic-data-delete-hint" style={{ maxHeight: '12em', overflowY: 'auto', margin: 0 }} data-testid="basic-data-withdraw-cancel-removed-list">
+                  {confirmation.removedLessonLines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+                </ul>
+              ) : null}
+              <details className="basic-data-delete-hint" data-testid="basic-data-withdraw-cancel-detail">
+                <summary style={{ cursor: 'pointer' }}>詳細</summary>
+                {confirmation.message}
+              </details>
+              <div className="auto-assign-modal-actions">
+                <button className="secondary-button" type="button" onClick={closeStudentWithdrawCancel}>キャンセル</button>
+                <button className="primary-button" type="button" onClick={confirmStudentWithdrawCancel} data-testid="basic-data-withdraw-cancel-confirm-button">退塾を取り消す</button>
               </div>
             </div>
           </div>

@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- feat: **退塾取消**(オーナー確定 2026-11-05・本番教室で室長が誤って生徒を退塾にした件)。「退塾生徒」一覧の各行に「退塾取消」(全教室・フラグなし・出す条件 `canCancelStudentWithdrawal`＝削除済みでなく行ロック中で、退塾日を外せば在籍になる生徒＝高3卒業済みは除く)。確定 `applyStudentWithdrawCancel` は退塾日を未入力 `''` に戻し、卒業の自動入力の印と記録を外すだけ(盤面・在庫台帳は触らない＝通常授業は再マージで、未消化は一覧の絞り込みが外れて戻る・INV-06)。今後の退塾は、退塾スイープ(`computeStudentWithdrawSweep`)が消した席・出欠記録(保留の下段を含む)を `removedLessons` で返し、盤面→App(`onStudentWithdrawSweepApplied`・開いている教室のときだけ＝INV-08)が名簿行 `withdrawSweepRemovedLessons` へ追記、取消の確認画面に「戻らない授業」として出す(`buildStudentWithdrawCancelConfirmation`・退塾ボタンは `[]` で記録開始)。退塾の確認文を「元に戻せません」→「「退塾取消」で在籍に戻せますが、今日以降に手で置いたコマと記録は消えて戻りません」へ。退塾・退塾取消を操作痕跡に記録。spec-basic-data §B・§H、user-manual(AI 回答の写し functions/src/generated/userManual.ts も再生成＝main マージで Functions デプロイが走る)、確認リスト wc-1・wc-2(開発用教室だけ・版は v1.5.689 据え置き)。テスト `withdrawCancel.test.ts`・`studentWithdrawCancel.test.ts`・sweep テスト拡張。
+
 ## v1.5.689 (2026-11-05)
 
 - fix: **第 2 版 段 4 の最終確認(INV-06)**: 丸ごと振替の組のキー `wholeDayPairKeys` を、生徒日程表の「未定」判定(`App.tsx` の `buildPopupOutstandingMakeupOrigins`)と監査用の生徒授業台帳(`studentLessonLedger.ts`)・調査レポート(`vanishedMakeupReport.ts`)の在庫計算にも渡した(渡し忘れると D' が休日のとき盤面と台帳で +1 ずれる)。回帰テスト `studentLessonLedger.test.ts`「組のキーがあれば休日の D' 自身のテンプレを未消化に数えない」(修正なしで落ちることを確認)。

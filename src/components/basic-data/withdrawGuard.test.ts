@@ -91,7 +91,8 @@ describe('applyStudentWithdrawToday（押した日を退塾日として記録・
     const next = applyStudentWithdrawToday(students, 's002', TODAY)
     expect(next).toHaveLength(2)
     expect(next.map((row) => row.id)).toEqual(['s001', 's002'])
-    expect(next[1]).toEqual({ ...students[1], withdrawDate: TODAY })
+    // 2026-11-05(退塾取消): 退塾ボタンで退塾した生徒は「戻らない授業」の記録を空で始める(記録なし=この機能より前の退塾 と区別する)。
+    expect(next[1]).toEqual({ ...students[1], withdrawDate: TODAY, withdrawSweepRemovedLessons: [] })
     expect(next[0]).toBe(students[0])
   })
 
@@ -105,8 +106,9 @@ describe('buildStudentWithdrawConfirmation', () => {
   it('今日の日付と「データは削除されず残る」ことを伝える(掃除フラグ ON の教室)', () => {
     const confirmation = buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: true })
     expect(confirmation.title).toBe('生徒A を退塾にします')
-    // 2026-10-25 1 行化（オーナー指示）: 畳まずに出す 1 行に日付と「元に戻せません」を必ず含める。案内の全文は message（「詳細」）に残る。
-    expect(confirmation.summary).toBe(`本日（${TODAY}）で退塾にします。★元に戻せません（データは「退塾生徒」に残ります）。`)
+    // 2026-10-25 1 行化（オーナー指示）: 畳まずに出す 1 行に日付を必ず含める。案内の全文は message（「詳細」）に残る。
+    // 2026-11-05(退塾取消・オーナー確定): 「元に戻せません」→「退塾取消で在籍に戻せるが、今日以降に手で置いたコマと記録は消えて戻らない」。
+    expect(confirmation.summary).toBe(`本日（${TODAY}）で退塾にします。「退塾取消」で在籍に戻せますが、今日以降に手で置いたコマと記録は消えて戻りません。`)
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
     // 2026-09-20 夜 改定: 一覧の呼び名は「退塾生徒」(旧「非在籍生徒表示」へ戻さない)。
@@ -120,8 +122,10 @@ describe('buildStudentWithdrawConfirmation', () => {
     expect(confirmation.message).toContain('今日以降の講習・振替などのコマと記録も消えます')
     expect(confirmation.message).toContain('未消化へは戻りません')
     expect(confirmation.message).toContain('昨日以前の記録は残ります')
-    // 2026-09-20 夜 改定: 退塾後は退塾日も編集できない=取り消せないので「元に戻せません」と伝える。
-    expect(confirmation.message).toContain('退塾にすると元に戻せません')
+    // 2026-11-05 改定(退塾取消・オーナー確定): 在籍には戻せるが、消えたコマと記録は戻らないと伝える(「元に戻せません」とは言わない)。
+    expect(confirmation.message).toContain('「退塾取消」で在籍に戻せます')
+    expect(confirmation.message).toContain('今日以降に手で置いた講習・振替などのコマと記録は消えて戻りません')
+    expect(confirmation.message).not.toContain('元に戻せません')
     expect(confirmation.overwriteNote).toBeNull()
     expect(confirmation.stockWarning).toBeNull()
   })
@@ -142,8 +146,10 @@ describe('buildStudentWithdrawConfirmation', () => {
       expect(confirmation.message).toContain('手で置いた講習・振替のコマは残ります')
       expect(confirmation.message).not.toContain('今日以降の講習・振替などのコマと記録も消えます')
       expect(confirmation.message).not.toContain('未消化へは戻りません')
-      // 退塾後の行ロックはフラグに依らず全教室で有効なので、「元に戻せません」は OFF でも出す。
-      expect(confirmation.message).toContain('退塾にすると元に戻せません')
+      // 退塾取消はフラグに依らず全教室で使えるので OFF でも案内する。OFF の教室は手で置いたコマが消えないので「消えて戻りません」とは書かない。
+      expect(confirmation.message).toContain('「退塾取消」で在籍に戻せます')
+      expect(confirmation.message).not.toContain('消えて戻りません')
+      expect(confirmation.summary).toBe(`本日（${TODAY}）で退塾にします。「退塾取消」で在籍に戻せます（データは「退塾生徒」に残ります）。`)
       expect(confirmation.message).toContain('本日から非在籍')
       expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
     }
@@ -269,9 +275,10 @@ describe('退塾後の行ロックと取り込みガード(オーナー確定 20
       .toEqual([{ id: 's002', withdrawDate: '', birthDate: '2012-05-01' }])
   })
 
-  it('退塾の確認文は「元に戻せません」と伝え、一覧の呼び名も「退塾生徒」に揃える', () => {
+  it('退塾の確認文は「退塾取消」で戻せることと消えたコマは戻らないことを伝え、一覧の呼び名も「退塾生徒」に揃える', () => {
     const confirmation = buildStudentWithdrawConfirmation({ name: '山田 太郎', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: true })
-    expect(confirmation.message).toContain('退塾にすると元に戻せません')
+    expect(confirmation.message).toContain('「退塾取消」で在籍に戻せます')
+    expect(confirmation.message).toContain('消えて戻りません')
     expect(confirmation.message).toContain('退塾生徒')
     expect(confirmation.message).not.toContain('非在籍生徒表示')
     expect(confirmation.message).not.toContain('退塾日を消してください')
