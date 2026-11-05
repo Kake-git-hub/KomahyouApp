@@ -99,6 +99,12 @@ export type VerificationChecklistPanelProps = {
    * タブを選べないブラウザでは App が渡さない(ボタンを出さず、ファイル選択と貼り付けだけ)。
    */
   onCaptureTab?: (view: Window) => Promise<{ name: string; dataUrl: string }>
+  /**
+   * 「準備する」(2026-11-06 オーナー選択「案 C(段階導入)」・spec-developer-report §E-2-4)。autoPrep の項目に出すボタンから呼ぶ。
+   * App が開いているコマ表へ一過性リクエスト(checklistPrepRequest)を渡し、結果文(どこに何を置いたか・残る手作業)を返す。
+   * App は検証用教室(開発用・テスト教室)のときだけ渡す。無ければボタンを出さない。保存はしない(「保存」を押してもらう)。
+   */
+  onPrepare?: (itemId: string) => Promise<{ ok: boolean; message: string }>
 }
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: VerificationChecklistStatus; label: string }> = [
@@ -147,7 +153,7 @@ type SharedResultsState =
   | { status: 'ready'; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
   | { status: 'error'; message: string; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
 
-export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
@@ -165,6 +171,10 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   /** 項目ごとの送信結果の一言(失敗の理由など)。 */
   const [itemMessages, setItemMessages] = useState<Record<string, string>>({})
   const [resultMessage, setResultMessage] = useState<string | null>(null)
+  /** 「準備する」を実行中の項目 id(同時に 1 件だけ)。 */
+  const [preparingItemId, setPreparingItemId] = useState<string | null>(null)
+  /** 「準備する」の結果文(項目ごと・画面だけ。下書きには保存しない)。 */
+  const [prepResults, setPrepResults] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [shared, setShared] = useState<SharedResultsState>({ status: 'idle' })
   /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
   const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
@@ -369,6 +379,21 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     })
   }, [])
 
+  /** 「準備する」(2026-11-06)。同時に 1 件だけ。結果文は画面だけに出す(下書きには残さない)。 */
+  const handlePrepare = useCallback(async (itemId: string) => {
+    if (!onPrepare || preparingItemId !== null) return
+    setPreparingItemId(itemId)
+    try {
+      const result = await onPrepare(itemId)
+      setPrepResults((current) => ({ ...current, [itemId]: result }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setPrepResults((current) => ({ ...current, [itemId]: { ok: false, message: `準備できませんでした: ${message}` } }))
+    } finally {
+      setPreparingItemId(null)
+    }
+  }, [onPrepare, preparingItemId])
+
   /** 1 項目を送る(2026-11-03)。1 項目 = 1 通。送れたら下書きに「送った内容」を残し、その項目の画像を下書きから外す。 */
   const handleSendItem = useCallback(async (itemId: string) => {
     if (sendingKey) return
@@ -566,7 +591,33 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                   ) : null}
                   {/* オーナーが新たに決めたこと(2026-11-01 オーナー指示「私が行った新たな判断があるものは、確認リストの説明に新たに定義したことを記載しテスト担当者が分かるように」)。 */}
                   {item.ownerDecision ? <p className="verification-checklist-owner-decision" data-testid={`verification-checklist-owner-decision-${item.id}`}><span className="verification-checklist-label">オーナーの決定</span>{text(item.ownerDecision)}</p> : null}
-                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p> : null}
+                  {item.prep ? (
+                    <div className="verification-checklist-prep-row">
+                      <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
+                      {/* 「準備する」(2026-11-06・案 C 第 1 段): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
+                      {item.autoPrep && onPrepare ? (
+                        <button
+                          type="button"
+                          className="secondary-button verification-checklist-prep-button"
+                          onClick={() => { void handlePrepare(item.id) }}
+                          disabled={preparingItemId !== null}
+                          data-testid={`verification-checklist-prep-${item.id}`}
+                        >
+                          {preparingItemId === item.id ? '準備中…' : '準備する'}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {prepResults[item.id] ? (
+                    <p
+                      className={`verification-checklist-prep-result ${prepResults[item.id].ok ? 'is-ok' : 'is-error'}`}
+                      data-testid="verification-checklist-prep-result"
+                      data-item-id={item.id}
+                      role="status"
+                    >
+                      {prepResults[item.id].message}
+                    </p>
+                  ) : null}
                   <div className="verification-checklist-label">やること</div>
                   <ol className="verification-checklist-steps">
                     {item.steps.map((step) => <li key={step}>{text(step)}</li>)}

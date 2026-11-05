@@ -6221,6 +6221,37 @@ body.verification-checklist-window {
   margin: 0 8px 0 0;
 }
 
+/* 確認リスト: 「準備する」(2026-11-06・案 C 第 1 段)。準備の行の右にボタン、結果文は項目の下に出す(改行を残す)。 */
+.verification-checklist-prep-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.verification-checklist-prep-row .verification-checklist-prep {
+  flex: 1;
+}
+.verification-checklist-prep-button {
+  margin-top: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.verification-checklist-prep-result {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 24px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+.verification-checklist-prep-result.is-ok {
+  background: #ecfdf5;
+  color: #065f46;
+}
+.verification-checklist-prep-result.is-error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
 .verification-checklist-check {
   margin: 4px 0 8px;
   padding-left: 22px;

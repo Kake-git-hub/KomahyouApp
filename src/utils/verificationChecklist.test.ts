@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { CHECKLIST_PREP_ITEM_IDS } from '../components/schedule-board/checklistPrep'
 import { DEVELOPER_REPORT_NOTE_LIMIT } from './developerReport'
 import {
   VERIFICATION_CHECKLIST,
@@ -243,7 +244,7 @@ describe('確認リストの項目定義', () => {
     // 同じ第109版(2026-11-05 夜・第 2 版 監査の追補 §9-14・§9-15): 下の行だけの手入力を上げる・手置き講師がテンプレの別の机にも居る机の v2-3 を足した(版は据え置き)。
     // 同じ第109版(2026-11-05 夜・第 2 版 段 4): 丸ごと振替の付け替え(同じ曜日だけ・テンプレに追従・解除)の v2-4 を足した(版は据え置き・テスト教室にも出す)。
     // 同じ第110版(2026-11-05 夜・段 4 の監査後の決定 §9-20・§9-21): 解除で移した手入力が元の日へ戻る・振替先に同じ生徒の手入力なら振替元は休みの v2-6 を足した(版は据え置き)。
-    expect(ids).toEqual(['tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-3', 'v2-5', 'v2-6'])
+    expect(ids).toEqual(['ap-1', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-3', 'v2-5', 'v2-6'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -654,7 +655,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-3', 'v2-5', 'v2-6'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['ap-1', 'tp-64', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-1', 'v2-3', 'v2-5', 'v2-6'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
@@ -662,7 +663,8 @@ describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示�
     for (const id of VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS) {
       const item = byId.get(id)
       expect(item, id).toBeDefined()
-      expect(item!.area, id).toBe('テンプレ作成')
+      // 第112版(2026-11-06): 「準備する」そのものの確認 ap-1(分類「確認リスト」)もテスト教室に出す(テンプレ関係の準備を自動で作る仕組みなので両教室で確かめる)。
+      expect(item!.area, id).toBe(id === 'ap-1' ? '確認リスト' : 'テンプレ作成')
       const text = [item!.title, item!.prep ?? '', ...item!.steps, ...(item!.check ?? [])].join('\n')
       expect(text, id).not.toMatch(VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER)
       expect(text, id).not.toContain('tp-41')
@@ -998,5 +1000,31 @@ describe('第111版(2026-11-05・v1.5.691): 11/5 深夜の送信(受付 20261105
   it('フリーメモ 2 件(確認リストの準備を自動で作る・20261105-190026128 / 20261105-190336460)はオーナー判断待ちなので対応済みにしない', () => {
     expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS).not.toContain('20261105-190026128-0be8a06a')
     expect(VERIFICATION_CHECKLIST_PROCESSED_REPORT_IDS.some((id) => id.startsWith('20261105-190026128') || id.startsWith('20261105-190336460'))).toBe(false)
+  })
+})
+
+describe('「準備する」(自動準備・2026-11-06 案 C 第 1 段・spec-developer-report §E-2-4)', () => {
+  it('autoPrep の項目の id 集合は checklistPrep.ts の CHECKLIST_PREP_ITEM_IDS と一致する(片方だけ足さない)', () => {
+    const autoPrepIds = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep).map((item) => item.id).sort()
+    expect(autoPrepIds).toEqual([...CHECKLIST_PREP_ITEM_IDS].sort())
+  })
+
+  it('autoPrep の項目の準備は「準備する」を押す文から始まる', () => {
+    for (const item of VERIFICATION_CHECKLIST.items.filter((entry) => entry.autoPrep)) {
+      expect(item.prep, item.id).toMatch(/^「準備する」を押す/u)
+    }
+  })
+})
+
+describe('第112版(2026-11-06・v1.5.692): 確認リストの「準備する」(自動準備・案 C 第 1 段)', () => {
+  const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+  it('ap-1(「準備する」そのものの確認)を先頭に足し、テスト教室にも出す', () => {
+    const item = byId.get('ap-1')!
+    expect(item.introducedIn).toBe('v1.5.692')
+    expect(item.ownerDecision).toContain('オーナーが 11/6 に決めたこと')
+    expect(item.check!.join('\n')).toContain('確認用 体験1')
+    expect(VERIFICATION_CHECKLIST.items[0].id).toBe('ap-1')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('ap-1')
+    expect(item.autoPrep).toBeUndefined()
   })
 })

@@ -27,6 +27,25 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(preceding).toMatch(/isActingDevelopmentClassroom\s*\?\s*\(\s*$/u)
   })
 
+  it('「準備する」(2026-11-06・案 C 第 1 段): パネルへ onPrepare、コマ表へ一過性リクエストと結果の受け口を渡す', () => {
+    // パネル自体が検証用教室(開発用・テスト教室)のときしかマウントされないので、onPrepare は常に渡してよい。
+    const panelIndex = APP_TSX.indexOf('<VerificationChecklistPanel')
+    const panelEnd = APP_TSX.indexOf('/>', panelIndex)
+    expect(APP_TSX.slice(panelIndex, panelEnd)).toContain('onPrepare={handleChecklistPrepare}')
+    expect(APP_TSX).toContain('checklistPrepRequest={checklistPrepRequest}')
+    expect(APP_TSX).toContain('onChecklistPrepRequestProcessed={handleChecklistPrepRequestProcessed}')
+    // Issue #46 同型: 処理結果を受けたら requestId で消費(null 化)する。保険タイマーも同じ消費を通す。
+    expect(APP_TSX).toContain('setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))')
+    expect(APP_TSX).toContain('const CHECKLIST_PREP_TIMEOUT_MS = 10000')
+    // 教室を切り替えた・教室データが差し替わったら、リクエストを捨てて待っている結果は失敗で返す(前の教室へ準備を置かない・INV-08)。
+    expect(APP_TSX).toMatch(/useEffect\(\(\) => \{\r?\n\s+cancelChecklistPrep\(CHECKLIST_PREP_CANCELLED_MESSAGE\)\r?\n\s+\}, \[actingClassroomId, boardMountKey, cancelChecklistPrep\]\)/u)
+  })
+
+  it('App.tsx は CRLF のまま(-text 扱い・書き換えで LF に変わると差分が全行になる)', () => {
+    expect(APP_TSX).toContain('\r\n')
+    expect(APP_TSX.replace(/\r\n/gu, '')).not.toContain('\n')
+  })
+
   it('画面分岐の外側(renderWithSubmissionAcknowledgement)に置かれ、確認通知の有無に関わらず出る', () => {
     expect(APP_TSX).toContain('const verificationChecklistPanel = isActingDevelopmentClassroom ? (')
     // 早期 return 側と通常 return 側の両方に差し込まれている(片方だけだと画面によって消える)。

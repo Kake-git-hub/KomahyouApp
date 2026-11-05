@@ -65,6 +65,7 @@ import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
+import { CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE, consumeChecklistPrepRequest, type ChecklistPrepRequest, type ChecklistPrepRequestResult, type ChecklistPrepResult } from './components/schedule-board/checklistPrep'
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
@@ -78,6 +79,11 @@ import './App.css'
 export type ClassroomSettings = SharedClassroomSettings
 
 const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
+// 確認リストの「準備する」(2026-11-06・案 C 第 1 段・spec-developer-report §E-2-4): コマ表が結果を返さないときの保険(週を移る分を見込んで保護者連絡の 8 秒より長め)。
+const CHECKLIST_PREP_TIMEOUT_MS = 10000
+const CHECKLIST_PREP_TIMEOUT_MESSAGE = 'コマ表で準備できませんでした。コマ表を開いてから、もう一度押してください。'
+const CHECKLIST_PREP_CANCELLED_MESSAGE = '教室が切り替わったか、教室のデータが読み直されたため、準備を取りやめました。もう一度押してください。'
+const CHECKLIST_PREP_SUPERSEDED_MESSAGE = '新しい準備を始めたため、前の準備は取りやめました。'
 
 // 保存失敗時の作業指示(spec-save-restore.md §2)。自動リトライに頼らず、
 // 自動ダウンロードしたバックアップを使って再ログイン後に復元する手順を明示する。
@@ -1892,6 +1898,47 @@ function AuthenticatedApp() {
     }, 8000)
     return () => window.clearTimeout(timeoutId)
   }, [parentAbsenceRequest, setParentAbsenceError])
+  // --- 確認リストの「準備する」(2026-11-06 オーナー選択「案 C(段階導入)」・spec-developer-report §E-2-4・計画 docs/plan-2026-11-06-checklist-auto-prep.md) ---
+  // パネル(検証用教室だけでマウント)→ ここで一過性リクエスト checklistPrepRequest を立てる → コマ表の effect が 1 回だけ処理して結果を返す →
+  // requestId で消費(null)して、待っているパネルの Promise を解く(Issue #46 同型・parentAbsenceRequest と同じ作法)。保存はしない(「保存」を押してもらう)。
+  const [checklistPrepRequest, setChecklistPrepRequest] = useState<ChecklistPrepRequest | null>(null)
+  const checklistPrepRequestIdRef = useRef(0)
+  // 結果待ちのパネル(同時に 1 件だけ)。保険タイマーもここで持ち、結果・タイムアウト・取りやめのどれか 1 回で解く。
+  const checklistPrepPendingRef = useRef<{ requestId: number; resolve: (result: ChecklistPrepResult) => void; timeoutId: number } | null>(null)
+  const settleChecklistPrep = useCallback((requestId: number, result: ChecklistPrepResult) => {
+    const pending = checklistPrepPendingRef.current
+    if (!pending || pending.requestId !== requestId) return
+    checklistPrepPendingRef.current = null
+    window.clearTimeout(pending.timeoutId)
+    pending.resolve(result)
+  }, [])
+  const cancelChecklistPrep = useCallback((message: string) => {
+    setChecklistPrepRequest(null)
+    const pending = checklistPrepPendingRef.current
+    if (pending) settleChecklistPrep(pending.requestId, { ok: false, message })
+  }, [settleChecklistPrep])
+  const handleChecklistPrepare = useCallback((itemId: string): Promise<ChecklistPrepResult> => {
+    // 二重のガード(パネルは検証用教室だけでマウント・コマ表も開いている教室で断る)。
+    if (!isActingDevelopmentClassroom) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE })
+    const previous = checklistPrepPendingRef.current
+    if (previous) settleChecklistPrep(previous.requestId, { ok: false, message: CHECKLIST_PREP_SUPERSEDED_MESSAGE })
+    // 準備はコマ表の上で行う。別の画面ならコマ表へ移る(コマ表がマウントされた最初のレンダーで effect が処理する)。
+    if (screenRef.current !== 'board') navigateClassroomScreenRef.current('board')
+    checklistPrepRequestIdRef.current += 1
+    const requestId = checklistPrepRequestIdRef.current
+    return new Promise<ChecklistPrepResult>((resolve) => {
+      const timeoutId = window.setTimeout(() => {
+        setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, requestId))
+        settleChecklistPrep(requestId, { ok: false, message: CHECKLIST_PREP_TIMEOUT_MESSAGE })
+      }, CHECKLIST_PREP_TIMEOUT_MS)
+      checklistPrepPendingRef.current = { requestId, resolve, timeoutId }
+      setChecklistPrepRequest({ requestId, itemId })
+    })
+  }, [isActingDevelopmentClassroom, screenRef, settleChecklistPrep])
+  const handleChecklistPrepRequestProcessed = useCallback((result: ChecklistPrepRequestResult) => {
+    setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))
+    settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message })
+  }, [settleChecklistPrep])
   // 「振替先を今決める」の配置が終わった(配置した/キャンセルした)。残りの連絡があればモーダルを開き直す。
   const handleParentAbsencePlacementSettled = useCallback(() => {
     isParentAbsencePlacementActiveRef.current = false
@@ -1999,6 +2046,7 @@ function AuthenticatedApp() {
         onSubmitNote={submitVerificationChecklistNote}
         loadSharedResults={loadVerificationChecklistSharedResults}
         resolveStudentName={resolveVerificationChecklistStudentName}
+        onPrepare={handleChecklistPrepare}
         onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}
       />
     ) : null
@@ -5093,6 +5141,12 @@ function AuthenticatedApp() {
     // 盤面は新しい名簿 × 新しい盤面で検出し直す(前の教室の掃除が流れることは無い・INV-08)。
   }, [boardMountKey, setPendingParentAbsenceFinalize])
 
+  // 確認リストの「準備する」: 教室を切り替えた・教室データが差し替わった(boardMountKey)ら、リクエストを捨てて待っているパネルへは失敗で返す
+  // (前の教室で押した準備を次の教室のコマ表へ置かない・INV-08)。
+  useEffect(() => {
+    cancelChecklistPrep(CHECKLIST_PREP_CANCELLED_MESSAGE)
+  }, [actingClassroomId, boardMountKey, cancelChecklistPrep])
+
   // --- 高3卒業の退塾日 自動入力(オーナー確定 2026-09-20 夜・案A・graduationWithdraw.ts・INV-02) ---------------
   // 4/1 になったら、卒業年度を過ぎた高3の withdrawDate へ 3/31 を**実データとして**入れる(従来は管理データ画面の
   // 表示上だけ補完していた)。これで卒業生も「退塾」として扱われ、盤面の痕跡消し(退塾スイープ)・請求の在籍数・
@@ -6464,6 +6518,8 @@ function AuthenticatedApp() {
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       parentAbsenceRequest={parentAbsenceRequest}
       onParentAbsenceRequestProcessed={handleParentAbsenceRequestProcessed}
+      checklistPrepRequest={checklistPrepRequest}
+      onChecklistPrepRequestProcessed={handleChecklistPrepRequestProcessed}
       isEditingStateLoadedForActingClassroom={Boolean(actingClassroomId) && loadedEditingClassroomIdRef.current === actingClassroomId}
       onParentAbsencePlacementSettled={handleParentAbsencePlacementSettled}
       initialBoardState={boardState}
