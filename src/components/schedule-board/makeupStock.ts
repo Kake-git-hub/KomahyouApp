@@ -1111,7 +1111,7 @@ function consumeOriginDates(originDates: string[], usedOriginDates: ReadonlyArra
 export function collectMakeupOriginCategoriesByKey(params: Parameters<typeof collectMakeupOriginDatesByKey>[0]): { effective: Record<string, string[]>; relaxed: Record<string, string[]> } {
   const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true, templatePendingDesks } = params
   const managedStudentIds = new Set(students.map((student) => student.id))
-  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks)).origins
+  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks, params.wholeDayPairKeys)).origins
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
   const absentMakeupOrigins = includeAbsentMakeupOrigins
     ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(resolveMakeupScanWeeks(weeks, templatePendingDesks), resolveStudentKey), managedStudentIds)
@@ -1160,6 +1160,8 @@ export function collectMakeupOriginDatesByKey(params: {
    * 記録の破棄と同時に在庫が消える（INV-06 誤減）。
    */
   includeAbsentMakeupOrigins?: boolean
+  /** 段 4: 丸ごと振替の組のキー（抑止キーの配列そのままでよい）。組の D' は盤面の印に加えてここからも読む（collectWholeDayPairTargetDates）。 */
+  wholeDayPairKeys?: readonly string[]
   /** テンプレ差分反映の保留マップ。下段の欠席記録も欠席由来の origin に数える（resolveMakeupScanWeeks・INV-06）。 */
   templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
@@ -1245,11 +1247,13 @@ export function buildMakeupStockEntries(params: {
   today?: Date
   /** テンプレ差分反映の保留マップ。下段を消化・欠席由来の走査に含める（resolveMakeupScanWeeks・INV-06 の 3 本目の走査対象）。 */
   templatePendingDesks?: TemplatePendingDeskMap | null
+  /** 段 4: 丸ごと振替の組のキー（collectWholeDayPairTargetDates が盤面の印に加えて読む）。 */
+  wholeDayPairKeys?: readonly string[]
 }) {
   // teachers はパラメータ型に残す(呼び出し側の互換維持)が、空きコマ不足origin廃止に伴い内部では未使用。
   const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date(), templatePendingDesks } = params
   const scanWeeks = resolveMakeupScanWeeks(weeks, templatePendingDesks)
-  const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks))
+  const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today, collectWholeDayPairTargetDates(weeks, params.wholeDayPairKeys))
   const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
   const absentMakeupResultOrigins = collectAbsentMakeupOrigins(scanWeeks, resolveStudentKey)
   const automaticShortages = automaticShortageResult.origins

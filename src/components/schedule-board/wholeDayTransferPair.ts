@@ -229,8 +229,9 @@ export function stripWholeDayPairDerivedRecords(cell: SlotCell): SlotCell {
  * 在庫の計算は抑止キーを受け取らないので、盤面に残る印（D の「休)」記録の移動先・D' の付け替えの授業）から読む。
  * D' を休日設定して付け替えの授業が D' から消えても、D の「休)」記録が移動先を持ち続ける。
  */
-export function collectWholeDayPairTargetDates(weeks: readonly (readonly SlotCell[])[]): Set<string> {
-  const dates = new Set<string>()
+export function collectWholeDayPairTargetDates(weeks: readonly (readonly SlotCell[])[], keys: readonly string[] = []): Set<string> {
+  // 再監査 要確認-3: 組のキーからも読む（D の週を盤面から外した・記録が作り直される前でも D' を数えない）。
+  const dates = new Set<string>(parseWholeDayTransferPairs(keys).map((pair) => pair.targetDateKey))
   for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
     for (const entry of desk.statusSlots ?? []) if (entry?.wholeDayPairDerived && entry.wholeDayPairTargetDate) dates.add(entry.wholeDayPairTargetDate)
     for (const student of desk.lesson?.studentSlots ?? []) if (student?.wholeDayPairSourceDate && student.lessonType === 'makeup') dates.add(cell.dateKey)
@@ -249,21 +250,47 @@ export function cellsHaveNonDerivedStatusEntries(cells: readonly SlotCell[]) {
  * collectAbsentMakeupOrigins）にし、振替先を持たせない。置けるようになったら「休)→D'」へ戻す。D と D' は別の週にあるので、週ごとの
  * 再マージの後に盤面全体で 1 回当てる（remergeBoardWeeksWithManagedData・テンプレの保存・付け替えの作成/解除の 3 か所）。何度当てても同じ（不動点）。
  */
-export function settleWholeDayPairBlockedRecords(weeks: SlotCell[][], keys: readonly string[], pendingDesks?: TemplatePendingDeskMap | null): SlotCell[][] {
+/**
+ * D' のコマで、付け替えの生徒 S を §2-2・§2-4 で置かないか（呼び出し側が templateConflictRules の collectTemplateBlockersInCell＋resolveTemplateStudentBlock を
+ * 当てて決める＝差分反映・再マージと同じ根拠。付け替えの授業そのものとその記録は根拠から外すこと・再監査 重大-A）。
+ */
+export type WholeDayPairTargetBlockResolver = (targetCell: SlotCell, entry: StudentStatusEntry, pair: WholeDayTransferPair) => boolean
+
+/** 根拠から外す: 付け替えの授業そのもの（印 wholeDayPairSourceDate）と、その記録（記録の印が組の D）。手入力と手入力の記録だけを残したセル（と保留）。 */
+export function stripWholeDayPairOwnEntries(cell: SlotCell, pendingDesks: TemplatePendingDeskMap | null | undefined, sourceDateKey: string): { cell: SlotCell; pendingDesks: TemplatePendingDeskMap } {
+  const keepStudent = (student: StudentEntry | null) => (student && student.wholeDayPairSourceDate === sourceDateKey ? null : student)
+  const keepRecord = (entry: StudentStatusEntry | null) => (entry && entry.wholeDayPairSourceDate === sourceDateKey ? null : entry)
+  const nextPending: TemplatePendingDeskMap = { ...(pendingDesks ?? {}) }
+  const desks = cell.desks.map((desk) => {
+    const key = buildTemplatePendingDeskKey(cell.id, desk.id)
+    const pending = nextPending[key]
+    if (pending) {
+      nextPending[key] = {
+        ...pending,
+        lower: {
+          ...pending.lower,
+          ...(pending.lower.lesson ? { lesson: { ...pending.lower.lesson, studentSlots: pending.lower.lesson.studentSlots.map(keepStudent) as [StudentEntry | null, StudentEntry | null] } } : {}),
+          ...(pending.lower.statusSlots ? { statusSlots: pending.lower.statusSlots.map(keepRecord) as [StudentStatusEntry | null, StudentStatusEntry | null] } : {}),
+        },
+      }
+    }
+    return {
+      ...desk,
+      ...(desk.lesson ? { lesson: { ...desk.lesson, studentSlots: desk.lesson.studentSlots.map(keepStudent) as [StudentEntry | null, StudentEntry | null] } } : {}),
+      ...(desk.statusSlots ? { statusSlots: desk.statusSlots.map(keepRecord) as [StudentStatusEntry | null, StudentStatusEntry | null] } : {}),
+    }
+  })
+  return { cell: { ...cell, desks }, pendingDesks: nextPending }
+}
+
+export function settleWholeDayPairBlockedRecords(weeks: SlotCell[][], keys: readonly string[], isBlockedOnTarget: WholeDayPairTargetBlockResolver): SlotCell[][] {
   const pairs = parseWholeDayTransferPairs(keys)
   if (pairs.length === 0) return weeks
   const cellsByDate = new Map<string, SlotCell[]>()
   for (const week of weeks) for (const cell of week) cellsByDate.set(cell.dateKey, [...(cellsByDate.get(cell.dateKey) ?? []), cell])
-  const sameStudent = (left: Pick<StudentEntry, 'managedStudentId' | 'name'>, right: Pick<StudentEntry, 'managedStudentId' | 'name'>) => (
-    left.managedStudentId && right.managedStudentId ? left.managedStudentId === right.managedStudentId : left.name === right.name
-  )
   const manualOnTarget = (pair: WholeDayTransferPair, slotNumber: number, entry: StudentStatusEntry) => {
     const cell = (cellsByDate.get(pair.targetDateKey) ?? []).find((item) => item.slotNumber === slotNumber)
-    if (!cell) return false
-    return cell.desks.some((desk) => [
-      ...(desk.lesson?.studentSlots ?? []),
-      ...(pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []),
-    ].some((student) => Boolean(student) && !isWholeDayPairExpandedStudent(student) && isManualOriginStudent(student) && sameStudent(student!, entry)))
+    return cell ? isBlockedOnTarget(cell, entry, pair) : false
   }
   let changed = false
   const next = weeks.map((week) => week.map((cell) => {

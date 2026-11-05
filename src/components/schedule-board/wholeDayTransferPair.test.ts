@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import type { SlotCell, StudentEntry } from './types'
 import {
   appendWholeDayTransferPair,
+  collectWholeDayPairTargetDates,
   buildWholeDayTransferPairKey,
   convertToWholeDayPairStudent,
   findWholeDayTransferPairForDate,
@@ -17,9 +18,10 @@ import {
   stripWholeDayPairDerivedRecords,
 } from './wholeDayTransferPair'
 import { inferStudentOrigin, resolveStudentOrigin } from './placementOrigin'
-import { buildStudentStatusEntry, buildWholeDayTransferPairConfirmMessage, canReleaseWholeDayTransferPair, formatStockOriginLabel, computeStudentMove, prepareStudentForMove, resolveWholeDayTransferPairSourceBlockReason } from './ScheduleBoardScreen'
+import { buildStudentStatusEntry, buildWholeDayTransferPairConfirmMessage, buildWholeDayTransferPairReleaseConfirmMessage, canReleaseWholeDayTransferPair, formatStockOriginLabel, resolveHolidayReleaseSuppressedOccurrences, computeStudentMove, prepareStudentForMove, resolveWholeDayTransferPairSourceBlockReason } from './ScheduleBoardScreen'
 import { auditTemplateLessonAccounting, describeLessonAccountingViolations } from './templateLessonAccountingOracle'
 import { collectOrphanedMakeups } from './templateTransferFollow'
+import { collectMakeupOriginDatesByKey } from './makeupStock'
 import { buildParentScheduleView } from '../../utils/parentSchedule'
 import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../../../functions/src/generated/parentSchedule'
 import { buildStudentPayload } from '../../utils/scheduleHtml'
@@ -378,7 +380,7 @@ describe('§9-20: 作成 → 解除で元の形へ戻る（D から移した手�
     const settledBefore = remerge(before, ROWS, [])
     const paired = pairedOrThrow(pairOf(settledBefore))
     expect(studentAt(paired.nextWeeks, D2, 1, 1)?.wholeDayPairMovedFrom).toMatchObject({ dateKey: D })
-    expect(cellAt(paired.nextWeeks, D2).desks[0].wholeDayPairMovedMemoFrom).toEqual([null, D])
+    expect(cellAt(paired.nextWeeks, D2).desks[0].wholeDayPairMovedMemoFrom).toEqual([null, { dateKey: D, text: '自習' }])
     const released = releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
     if (released.status !== 'transferred') throw new Error(released.message)
     expect(released.nextWeeks).toEqual(settledBefore)
@@ -421,5 +423,159 @@ describe('監査 要確認-5: フラグを OFF に戻しても、組のある日
     expect(board).not.toContain('templateDiffApplyEnabled && findWholeDayTransferPairForDate(')
     // 作るのは ON の教室だけ（OFF は第 1 版の computeWholeDayTransfer のまま）。
     expect(board).toContain('if (templateDiffApplyEnabled) {\n      handleWholeDayTransferPairTarget(sourceDateKey, targetDateKey)')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 段 4 再監査（2026-11-05・4d548b7）
+// ─────────────────────────────────────────────────────────────────────────────
+
+const trialEntry = (id = 'trial-1'): StudentEntry => ({ id, name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' })
+const byStudentName = new Map(students.map((student) => [student.name, student]))
+const weekIndexOf = (weeks: SlotCell[][], dateKey: string) => weeks.findIndex((week) => week.some((cell) => cell.dateKey === dateKey))
+const releasedOrThrow = (result: ReturnType<typeof releaseOf>) => {
+  if (result.status !== 'transferred') throw new Error(result.message)
+  return result
+}
+
+describe('再監査 要修正-1: D から移した手入力は、D\' の中で動かした・並べ替えたら解除で D へ戻さない', () => {
+  it('D から移した体験を D\' で別の時限へ動かすと解除で D\' に残る（印も外れる）', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[1].lesson!.studentSlots[1] = trialEntry()
+    const paired = pairedOrThrow(pairOf(before))
+    const index = weekIndexOf(paired.nextWeeks, D2)
+    const moved = computeStudentMove({
+      weeks: paired.nextWeeks, weekIndex: index, cells: paired.nextWeeks[index], movingStudentId: 'trial-1', cellId: cellAt(paired.nextWeeks, D2, 4).id, deskIndex: 1, studentIndex: 0,
+      suppressedRegularLessonOccurrences: paired.nextSuppressedRegularLessonOccurrences, managedStudentByAnyName: byStudentName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
+    })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    expect(studentAt(moved.nextWeeks, D2, 1, 0, 4)?.wholeDayPairMovedFrom).toBeUndefined()
+    const released = releasedOrThrow(releaseOf(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences))
+    expect(studentAt(released.nextWeeks, D2, 1, 0, 4)?.id).toBe('trial-1')
+    expect(studentAt(released.nextWeeks, D, 1, 0, 4)).toBeNull()
+    expect(studentAt(released.nextWeeks, D, 1, 1)).toBeNull()
+  })
+
+  it('D\' を並べ替えた後の解除は、違う席へは戻さず D\' に残す（印は外れる）', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[1].lesson!.studentSlots[1] = trialEntry()
+    const paired = pairedOrThrow(pairOf(before))
+    const weeks = structuredClone(paired.nextWeeks)
+    // 並べ替えで体験が机 2 の生徒 2 → 机 1 の生徒 2 へ移った形（印は付いたまま・位置だけ変わる）。
+    const target = cellAt(weeks, D2)
+    target.desks[0].lesson!.studentSlots[1] = target.desks[1].lesson!.studentSlots[1]
+    target.desks[1].lesson!.studentSlots[1] = null
+    const released = releasedOrThrow(releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences))
+    expect(studentAt(released.nextWeeks, D2, 0, 1)).toMatchObject({ id: 'trial-1' })
+    expect(studentAt(released.nextWeeks, D2, 0, 1)?.wholeDayPairMovedFrom).toBeUndefined()
+    expect(studentAt(released.nextWeeks, D, 0, 1)).toBeNull()
+    expect(studentAt(released.nextWeeks, D, 1, 1)).toBeNull()
+  })
+})
+
+describe('再監査 要修正-2: 机の印は移した中身を控え、D\' で替えた講師・書き換えたメモは D へ持っていかない', () => {
+  const withTeacher = () => {
+    const before = structuredClone(baseBoard())
+    const desk = cellAt(before, D, 4).desks[1]
+    Object.assign(desk, { teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4' })
+    desk.lesson = { id: 'manual-4', studentSlots: [trialEntry(), null] }
+    return remerge(before, ROWS, [])
+  }
+  it('講師を移した場合の作成 → 解除が元と deep-equal', () => {
+    const before = withTeacher()
+    const paired = pairedOrThrow(pairOf(before))
+    expect(cellAt(paired.nextWeeks, D2, 4).desks[1]).toMatchObject({ teacher: '高橋', wholeDayPairMovedTeacherFrom: { dateKey: D, teacher: '高橋', teacherId: 't4' } })
+    const released = releasedOrThrow(releaseOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences))
+    expect(released.nextWeeks).toEqual(before)
+  })
+  it('D\' で講師を替えた机は解除で D へ戻さない（替えた講師は D\' に残る）', () => {
+    const paired = pairedOrThrow(pairOf(withTeacher()))
+    const weeks = structuredClone(paired.nextWeeks)
+    Object.assign(cellAt(weeks, D2, 4).desks[1], { teacher: '田中', teacherAssignmentTeacherId: 't1' })
+    const released = releasedOrThrow(releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences))
+    expect(cellAt(released.nextWeeks, D2, 4).desks[1].teacher).toBe('田中')
+    expect(cellAt(released.nextWeeks, D, 4).desks[1].teacher).toBe('')
+    expect(cellAt(released.nextWeeks, D2, 4).desks[1].wholeDayPairMovedTeacherFrom).toBeUndefined()
+  })
+  it('D\' でメモを書き換えた席は戻さない（書き換えたメモは D\' に残る）', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[0].memoSlots = [null, '自習']
+    const paired = pairedOrThrow(pairOf(remerge(before, ROWS, [])))
+    const weeks = structuredClone(paired.nextWeeks)
+    cellAt(weeks, D2).desks[0].memoSlots = [null, '自習（変更）']
+    const released = releasedOrThrow(releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences))
+    expect(cellAt(released.nextWeeks, D2).desks[0].memoSlots).toEqual([null, '自習（変更）'])
+    expect(cellAt(released.nextWeeks, D).desks[0].memoSlots ?? [null, null]).toEqual([null, null])
+    expect(cellAt(released.nextWeeks, D2).desks[0].wholeDayPairMovedMemoFrom).toBeUndefined()
+  })
+})
+
+describe('再監査: 解除を止める経路（理由つき）', () => {
+  it('戻す D の席がふさがっていると止める', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[1].lesson!.studentSlots[1] = trialEntry()
+    const paired = pairedOrThrow(pairOf(before))
+    const weeks = structuredClone(paired.nextWeeks)
+    cellAt(weeks, D).desks[1].lesson = { id: 'later', studentSlots: [null, trialEntry('trial-2')] }
+    const blocked = releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences)
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') expect(blocked.message).toContain('席がふさがっている')
+  })
+  it('移した手入力が保留の下段に移っていると止める', () => {
+    const before = structuredClone(baseBoard())
+    cellAt(before, D).desks[1].lesson!.studentSlots[1] = trialEntry()
+    const paired = pairedOrThrow(pairOf(before))
+    const weeks = structuredClone(paired.nextWeeks)
+    const target = cellAt(weeks, D2)
+    const moved = target.desks[1].lesson!.studentSlots[1]!
+    target.desks[1].lesson!.studentSlots[1] = null
+    const pending = { [`${target.id}::${target.desks[1].id}`]: { lower: { lesson: { id: 'lower', studentSlots: [moved, null] as [StudentEntry | null, StudentEntry | null] } }, effectiveStartDate: D, createdAt: '2026-10-01T10:00:00.000Z' } }
+    const blocked = releaseOf(weeks, paired.nextSuppressedRegularLessonOccurrences, { pendingDesks: pending })
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') expect(blocked.message).toContain('緑の下の行')
+  })
+})
+
+describe('再監査 要確認-1〜4', () => {
+  it('要確認-1: 以前の形の丸ごと振替が残る日（日単位の足場講師の抑止）は、新しい組の振替先にも振替元にも選べない（理由を出す）', () => {
+    for (const legacyDate of [D2, D]) {
+      const result = pairOf(baseBoard(), { suppressed: [`TEMPLATE_TEACHER__DAY__${legacyDate}__0`] })
+      expect(result).toEqual({ status: 'blocked', message: `${legacyDate} には以前の形の丸ごと振替が残っているため、丸ごと振替できません。` })
+    }
+  })
+  it('要確認-2: 付け替えの印の無い振替から導くキーは今までどおり効く（D の青木を別の日へ置いた振替があれば D\' に青木を出さない）', () => {
+    const paired = pairedOrThrow(pairOf(baseBoard()))
+    const weeks = structuredClone(paired.nextWeeks)
+    cellAt(weeks, '2026-10-15').desks[0].lesson = { id: 'm', studentSlots: [{ id: 'mk', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: D, makeupSourceLabel: '2026/10/7(水) 5限', origin: 'manual' }, null] }
+    const remerged = remerge(weeks, ROWS, paired.nextSuppressedRegularLessonOccurrences)
+    expect(seatIds(remerged, D2)).toEqual([[], ['sB', null]])
+    // 付け替えの授業そのものから導くキーは効かない（効くと D' の全員が消える）。
+    expect(seatIds(remerge(paired.nextWeeks, ROWS, paired.nextSuppressedRegularLessonOccurrences), D2)).toEqual([['sA', null], ['sB', null]])
+  })
+  it('要確認-3: 組の D\' は盤面の印に加えて組のキーからも読む', () => {
+    expect([...collectWholeDayPairTargetDates([], [KEY])]).toEqual([D2])
+    expect([...collectWholeDayPairTargetDates([])]).toEqual([])
+    // 盤面に D の記録も D' の授業も無くても、組のキーがあれば D' 自身のテンプレで休日振替を積まない。
+    const holiday = settings({ holidayDates: [D2] })
+    const empty = buildBoard(ROWS, holiday).map((week) => week.map((cell) => ({ ...cell, desks: cell.desks.map((desk) => ({ id: desk.id, teacher: '' })) })))
+    const late = new Date('2026-10-20T00:00:00')
+    expect(Object.keys(collectMakeupOriginDatesByKey({ students, regularLessons: ROWS, classroomSettings: holiday, weeks: empty, manualAdjustments: {}, resolveStudentKey: (student) => student.managedStudentId ?? student.name, today: late, wholeDayPairKeys: [KEY] }))).toEqual([])
+    expect(Object.keys(collectMakeupOriginDatesByKey({ students, regularLessons: ROWS, classroomSettings: holiday, weeks: empty, manualAdjustments: {}, resolveStudentKey: (student) => student.managedStudentId ?? student.name, today: late })).sort()).toEqual(['sA__数', 'sB__数'])
+  })
+  it('要確認-4: 組の無い日の休日解除は、その日のテンプレの授業の抑止キーを積み、席へ戻した分は積まない（既にあるものも外す）', () => {
+    const keys = resolveHolidayReleaseSuppressedOccurrences({
+      dateKey: D, regularLessons: ROWS, students, teachers, suppressedRegularLessonOccurrences: [`sB__数__${D}__${SLOT}`, 'other__数__2026-10-21__5'], restoredOccurrenceKeys: new Set([`sB__数__${D}__${SLOT}`]),
+    })
+    expect(keys).toEqual(['other__数__2026-10-21__5', `sA__数__${D}__${SLOT}`])
+    // 組の日は積まない（席へ戻した分を外すのは同じ）。
+    expect(resolveHolidayReleaseSuppressedOccurrences({ dateKey: D, regularLessons: ROWS, students, teachers, suppressedRegularLessonOccurrences: [KEY], restoredOccurrenceKeys: new Set() })).toEqual([KEY])
+  })
+})
+
+describe('再監査 要修正-3: 解除の確認文は §9-20（移した手入力は元の日へ戻す・後から置いたものは残す）', () => {
+  it('確認文に戻す・残すの両方が出て、旧い「手入力はそのまま残します」は出ない', () => {
+    const message = buildWholeDayTransferPairReleaseConfirmMessage({ sourceDateKey: D, targetDateKey: D2 })
+    expect(message).toContain('10/7(水) から移した手入力は 10/7(水) の元の席へ戻します（10/14(水) で後から置いたものは残ります）')
+    expect(message).not.toContain('手入力はそのまま残します')
   })
 })

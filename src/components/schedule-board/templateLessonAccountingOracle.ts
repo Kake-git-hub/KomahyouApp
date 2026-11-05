@@ -102,6 +102,7 @@ export function auditTemplateLessonAccounting(params: LessonAccountingAuditParam
     students: params.students, regularLessons: [...params.regularLessons], classroomSettings: params.classroomSettings, weeks: params.weeks,
     manualAdjustments: params.manualMakeupAdjustments, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey,
     today: params.today ?? new Date(`${params.fromDate}T00:00:00`), includeAbsentMakeupOrigins: true, templatePendingDesks: params.templatePendingDesks,
+    wholeDayPairKeys: params.suppressedRegularLessonOccurrences,
   })
   const originDatesByKey = originCategories.effective
   const originsOn = (studentId: string, subject: string, dateKey: string) => {

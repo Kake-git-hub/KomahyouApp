@@ -80,7 +80,16 @@ export type StudentEntry = {
    * （D' で後から手で置いた手入力は D' に残す）。restore は移す前の区分・振替元・印（prepareStudentForMove が書き換える項目だけ）。
    * 別の席・別の日へ動かすと外れる（prepareStudentForMove）。
    */
-  wholeDayPairMovedFrom?: { dateKey: string; restore: Partial<Pick<StudentEntry, 'origin' | 'lessonType' | 'makeupSourceDate' | 'makeupSourceLabel' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>> }
+  wholeDayPairMovedFrom?: {
+    dateKey: string
+    /** 移した先（D' の時限・机番号・席）。解除は今の位置がこれと同じときだけ戻す（D' の中で動かした・並べ替えた授業は D' に残す・再監査 要修正-1）。 */
+    slotNumber?: number
+    deskIndex?: number
+    seat?: number
+    /** D の元の机の授業 ID（解除で机に授業が無ければこの ID で作り直す＝作成→解除で元の形）。 */
+    lessonId?: string
+    restore: Partial<Pick<StudentEntry, 'origin' | 'lessonType' | 'makeupSourceDate' | 'makeupSourceLabel' | 'sameDayMoveSourceDate' | 'sameDayMoveSourceLabel'>>
+  }
   warning?: string
   warningHighlight?: boolean
   // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
@@ -203,10 +212,13 @@ export type DeskCell = {
   teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
-  /** §9-20: 付け替えの作成で移動元 D から移したメモの席（値は D）。解除で D の同じ席へ戻す。 */
-  wholeDayPairMovedMemoFrom?: [string | null, string | null]
-  /** §9-20: 付け替えの作成で移動元 D から移した手置き講師（値は D）。解除で D の同じ机へ戻す。 */
-  wholeDayPairMovedTeacherFrom?: string
+  /** §9-20: 付け替えの作成で移動元 D から移したメモ（席ごとに D と移した本文）。解除は今のメモが同じ本文のときだけ D の同じ席へ戻す（再監査 要修正-2）。 */
+  wholeDayPairMovedMemoFrom?: [{ dateKey: string; text: string } | null, { dateKey: string; text: string } | null]
+  /**
+   * §9-20: 付け替えの作成で移動元 D から移した手置き講師（D と移す前の講師欄の中身）。解除は今の講師が同じ講師（名前・ID）のときだけ D の同じ机へ
+   * 移す前の中身で戻す（D' で後から替えた講師は D' に残す・再監査 要修正-2）。
+   */
+  wholeDayPairMovedTeacherFrom?: { dateKey: string; teacher: string; teacherId?: string; block: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId' | 'teacherUnavailableWarning'> }
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   lesson?: DeskLesson
 }
