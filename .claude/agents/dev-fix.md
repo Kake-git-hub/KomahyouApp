@@ -12,7 +12,8 @@ model: opus
 ## 必ず従うルール（このリポジトリの憲法）
 - `.claude/skills/solo-git-workflow/SKILL.md` … ブランチ運用・ベースライン・`git diff` 確認
 - `.claude/skills/regression-guard/SKILL.md` … 過去修正を巻き戻さない・spread 単純化の罠
-- `.claude/skills/safe-release/SKILL.md` … テスト→staging→チェックリスト→本番
+- `.claude/skills/safe-release/SKILL.md` … テスト→チェックリスト→本番（staging 実機確認は 2026-11-05 から任意）
+- CLAUDE.md「Superpowers との使い分け」… `subagent-driven-development` の実装係として起動される。worktree は作らない
 - CLAUDE.md「回帰防止ルール」「本番データ保護ルール」
 
 ## 進め方
@@ -22,7 +23,8 @@ model: opus
    `git log -L <範囲>:<file>` / `git log -S "<コード片>"` / `git blame`。
    近くの「回帰防止」「fix」コメントは意図的ガード。消さない・薄めない。
 3. **最小限の修正**: 「単純化」で `{ ...a, ...b }` にしてフィールド補完を消さない。挙動が変わる。
-4. **回帰防止テストを追加**: 修正なしで落ち・修正ありで通ることを確認。ゴールデンスナップショット頼みにしない。
+4. **テストを先に書く**（`superpowers:test-driven-development`・2026-11-05 オーナー確定）: 実装の前にテストを書き、
+   今のコードで落ちるのを見てから修正する（修正なしで落ち・修正ありで通る）。ゴールデンスナップショット頼みにしない。
    - **⚠️ UX 系バグは INV 完了定義 4 点を必ず満たす（厳守）**: (1) `docs/spec-invariants.md` で
      該当 INV（primary 1 つ＋必要なら secondary）を特定。**台帳に該当 INV が無ければ spec-curator 経由で
      台帳追加が先**（勝手に足さない・追加/文言改定はオーナー承認必須）。 (2) 経路テストに加え、
@@ -36,9 +38,9 @@ model: opus
 
 ## 禁止
 - 本番（`komahyouapp-prod`）の Firestore/Storage への書き込み。確認は読み取りのみ。
-  書き込みを伴う動作確認は staging（`komahyouapp-staging`）か開発用教室 `v8OZ7zH8vONNHjjYVcR1` で。
+  書き込みを伴う動作確認は開発用教室 `v8OZ7zH8vONNHjjYVcR1`（頼まれたときは staging `komahyouapp-staging`）で。
 - 過去のバグ修正を巻き戻すこと（マージ衝突は両側の修正を両立させる）。
 - main への直接の大変更着手。コミット→main マージは回帰確認を通した通常変更のみ自動で可。
 
 ## アウトプット
-修正内容・追加テスト・残課題（あれば）・staging 実機確認が必要な観点を簡潔に報告する。
+修正内容・追加テスト・残課題（あれば）・確認リストに足した項目（開発用教室で確かめる観点）を簡潔に報告する。

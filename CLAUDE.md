@@ -4,8 +4,10 @@
 
 このリポジトリでコードを**編集・追加・修正・リファクタリング**する前に、スキル
 `.claude/skills/solo-git-workflow/SKILL.md`（一人開発向け Git 運用＋回帰防止）の手順に従うこと。
-**本番へマージ／デプロイする前**は `.claude/skills/safe-release/SKILL.md`（staging 実機検証→本番→
-ライブ検証→ロールバック、リリース前チェックリスト）にも従うこと。
+**本番へマージ／デプロイする前**は `.claude/skills/safe-release/SKILL.md`（自動テスト→リリース前チェックリスト→
+本番→ライブ検証→ロールバック）にも従うこと。staging での実機確認は 2026-11-05 のオーナー指示で必須から外した。
+**作業の進め方そのもの（聞き取り・計画・テスト先行・実装・レビュー・完了確認）は Superpowers プラグインに従う**。
+このアプリ用の上書きは下の「Superpowers との使い分け」が正本。
 ユーザーが明示的に Git や回帰に触れていなくても、編集を始める前にこのスキルの判断フロー
 （壊れたら困る変更はブランチを切る／変更前にベースラインを取る／変更後に既存機能の回帰を確認／
 コミット前に `git diff`）を踏むこと。下記の回帰防止ルール・本番データ保護ルールと併せて守る。
@@ -30,6 +32,29 @@
   毎回の明示指示なしに、回帰確認(build/テスト/`git diff`)を通したうえでコミット →
   `CHANGELOG.md` の `## 未リリース` を次の版でラベル付け → main へマージ(= CI 自動デプロイ)まで進める。
   ただし**本番データへの書き込み・履歴の破壊的操作・大きな変更の main 直接着手**は対象外(従来どおり慎重に)。
+
+## Superpowers との使い分け（オーナー確定 2026-11-05・厳守）
+
+一般的な作業の進め方は Superpowers プラグインのスキル（`superpowers:*`）に従い、このアプリ固有の決まりは
+既存スキル（solo-git-workflow / regression-guard / safe-release / bug-triage / staging-environment）に残す。
+両者がぶつかる点は次のとおり決めた（この表が Superpowers の既定より優先する）。
+
+| # | 論点 | 決定 |
+|---|---|---|
+| 1 | ブランチの仕上げ | `finishing-a-development-branch` の「マージ／PR／残す／破棄」の選択肢は出さない。確認を通したら **main マージまで自動**（solo-git-workflow C）。PR は作らない |
+| 2 | テスト | **すべての変更をテスト先行**（`test-driven-development`）。先にテストを書き、今のコードで落ちるのを見てから実装する。アプリのコードに触れない変更（文書・設定）は対象外 |
+| 3 | 実装 | **コードの変更は `subagent-driven-development` で進める**（作業ごとに実装係＋レビュー係）。実装係は `dev-fix` エージェント、判断を伴う作業は Opus 最新・機械的な作業は Sonnet 最新を `model:` で指定 |
+| 4 | レビュー | Superpowers のレビュー段（各作業後・最後の全体レビュー）は **`regression-reviewer` エージェント 1 人**で行い、仕様適合・コード品質・INV 監査・巻き戻し検査を 1 回で見る。別の汎用レビュー係は重ねない |
+| 5 | 仕様・設計メモ | `brainstorming` の設計は `docs/superpowers/specs/` ではなく **既存の `docs/spec-*.md`（正本）に書き足す**（spec-curator の管理） |
+| 6 | 計画書 | `writing-plans` の計画は **`docs/plan-YYYY-MM-DD-<題名>.md`** に置く（書き方は Superpowers どおり） |
+| 7 | worktree | **作らない**。ブランチを切るだけ（クラウドのセッションはもともと使い捨ての分離環境。worktree では `functions/node_modules` や `.env.local` が無くテストが落ちる） |
+| 8 | 聞き取り | 新機能・挙動変更は `brainstorming` で進める。使い勝手に影響するものは、出す案に**懸案と妥協案を必ず含める**（下の標準フロー 2 の厳守事項）。明白なバグ修正は対象外 |
+| 9 | 不具合調査 | 進め方は `systematic-debugging`。書き換える前に regression-guard（過去修正の追い方・踏み抜き例・INV 4 点）も必ず読む |
+| 10 | 完了確認 | `verification-before-completion` に従い、「何を実行すれば完了と言えるか」は safe-release のリリース前チェックリストで決める |
+| 11 | スキルの強制 | 「1% でも当てはまればスキルを読む」は**コードの変更に限る**。質問への回答・読むだけの調査・文言/ラベル/設定だけの変更はスキルを読まずに進めてよい |
+
+- 公開リポジトリなので、Superpowers の手順で書く文書（仕様・計画・レビュー記録）にも生徒・講師の実名は書かない。
+- 本番データ保護ルール・確認リスト・進行中テーマ台帳・CHANGELOG・利用者報告 Issue の扱いは、Superpowers の手順の途中でも従来どおり守る。
 
 ## ⚠️ 回帰防止ルール（過去の修正を必ず踏襲する・厳守）
 
@@ -156,15 +181,17 @@ Claude の記憶（過去の事故・設計判断・オーナー指示の記録�
      複数提示し、オーナーと一緒に落とし所を決めてから実装する**。オーナーは妥協案を検討したい意向。
      判断が要る点は `AskUserQuestion` 等で選択式にして返す。純粋にユーザビリティへ影響しない内部修正・
      明白なバグ修正はこの限りでない（[[komahyou-clarify-before-proceeding]] の延長）。
-3. → **dev-fix** で実装＋回帰防止テスト（同コミット必須）。UX 系バグは INV 完了定義4点（該当 INV 特定→経路テスト＋マトリクス拡張→兄弟監査→コミットに INV-ID）を満たす。
-4. → **regression-reviewer** で INV 監査＋巻き戻し検査（リファクタ・マージ衝突解決後は必須）。差分が触れる INV の特定・兄弟被覆・マトリクス格下げ・権威関数の分散を点検する。
-5. → **safe-release** で staging 実機確認 → 本番マージ → ライブ検証。
-   - **例外: 請求画面(`/billing`・開発者専用)だけの変更は staging 実機確認を省き、本番へ直接出してよい(オーナー指示 2026-10-10)**。
-     室長・保護者の画面に出ないため。lint / unit / build と、rules を触ったときの `npm run test:rules` は省かない。
+3. → **dev-fix** で実装＋回帰防止テスト（同コミット必須・テスト先行。`subagent-driven-development` の実装係として起動）。UX 系バグは INV 完了定義4点（該当 INV 特定→経路テスト＋マトリクス拡張→兄弟監査→コミットに INV-ID）を満たす。
+4. → **regression-reviewer** で仕様適合・品質＋INV 監査＋巻き戻し検査（Superpowers のレビュー段もこれ 1 人で行う。リファクタ・マージ衝突解決後は必須）。差分が触れる INV の特定・兄弟被覆・マトリクス格下げ・権威関数の分散を点検する。
+5. → **safe-release** で自動テスト・チェックリスト → 本番マージ → ライブ検証。
+   - **staging での実機確認は必須でない(オーナー指示 2026-11-05)**。画面での確認は、本番反映後にオーナーが
+     開発用教室の確認リストで行う(確認リストの更新は従来どおり必須)。staging はオーナーが使いたいときだけ使う。
+     lint / unit / build と、rules を触ったときの `npm run test:rules` は省かない。
 
 ### スキル（`.claude/skills/`）
 - `solo-git-workflow`（Git運用）/ `regression-guard`（回帰防止の実務）/ `safe-release`（安全リリース）/
-  `staging-environment`（検証環境）/ `bug-triage`（報告→Issue 一本化）。
+  `staging-environment`（検証環境・任意）/ `bug-triage`（報告→Issue 一本化）。
+- 一般的な進め方は Superpowers プラグイン（`superpowers:*`）。ぶつかる点は「Superpowers との使い分け」の表に従う。
 
 ### 課題管理
 - バグ・要望は **GitHub Issues に一本化**（`Kake-git-hub/KomahyouApp`）。テンプレ `.github/ISSUE_TEMPLATE/`、
@@ -175,11 +202,12 @@ Claude の記憶（過去の事故・設計判断・オーナー指示の記録�
   E2E を廃止した今、UI操作・盤面ロジック・警告・保存/権限などの回帰防止はユニットが唯一の自動ゲート。テスト無しでマージしない。
   - 純粋関数として書けるよう設計する（巨大コンポーネント内のロジックは `computeStudentMove` / `resolveLessonPatternWarnings` のように切り出してから検証する）。
   - 「修正なしで落ち・修正ありで通る」を確認（回帰防止）。`docs/test-strategy.md` の方針に従う。
-  - 保存/権限/教室分離を触ったら `npm run test:rules` も回す。本番critical（実Firebase往復・画面表示）は staging 実機確認で補完。
+  - 保存/権限/教室分離を触ったら `npm run test:rules` も回す。本番critical（実Firebase往復・画面表示）は、本番反映後に開発用教室の確認リストで補完する。
+  - **テストは先に書く（オーナー確定 2026-11-05）**: `superpowers:test-driven-development` に従い、テストを書いて今のコードで落ちるのを見てから実装する。
 - `.github/workflows/ci-tests.yml` がブランチ push ごとに **lint / unit / build** を実行（毎push・約1分・決定的）。
   main マージ前に緑を確認する。マージ前チェックは `.github/PULL_REQUEST_TEMPLATE.md` ＝ `docs/runbooks/release-checklist.md`。
 - **Playwright E2E は廃止（2026-06-29）**。全シナリオをユニット（純粋関数）へ移植済み。方針と移植マップは `docs/test-strategy.md`。
-  UI操作の回帰はユニットが、実環境の通し動作は staging 実機確認が担保。Firestore ルールの教室分離は `npm run test:rules`（手動・要 Java + エミュレータ）。
+  UI操作の回帰はユニットが、実環境の通し動作は開発用教室の確認リスト（本番反映後・オーナー）が担保。Firestore ルールの教室分離は `npm run test:rules`（手動・要 Java + エミュレータ）。
 
 ### 監視・障害検知 / ロールバック
 - **外形監視**: `.github/workflows/uptime-check.yml`（15分ごと＋手動）が本番の index/version.json/QR API を確認。

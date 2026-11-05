@@ -23,6 +23,8 @@ functions/.env.*
 firebase-debug.log*
 playwright-report
 test-results
+# Playwright MCP プラグインがページの写し・コンソールログを書き出す作業用フォルダ
+.playwright-mcp/
 
 # Claude Code config: keep skills/settings in the repo, ignore only machine-local overrides
 .claude/settings.local.json

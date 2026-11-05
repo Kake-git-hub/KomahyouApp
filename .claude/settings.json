@@ -11,5 +11,9 @@
       "Bash(gcloud*firestore*documents*create*)",
       "Bash(gcloud*firestore*documents*delete*)"
     ]
+  },
+  "env": {
+    "ENABLE_STOP_REVIEW": "0",
+    "SG_AGENTIC_MODEL": "sonnet"
   }
 }
