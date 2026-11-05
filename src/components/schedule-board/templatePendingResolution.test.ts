@@ -206,6 +206,9 @@ function balances(weeks: SlotCell[][], rows: RegularLessonRow[], templatePending
 }
 
 // 机0 に在庫由来の振替 M（下段になる）・メモ・移動元の記録、新テンプレは机0 に C → 保留（2 行）。
+// 解決操作の足場: 机 0 の上段＝テンプレの C、下段＝在庫由来の振替 M（生徒 1）＋移動元の記録 D とメモ（生徒 2）。
+// ★第 2 版（spec-template-conflict-v2 §2-1・§4-2 規則 3）の保存は記録・メモを席の空いた上段に残すのでこの形を作らないが、旧版の保存が作った保留
+//   （開発用・テスト教室に残る・§7 で作り直すまで）にも解決操作は効かなければならないので、旧版の形を手で組んで解決操作を固定する。
 function pendingWithMakeupLower(lowerOverrides: Partial<StudentEntry> = {}) {
   let week = buildWeek(OLD_ROWS)
   week = mutateDesk(week, 0, (desk) => ({
@@ -215,10 +218,24 @@ function pendingWithMakeupLower(lowerOverrides: Partial<StudentEntry> = {}) {
     memoSlots: [null, '持ち物'],
   }))
   const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
-  const diff = applyDiff(week, newRows)
-  const deskId = deskOf(diff.nextWeeks, 0).id
+  const saved = applyDiff(week, newRows)
+  const deskId = deskOf(saved.nextWeeks, 0).id
   const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
-  expect(diff.nextPendingDesks[key]).toBeDefined()
+  // 第 2 版の保存: M だけ下段（テンプレの C と同じ席）・記録とメモは上段の空いた席 2 に残る。
+  expect(saved.nextPendingDesks[key]?.lower.lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual(['sM', null])
+  expect(deskOf(saved.nextWeeks, 0).memoSlots).toEqual([null, '持ち物'])
+  // 旧版の形へ: 記録とメモを下段へ移す。
+  const upper = deskOf(saved.nextWeeks, 0)
+  const legacyWeeks = [mutateDesk(saved.nextWeeks[0], 0, (desk) => {
+    const { statusSlots: _status, memoSlots: _memo, ...rest } = desk
+    void _status
+    void _memo
+    return rest
+  })]
+  const diff = {
+    nextWeeks: legacyWeeks,
+    nextPendingDesks: { ...saved.nextPendingDesks, [key]: { ...saved.nextPendingDesks[key], lower: { ...saved.nextPendingDesks[key].lower, statusSlots: upper.statusSlots, memoSlots: upper.memoSlots } } } as TemplatePendingDeskMap,
+  }
   return { before: [week], diff, newRows, deskId, key }
 }
 
@@ -789,11 +806,14 @@ describe('席ごと: regression-reviewer 指摘（2026-09-30）の固定', () =>
   it('H-1: 会計記録が下段へあふれた机（下段 [ , M]＋D の出席）でも既存を採用が止まらず、記録は机に戻る', () => {
     // Q37（2026-10-03）: 休みの記録は席を確保せず机に残るので、下段へあふれる会計記録は出席だけになった。
     const setup = pendingFrom((desk) => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [null, makeupM()] }, statusSlots: [status('sD', 'attended'), null] }), NEW_ROWS_BOTH)
-    expect(setup.diff.nextPendingDesks[setup.key].lower.statusSlots?.filter(Boolean).map((item) => item!.status)).toEqual(['attended'])
+    // 第 2 版（§4-2 規則 3: 記録は動かさない）: 出席の記録は下段へあふれず、机の元の席（上段の生徒の下）に残る。
+    expect(setup.diff.nextPendingDesks[setup.key].lower.statusSlots).toBeUndefined()
+    expect(deskOf(setup.diff.nextWeeks, 0).statusSlots?.filter(Boolean).map((item) => item!.status)).toEqual(['attended'])
     const result = resolve('adopt-existing', setup)
     if (result.status !== 'applied') throw new Error(result.message)
     const desk0 = deskOf(result.nextWeeks, 0)
-    expect(liveIds(desk0)).toEqual(['sM'])
+    // 第 2 版: 記録は下段に無いので、取り下げるのは M とぶつかった生徒 2 の席（C）だけ。生徒 1 のテンプレ A は残る（記録はその下に残る）。
+    expect(liveIds(desk0)).toEqual(['sA', 'sM'])
     expect(desk0.statusSlots?.filter(Boolean).map((item) => [item!.managedStudentId, item!.status])).toEqual([['sD', 'attended']])
   })
 

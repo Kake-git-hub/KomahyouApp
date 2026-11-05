@@ -9,6 +9,7 @@ import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject
 import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { describeShiftedTemplateTeacher, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { isManualOriginDeskTeacher, isManualOriginStudent, MANUAL_ORIGIN_CLASS } from './placementOrigin'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
 
@@ -269,6 +270,12 @@ type BoardGridProps = {
   // 狭い画面では下段を帯「保留 n」にして（CSS）、押すと onTemplatePendingLowerClick で保留の机のメニューを開く。
   // ★下段は盤面画面専用（INV-13）。盤面 PDF はクローンから .sa-pending-lower を外す（stripTemplatePendingLowerForPdf）。
   templatePendingDesks?: TemplatePendingDeskMap
+  /**
+   * 出自の印（docs/spec-template-conflict-v2.md §5・1-5）: 手入力の生徒名・講師名・メモを青字にする（sa-manual-origin）。機能フラグ templateDiffApply の
+   * 教室のライブ盤面だけ true（テンプレ編集・フラグ OFF は false＝従来の色）。文字色は青が勝ち、「外)」などの前置きと背景はそのまま。
+   * ★盤面画面だけ（日程表・PDF・保護者 QR には出さない。盤面 PDF は stripTemplatePendingLowerForPdf がクローンから外す＝INV-13）。
+   */
+  showManualOriginColor?: boolean
   onTemplatePendingLowerClick?: (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => void
   /** 緑の下の行の講師欄（下段の手置き講師）を押したとき。講師の選択（テンプレの講師を採用／手入力の講師を採用）を開く（tp-64・2026-10-27）。 */
   onTemplatePendingLowerTeacherClick?: (cellId: string, deskIndex: number, x: number, y: number) => void
@@ -307,6 +314,7 @@ function BoardGridComponent({
   onGroupTeacherClick,
   transferSourceRestDisplayEnabled = false,
   templatePendingDesks,
+  showManualOriginColor = false,
   onTemplatePendingLowerClick,
   onTemplatePendingLowerTeacherClick,
   onTemplatePendingLowerMouseDown,
@@ -371,6 +379,7 @@ function BoardGridComponent({
     extraClassName = '',
     pendingLowerNode: ReactNode = null,
     copyNotice: SameDayMoveCopyNoticeView | null = null,
+    manualOrigin = false,
   ) => {
     const effectiveName = studentName || statusEntry?.name || ''
     const effectiveGrade = studentName ? studentGrade : (statusEntry?.grade ?? studentGrade)
@@ -449,7 +458,7 @@ function BoardGridComponent({
         <div className={`sa-student-inner${pendingLowerNode && isOpenedPendingSeat(cell.id, cell.desks[deskIndex]?.id, studentIndex) ? ' sa-pending-upper-selected' : ''}`}>
           {hasMemo ? (
             <span
-              className={`sa-student-name sa-student-name-note${hasWarning ? ' sa-student-name-warning' : ''}`}
+              className={`sa-student-name sa-student-name-note${hasWarning ? ' sa-student-name-warning' : ''}${showManualOriginColor ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}
               style={getMemoTextStyle(memoText)}
               data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
               title={hoverText}
@@ -460,7 +469,7 @@ function BoardGridComponent({
             <>
               <span className="sa-student-name-row">
                 <span
-                  className={`sa-student-name${hasNameWarning ? ' sa-student-name-warning' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
+                  className={`sa-student-name${hasNameWarning ? ' sa-student-name-warning' : ''}${hasStatus ? ' sa-student-name-absence' : ''}${showManualOriginColor && manualOrigin && studentName ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}
                   data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
                   title={hoverText}
                 >
@@ -528,7 +537,7 @@ function BoardGridComponent({
       content = (
         <>
           <span className="sa-student-name-row">
-            <span className="sa-student-name">{resolveStudentDisplayName(student.name, student.managedStudentId)}</span>
+            <span className={`sa-student-name${showManualOriginColor && isManualOriginStudent(student) ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}>{resolveStudentDisplayName(student.name, student.managedStudentId)}</span>
             {dateLabel ? <span className="sa-student-origin-date">{dateLabel}</span> : null}
           </span>
           <span className="sa-student-detail">
@@ -545,7 +554,7 @@ function BoardGridComponent({
       )
     } else if (memo && memo.trim()) {
       const memoText = memo.replace(/\r/g, '').split('\n').slice(0, 2).join('\n')
-      content = <span className="sa-student-name sa-student-name-note" style={getMemoTextStyle(memoText)}>{memoText}</span>
+      content = <span className={`sa-student-name sa-student-name-note${showManualOriginColor ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`} style={getMemoTextStyle(memoText)}>{memoText}</span>
     } else if (record) {
       const lessonPrefix = getLessonPrefix(record.lessonType, Boolean(isExternalStudentName?.(record.name)))
       const grade = resolveStudentGradeLabel(record.name, record.grade, cell.dateKey, record.birthDate)
@@ -846,7 +855,7 @@ function BoardGridComponent({
                           data-testid={`teacher-cell-${cell.id}-${deskIndex}`}
                         >
                           <div
-                            className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
+                            className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}${showManualOriginColor && cell.isOpenDay && isManualOriginDeskTeacher(desk) ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}
                             title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : (shiftedTeacher ? describeShiftedTemplateTeacher(desk) : teacherAssignmentHint)))}
                           >
                             {/* 講師未割当などの埋め草は表示だけ空白にする(deskTeacherLabel.ts・オーナー指示 2026-10-22)。データは変えない。 */}
@@ -865,7 +874,7 @@ function BoardGridComponent({
                               }}
                               onMouseDown={(event) => event.stopPropagation()}
                             >
-                              <div className="sa-pending-lower-inner sa-teacher-name">{pendingEntry.lower.teacher.teacher}</div>
+                              <div className={`sa-pending-lower-inner sa-teacher-name${showManualOriginColor ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}>{pendingEntry.lower.teacher.teacher}</div>
                               {/* 狭い画面は名前の代わりに帯（生徒の下段と同じ）。 */}
                               <span className="sa-pending-lower-band">講師</span>
                             </div>
@@ -896,6 +905,7 @@ function BoardGridComponent({
                           pendingEntry ? 'sa-pending-desk' : '',
                           pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 0, pendingEntry) : null,
                           firstStudent ? resolveSameDayMoveCopyNotice(firstStudent, cell, sameDayRegularSlotIndex) : null,
+                          isManualOriginStudent(firstStudent),
                         ),
                         renderStudentCell(
                           cell,
@@ -922,6 +932,7 @@ function BoardGridComponent({
                           pendingEntry ? 'sa-day-group-end sa-pending-desk' : 'sa-day-group-end',
                           pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 1, pendingEntry) : null,
                           secondStudent ? resolveSameDayMoveCopyNotice(secondStudent, cell, sameDayRegularSlotIndex) : null,
+                          isManualOriginStudent(secondStudent),
                         ),
                       ]
                     })}

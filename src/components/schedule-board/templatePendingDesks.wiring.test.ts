@@ -344,8 +344,9 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     // 絞り込みは差分反映の本体と保存直後の再マージの重ね合わせの両方に効く（絞り込みの外は参照ごと不変）。
     expect(BOARD_TSX).toContain('slotFilter: params.slotFilter,')
     expect(BOARD_TSX).toContain('if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell')
-    // 入口は同日移動の写しがある日を全コマにしてから本体・重ね合わせへ渡す（Q39-9・regression-reviewer H-1）。
-    expect(BOARD_TSX).toContain('slotFilter: expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks, pendingDesks: input.templatePendingDesks, effectiveStartDate: input.effectiveStartDate, filter: input.slotFilter })')
+    // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止）: 入口は絞り込みを使わず全コマを当て直す（旧 Q39-9 の「写しのある日は全コマ」も不要）。
+    expect(BOARD_TSX).toContain('const params = { ...input, wholeDayTransferSettlement, slotFilter: null as TemplateDiffSlotFilter | null }')
+    expect(BOARD_TSX).not.toContain('expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks')
     // 範囲の権威は計画関数 1 か所: 基準は保存時点の保存済みテンプレ（編集画面と同じ在籍フィルタ）、範囲は定義の差 ∪ 盤面の行との差（regression-reviewer H-2）。
     const planFn = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
     expect(planFn).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })')
@@ -356,7 +357,8 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(planFn).toContain("baseScopeNote.scope === 'changed-slots' && diff.scopedFullDates.length > 0 ? { ...baseScopeNote, fullDates: diff.scopedFullDates } : baseScopeNote")
     // 旧方式（フラグ OFF）の既定日と保存ボタンの文言は不変（差分反映の教室だけ来週の月曜・「反映（変えたコマだけ）」）。
     expect(BOARD_TSX).toContain("      : (filteredTemplate?.effectiveStartDate || today))")
-    expect(BOARD_TSX).toContain("templateSaveButtonLabel={templateDiffApplyEnabled ? '反映開始日以降にこのテンプレを反映（変えたコマだけ）' : undefined}")
+    // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止）: 「変えたコマだけ」の絞り込みは使わないので、ボタンの文言からも外した。
+    expect(BOARD_TSX).toContain("templateSaveButtonLabel={templateDiffApplyEnabled ? '反映開始日以降にこのテンプレを反映' : undefined}")
     // 試し実行は数秒かかる同期計算。先に BusyOverlay を描いて 1 フレーム待ってから計算する(2026-10-14 オーナー指摘「ボタンを押して
     // つぎのモーダルが出るまで操作できないのにローディングスピンがでない」)。差分反映 OFF の教室は従来どおり即モーダル。
     const request = sliceBody(BOARD_TSX, 'const handleTemplateSaveRequest = () => {', 'const handleTemplateSaveConfirm = async () => {')
@@ -377,7 +379,7 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(plan).toContain('manualMakeupAdjustments,\n      suppressedMakeupOrigins,\n      // 決定記録 46（Q40-9）: 保存前のテンプレの行（時限を変えた生徒の丸ごと振替の振替を新しい時限へ動かす）。\n      previousRegularLessons: regularLessons,\n    })')
     expect(plan).not.toMatch(/filterTemplateOverwriteHolidayDates\(/)
     // Q40-1 根拠 (b) は在庫の正本 collectMakeupOriginDatesByKey を、取り下げ後の台帳・保存後の盤面（上段＋保留の下段）・同じ抑止で呼ぶ（監査 H-A/M-A・判定を在庫と分けない）。
-    const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// Q36 の反復本体')
+    const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// 第 2 版の差分反映の本体')
     expect(entry).toContain('resolveLedgerOriginDates: (ledgerAfterRemovals) => collectMakeupOriginDatesByKey({')
     expect(entry).toContain('manualAdjustments: ledgerAfterRemovals, suppressedOrigins: params.suppressedMakeupOrigins ?? {}, resolveStudentKey: buildTemplateTransferStockIdResolver(params.students),')
     expect(entry).toContain('includeAbsentMakeupOrigins: true, templatePendingDesks: run.diff.nextPendingDesks,')

@@ -7512,3 +7512,10 @@ button.verification-checklist-attach:disabled {
   color: #137333;
   font-weight: 600;
 }
+
+/* 出自＝手入力の青字（docs/spec-template-conflict-v2.md §5・機能フラグ templateDiffApply の教室の盤面だけ）。
+   文字色は青が勝つ（警告の赤・休みの灰より後に書き、詳細度も上げる）。前置き（外)・振)・休)）と背景はそのまま。盤面 PDF はクラスごと外す。 */
+.slot-adjust-grid .sa-student-name.sa-manual-origin,
+.slot-adjust-grid .sa-teacher-name.sa-manual-origin {
+  color: #1d4ed8;
+}

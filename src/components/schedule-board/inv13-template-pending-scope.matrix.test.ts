@@ -84,6 +84,7 @@ const OLD_ROWS = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数'), ro
 // 机0 は講師交代（田中→鈴木）＋生徒 A→C。机1 は田中＋B。机2 は佐藤だけ。
 const NEW_ROWS = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
 // 席不足（Q21-10）の列: 机1 のテンプレが 2 人（B・A）。
+const NEW_ROWS_TWO_IN_DESK0 = [row('r0', 't2', 'sC', '数', 'sA', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
 const NEW_ROWS_TWO_IN_DESK1 = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数', 'sA', '数'), row('r2', 't3')]
 
 function buildWeek(rows: RegularLessonRow[]): SlotCell[] {
@@ -174,22 +175,22 @@ const COLUMNS: LowerColumn[] = [
     newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦'], upperStudentId: 'sC', lowerLessonType: 'special',
   },
   {
+    // 第 2 版（spec-template-conflict-v2 §4-2 規則 3「記録は動かさない」）: 移動元の記録は下段へ入らず机の元の席に残る（上段＝盤面の週データ・日程表に出るのは仕様）。
+    // 下段に入る振替 M だけが隠れる。
     label: '表示専用の記録（移動元 moved）',
     desks: { 0: (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [MAKEUP_M, null] }, statusSlots: [null, status('sD', 'moved', { moveDestinationDateKey: '2026-10-09' })] }) },
-    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM', 'sD'], hiddenTexts: ['三浦', '土屋'], upperStudentId: 'sC', lowerLessonType: 'makeup',
+    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦'], upperStudentId: 'sC', lowerLessonType: 'makeup',
   },
   {
+    // 第 2 版（§2-1）: メモは席を占める手入力。テンプレがメモの席に生徒を置くとその席が 2 行（メモは下段）。テンプレが生徒 2 の席も埋める形にする。
     label: 'メモ',
     desks: { 0: (desk) => ({ ...desk, lesson: { id: 'l0', studentSlots: [MAKEUP_M, null] }, memoSlots: [null, '下段の持ち物メモ'] }) },
-    newRows: NEW_ROWS, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦', '下段の持ち物メモ'], upperStudentId: 'sC', lowerLessonType: 'makeup',
+    newRows: NEW_ROWS_TWO_IN_DESK0, pendingDeskIndex: 0, hiddenStudentIds: ['sM'], hiddenTexts: ['三浦', '下段の持ち物メモ'], upperStudentId: 'sC', lowerLessonType: 'makeup',
   },
   // 「席不足で下段へ入った会計記録（欠席）」の列は Q37（オーナー指示 2026-10-03「休みと振無休みは空白と同じような扱い」）で消えた:
   // 休み・振無休の記録は席を確保せず、席が足りなくても机（上段の生徒の下）に残る＝保留中も日程表・在庫に出る（下の describe で固定）。
-  {
-    label: '席不足で下段へ入った会計記録（出席）',
-    desks: { 1: (desk) => ({ ...desk, lesson: undefined, statusSlots: [status('sD', 'attended', { teacherName: '田中' }), null] }) },
-    newRows: NEW_ROWS_TWO_IN_DESK1, pendingDeskIndex: 1, hiddenStudentIds: ['sD'], hiddenTexts: ['土屋'], upperStudentId: 'sB',
-  },
+  // 「席不足で下段へ入った会計記録（出席）」の列は第 2 版（spec-template-conflict-v2 §4-2 規則 3「記録は動かさない」・2026-11-05 オーナー承認）で消えた:
+  // 出席の記録も席を確保せず机の元の席（上段の生徒の下）に残る＝保存は記録を下段へ入れない。旧版の保留に残る下段の記録は下の「旧形式」の describe で固定する。
 ]
 
 function buildPendingBoard(column: LowerColumn) {
@@ -434,10 +435,8 @@ describe.each(COLUMNS)('INV-13 マトリクス: 下段＝$label', (column) => {
         // 盤面共有はメモを載せない（従来仕様）。
         if (text !== '下段の持ち物メモ') expect(json, text).toContain(text)
       }
-      if (displayOnly) {
-        expect(pdfText).not.toContain('土屋')
-        expect(json).not.toContain('土屋')
-      }
+      // 第 2 版（spec-template-conflict-v2 §4-2 規則 3）: 移動元の記録は保存でも解決でも動かさない＝初めから机に居て、解決の後も消えない（旧 Q28-3 の「捨てる」は下段の記録だけ）。
+      if (displayOnly) expect(pdfText).toContain('土屋')
     })
 
     it('生徒日程表・回数表（実績）に下段だった生徒が出る', () => {

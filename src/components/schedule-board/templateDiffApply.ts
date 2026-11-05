@@ -1566,7 +1566,11 @@ function studentsChanged(before: DeskLesson | undefined, after: DeskLesson | und
  * テンプレ保存の差分反映（Q21・Q21-11・Q24-1・Q28-6・Q29・Q35）。保存本体と確認文の件数の両方がこれを呼ぶ（Q32-1）。
  * 反映日より前のセル・週は**参照ごと**そのまま返す（INV-10）。
  */
-export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams): ComputeTemplateDiffApplyResult {
+/**
+ * ★旧仕様（§H Q21〜Q42・2026-11-05 まで）の差分反映。**入口からは外した**（第 2 版 docs/spec-template-conflict-v2.md §6 で置き換え）。
+ * 経緯の記録として純関数とテストだけ残す。保存・確認の画面は templateConflictRules.ts の computeTemplateDiffApply（下で再公開）を使う。
+ */
+export function computeTemplateDiffApplyLegacyQ21(params: ComputeTemplateDiffApplyParams): ComputeTemplateDiffApplyResult {
   const summary = createEmptyTemplateDiffApplySummary()
   const nextPendingDesks: TemplatePendingDeskMap = { ...params.pendingDesks }
   const addedSuppressed = new Set<string>()
@@ -2496,7 +2500,7 @@ export type TemplateDiffConfirmContext = {
  * 名前つきで出すことで、黙って消える形（改定前の M-1 の誤認など）が確認の画面の時点で見える。
  */
 export type TemplateDiffStudentNote = {
-  kind: 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
+  kind: 'manual-first' | 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
     | 'copy-kept-record' | 'copy-kept-vanish'
   /** 生徒の名前（講師の行では講師の名前）。 */
   studentName: string
@@ -2543,18 +2547,9 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
   const who = note.subject ? `${note.studentName}（${note.subject}）` : `講師 ${note.studentName}`
   switch (note.kind) {
     case 'teacher-pending': {
-      // オーナー決定 2026-11-01「緑 2 段へ広げる」: 手で置いた生徒の有無・テンプレ机が講師だけかで文を分ける（「手で置いた生徒が居ないため替わります」は廃止）。
-      const head = `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、`
-      // 2026-11-05（決定記録 64・tp-70）: テンプレのこの机が講師だけ（生徒なし）なら、手で置いた生徒は上の行（席）に残し、講師だけを下の行に残す。
-      const hasStudents = Boolean(note.keptStudentNames && note.keptStudentNames.length > 0)
-      const students = note.templateTeacherOnly
-        ? (hasStudents
-          ? `テンプレのこの机は講師だけ（生徒なし）なので、手で置いた ${note.keptStudentNames!.join('・')} は席に残し、講師だけ下の行に残して保留（緑）にします。`
-          : '講師だけ下の行に残して保留（緑）にします（手で置いた生徒は居ません）。')
-        : (hasStudents
-          ? `手で置いた ${note.keptStudentNames!.join('・')} と一緒に下の行に残して保留（緑）にします。`
-          : '講師だけ下の行に残して保留（緑）にします（手で置いた生徒は居ません）。')
-      return `${head}${students}緑の講師欄で「上段(テンプレ)の講師を採用する」か「下段(手入力)の講師を採用する」を選んでください。`
+      // 第 2 版 §2-3: 手置き講師の机にテンプレの別の講師が入る → 講師欄だけ 2 行（上＝テンプレ／下＝手入力）。席は §2-1 で別に決まる。
+      const seat = note.templateTeacherOnly ? 'テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります。' : ''
+      return `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、講師欄を 2 行（上＝テンプレ／下＝手入力）にします。${seat}緑の講師欄で「上段(テンプレ)の講師を採用する」か「下段(手入力)の講師を採用する」を選んでください。`
     }
     case 'teacher-replaced': {
       // 2026-11-01 以降この行が出る形は 2 つだけ（regression-reviewer メモ 8）。旧「手で置いた生徒が居ないため」「講師だけのため」は出ない。
@@ -2568,9 +2563,11 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
     }
     // 決定記録 66（2026-11-05・tp-59）: detail＝テンプレがこの講師を置く机の番号。
     case 'teacher-elsewhere': {
-      const students = note.keptStudentNames && note.keptStudentNames.length > 0 ? `手で置いた ${note.keptStudentNames.join('・')} は席に残します。` : ''
-      return `${where} ${who}: この講師は同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}にテンプレで入るため、この机では保留（緑）にしました。${students}緑の講師欄で「上段(テンプレ)の講師を採用する」（講師なし）を選ぶか、テンプレを直してください。`
+      // 第 2 版 §2-3（講師の一意・手置き講師が勝つ・§9-1）: studentName＝テンプレの講師・detail＝手置きの机の番号（1 始まり）。
+      return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は空のままです）。`
     }
+    // 第 2 版 §2-2（生徒の一意・手入力が勝つ）。
+    case 'manual-first': return `${where} ${who}: 同じコマに手入力の同じ生徒が先にあるため、テンプレのこの授業は置きません（予定数に数えません）。`
     case 'duplicate-skipped': return `${where} ${who}: 同じコマに同じ生徒の授業（振替・講習など）があり、その机の下の行に空きが無いため、テンプレの通常授業は置きません。`
     // 決定記録 57（2026-11-01・A-10）: detail＝テンプレの机番号（「机 n」）。
     case 'duplicate-demoted': return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}にテンプレの通常授業を置くため、手で置いた授業（振替・講習など）はその机の下の行（保留・緑）に残します。どちらかを片づけてください。`
@@ -2723,3 +2720,6 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.manualTeacherReplaced > 0) parts.push(`手で置いた講師を机に戻さずテンプレに合わせた机: ${summary.manualTeacherReplaced}机。`)
   return parts.join('')
 }
+
+// 第 2 版（docs/spec-template-conflict-v2.md §2）の差分反映。保存・確認の画面はこれを使う（旧 computeTemplateDiffApplyLegacyQ21 は入口から外した）。
+export { computeTemplateDiffApply } from './templateConflictRules'

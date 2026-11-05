@@ -37,8 +37,16 @@ export type EditedFromRegular = {
   addedMakeupSuppressionKey?: string
 }
 
+/**
+ * 出自の印（docs/spec-template-conflict-v2.md §1-1）。置いた瞬間に付く 2 値。読み手は placementOrigin.ts の resolveStudentOrigin を通す
+ * （印の無い旧データは §7 の推定で読む）。テンプレ＝テンプレの展開で置いた授業（同じ日の中で動かしたものを含む）／手入力＝人の操作で置いたもの。
+ */
+export type PlacementOriginMark = 'template' | 'manual'
+
 export type StudentEntry = {
   id: string
+  /** 出自の印（§1-1・機能フラグ templateDiffApply の教室で付ける）。無ければ推定（placementOrigin.ts）。 */
+  origin?: PlacementOriginMark
   name: string
   managedStudentId?: string
   grade: GradeLabel
@@ -93,6 +101,8 @@ export type HolidayStockReturnStamp = {
 export type StudentStatusEntry = {
   id: string
   studentId: string
+  /** 記録を付けた生徒の出自の印（記録を外して席へ戻すときに生徒へ戻す。記録そのものは常に手入力）。 */
+  origin?: PlacementOriginMark
   sourceManagedLesson: boolean
   name: string
   managedStudentId?: string

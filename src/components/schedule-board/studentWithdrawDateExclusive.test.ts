@@ -321,7 +321,8 @@ describe('退塾ボタン/編集の退塾日入力のどちらでも、その場
     // 合成関数を通る＝3 経路 + 定義 = 4 件。経路ごとに weeks.map を書き写すと同一性が静かに壊れるのでここで固定する。
     expect(boardSource.match(/remergeBoardWeekWithManagedData\(week, params\)/g)).toHaveLength(1)
     expect(boardSource.match(/remergeBoardWeeksWithManagedData\(/g)).toHaveLength(4)
-    expect(boardSource).toContain('}, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])')
+    // 第 2 版（spec-template-conflict-v2 §2）: フラグ templateDiffApply の教室だけ再マージに規則を当てるので、フラグも deps に入る（保留マップは ref で読む）。
+    expect(boardSource).toContain('}, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences, templateDiffApplyEnabled])')
     expect(boardSource).toContain('const week = stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)')
   })
 

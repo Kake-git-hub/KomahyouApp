@@ -45,8 +45,9 @@ export function buildWeek(rows: RegularLessonRow[], classroomSettings = settings
     classroomSettings, teachers, students, regularLessons: rows, boardWeeks: [],
   })
 }
-export function remerge(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], classroomSettings = settings()) {
-  return remergeBoardWeeksWithManagedData(weeks, { classroomSettings, teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29' })
+/** 再マージ（機能フラグ templateDiffApply の教室と同じ＝第 2 版の規則〔§2-2〜§2-4〕を保留マップ込みで当てる）。 */
+export function remerge(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], classroomSettings = settings(), pendingDesks: TemplatePendingDeskMap | null = {}) {
+  return remergeBoardWeeksWithManagedData(weeks, { classroomSettings, teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29', templateOriginRules: { pendingDesks } })
 }
 export function balances(weeks: SlotCell[][], rows: RegularLessonRow[], manualAdjustments: Record<string, ManualMakeupOrigin[]>, classroomSettings = settings(), suppressedOrigins: Record<string, ManualMakeupOrigin[]> = {}, templatePendingDesks: TemplatePendingDeskMap | null = null) {
   const entries = buildMakeupStockEntries({ students, teachers, regularLessons: rows, classroomSettings, weeks, manualAdjustments, suppressedOrigins, resolveStudentKey, today: TODAY, templatePendingDesks })

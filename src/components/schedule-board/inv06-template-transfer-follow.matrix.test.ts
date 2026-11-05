@@ -366,17 +366,26 @@ describe('INV-06 × Q40-1: テンプレから外した生徒の根拠を失っ�
     const savedLower = save(lower, newRows, board.suppressed, { manualMakeupAdjustments: board.ledgers, templatePendingDesks: pending, slotFilter: wedOnly })
     expect(savedLower.summary.orphanedMakeupsRemoved).toBe(0)
     expect(liveIds(savedLower.nextWeeks, FRI_CELL)).toContain('sA')
-    expect(Object.keys(savedLower.nextPendingDesks)).toEqual(Object.keys(pending))
+    // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止・§2-1・§4-2 規則 3）: 絞り込みは使わず木 5限も当て直す。テンプレの生徒が居ない席なので下段の D は上段へ戻り、
+    // 休みの記録も机の同じ席へ戻る（記録は消えない）＝保留は 1 行に戻る。根拠 (b) は記録が机に移っても同じに数える（振替は消えない）。
+    expect(savedLower.nextPendingDesks).toEqual({})
+    expect(cellOf(savedLower.nextWeeks, THU_CELL).desks[0].statusSlots?.[0]).toMatchObject({ id: absentMakeupA.id, status: 'absent' })
   })
 
-  it('範囲（変えたコマ）の外の振替元は触らない: 木 5限だけの絞り込みでは水 5限 由来の振替は消えず、置きもしない', () => {
+  // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止・2-9）: 「変えたコマだけ」の絞り込みは使わない。絞り込みを渡しても、渡さないときと同じ結果になる
+  // （旧「範囲の外の振替元は触らない」は廃止。手入力のある席は反映前後で変わらないことは 2-9 の行で固定する）。
+  it('絞り込み（変えたコマ）を渡しても全コマを当て直す: 木 5限だけの絞り込みでも水 5限 由来の A の振替は根拠を失って消え、C は振替先へ置く', () => {
     const board = transferredBoard()
     const newRows = [row('r0', 't1', '', 'sC'), row('r1', 't2', 'sB'), row('r2', 't3', '', '', 4)]
-    const saved = save(board.weeks, newRows, board.suppressed, { slotFilter: { slotKeys: new Set([buildTemplateSlotKey(4, SLOT)]) } })
-    expect(saved.summary.orphanedMakeupsRemoved).toBe(0)
-    expect(saved.summary.wholeDayTransferPlacedStudents + saved.summary.wholeDayTransferStockedStudents).toBe(0)
-    expect(liveIds(saved.nextWeeks, THU_CELL).sort()).toEqual(['sA', 'sB'])
-    expect(cellOf(saved.nextWeeks, WED_CELL)).toBe(cellOf(board.weeks, WED_CELL))
+    const filtered = save(board.weeks, newRows, board.suppressed, { slotFilter: { slotKeys: new Set([buildTemplateSlotKey(4, SLOT)]) } })
+    const full = save(board.weeks, newRows, board.suppressed)
+    expect(filtered.summary.orphanedMakeupsRemoved).toBe(1)
+    expect(filtered.summary.wholeDayTransferPlacedStudents).toBe(1)
+    // 記録の id は作った時刻を含むので、中身（生徒・種別・記録の種類）で比べる。
+    const project = (weeks: SlotCell[][]) => weeks.flat().map((cell) => cell.desks.map((desk) => [desk.teacher, (desk.lesson?.studentSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.lessonType}` : null)), (desk.statusSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.status}` : null))]))
+    expect(project(filtered.nextWeeks)).toEqual(project(full.nextWeeks))
+    expect(Object.keys(filtered.nextPendingDesks)).toEqual(Object.keys(full.nextPendingDesks))
+    expect(liveIds(filtered.nextWeeks, THU_CELL).sort()).toEqual(['sB', 'sC'])
   })
 })
 
