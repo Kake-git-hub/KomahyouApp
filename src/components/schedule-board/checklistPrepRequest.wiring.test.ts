@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 const BOARD_TSX = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
 
 function effectBody(): string {
-  const start = BOARD_TSX.indexOf('if (!shouldProcessChecklistPrepRequest(checklistPrepRequest, processedChecklistPrepRequestIdRef.current)) return')
+  const start = BOARD_TSX.indexOf('if (!shouldProcessChecklistPrepRequest(checklistPrepRequest, processedChecklistPrepRequestIdRef.current, {')
   expect(start, 'checklist prep effect not found').toBeGreaterThan(0)
   const end = BOARD_TSX.indexOf('}, [', start)
   expect(end).toBeGreaterThan(start)
@@ -52,12 +52,33 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(body).toContain('templatePendingDesks: activeTemplatePendingDesks,')
   })
 
-  it('置くのは applyChecklistPrepOps → commitWeeks を 1 回(既定引数のまま)。保存は呼ばない', () => {
+  it('押した教室(request.classroomId)とコマ表の教室が違う・教室データの読み込みが済んでいない間は処理しない(消費もせず待つ・要確認 1・INV-08)', () => {
     const body = effectBody()
-    expect(body).toContain('const nextWeeks = applyChecklistPrepOps(weeks, step.plan.ops, buildTeacherAliasResolver(teachers))')
-    expect(body).toContain('commitWeeks(nextWeeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
+    // 判断は純関数 shouldProcessChecklistPrepRequest(checklistPrep.test.ts で固定)。effect はコマ表の教室と読み込み済みの印を渡すだけ。
+    expect(body).toContain('classroomId: classroomStorageKey ?? null,')
+    expect(body).toContain('isEditingStateLoaded: isEditingStateLoadedForActingClassroom,')
+    expect(body.indexOf('isEditingStateLoaded: isEditingStateLoadedForActingClassroom,')).toBeLessThan(body.indexOf('const finish = '))
+    const depsStart = BOARD_TSX.indexOf('}, [', BOARD_TSX.indexOf(body))
+    const deps = BOARD_TSX.slice(depsStart, BOARD_TSX.indexOf('])', depsStart))
+    expect(deps).toContain('isEditingStateLoadedForActingClassroom')
+    expect(deps).toContain('classroomStorageKey')
+  })
+
+  it('置くのは applyChecklistPrepOps → commitWeeks を 1 回(既定引数のまま)。置けなかった操作があれば commitWeeks を呼ばず失敗で返す。保存は呼ばない', () => {
+    const body = effectBody()
+    expect(body).toContain('const applied = applyChecklistPrepOps(weeks, step.plan.ops, buildTeacherAliasResolver(teachers))')
+    const skippedIndex = body.indexOf('if (applied.skipped > 0) {')
+    expect(skippedIndex).toBeGreaterThan(0)
+    expect(body.slice(skippedIndex, skippedIndex + 200)).toContain('finish(false, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE)')
+    expect(skippedIndex).toBeLessThan(body.indexOf('commitWeeks('))
+    expect(body).toContain('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
     expect([...body.matchAll(/commitWeeks\(/gu)]).toHaveLength(1)
     expect(body).not.toContain('onSaveBoard')
     expect(body).not.toContain('setWeeks(')
+  })
+
+  it('講師メニューの「保存」の出自は権威関数 resolveManualTeacherAssignmentSource(準備と同じ 1 本)を通す(式を画面に複製しない)', () => {
+    expect(BOARD_TSX).toContain('const teacherAssignmentSource = resolveManualTeacherAssignmentSource(targetDesk)')
+    expect(BOARD_TSX).not.toContain("!targetDesk.lesson && targetDesk.teacher.trim() && !targetDesk.manualTeacher")
   })
 })

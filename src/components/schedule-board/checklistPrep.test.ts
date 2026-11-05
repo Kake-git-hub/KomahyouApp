@@ -10,6 +10,7 @@ import {
   CHECKLIST_PREP_SAVE_REMINDER,
   applyChecklistPrepOps,
   consumeChecklistPrepRequest,
+  pickChecklistPrepProfileStudent,
   planChecklistPrep,
   resolveChecklistPrepStep,
   shouldProcessChecklistPrepRequest,
@@ -64,7 +65,10 @@ function cell(dateKey: string, slotNumber: number, desks: DeskCell[], overrides:
   }
 }
 
-/** v2-1 も tp-64 も置ける標準のコマ（机 1=テンプレ講師 A＋テンプレ生徒・机 2=テンプレ講師 B＋テンプレ生徒・机 3=テンプレ講師だけ・机 4=空）。 */
+/**
+ * v2-1 も tp-64 も置ける標準のコマ（机 1=テンプレ講師 A＋テンプレ生徒・机 2=テンプレ講師 B＋テンプレ生徒・机 3=テンプレ講師だけ・
+ * 机 4〜6=講師も授業も無い空き机）。
+ */
 function fullCell(dateKey: string, slotNumber: number): SlotCell {
   const prefix = `${dateKey}_${slotNumber}`
   return cell(dateKey, slotNumber, [
@@ -72,6 +76,8 @@ function fullCell(dateKey: string, slotNumber: number): SlotCell {
     templateDesk(`${prefix}_d2`, '講師B', templateStudent(`${prefix}_s2`, 's002')),
     teacherOnlyDesk(`${prefix}_d3`, '講師C'),
     emptyDesk(`${prefix}_d4`),
+    emptyDesk(`${prefix}_d5`),
+    emptyDesk(`${prefix}_d6`),
   ])
 }
 
@@ -101,8 +107,8 @@ describe('CHECKLIST_PREP_ITEM_IDS', () => {
   })
 })
 
-describe('planChecklistPrep: v2-1（青字）', () => {
-  it('空き机に体験・その机の別の席にメモ・テンプレの生徒が居る机の講師を手で別の講師へ替える（同じコマの講師と重ならない）', () => {
+describe('planChecklistPrep: v2-1（青字・案 A の並び替え → テンプレ保存）', () => {
+  it('講師も授業も無い空き机 3 つを使う: 1 つ目に体験 2 人・2 つ目の席 1 にメモ・3 つ目に手で置く講師（テンプレの講師と生徒の机は替えない）', () => {
     const weeks = [[fullCell('2026-11-12', 1)]]
     const plan = planChecklistPrep(baseInput('v2-1', weeks))
     expect(plan.ok).toBe(true)
@@ -110,35 +116,59 @@ describe('planChecklistPrep: v2-1（青字）', () => {
     expect(plan.cellId).toBe('2026-11-12_1')
     expect(plan.dateKey).toBe('2026-11-12')
     expect(plan.weekIndex).toBe(0)
+    expect(plan.deskIndex).toBe(3)
     expect(plan.ops).toEqual<ChecklistPrepOp[]>([
-      { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 2, studentIndex: 0, name: '確認用 体験1', grade: '中1', subject: '英' },
-      { kind: 'memo', cellId: '2026-11-12_1', deskIndex: 2, studentIndex: 1, text: '確認用メモ1' },
+      { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 0, name: '確認用 体験1', grade: '中1', subject: '英' },
+      { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 1, name: '確認用 体験2', grade: '中1', subject: '英' },
+      { kind: 'memo', cellId: '2026-11-12_1', deskIndex: 4, studentIndex: 0, text: '確認用メモ1' },
       // 講師A・B・C は同じコマに居るので D（呼び名の対応表で別人）。
-      { kind: 'manual-teacher', cellId: '2026-11-12_1', deskIndex: 0, teacherName: '講師D', teacherId: 't4' },
+      { kind: 'manual-teacher', cellId: '2026-11-12_1', deskIndex: 5, teacherName: '講師D', teacherId: 't4' },
     ])
-    expect(plan.message).toContain('11/12(木) 1限 机 3 の生徒 1 に体験「確認用 体験1」を置きました')
-    expect(plan.message).toContain('11/12(木) 1限 机 3 の生徒 2 にメモ「確認用メモ1」を書きました')
-    expect(plan.message).toContain('11/12(木) 1限 机 1 の講師を 講師A から 講師D に替えました')
+    // テンプレの講師と生徒の机（机 1・2）とテンプレの講師だけの机（机 3）には何も置かない（§2-3 の講師欄 2 行の元にしない）。
+    expect(plan.ops.some((op) => op.deskIndex <= 2)).toBe(false)
+    expect(plan.message).toContain('11/12(木) 1限 机 4 の生徒 1・生徒 2 に体験「確認用 体験1」「確認用 体験2」を置きました')
+    expect(plan.message).toContain('11/12(木) 1限 机 5 の生徒 1 にメモ「確認用メモ1」を書きました')
+    expect(plan.message).toContain('11/12(木) 1限 机 6 に講師 講師D を手で置きました')
+    expect(plan.message).not.toContain('替えました')
     // 保存は自動でしない（計画 §0-3）。結果文の最後に「保存を押してください」を必ず添える。
     expect(plan.message.endsWith(CHECKLIST_PREP_SAVE_REMINDER)).toBe(true)
     expect(plan.message).toContain('「保存」を押してから')
   })
 
-  it('講師だけの机が無ければ空の机に体験を置く', () => {
-    const prefix = '2026-11-12_1'
-    const weeks = [[cell('2026-11-12', 1, [
-      templateDesk(`${prefix}_d1`, '講師A', templateStudent('s1', 's001')),
-      emptyDesk(`${prefix}_d2`),
-    ])]]
+  it('当てた形: 体験 2 人の机は講師なし・メモの机は授業なし・手で置いた講師の机は授業なし（manual）', () => {
+    const weeks = [[fullCell('2026-11-12', 1)]]
     const plan = planChecklistPrep(baseInput('v2-1', weeks))
-    expect(plan.ok).toBe(true)
-    if (!plan.ok) return
-    expect(plan.ops[0]).toMatchObject({ kind: 'trial', deskIndex: 1, studentIndex: 0 })
+    if (!plan.ok) throw new Error('plan failed')
+    const applied = applyChecklistPrepOps(weeks, plan.ops, buildTeacherAliasResolver(TEACHERS), { now: 1 })
+    expect(applied.skipped).toBe(0)
+    const desks = applied.weeks[0][0].desks
+    expect(desks[3].teacher).toBe('')
+    expect(desks[3].lesson?.studentSlots.map((student) => student?.name)).toEqual(['確認用 体験1', '確認用 体験2'])
+    expect(desks[4]).toMatchObject({ teacher: '', memoSlots: ['確認用メモ1', null] })
+    expect(desks[4].lesson).toBeUndefined()
+    expect(desks[5]).toMatchObject({ teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4' })
+    expect(desks[5].lesson).toBeUndefined()
+    // テンプレの机は変わらない。
+    expect(desks.slice(0, 3)).toEqual(weeks[0][0].desks.slice(0, 3))
+  })
+
+  it('テンプレの講師だけの机は空き机に数えない（空き机が 3 つ無いコマは飛ばして次のコマを探す）', () => {
+    const prefix = '2026-11-12_1'
+    const short = cell('2026-11-12', 1, [
+      templateDesk(`${prefix}_d1`, '講師A', templateStudent('s1', 's001')),
+      teacherOnlyDesk(`${prefix}_d2`, '講師C'),
+      emptyDesk(`${prefix}_d3`),
+      emptyDesk(`${prefix}_d4`),
+    ])
+    const plan = planChecklistPrep(baseInput('v2-1', [[short, fullCell('2026-11-12', 2)]]))
+    expect(plan.ok && plan.cellId).toBe('2026-11-12_2')
+    expect(planChecklistPrep(baseInput('v2-1', [[short]]))).toMatchObject({ ok: false })
   })
 
   it('体験の学年・科目は渡された見本に合わせる（無ければ 中1・英）', () => {
     const plan = planChecklistPrep(baseInput('v2-1', [[fullCell('2026-11-12', 1)]], { trialProfile: { grade: '高1', subject: '数' } }))
     expect(plan.ok && plan.ops[0]).toMatchObject({ kind: 'trial', grade: '高1', subject: '数' })
+    expect(plan.ok && plan.ops[1]).toMatchObject({ kind: 'trial', grade: '高1', subject: '数' })
   })
 
   it('呼び名の対応表で同じ人は避ける（登録名と表示名が違う講師）', () => {
@@ -146,11 +176,13 @@ describe('planChecklistPrep: v2-1（青字）', () => {
     const weeks = [[cell('2026-11-12', 1, [
       templateDesk('d1', '講師A 本名', templateStudent('s1', 's001')),
       emptyDesk('d2'),
+      emptyDesk('d3'),
+      emptyDesk('d4'),
     ])]]
     const plan = planChecklistPrep(baseInput('v2-1', weeks, { teachers, teacherAliases: buildTeacherAliasResolver(teachers) }))
     expect(plan.ok).toBe(true)
     if (!plan.ok) return
-    expect(plan.ops.find((op) => op.kind === 'manual-teacher')).toMatchObject({ teacherName: '講師E', teacherId: 't2' })
+    expect(plan.ops.find((op) => op.kind === 'manual-teacher')).toMatchObject({ teacherName: '講師E', teacherId: 't2', deskIndex: 3 })
   })
 
   it('退塾した講師は選ばない', () => {
@@ -179,25 +211,26 @@ describe('planChecklistPrep: 置き場の選び方', () => {
     expect(planChecklistPrep(baseInput('v2-1', weeks, { effectiveStartDate: null }))).toMatchObject({ ok: true, cellId: '2026-11-11_1' })
   })
 
-  it('保留（2 行）の机と出欠記録のある机は使わない', () => {
+  it('保留（2 行）の机と出欠記録のある机は空き机に数えない', () => {
     const blocked = fullCell('2026-11-12', 1)
-    // 体験を置ける机 3・4 を保留と記録で塞ぐ → 11/12 は v2-1 を置けない。
+    // 空き机 4〜6 のうち 2 つを保留と記録で塞ぐ → 11/12 は空き机が 1 つで v2-1 を置けない。
     blocked.desks[3].statusSlots = [statusEntry(), null]
     const pending: TemplatePendingDeskMap = {
-      [buildTemplatePendingDeskKey(blocked.id, blocked.desks[2].id)]: { lower: { studentSlots: [null, null] } } as unknown as TemplatePendingDeskMap[string],
+      [buildTemplatePendingDeskKey(blocked.id, blocked.desks[4].id)]: { lower: { studentSlots: [null, null] } } as unknown as TemplatePendingDeskMap[string],
     }
     const weeks = [[blocked, fullCell('2026-11-13', 1)]]
     const plan = planChecklistPrep(baseInput('v2-1', weeks, { templatePendingDesks: pending }))
     expect(plan.ok && plan.cellId).toBe('2026-11-13_1')
   })
 
-  it('講師を替える机が保留・記録つきなら別の机を使う', () => {
+  it('記録つきの空き机を飛ばして、残りの空き机を順に使う', () => {
     const target = fullCell('2026-11-12', 1)
-    target.desks[0].statusSlots = [null, statusEntry()]
+    target.desks.push(emptyDesk('2026-11-12_1_d7'))
+    target.desks[4].statusSlots = [null, statusEntry()]
     const plan = planChecklistPrep(baseInput('v2-1', [[target]]))
     expect(plan.ok).toBe(true)
     if (!plan.ok) return
-    expect(plan.ops.find((op) => op.kind === 'manual-teacher')).toMatchObject({ deskIndex: 1 })
+    expect(plan.ops.map((op) => op.deskIndex)).toEqual([3, 3, 5, 6])
   })
 
   it('置ける場所が無ければ理由を返して何もしない', () => {
@@ -217,19 +250,21 @@ describe('planChecklistPrep: 置き場の選び方', () => {
     const first = planChecklistPrep(baseInput('v2-1', weeks))
     expect(first.ok).toBe(true)
     if (!first.ok) return
-    const afterFirst = applyChecklistPrepOps(weeks, first.ops, buildTeacherAliasResolver(TEACHERS), { now: 1 })
+    const afterFirst = applyChecklistPrepOps(weeks, first.ops, buildTeacherAliasResolver(TEACHERS), { now: 1 }).weeks
     const second = planChecklistPrep(baseInput('v2-1', afterFirst))
     expect(second.ok).toBe(true)
     if (!second.ok) return
     const firstSeats = first.ops.map((op) => `${op.cellId}/${op.deskIndex}/${'studentIndex' in op ? op.studentIndex : 't'}`)
     const secondSeats = second.ops.map((op) => `${op.cellId}/${op.deskIndex}/${'studentIndex' in op ? op.studentIndex : 't'}`)
     expect(secondSeats.some((seat) => firstSeats.includes(seat))).toBe(false)
-    expect(second.ops[0]).toMatchObject({ kind: 'trial', name: '確認用 体験2' })
-    expect(second.ops[1]).toMatchObject({ kind: 'memo', text: '確認用メモ2' })
+    expect(second.cellId).toBe('2026-11-12_2')
+    expect(second.ops[0]).toMatchObject({ kind: 'trial', name: '確認用 体験3' })
+    expect(second.ops[1]).toMatchObject({ kind: 'trial', name: '確認用 体験4' })
+    expect(second.ops[2]).toMatchObject({ kind: 'memo', text: '確認用メモ2' })
     // 前の準備は残っている。
-    const afterSecond = applyChecklistPrepOps(afterFirst, second.ops, buildTeacherAliasResolver(TEACHERS), { now: 2 })
+    const afterSecond = applyChecklistPrepOps(afterFirst, second.ops, buildTeacherAliasResolver(TEACHERS), { now: 2 }).weeks
     const names = afterSecond.flat().flatMap((c) => c.desks.flatMap((d) => d.lesson?.studentSlots ?? [])).filter(Boolean).map((s) => s!.name)
-    expect(names).toEqual(expect.arrayContaining(['確認用 体験1', '確認用 体験2']))
+    expect(names).toEqual(expect.arrayContaining(['確認用 体験1', '確認用 体験2', '確認用 体験3', '確認用 体験4']))
   })
 })
 
@@ -247,10 +282,11 @@ describe('planChecklistPrep: tp-64（講師欄の緑）', () => {
     expect(plan.message).toContain('(1) 11/12(木) 1限 机 1')
     expect(plan.message).toContain('講師を 講師A から 講師D に替え')
     expect(plan.message).toContain('(2) 11/12(木) 1限 机 2 の生徒 2 に体験「確認用 体験2」')
-    expect(plan.message).toContain('(1) は何も変えずにテンプレを保存すれば')
-    expect(plan.message).toContain('「通常授業テンプレ作成」で 木曜 1限 机 2 の生徒 2 に誰かを登録して保存')
-    // (1) の席の採用（生徒の 2 行）も確かめられるよう、同じ机の席も具体的に書く。
-    expect(plan.message).toContain('木曜 1限 机 1 の生徒 2 にも誰かを登録')
+    // 残る手作業は (1)・(2) の両方の席（生徒 2）の登録が必須（任意扱いにしない・確認リスト tp-64 の prep と同じ）。
+    expect(plan.message).toContain('残る手作業（必須）: 「通常授業テンプレ作成」で 木曜 1限 机 1 の生徒 2 と 木曜 1限 机 2 の生徒 2 の両方に誰かを登録して、テンプレを保存してください。')
+    expect(plan.message).toContain('(1) の机は講師欄が緑の 2 行（上=講師A・下=講師D）＋生徒 2 も緑の 2 行、(2) の机は生徒 2 だけが緑で講師欄は白のまま')
+    expect(plan.message).not.toContain('確かめるときは')
+    expect(plan.message).not.toContain('何も変えずに')
     expect(plan.message.endsWith(CHECKLIST_PREP_SAVE_REMINDER)).toBe(true)
   })
 
@@ -272,7 +308,7 @@ describe('planChecklistPrep: tp-64（講師欄の緑）', () => {
     const weeks = [[fullCell('2026-11-12', 1), fullCell('2026-11-12', 2)]]
     const first = planChecklistPrep(baseInput('tp-64', weeks))
     if (!first.ok) throw new Error('first plan failed')
-    const after = applyChecklistPrepOps(weeks, first.ops, buildTeacherAliasResolver(TEACHERS), { now: 1 })
+    const after = applyChecklistPrepOps(weeks, first.ops, buildTeacherAliasResolver(TEACHERS), { now: 1 }).weeks
     const second = planChecklistPrep(baseInput('tp-64', after))
     expect(second).toMatchObject({ ok: true, cellId: '2026-11-12_2' })
     if (!second.ok) return
@@ -290,7 +326,9 @@ describe('applyChecklistPrepOps', () => {
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 0, name: '確認用 体験1', grade: '中1', subject: '英' },
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 0, studentIndex: 1, name: '確認用 体験2', grade: '中1', subject: '英' },
     ]
-    const next = applyChecklistPrepOps(weeks, ops, aliases, { now: 123456 })
+    const applied = applyChecklistPrepOps(weeks, ops, aliases, { now: 123456 })
+    expect(applied.skipped).toBe(0)
+    const next = applied.weeks
     expect(weeks).toEqual(before)
     const desk = next[0][0].desks[3]
     expect(desk.lesson?.id).toBe('2026-11-12_1_desk_4_manual')
@@ -315,7 +353,7 @@ describe('applyChecklistPrepOps', () => {
 
   it('メモは memoSlots に書き、講師は手で置いた講師（manualTeacher・ID つき）にする', () => {
     const weeks = [[fullCell('2026-11-12', 1)]]
-    const next = applyChecklistPrepOps(weeks, [
+    const { weeks: next } = applyChecklistPrepOps(weeks, [
       { kind: 'memo', cellId: '2026-11-12_1', deskIndex: 2, studentIndex: 1, text: '確認用メモ1' },
       { kind: 'manual-teacher', cellId: '2026-11-12_1', deskIndex: 0, teacherName: '講師D', teacherId: 't4' },
       { kind: 'manual-teacher', cellId: '2026-11-12_1', deskIndex: 2, teacherName: '講師E', teacherId: 't5' },
@@ -326,10 +364,10 @@ describe('applyChecklistPrepOps', () => {
     expect(next[0][0].desks[2]).toMatchObject({ teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 't5' })
   })
 
-  it('埋まっている席・メモのある席には置かない（既存を消さない）', () => {
+  it('埋まっている席・メモのある席には置かない（既存を消さない）。置かなかった操作は skipped に数える', () => {
     const weeks = [[fullCell('2026-11-12', 1)]]
     weeks[0][0].desks[3].memoSlots = ['既存のメモ', null]
-    const next = applyChecklistPrepOps(weeks, [
+    const { weeks: next, skipped } = applyChecklistPrepOps(weeks, [
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 0, studentIndex: 0, name: '確認用 体験1', grade: '中1', subject: '英' },
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 0, name: '確認用 体験2', grade: '中1', subject: '英' },
       { kind: 'memo', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 0, text: '確認用メモ1' },
@@ -337,6 +375,19 @@ describe('applyChecklistPrepOps', () => {
     expect(next[0][0].desks[0].lesson?.studentSlots[0]?.name).toBe('生徒s001')
     expect(next[0][0].desks[3].lesson).toBeUndefined()
     expect(next[0][0].desks[3].memoSlots).toEqual(['既存のメモ', null])
+    expect(skipped).toBe(3)
+  })
+
+  it('机の数が足りない（机・コマが見つからない）操作は置かずに skipped に数える（「置きました」と言わない・要確認 3）', () => {
+    const weeks = [[fullCell('2026-11-12', 1)]]
+    const applied = applyChecklistPrepOps(weeks, [
+      { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 3, studentIndex: 0, name: '確認用 体験1', grade: '中1', subject: '英' },
+      { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 9, studentIndex: 0, name: '確認用 体験2', grade: '中1', subject: '英' },
+      { kind: 'manual-teacher', cellId: '2026-11-12_1', deskIndex: 12, teacherName: '講師D', teacherId: 't4' },
+      { kind: 'memo', cellId: '2026-11-19_1', deskIndex: 0, studentIndex: 0, text: '確認用メモ1' },
+    ], aliases, { now: 1 })
+    expect(applied.skipped).toBe(3)
+    expect(applied.weeks[0][0].desks).toHaveLength(6)
   })
 
   it('準備（体験・メモ・講師）では振替の未消化（在庫）が変わらない（INV-06）', () => {
@@ -356,7 +407,8 @@ describe('applyChecklistPrepOps', () => {
     for (const itemId of CHECKLIST_PREP_ITEM_IDS) {
       const plan = planChecklistPrep(baseInput(itemId, weeks))
       if (!plan.ok) throw new Error(`plan failed: ${itemId}`)
-      const next = applyChecklistPrepOps(weeks, plan.ops, aliases, { now: 1 })
+      const { weeks: next, skipped } = applyChecklistPrepOps(weeks, plan.ops, aliases, { now: 1 })
+      expect(skipped).toBe(0)
       expect(stock(next)).toEqual(stock(weeks))
       // 足したのは体験だけ。
       const added = next.flat().flatMap((c) => c.desks.flatMap((d) => d.lesson?.studentSlots ?? [])).filter((s) => s?.name.startsWith('確認用'))
@@ -369,7 +421,7 @@ describe('applyChecklistPrepOps', () => {
 describe('resolveChecklistPrepStep（コマ表の effect が通す 1 回分の判断）', () => {
   const weeks = [[fullCell('2026-11-05', 1)], [fullCell('2026-11-12', 1)]]
   const base = {
-    request: { requestId: 1, itemId: 'v2-1' },
+    request: { requestId: 1, itemId: 'v2-1', classroomId: 'dev' },
     isVerificationClassroom: true,
     isTemplateMode: false,
     currentWeekIndex: 1,
@@ -410,13 +462,42 @@ describe('resolveChecklistPrepStep（コマ表の effect が通す 1 回分の�
 })
 
 describe('一過性リクエストの消費（Issue #46 同型）', () => {
+  const ready = { classroomId: 'dev', isEditingStateLoaded: true }
+
   it('処理済みの requestId は二度処理しない・消費は同じ requestId のときだけ null', () => {
-    const request = { requestId: 3, itemId: 'v2-1' }
-    expect(shouldProcessChecklistPrepRequest(null, null)).toBe(false)
-    expect(shouldProcessChecklistPrepRequest(request, null)).toBe(true)
-    expect(shouldProcessChecklistPrepRequest(request, 3)).toBe(false)
+    const request = { requestId: 3, itemId: 'v2-1', classroomId: 'dev' }
+    expect(shouldProcessChecklistPrepRequest(null, null, ready)).toBe(false)
+    expect(shouldProcessChecklistPrepRequest(request, null, ready)).toBe(true)
+    expect(shouldProcessChecklistPrepRequest(request, 3, ready)).toBe(false)
     expect(consumeChecklistPrepRequest(request, 3)).toBeNull()
     expect(consumeChecklistPrepRequest(request, 2)).toBe(request)
     expect(consumeChecklistPrepRequest(null, 3)).toBeNull()
+  })
+
+  it('押した教室とコマ表の教室が違う・教室データの読み込みが済んでいない間は処理しない（消費もせず待つ・INV-08・要確認 1）', () => {
+    const request = { requestId: 4, itemId: 'v2-1', classroomId: 'dev' }
+    expect(shouldProcessChecklistPrepRequest(request, null, { classroomId: 'other', isEditingStateLoaded: true })).toBe(false)
+    expect(shouldProcessChecklistPrepRequest(request, null, { classroomId: null, isEditingStateLoaded: true })).toBe(false)
+    expect(shouldProcessChecklistPrepRequest(request, null, { classroomId: 'dev', isEditingStateLoaded: false })).toBe(false)
+    expect(shouldProcessChecklistPrepRequest({ ...request, classroomId: null }, null, { classroomId: null, isEditingStateLoaded: true })).toBe(false)
+    expect(shouldProcessChecklistPrepRequest(request, null, ready)).toBe(true)
+  })
+})
+
+describe('体験の学年の見本（軽微 7）', () => {
+  const row = (id: string, overrides: Partial<StudentRow> = {}): StudentRow => ({
+    id, name: `生徒${id}`, displayName: `生徒${id}`, email: '', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01', ...overrides,
+  } as StudentRow)
+
+  it('今日在籍している生徒（生年月日あり）から取る。退塾・入塾前・生年月日なしは選ばない。誰も居なければ null（固定値の 中1・英）', () => {
+    const students = [
+      row('w', { withdrawDate: '2026-10-31' }),
+      row('f', { entryDate: '2026-12-01' }),
+      row('n', { birthDate: '' }),
+      row('a', { birthDate: '2010-06-01' }),
+    ]
+    expect(pickChecklistPrepProfileStudent(students, TODAY)?.id).toBe('a')
+    expect(pickChecklistPrepProfileStudent(students.slice(0, 3), TODAY)).toBeNull()
+    expect(pickChecklistPrepProfileStudent([], TODAY)).toBeNull()
   })
 })

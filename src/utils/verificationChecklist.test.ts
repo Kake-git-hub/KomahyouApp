@@ -1023,8 +1023,44 @@ describe('第112版(2026-11-06・v1.5.692): 確認リストの「準備する」
     expect(item.introducedIn).toBe('v1.5.692')
     expect(item.ownerDecision).toContain('オーナーが 11/6 に決めたこと')
     expect(item.check!.join('\n')).toContain('確認用 体験1')
+    // v2-1 の準備(空き机に体験 2 人・手で置く講師)に合わせる: 2 回目は 体験3・体験4、講師は「替えた」ではなく「置いた」。
+    expect(item.check!.join('\n')).toContain('「確認用 体験1」「確認用 体験2」(同じ机)')
+    expect(item.check!.join('\n')).toContain('「確認用 体験3」「確認用 体験4」')
+    expect(`${item.title}\n${item.check!.join('\n')}`).not.toContain('手で替えた講師')
     expect(VERIFICATION_CHECKLIST.items[0].id).toBe('ap-1')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('ap-1')
     expect(item.autoPrep).toBeUndefined()
+  })
+})
+
+describe('「準備する」の中身と確認の目安を揃える(regression-reviewer 要修正 1・2・2026-11-06)', () => {
+  const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+
+  it('v2-1: 準備は空き机に体験 2 人・別の空き机にメモ・別の空き机に手で置く講師(テンプレの机の講師は替えない)。目安は並び替え → テンプレ保存に合わせる', () => {
+    const item = byId.get('v2-1')!
+    expect(item.prep).toContain('講師も授業も無い空き机')
+    expect(item.prep).toContain('体験を 2 人')
+    expect(item.prep).toContain('メモを 1 つ')
+    expect(item.prep).toContain('手で置いた講師を 1 人')
+    expect(item.prep).not.toContain('替えた')
+    const check = item.check!
+    expect(check[0]).toContain('体験の生徒名・メモ・手で置いた講師名が青字')
+    expect(check[1]).toContain('並び替えで体験 2 人の机が上へ詰まり(2 人の机は 1 人の机より先)、テンプレの生徒の机も上へ詰まる(緑の 2 行の机は動かない)。読み込み直しても並び替えた形のまま')
+    expect(check[2]).toContain('テンプレを保存すると、テンプレの生徒はテンプレの机番号に戻り、体験 2 人は同じ机のまま(講師なし)、メモと手で置いた講師は空いた番号の机へ寄る。緑の 2 行は出ず、講師が入れ替わらず、同じ講師が 2 机に出ない')
+    expect(check[3]).toContain('コマ表の PDF・生徒日程表・講師日程表には青字が出ない')
+    // 前の準備(振替の生徒・手で置いた 2 人・講師はテンプレの講師のまま)の文言は残さない。
+    expect(check.join('\n')).not.toContain('振替の生徒名')
+    expect(check.join('\n')).not.toContain('講師はテンプレの講師のまま')
+  })
+
+  it('tp-64: (1) と (2) の両方の席(生徒 2)のテンプレ登録を必須の手作業にし、目安は「(1) は講師欄が緑 2 行＋席 2 も緑 2 行、(2) は席 2 だけ緑で講師欄は白」', () => {
+    const item = byId.get('tp-64')!
+    expect(item.prep).toMatch(/^「準備する」を押す/u)
+    expect(item.prep).toContain('(1) と (2) の両方の席(生徒 2)にテンプレで誰かを登録して保存する')
+    expect(item.prep).not.toContain('(2) の席にテンプレで誰かを登録し、')
+    const check = item.check!.join('\n')
+    expect(check).toContain('(1) の机は講師欄が緑 2 行(上の行がテンプレの講師・下の行が手で置いた講師の 2 行)＋席 2 も緑 2 行')
+    expect(check).toContain('(2) の机は席 2 だけ緑で講師欄は白')
+    expect(item.steps.join('\n')).toContain('(1) の緑の下の行の生徒を押して「下段(手入力)を採用する」')
   })
 })

@@ -1932,9 +1932,10 @@ function AuthenticatedApp() {
         settleChecklistPrep(requestId, { ok: false, message: CHECKLIST_PREP_TIMEOUT_MESSAGE })
       }, CHECKLIST_PREP_TIMEOUT_MS)
       checklistPrepPendingRef.current = { requestId, resolve, timeoutId }
-      setChecklistPrepRequest({ requestId, itemId })
+      // 押した教室を載せる(コマ表は自分の教室と違うリクエストを処理しない・下の取りやめ effect より先にコマ表が走っても前の教室へ置かない・INV-08)。
+      setChecklistPrepRequest({ requestId, itemId, classroomId: actingClassroomId })
     })
-  }, [isActingDevelopmentClassroom, screenRef, settleChecklistPrep])
+  }, [actingClassroomId, isActingDevelopmentClassroom, screenRef, settleChecklistPrep])
   const handleChecklistPrepRequestProcessed = useCallback((result: ChecklistPrepRequestResult) => {
     setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))
     settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message })

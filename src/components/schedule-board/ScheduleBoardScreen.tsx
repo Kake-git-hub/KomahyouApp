@@ -69,8 +69,8 @@ import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
-import { setManualTeacherAssignment } from './deskTeacherAssignment'
-import { applyChecklistPrepOps, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestResult } from './checklistPrep'
+import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
+import { applyChecklistPrepOps, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestResult } from './checklistPrep'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
@@ -12456,9 +12456,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     const selectedTeacher = teacherOptions.find((option) => option.name === currentTeacherMenu.selectedTeacherName)
-    const teacherAssignmentSource = !targetDesk.lesson && targetDesk.teacher.trim() && !targetDesk.manualTeacher
-      ? 'manual-replaced'
-      : 'manual'
+    // 出自（授業の無い机のテンプレ講師を替える＝manual-replaced）は確認リストの準備と同じ権威関数 1 本で決める。
+    const teacherAssignmentSource = resolveManualTeacherAssignmentSource(targetDesk)
     setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
@@ -15630,7 +15629,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 判断(断る・週を移る・置き場)は純関数 resolveChecklistPrepStep、置き方は applyChecklistPrepOps(体験・メモ・手で置く講師だけ＝在庫中立 INV-06・
   // 足すだけ INV-02)。ここは室長の操作と同じ commitWeeks を 1 回通すだけ(出自の印・Undo・保存ボタンは今どおり)。保存は自動でしない。
   useEffect(() => {
-    if (!shouldProcessChecklistPrepRequest(checklistPrepRequest, processedChecklistPrepRequestIdRef.current)) return
+    // 押した教室とコマ表の教室が違う・教室データの読み込みが済んでいない間は処理しない（消費もせず待つ。取りやめは App が教室切り替え・
+    // boardMountKey で行う。この effect が取りやめより先に走っても前の教室で押した準備を置かない・INV-08・regression-reviewer 要確認 1）。
+    if (!shouldProcessChecklistPrepRequest(checklistPrepRequest, processedChecklistPrepRequestIdRef.current, {
+      classroomId: classroomStorageKey ?? null,
+      isEditingStateLoaded: isEditingStateLoadedForActingClassroom,
+    })) return
     const request = checklistPrepRequest!
     const finish = (ok: boolean, message: string) => {
       processedChecklistPrepRequestIdRef.current = request.requestId
@@ -15643,7 +15647,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const effectiveStartDate = templateDiffApplyEnabled
       ? resolveDefaultTemplateEffectiveStartDate({ todayKey, savedEffectiveStartDate })
       : (savedEffectiveStartDate || todayKey)
-    const profileStudent = students.find((student) => student.birthDate)
+    const profileStudent = pickChecklistPrepProfileStudent(students, todayKey)
     const step = resolveChecklistPrepStep({
       request,
       isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }),
@@ -15670,8 +15674,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       if (!jumpToWeekByDate(step.dateKey)) finish(false, CHECKLIST_PREP_JUMP_FAILED_MESSAGE)
       return
     }
-    const nextWeeks = applyChecklistPrepOps(weeks, step.plan.ops, buildTeacherAliasResolver(teachers))
-    commitWeeks(nextWeeks, weekIndex, step.plan.cellId, step.plan.deskIndex)
+    const applied = applyChecklistPrepOps(weeks, step.plan.ops, buildTeacherAliasResolver(teachers))
+    // 机や席が見つからず 1 つでも置けなかったら何も変えずに失敗で返す（置いていないのに「置きました」と言わない・要確認 3）。
+    if (applied.skipped > 0) {
+      finish(false, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE)
+      return
+    }
+    commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)
     setSelectedCellId(step.plan.cellId)
     setSelectedDeskIndex(step.plan.deskIndex)
     setStatusMessage('確認リストの準備を置きました。保存を押してください。')
@@ -15679,7 +15688,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // jumpToWeekByDate / commitWeeks は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と App 側の消費で防ぐ
     // (parentAbsenceRequest と同じ作法)。値の deps は漏らさない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.regularLessonTemplate?.effectiveStartDate, classroomStorageKey, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, students, teachers, templateDiffApplyEnabled, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.regularLessonTemplate?.effectiveStartDate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, students, teachers, templateDiffApplyEnabled, weekIndex, weeks])
 
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を

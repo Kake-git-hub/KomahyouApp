@@ -9,7 +9,7 @@
 // ★足すだけ（INV-02）: 既にある生徒・メモ・記録は消さない・動かさない。埋まっている席には置かない（applyChecklistPrepOps でも二重に確かめる）。
 // ★一過性リクエスト（Issue #46 同型）: App の checklistPrepRequest → コマ表が 1 回だけ処理 → 結果を返して App が消費（null）。
 
-import { getTeacherDisplayName, resolveTeacherRosterStatus, type TeacherRow } from '../basic-data/basicDataModel'
+import { getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
 import { resolveDeskTeacherOrigin, resolveStudentOrigin } from './placementOrigin'
 import { hasDeskTeacherRest } from './teacherRest'
@@ -25,16 +25,30 @@ export function isChecklistPrepItemId(itemId: string): itemId is ChecklistPrepIt
   return (CHECKLIST_PREP_ITEM_IDS as readonly string[]).includes(itemId)
 }
 
-/** App → コマ表の一過性リクエスト。 */
-export type ChecklistPrepRequest = { requestId: number; itemId: string }
+/**
+ * App → コマ表の一過性リクエスト。classroomId は押したときに開いていた教室（App の actingClassroomId）。コマ表は自分の教室と違うリクエストを
+ * 処理しない（教室切り替えの取りやめ effect より先にコマ表の effect が走っても、前の教室で押した準備を次の教室へ置かない・INV-08）。
+ */
+export type ChecklistPrepRequest = { requestId: number; itemId: string; classroomId: string | null }
 /** パネルへ返す結果（結果文はそのまま項目の下に出す）。 */
 export type ChecklistPrepResult = { ok: boolean; message: string }
 /** コマ表 → App の処理結果。 */
 export type ChecklistPrepRequestResult = ChecklistPrepResult & { requestId: number }
 
-export function shouldProcessChecklistPrepRequest(request: ChecklistPrepRequest | null | undefined, processedRequestId: number | null): boolean {
+/**
+ * コマ表の effect がこのレンダーでリクエストを処理してよいか。処理済み・押した教室とコマ表の教室が違う・教室データの読み込みが済んでいない
+ * （isEditingStateLoadedForActingClassroom が false）間は false（消費もしない＝待つ。取りやめは App が教室切り替え・boardMountKey で行い、
+ * 待ちすぎは App の保険タイマーで失敗に返す）。
+ */
+export function shouldProcessChecklistPrepRequest(
+  request: ChecklistPrepRequest | null | undefined,
+  processedRequestId: number | null,
+  board: { classroomId: string | null; isEditingStateLoaded: boolean },
+): boolean {
   if (!request) return false
-  return processedRequestId !== request.requestId
+  if (processedRequestId === request.requestId) return false
+  if (!request.classroomId || request.classroomId !== board.classroomId) return false
+  return board.isEditingStateLoaded
 }
 
 // 処理した requestId と今の state の requestId が一致するときだけ null 化する（より新しいリクエストは消さない）。
@@ -73,6 +87,8 @@ export const CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE = '開発用教室・テス
 export const CHECKLIST_PREP_TEMPLATE_MODE_MESSAGE = 'テンプレート編集中は準備できません。編集を終了してから、もう一度押してください。'
 export const CHECKLIST_PREP_UNKNOWN_ITEM_MESSAGE = 'この項目は自動で準備できません。'
 export const CHECKLIST_PREP_JUMP_FAILED_MESSAGE = '準備するコマの週へ移れませんでした。コマ表を開いてから、もう一度押してください。'
+/** 当てるときに机や席が見つからず 1 つでも置けなかった（コマ表は何も変えない）。 */
+export const CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE = 'コマ表の机が足りず置けませんでした。もう一度押してください。'
 
 const DEFAULT_TRIAL_PROFILE: { grade: GradeLabel; subject: SubjectLabel } = { grade: '中1', subject: '英' }
 const defaultAliases: TeacherAliasResolver = (key) => [key]
@@ -112,19 +128,16 @@ function isBlockedDesk(context: CellContext, desk: DeskCell) {
   return context.pendingDeskIds.has(desk.id) || hasStatusRecord(desk) || hasDeskTeacherRest(desk) || isDeletedTombstone(desk)
 }
 
-/** 授業もメモも無い机（体験を置く空き机）。 */
-function isFreeDesk(context: CellContext, desk: DeskCell) {
-  return !isBlockedDesk(context, desk) && !desk.lesson?.studentSlots.some(Boolean) && !hasMemo(desk, 0) && !hasMemo(desk, 1) && (!desk.teacher.trim() || resolveDeskTeacherOrigin(desk) === 'template')
+/**
+ * 講師も授業もメモも無い机（v2-1 の空き机）。テンプレの講師だけの机は数えない（そこへ置いた手入力はテンプレの講師の机になり、
+ * 手で置く講師ならテンプレ保存で講師欄が緑 2 行〔§2-3〕になって v2-1 の目安「緑の 2 行は出ず」と食い違う・regression-reviewer 要修正 1）。
+ */
+function isEmptyDesk(context: CellContext, desk: DeskCell) {
+  return !isBlockedDesk(context, desk) && !desk.teacher.trim() && !desk.lesson?.studentSlots.some(Boolean) && !hasMemo(desk, 0) && !hasMemo(desk, 1)
 }
 
 function isTemplateTeacherDesk(desk: DeskCell) {
   return Boolean(desk.teacher.trim()) && resolveDeskTeacherOrigin(desk) === 'template'
-}
-
-/** テンプレの講師とテンプレの生徒が居る机（v2-1 の講師を替える机）。 */
-function isTemplateLessonDesk(context: CellContext, desk: DeskCell) {
-  if (isBlockedDesk(context, desk) || !isTemplateTeacherDesk(desk)) return false
-  return desk.lesson?.studentSlots.some((student) => student && resolveStudentOrigin(student) === 'template') ?? false
 }
 
 /** tp-64: テンプレの講師とテンプレの生徒 1 人が居て、もう 1 席が空いている机。空いている席を返す（無ければ null）。 */
@@ -216,33 +229,33 @@ function listCandidateCells(input: ChecklistPrepInput): CellContext[] {
 
 type CellPlan = { deskIndex: number; ops: ChecklistPrepOp[]; lines: string[] }
 
+// v2-1（青字・案 A の並び替え → テンプレ保存）: 講師も授業も無い空き机を 3 つ使う。1 つ目に体験 2 人（並び替えで「2 人の机」として上へ詰まる）・
+// 2 つ目の席 1 にメモ・3 つ目に手で置く講師（授業なし）。テンプレの講師と生徒の机は替えない（替えるとテンプレ保存で講師欄が緑 2 行になる）。
+// 空き机が 3 つ無いコマは使わない（次のコマを探す）。
 function planV21(context: CellContext, input: ChecklistPrepInput, aliases: TeacherAliasResolver, serials: { trial: number; memo: number }): CellPlan | null {
   const { cell } = context
-  const desks = cell.desks
-  // 体験を置く空き机: テンプレの講師だけの机を先に、無ければ講師も居ない机。
-  const freeIndexes = desks.map((desk, index) => (isFreeDesk(context, desk) ? index : -1)).filter((index) => index >= 0)
-  const trialDeskIndex = freeIndexes.find((index) => desks[index].teacher.trim()) ?? freeIndexes[0]
-  if (trialDeskIndex == null) return null
-  const teacherDeskIndex = desks.findIndex((desk, index) => index !== trialDeskIndex && isTemplateLessonDesk(context, desk))
-  if (teacherDeskIndex < 0) return null
-  const replacement = pickReplacementTeacher(context, input, aliases, [])
-  if (!replacement) return null
+  const emptyIndexes = cell.desks.map((desk, index) => (isEmptyDesk(context, desk) ? index : -1)).filter((index) => index >= 0)
+  if (emptyIndexes.length < 3) return null
+  const [trialDeskIndex, memoDeskIndex, teacherDeskIndex] = emptyIndexes
+  const teacher = pickReplacementTeacher(context, input, aliases, [])
+  if (!teacher) return null
   const profile = input.trialProfile ?? DEFAULT_TRIAL_PROFILE
-  const trialName = `${CHECKLIST_PREP_TRIAL_NAME_PREFIX}${serials.trial}`
+  const firstName = `${CHECKLIST_PREP_TRIAL_NAME_PREFIX}${serials.trial}`
+  const secondName = `${CHECKLIST_PREP_TRIAL_NAME_PREFIX}${serials.trial + 1}`
   const memoText = `${CHECKLIST_PREP_MEMO_PREFIX}${serials.memo}`
-  const replacementName = getTeacherDisplayName(replacement)
-  const previousTeacher = desks[teacherDeskIndex].teacher
+  const teacherName = getTeacherDisplayName(teacher)
   return {
     deskIndex: trialDeskIndex,
     ops: [
-      { kind: 'trial', cellId: cell.id, deskIndex: trialDeskIndex, studentIndex: 0, name: trialName, grade: profile.grade, subject: profile.subject },
-      { kind: 'memo', cellId: cell.id, deskIndex: trialDeskIndex, studentIndex: 1, text: memoText },
-      { kind: 'manual-teacher', cellId: cell.id, deskIndex: teacherDeskIndex, teacherName: replacementName, teacherId: replacement.id },
+      { kind: 'trial', cellId: cell.id, deskIndex: trialDeskIndex, studentIndex: 0, name: firstName, grade: profile.grade, subject: profile.subject },
+      { kind: 'trial', cellId: cell.id, deskIndex: trialDeskIndex, studentIndex: 1, name: secondName, grade: profile.grade, subject: profile.subject },
+      { kind: 'memo', cellId: cell.id, deskIndex: memoDeskIndex, studentIndex: 0, text: memoText },
+      { kind: 'manual-teacher', cellId: cell.id, deskIndex: teacherDeskIndex, teacherName, teacherId: teacher.id },
     ],
     lines: [
-      `${seatLabel(cell, trialDeskIndex, 0)} に体験「${trialName}」を置きました。`,
-      `${seatLabel(cell, trialDeskIndex, 1)} にメモ「${memoText}」を書きました。`,
-      `${cellLabel(cell)} 机 ${teacherDeskIndex + 1} の講師を ${previousTeacher} から ${replacementName} に替えました（手で置いた講師）。`,
+      `${cellLabel(cell)} 机 ${trialDeskIndex + 1} の生徒 1・生徒 2 に体験「${firstName}」「${secondName}」を置きました（講師なしの机に 2 人）。`,
+      `${seatLabel(cell, memoDeskIndex, 0)} にメモ「${memoText}」を書きました。`,
+      `${cellLabel(cell)} 机 ${teacherDeskIndex + 1} に講師 ${teacherName} を手で置きました（授業の無い空き机）。`,
     ],
   }
 }
@@ -273,9 +286,8 @@ function planTp64(context: CellContext, input: ChecklistPrepInput, aliases: Teac
     lines: [
       `(1) ${cellLabel(cell)} 机 ${firstIndex + 1} の講師を ${previousTeacher} から ${replacementName} に替え（手で置いた講師）、生徒 ${firstSeat + 1} に体験「${firstName}」を置きました。`,
       `(2) ${seatLabel(cell, secondIndex, secondSeat)} に体験「${secondName}」を置きました。`,
-      `残る手作業: (1) は何も変えずにテンプレを保存すれば、この机の講師欄が 2 行（上=${previousTeacher}・下=${replacementName}）になります。`
-        + `(2) は「通常授業テンプレ作成」で ${templateSeatLabel(cell, secondIndex, secondSeat)} に誰かを登録して保存してください。`
-        + `(1) で生徒の採用も確かめるときは、同じ保存の前に ${templateSeatLabel(cell, firstIndex, firstSeat)} にも誰かを登録してください。`,
+      `残る手作業（必須）: 「通常授業テンプレ作成」で ${templateSeatLabel(cell, firstIndex, firstSeat)} と ${templateSeatLabel(cell, secondIndex, secondSeat)} の両方に誰かを登録して、テンプレを保存してください。`
+        + `保存すると (1) の机は講師欄が緑の 2 行（上=${previousTeacher}・下=${replacementName}）＋生徒 ${firstSeat + 1} も緑の 2 行、(2) の机は生徒 ${secondSeat + 1} だけが緑で講師欄は白のままです。`,
     ],
   }
 }
@@ -286,7 +298,7 @@ const ITEM_PLANNERS: Record<ChecklistPrepItemId, typeof planV21> = {
 }
 
 const ITEM_NOT_FOUND_REASONS: Record<ChecklistPrepItemId, string> = {
-  'v2-1': '空き机と、テンプレの講師・生徒が居る机が揃うコマ',
+  'v2-1': '講師も授業も無い空き机が 3 つあるコマ',
   'tp-64': 'テンプレの講師と生徒 1 人だけの机が 2 つあるコマ',
 }
 
@@ -330,11 +342,14 @@ function cloneDeskForPrep(desk: DeskCell): DeskCell {
 /**
  * 操作を当てた新しい weeks を返す（入力は書き換えない・触るコマだけ作り直す）。埋まっている席・メモのある席・記録のある席には置かない
  * （既存を消さない＝INV-02）。体験は手動の「体験追加」と同じ形（id・lesson.id の規則）。講師は講師メニューの「保存」と同じ書き込み。
+ * skipped は置かなかった操作の数（コマ・机が見つからない／席が埋まっている）。1 つでもあればコマ表は commitWeeks を呼ばず失敗で返す
+ * （置いていないのに「置きました」と言わない・regression-reviewer 要確認 3）。
  */
-export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly ChecklistPrepOp[], aliases?: TeacherAliasResolver, options: { now?: number } = {}): SlotCell[][] {
+export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly ChecklistPrepOp[], aliases?: TeacherAliasResolver, options: { now?: number } = {}): { weeks: SlotCell[][]; skipped: number } {
   const stamp = (options.now ?? Date.now()).toString(36)
   const touchedCellIds = new Set(ops.map((op) => op.cellId))
-  return weeks.map((week) => {
+  let applied = 0
+  const nextWeeks = weeks.map((week) => {
     if (!week.some((cell) => touchedCellIds.has(cell.id))) return week
     return week.map((cell) => {
       if (!touchedCellIds.has(cell.id)) return cell
@@ -345,6 +360,7 @@ export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly Checkli
         if (!desk) continue
         if (op.kind === 'manual-teacher') {
           setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases)
+          applied += 1
           continue
         }
         if (!isSeatEmpty(desk, op.studentIndex)) continue
@@ -352,6 +368,7 @@ export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly Checkli
           const memoSlots: [string | null, string | null] = desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : [null, null]
           memoSlots[op.studentIndex] = op.text
           desk.memoSlots = memoSlots
+          applied += 1
           continue
         }
         const student: StudentEntry = {
@@ -365,10 +382,18 @@ export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly Checkli
         }
         if (!desk.lesson) desk.lesson = { id: `${cell.id}_desk_${op.deskIndex + 1}_manual`, studentSlots: [null, null] }
         desk.lesson.studentSlots[op.studentIndex] = student
+        applied += 1
       }
       return nextCell
     })
   })
+  // 同じ cellId のコマが複数の週に重なって 2 回当たることは無い（cellId は日付＋時限）。見つからないコマの操作も skipped に入る。
+  return { weeks: nextWeeks, skipped: Math.max(0, ops.length - applied) }
+}
+
+/** 体験の学年の見本にする生徒（今日在籍・生年月日あり・名簿の順で最初）。居なければ null（固定値 中1・英 を使う）。 */
+export function pickChecklistPrepProfileStudent(students: readonly StudentRow[], todayKey: string): StudentRow | null {
+  return students.find((student) => Boolean(student.birthDate) && isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, todayKey)) ?? null
 }
 
 export type ChecklistPrepStep =

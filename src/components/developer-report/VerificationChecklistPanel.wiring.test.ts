@@ -37,6 +37,8 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     // Issue #46 同型: 処理結果を受けたら requestId で消費(null 化)する。保険タイマーも同じ消費を通す。
     expect(APP_TSX).toContain('setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))')
     expect(APP_TSX).toContain('const CHECKLIST_PREP_TIMEOUT_MS = 10000')
+    // 押した教室をリクエストに載せる(コマ表は自分の教室と違うリクエストを処理しない・取りやめの effect より先に走っても前の教室へ置かない・要確認 1)。
+    expect(APP_TSX).toContain('setChecklistPrepRequest({ requestId, itemId, classroomId: actingClassroomId })')
     // 教室を切り替えた・教室データが差し替わったら、リクエストを捨てて待っている結果は失敗で返す(前の教室へ準備を置かない・INV-08)。
     expect(APP_TSX).toMatch(/useEffect\(\(\) => \{\r?\n\s+cancelChecklistPrep\(CHECKLIST_PREP_CANCELLED_MESSAGE\)\r?\n\s+\}, \[actingClassroomId, boardMountKey, cancelChecklistPrep\]\)/u)
   })

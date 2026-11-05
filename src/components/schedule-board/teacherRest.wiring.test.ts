@@ -97,7 +97,8 @@ describe('3-1・3-5 講師欄のメニューの「休み」ボタン（ScheduleB
 describe('§9-19 講師メニューの「保存」（手で置く経路）: 休んだ講師本人を置くと休みを解除する', () => {
   it('講師メニューの保存が通る setManualTeacherAssignment が releaseTeacherRestIfSameTeacherPlaced を呼ぶ。D&D（computeTeacherMove）も同じ', () => {
     // 2026-11-06: 書き込みは deskTeacherAssignment.ts へ切り出した（確認リストの「準備する」と共有）。盤面はそれを import して呼ぶ。
-    expect(BOARD_TSX).toContain("import { setManualTeacherAssignment } from './deskTeacherAssignment'")
+    // 出自（manual / manual-replaced）の決め方も同じファイルの resolveManualTeacherAssignmentSource を通す（regression-reviewer 権威関数の一本化）。
+    expect(BOARD_TSX).toContain("import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'")
     expect(BOARD_TSX).not.toContain('function setManualTeacherAssignment(')
     const setter = DESK_TEACHER_ASSIGNMENT_TS.slice(DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function setManualTeacherAssignment('), DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function resolveManualTeacherAssignmentSource('))
     // 監査 要確認-6: 呼び名の対応表（buildTeacherAliasResolver）を通す（D&D と同じ）。
