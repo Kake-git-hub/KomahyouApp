@@ -436,20 +436,22 @@ export function cleanupChecklistPrepBoard(
  * （保存の段で断った・失敗したときにも黙って消さずに出す。後片づけで盤面を変えていなければ空）。
  */
 export type ChecklistPrepTemplatePhase =
-  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string; queuedFromWeeks: SlotCell[][] }
-  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string; queuedFromWeeks: SlotCell[][] }
+  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
+  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
 
 /**
  * 積んだテンプレ保存の段をこのレンダーで走らせてよいか（修正ラウンド 1 I-1）。
  *  - none … 段が無い。 stale … 別のリクエストの段（捨てる）。
  *  - wait … 段を積んだときの weeks（盤面を当てる前の参照）のまま＝盤面を当てたのと同じレンダーのクロージャ（StrictMode の effect の 2 回目など）。
  *    ここで保存すると buildTemplateDiffSavePlan が準備前の weeks から盤面を作り直し、その setWeeks が準備を上書きして消す。次のレンダーを待つ。
- *  - run … weeks が変わった（盤面の準備が入った）レンダー。
+ *    wait は weeks と保留マップの**両方**が積んだときと同じ参照のときだけ（修正ラウンド 2: 後片づけで保留の机の下の行だけを消すと
+ *    cleanupChecklistPrepBoard・commitWeeks とも weeks は同じ参照のまま＝weeks だけで見ると待ち続けて保険タイマーまで止まる）。
+ *  - run … weeks か保留マップが変わった（盤面の準備・後片づけが入った）レンダー。
  */
-export function resolveChecklistPrepTemplatePhaseTiming(params: { phase: ChecklistPrepTemplatePhase | null; requestId: number; weeks: SlotCell[][] }): 'none' | 'stale' | 'wait' | 'run' {
+export function resolveChecklistPrepTemplatePhaseTiming(params: { phase: ChecklistPrepTemplatePhase | null; requestId: number; weeks: SlotCell[][]; pendingDesks: TemplatePendingDeskMap | null }): 'none' | 'stale' | 'wait' | 'run' {
   if (!params.phase) return 'none'
   if (params.phase.requestId !== params.requestId) return 'stale'
-  return params.weeks === params.phase.queuedFromWeeks ? 'wait' : 'run'
+  return params.weeks === params.phase.queuedFromWeeks && params.pendingDesks === params.phase.queuedFromPendingDesks ? 'wait' : 'run'
 }
 
 /** 後片づけのテンプレ保存の反映開始日（主セッションの判断 2026-11-06）: 今日と保存済みの反映開始日の遅い方（今日より前の週に確認用の生徒を残さない・保存済みの先日付の版を前倒ししない）。 */

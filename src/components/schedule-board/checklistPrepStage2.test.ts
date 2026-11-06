@@ -289,19 +289,29 @@ describe('buildChecklistPrepCleanupMessage（後片づけの結果の文）', ()
   })
 })
 
-describe('resolveChecklistPrepTemplatePhaseTiming（テンプレ保存の段を走らせてよいか・修正ラウンド 1 I-1）', () => {
+describe('resolveChecklistPrepTemplatePhaseTiming（テンプレ保存の段を走らせてよいか・修正ラウンド 1 I-1／2 Important）', () => {
   const preWeeks: SlotCell[][] = [[]]
   const postWeeks: SlotCell[][] = [[]]
-  const phase: ChecklistPrepTemplatePhase = { kind: 'prep', requestId: 7, classroomId: 'c1', template: template([]), assigned: [], boardMessage: '', queuedFromWeeks: preWeeks }
+  const prePending: TemplatePendingDeskMap = {}
+  const postPending: TemplatePendingDeskMap = {}
+  const phase: ChecklistPrepTemplatePhase = { kind: 'prep', requestId: 7, classroomId: 'c1', template: template([]), assigned: [], boardMessage: '', queuedFromWeeks: preWeeks, queuedFromPendingDesks: prePending }
 
   it('段が無ければ none、別のリクエストの段は stale（捨てる）', () => {
-    expect(resolveChecklistPrepTemplatePhaseTiming({ phase: null, requestId: 7, weeks: postWeeks })).toBe('none')
-    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 8, weeks: postWeeks })).toBe('stale')
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase: null, requestId: 7, weeks: postWeeks, pendingDesks: postPending })).toBe('none')
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 8, weeks: postWeeks, pendingDesks: postPending })).toBe('stale')
   })
 
-  it('盤面を当てたのと同じ weeks（StrictMode の 2 回目など・準備前のクロージャ）なら wait、weeks が変わった次のレンダーなら run', () => {
-    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 7, weeks: preWeeks })).toBe('wait')
-    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 7, weeks: postWeeks })).toBe('run')
+  it('盤面を当てたのと同じ weeks と保留マップ（StrictMode の 2 回目など・準備前のクロージャ）なら wait、weeks が変わった次のレンダーなら run', () => {
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 7, weeks: preWeeks, pendingDesks: prePending })).toBe('wait')
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 7, weeks: postWeeks, pendingDesks: postPending })).toBe('run')
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase, requestId: 7, weeks: postWeeks, pendingDesks: prePending })).toBe('run')
+  })
+
+  it('後片づけで保留の机の下の行だけを消した（weeks は同じ参照・保留マップだけ変わった）次のレンダーは run（待ち続けて保険タイマーまで止まらない）', () => {
+    const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: 9, classroomId: 'c1', template: template([]), removed: { trials: 1, memos: 0, teachers: 1 }, templateRemoved: 1, boardMessage: 'x', queuedFromWeeks: preWeeks, queuedFromPendingDesks: prePending }
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase: cleanupPhase, requestId: 9, weeks: preWeeks, pendingDesks: postPending })).toBe('run')
+    // StrictMode の 2 回目（同じレンダー＝両方同じ参照）は wait のまま。
+    expect(resolveChecklistPrepTemplatePhaseTiming({ phase: cleanupPhase, requestId: 9, weeks: preWeeks, pendingDesks: prePending })).toBe('wait')
   })
 })
 

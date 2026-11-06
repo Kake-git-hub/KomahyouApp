@@ -15715,9 +15715,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
     // ★盤面を当てたのと同じレンダーのクロージャ(準備前の weeks)では保存しない(StrictMode の effect の 2 回目など。保存すると準備前の weeks から
     //   盤面を作り直した setWeeks が準備を上書きして消す・修正ラウンド 1 I-1)。weeks が変わった次のレンダーで走る。
-    const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks })
+    const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks, pendingDesks: templatePendingDesks })
     if (templatePhaseTiming === 'stale') checklistPrepTemplatePhaseRef.current = null
-    if (templatePhaseTiming === 'wait') return
+    if (templatePhaseTiming === 'wait') {
+      return
+    }
     if (templatePhaseTiming === 'run') {
       runChecklistPrepTemplatePhase(checklistPrepTemplatePhaseRef.current!)
       return
@@ -15750,8 +15752,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         finish(true, boardMessage)
         return
       }
-      // queuedFromWeeks は盤面を当てる前の weeks(この参照のままのレンダーでは保存しない・I-1)。
-      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage, queuedFromWeeks: weeks }
+      // queuedFromWeeks / queuedFromPendingDesks は盤面を当てる前の参照(両方そのままのレンダーでは保存しない・I-1。下の行だけ消すと weeks は同じ参照のまま・修正ラウンド 2)。
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       if (cleanupPlan.boardChanged) {
         checklistPrepTemplatePhaseRef.current = cleanupPhase
         onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })
@@ -15817,7 +15819,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(step.plan.deskIndex)
     if (templateSave) {
       setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
-      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message, queuedFromWeeks: weeks }
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })
       return
     }

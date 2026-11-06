@@ -38,7 +38,8 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     lines.forEach((line, index) => {
       if (line.trim() !== 'return') return
       const previous = (lines[index - 1] ?? '').trim()
-      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|checklistPrepTemplatePhaseRef\.current = |onChecklistPrepRequestProgress\?\.\(\{ requestId: request\.requestId, stage: 'board-applied'|runChecklistPrepTemplatePhase\(/u)
+      // wait(盤面を当てたのと同じレンダー)は何もしないで次のレンダーを待つ(このガードの対象に入れるため if ブロックの中の単独の return にしてある)。
+      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|if \(templatePhaseTiming === 'wait'\) \{|checklistPrepTemplatePhaseRef\.current = |onChecklistPrepRequestProgress\?\.\(\{ requestId: request\.requestId, stage: 'board-applied'|runChecklistPrepTemplatePhase\(/u)
     })
   })
 
@@ -106,20 +107,20 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     const deferIndex = body.indexOf("checklistPrepTemplatePhaseRef.current = { kind: 'prep',")
     expect(deferIndex).toBeGreaterThan(commitIndex)
     // 積むときは盤面を当てる前の weeks の参照を持つ(I-1: 同じレンダーのクロージャ=準備前の weeks では保存しない)。
-    expect(body.slice(deferIndex, deferIndex + 400)).toContain('queuedFromWeeks: weeks')
+    expect(body.slice(deferIndex, deferIndex + 450)).toContain('queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks')
     // 積んだら App へ「盤面を置いた」を知らせ(I-2: 保険タイマーを延ばし、以後の取りやめの文を切り替える)、finish せずに return。
     const deferLines = body.slice(deferIndex).split(/\r?\n/u)
     expect(deferLines[1]?.trim()).toBe("onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })")
     expect(deferLines[2]?.trim()).toBe('return')
     // 保存の段: 同じリクエストの段が積まれていれば、ほかより先にそれを行う。いつ走らせるかは純関数で決める(none / stale / wait / run)。
-    const timingIndex = body.indexOf('const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks })')
+    const timingIndex = body.indexOf('const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks, pendingDesks: templatePendingDesks })')
     expect(timingIndex).toBeGreaterThan(0)
     const phaseIndex = body.indexOf("if (templatePhaseTiming === 'run') {")
     expect(phaseIndex).toBeGreaterThan(timingIndex)
     expect(phaseIndex).toBeLessThan(body.indexOf('resolveChecklistPrepStep({'))
     expect(body.slice(timingIndex, phaseIndex)).toContain("if (templatePhaseTiming === 'stale') checklistPrepTemplatePhaseRef.current = null")
     // wait(StrictMode の 2 回目など盤面を当てたのと同じレンダー)は何もせず待つ(finish も保存もしない)。
-    expect(body.slice(timingIndex, phaseIndex)).toContain("if (templatePhaseTiming === 'wait') return")
+    expect(body.slice(timingIndex, phaseIndex)).toMatch(/if \(templatePhaseTiming === 'wait'\) \{\r?\n\s+return\r?\n\s+\}/u)
     const runner = body.slice(body.indexOf('const runChecklistPrepTemplatePhase = '), phaseIndex)
     // 見直し(テンプレ編集中・教室)→ 違えば失敗の文(盤面は置いたまま)。
     expect(runner).toContain('resolveChecklistPrepTemplatePhaseBlock({ phaseClassroomId: phase.classroomId, classroomId: classroomStorageKey ?? null, isTemplateMode })')
@@ -157,7 +158,8 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(cleanup).toContain("onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })")
     expect(cleanup).toContain('runChecklistPrepTemplatePhase(cleanupPhase)')
     // 後片づけの段も盤面を当てる前の weeks を持つ(I-1 と同じ守り)。
-    expect(cleanup).toContain('queuedFromWeeks: weeks')
+    // 後片づけは保留の下の行だけを消すと weeks が同じ参照のままなので、保留マップの参照も持つ(修正ラウンド 2)。
+    expect(cleanup).toContain('queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks')
     // 主セッションの判断: 後片づけのテンプレ保存の反映開始日は max(今日, 保存済みの反映開始日)。
     expect(body).toContain('effectiveStartDate: resolveChecklistPrepCleanupEffectiveStartDate(todayKey, savedEffectiveStartDate)')
   })
