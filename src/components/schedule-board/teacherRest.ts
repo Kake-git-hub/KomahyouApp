@@ -78,6 +78,8 @@ export function restDeskTeacher(desk: DeskCell, resolveTeacherId?: (teacherName:
   // 講師が居なくなるので、講師に付いていた画面だけの印（出席不可の警告・ずらした講師の緑）は外す。
   delete next.teacherUnavailableWarning
   delete next.templateTeacherShift
+  // 準備で置いた講師の印（確認リストの後片づけの見分け・spec-developer-report §E-2-4-2）も外す（講師が居なくなった机）。
+  delete next.checklistPrepTeacher
   return next
 }
 

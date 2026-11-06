@@ -14,8 +14,11 @@ import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from
 import type { RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import {
   CHECKLIST_PREP_MEMO_PREFIX,
+  CHECKLIST_PREP_SAVE_REMINDER,
+  CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE,
   CHECKLIST_PREP_TRIAL_NAME_PREFIX,
   findChecklistPrepTemplateDesk,
+  isUsableChecklistPrepStudent,
   isChecklistPrepTemplateSeatTaken,
   listAvailableChecklistPrepStudents,
   resolveChecklistPrepTemplateDeskIndex,
@@ -53,7 +56,16 @@ export const CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT: Record<ChecklistPrepTemplate
  * App → コマ表の一過性リクエスト。classroomId は押したときに開いていた教室（App の actingClassroomId）。コマ表は自分の教室と違うリクエストを
  * 処理しない（教室切り替えの取りやめ effect より先にコマ表の effect が走っても、前の教室で押した準備を次の教室へ置かない・INV-08）。
  */
-export type ChecklistPrepRequest = { requestId: number; itemId: string; classroomId: string | null }
+export type ChecklistPrepRequest = {
+  requestId: number
+  itemId: string
+  classroomId: string | null
+  /**
+   * 'prep'（既定）＝項目の「準備する」、'cleanup'＝パネルの「後片づけ」（§E-2-4-2 決定 4・itemId は使わない）。
+   * どちらも同じ一過性リクエスト・同じ待ち合わせ・同じ保険タイマー（App）で、コマ表の同じ effect が 1 回だけ処理する。
+   */
+  kind?: 'prep' | 'cleanup'
+}
 /** パネルへ返す結果（結果文はそのまま項目の下に出す）。 */
 export type ChecklistPrepResult = { ok: boolean; message: string }
 /** コマ表 → App の処理結果。 */
@@ -121,9 +133,9 @@ export type ChecklistPrepInput = {
   prepStudents?: readonly StudentRow[]
 }
 
-// 体験・メモの名前の頭（第 1 段から不変）。定義は後片づけ（checklistPrepTemplate.ts）と共有するため向こうに置き、ここから再公開する（読み込みの向きを一方向に保つ）。
-export { CHECKLIST_PREP_MEMO_PREFIX, CHECKLIST_PREP_TRIAL_NAME_PREFIX }
-export const CHECKLIST_PREP_SAVE_REMINDER = '盤面はまだ保存していません。「保存」を押してから、項目の「やること」を行ってください。'
+// 体験・メモの名前の頭と盤面の保存の一言（第 1 段から不変）。定義は後片づけ・第 2 段の結果の文（checklistPrepTemplate.ts）と共有するため向こうに置き、
+// ここから再公開する（読み込みの向きを一方向に保つ）。
+export { CHECKLIST_PREP_MEMO_PREFIX, CHECKLIST_PREP_SAVE_REMINDER, CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE, CHECKLIST_PREP_TRIAL_NAME_PREFIX }
 export const CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE = '開発用教室・テスト教室でだけ準備できます。'
 export const CHECKLIST_PREP_TEMPLATE_MODE_MESSAGE = 'テンプレート編集中は準備できません。編集を終了してから、もう一度押してください。'
 export const CHECKLIST_PREP_UNKNOWN_ITEM_MESSAGE = 'この項目は自動で準備できません。'
@@ -509,6 +521,11 @@ export function resolveChecklistPrepStep(params: {
   if (!params.isVerificationClassroom) return { kind: 'finish', ok: false, message: CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE }
   if (params.isTemplateMode) return { kind: 'finish', ok: false, message: CHECKLIST_PREP_TEMPLATE_MODE_MESSAGE }
   if (!isChecklistPrepItemId(request.itemId)) return { kind: 'finish', ok: false, message: CHECKLIST_PREP_UNKNOWN_ITEM_MESSAGE }
+  // 第 2 段: 名簿の使える確認用の生徒が項目の数より少なければ何も置かない（App が名簿へ足してからリクエストを立てる＝足し忘れ）。
+  if (checklistPrepNeedsTemplate(request.itemId) && input.template !== undefined && input.prepStudents
+    && input.prepStudents.filter(isUsableChecklistPrepStudent).length < CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT[request.itemId]) {
+    return { kind: 'finish', ok: false, message: CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE }
+  }
   const earliest = resolveChecklistPrepEarliestDateKey(input.todayKey, input.effectiveStartDate)
   const reachesEarliest = input.weeks.some((week) => week.some((cell) => cell.dateKey >= earliest))
   if (!reachesEarliest) {

@@ -12,6 +12,8 @@ import { getStudentDisplayName, isStudentDeletedFromApp, normalizeDateText, type
 import { resolveStudentOrigin } from './placementOrigin'
 import { regularTemplateDayLabelByValue, type RegularLessonTemplate, type RegularLessonTemplateCell, type RegularLessonTemplateDesk } from '../regular-template/regularLessonTemplate'
 import { normalizeRequestedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import type { TemplateDiffScopeNote } from './templateDefinitionDiff'
+import { buildTemplateDiffConfirmDetail, type TemplateDiffApplySummary, type TemplateDiffStudentNote } from './templateDiffApply'
 import { isTemplatePendingLowerEmpty, type TemplatePendingDeskMap, type TemplatePendingLower } from './templatePendingDesks'
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry, SubjectLabel } from './types'
 
@@ -20,6 +22,23 @@ export const CHECKLIST_PREP_TRIAL_NAME_PREFIX = '確認用 体験'
 /** 準備で書くメモの頭（第 1 段から不変・checklistPrep.ts が再公開する）。 */
 export const CHECKLIST_PREP_MEMO_PREFIX = '確認用メモ'
 export const CHECKLIST_PREP_STUDENT_NAME_PREFIX = '確認用 生徒'
+/** 盤面だけを準備したときの結果の文の最後の一言（第 1 段から不変・checklistPrep.ts が再公開する）。 */
+export const CHECKLIST_PREP_SAVE_REMINDER = '盤面はまだ保存していません。「保存」を押してから、項目の「やること」を行ってください。'
+/** 第 2 段: 盤面の準備に続けてテンプレも保存したときの最後の一言（盤面だけの一言の代わりに 1 つだけ付ける）。 */
+export const CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER = '盤面とテンプレはまだサーバーに保存していません。「保存」を押してから、項目の「やること」を行ってください。'
+/** 第 2 段: 盤面には置いたが、テンプレの保存の段で断った・失敗した（途中まで進んだものは黙って消さない・§E-2-4-2 安全）。 */
+export const CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX = '盤面には置きましたが、テンプレは保存していません: '
+/** 名簿の確認用の生徒が足りない（App の足し忘れ）。何も置かない。 */
+export const CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE = '確認用の生徒が名簿に足りません。もう一度押してください。何も変えていません。'
+/** テンプレ保存の段の見直しで断る理由。 */
+export const CHECKLIST_PREP_TEMPLATE_PHASE_MODE_REASON = 'テンプレート編集中になったため。編集を終了してから、テンプレを手で保存してください。'
+export const CHECKLIST_PREP_TEMPLATE_PHASE_CLASSROOM_REASON = '教室が切り替わったため。'
+/** 後片づけ（§E-2-4-2 決定 4）の文言。 */
+export const CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE = '片づけるものはありません。'
+export const CHECKLIST_PREP_CLEANUP_NOT_VERIFICATION_MESSAGE = '開発用教室・テスト教室でだけ後片づけできます。'
+export const CHECKLIST_PREP_CLEANUP_TEMPLATE_MODE_MESSAGE = 'テンプレート編集中は後片づけできません。編集を終了してから、もう一度押してください。'
+export const CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX = '盤面からは消しましたが、テンプレは保存していません: '
+export const CHECKLIST_PREP_CLEANUP_SAVE_REMINDER = '盤面とテンプレはまだサーバーに保存していません。「保存」を押してください。'
 
 /**
  * 確認用の生徒の生年月日: todayKey の属する年度（4/1 始まり）に小 4 になる 4/2 生まれ（＝年度の開始年の 10 年前の 4/2）。
@@ -271,7 +290,9 @@ function hasStatusRecords(statusSlots: DeskCell['statusSlots']): boolean {
   return Boolean(statusSlots?.some(Boolean))
 }
 
-type RemovedCounts = { trials: number; memos: number; teachers: number }
+/** 後片づけで盤面（上の行・保留の下の行）から消した数。 */
+export type ChecklistPrepRemovedCounts = { trials: number; memos: number; teachers: number }
+type RemovedCounts = ChecklistPrepRemovedCounts
 
 /** 授業から準備の体験を外す。外したものが無ければ同じ授業、全部の席が空けば undefined。 */
 function stripPrepTrials(lesson: DeskLesson | undefined, counts: RemovedCounts): DeskLesson | undefined {
@@ -397,4 +418,161 @@ export function cleanupChecklistPrepBoard(
   }
 
   return { weeks: weeksChanged ? nextWeeks : weeks, pendingDesks: nextPendingDesks, removed: counts }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// コマ表の 2 段処理（盤面の準備 → テンプレ保存）と後片づけを組む純関数（§E-2-4-2・計画 Task 3）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * テンプレ保存の段（コマ表の effect が ref に積み、盤面の準備が入った次のレンダーで行う）。
+ * template は保存するテンプレ（手で保存するときと同じ handleSaveRegularLessonTemplateByDiff へ渡す）。boardMessage は盤面で行ったことの文
+ * （保存の段で断った・失敗したときにも黙って消さずに出す。後片づけで盤面を変えていなければ空）。
+ */
+export type ChecklistPrepTemplatePhase =
+  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string }
+  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string }
+
+/** handleSaveRegularLessonTemplateByDiff が返す、保存した計画の中身（確認画面の「詳細」と同じ材料）。 */
+export type ChecklistPrepTemplateSaveResult = { summary: TemplateDiffApplySummary; studentNotes?: readonly TemplateDiffStudentNote[]; scopeNote?: TemplateDiffScopeNote }
+
+/** 盤面の文の最後の一言（CHECKLIST_PREP_SAVE_REMINDER）を外す（テンプレも保存したときは別の一言を最後に 1 つだけ付ける）。 */
+function stripBoardSaveReminder(boardMessage: string): string[] {
+  const lines = boardMessage.split('\n')
+  while (lines.length > 0 && (lines[lines.length - 1] === CHECKLIST_PREP_SAVE_REMINDER || !lines[lines.length - 1].trim())) lines.pop()
+  return lines
+}
+
+/** 確認画面の「詳細」と同じ組み立て（buildTemplateDiffConfirmDetail は studentNotes を渡すと生徒ごとの理由〔buildTemplateDiffStudentNoteLines〕も載せる）。 */
+function buildSavedDetailLines(params: { effectiveStartDate: string; todayKey: string } & ChecklistPrepTemplateSaveResult): string[] {
+  return ['詳細:', buildTemplateDiffConfirmDetail(params.effectiveStartDate, params.summary, { scopeNote: params.scopeNote, todayKey: params.todayKey, studentNotes: params.studentNotes })]
+}
+
+/**
+ * 準備 → テンプレ保存まで済んだときの結果の文: 盤面の行（盤面だけの一言は外す）→ テンプレへ登録した席と確認用の生徒 →「詳細:」＋確認画面の「詳細」と同じ文
+ * （言い回しを二重に持たない）→ 最後に CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER を 1 つだけ。
+ */
+export function buildChecklistPrepTemplateSavedMessage(params: {
+  boardMessage: string
+  assigned: readonly ChecklistPrepTemplateAssignment[]
+  effectiveStartDate: string
+  summary: TemplateDiffApplySummary
+  studentNotes?: readonly TemplateDiffStudentNote[]
+  scopeNote?: TemplateDiffScopeNote
+  todayKey: string
+}): string {
+  const seats = params.assigned.map((entry) => `${entry.label} ${templateSeatLabel(entry)} に「${entry.studentName}」`).join('、')
+  return [
+    ...stripBoardSaveReminder(params.boardMessage),
+    `テンプレの ${seats}を登録して、テンプレを保存しました。`,
+    ...buildSavedDetailLines(params),
+    CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER,
+  ].join('\n')
+}
+
+/**
+ * テンプレ保存の段で断った・失敗したときの文（Review Focus 3）。盤面で行ったことは残っているので、その文を続けて出す（黙って消さない）。
+ * 準備: 「盤面には置きましたが、テンプレは保存していません: 理由」＋盤面の文（最後は盤面の保存の一言）。
+ * 後片づけ: 盤面を変えていれば「盤面からは消しましたが…」＋消した件数の文、変えていなければ「テンプレは保存していません: 理由」だけ。
+ */
+export function buildChecklistPrepTemplateFailedMessage(params: { kind: 'prep' | 'cleanup'; reason: string; boardMessage: string }): string {
+  if (params.kind === 'cleanup' && !params.boardMessage) return `テンプレは保存していません: ${params.reason}`
+  const prefix = params.kind === 'prep' ? CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX : CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX
+  return `${prefix}${params.reason}\n${params.boardMessage}`
+}
+
+/** 保存の段の見直し: 積んだときの教室と違う・テンプレ編集中になったら理由を返す（教室の切り替えで取りやめ・INV-08）。問題が無ければ null。 */
+export function resolveChecklistPrepTemplatePhaseBlock(params: { phaseClassroomId: string | null; classroomId: string | null; isTemplateMode: boolean }): string | null {
+  if (!params.classroomId || params.phaseClassroomId !== params.classroomId) return CHECKLIST_PREP_TEMPLATE_PHASE_CLASSROOM_REASON
+  if (params.isTemplateMode) return CHECKLIST_PREP_TEMPLATE_PHASE_MODE_REASON
+  return null
+}
+
+/**
+ * 保存するテンプレを作る（盤面を当てる前に行い、失敗なら盤面も変えない）。baseTemplate は保存済みテンプレを在籍で絞ったもの
+ * （buildTemplateDiffSavePlan の baseline と同じ）。反映開始日と保存時刻を差し替えてから確認用の生徒を登録する（学年は反映開始日で見る）。
+ * 名簿の使える確認用の生徒が登録の数より少なければ CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE（App の足し忘れ）。
+ */
+export function prepareChecklistPrepTemplateSave(params: {
+  registrations: readonly ChecklistPrepTemplateRegistration[]
+  baseTemplate: RegularLessonTemplate | null | undefined
+  effectiveStartDate: string
+  students: readonly StudentRow[]
+  savedAt: string
+}): { ok: true; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[] } | { ok: false; reason: string } {
+  if (!params.baseTemplate) return { ok: false, reason: 'テンプレがまだ無いため、確認用の生徒を登録できません。何も変えていません。' }
+  const prepStudents = params.students.filter(isUsableChecklistPrepStudent)
+  if (prepStudents.length < params.registrations.length) return { ok: false, reason: CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE }
+  return assignChecklistPrepTemplateStudents({ ...params.baseTemplate, effectiveStartDate: params.effectiveStartDate, savedAt: params.savedAt }, params.registrations, prepStudents)
+}
+
+/** 後片づけを断る（検証用教室でない・テンプレ編集中）。断らなければ null。 */
+export function resolveChecklistPrepCleanupBlock(params: { isVerificationClassroom: boolean; isTemplateMode: boolean }): string | null {
+  if (!params.isVerificationClassroom) return CHECKLIST_PREP_CLEANUP_NOT_VERIFICATION_MESSAGE
+  if (params.isTemplateMode) return CHECKLIST_PREP_CLEANUP_TEMPLATE_MODE_MESSAGE
+  return null
+}
+
+export type ChecklistPrepCleanupPlan =
+  | { nothing: true }
+  | {
+    nothing: false
+    /** 盤面から 1 件以上消すか（false なら weeks・pendingDesks は入力のまま・commitWeeks しない）。 */
+    boardChanged: boolean
+    weeks: SlotCell[][]
+    pendingDesks: TemplatePendingDeskMap | null
+    removed: ChecklistPrepRemovedCounts
+    /** 保存するテンプレ（確認用の生徒の登録を外して toSaveTemplate を通したもの）。外すものが無ければ null。 */
+    template: RegularLessonTemplate | null
+    templateRemoved: number
+  }
+
+/**
+ * 後片づけの計画（純関数）: 盤面は cleanupChecklistPrepBoard、テンプレは確認用の生徒（isChecklistPrepStudent＝退塾した確認用も含む）の登録だけ外す。
+ * テンプレは保存済みのもの（絞り込む前）で外し、件数もそこで数える（退塾した確認用の登録は在籍の絞り込みで見えなくなるため）。保存する形は toSaveTemplate
+ * （在籍の絞り込み・反映開始日・保存時刻）で作る。「片づけるものはありません」は**件数**で決める（盤面の removed がすべて 0 かつテンプレの removed が 0）。
+ * cleanupChecklistPrepBoard は古い印だけ外した机で新しい参照を返すことがあるが、件数 0 なら盤面を変えない（何も変えずに知らせる・Review Focus 5）。
+ */
+export function planChecklistPrepCleanup(params: {
+  weeks: SlotCell[][]
+  pendingDesks: TemplatePendingDeskMap | null
+  savedTemplate: RegularLessonTemplate | null | undefined
+  students: readonly StudentRow[]
+  toSaveTemplate: (template: RegularLessonTemplate) => RegularLessonTemplate
+}): ChecklistPrepCleanupPlan {
+  const board = cleanupChecklistPrepBoard(params.weeks, params.pendingDesks)
+  const boardChanged = board.removed.trials + board.removed.memos + board.removed.teachers > 0
+  const prepStudentIds = new Set(params.students.filter(isChecklistPrepStudent).map((student) => student.id))
+  const removedTemplate = params.savedTemplate && prepStudentIds.size > 0 ? removeChecklistPrepTemplateStudents(params.savedTemplate, prepStudentIds) : null
+  const templateRemoved = removedTemplate?.removed ?? 0
+  if (!boardChanged && templateRemoved === 0) return { nothing: true }
+  return {
+    nothing: false,
+    boardChanged,
+    weeks: boardChanged ? board.weeks : params.weeks,
+    pendingDesks: boardChanged ? board.pendingDesks : params.pendingDesks,
+    removed: board.removed,
+    template: removedTemplate && templateRemoved > 0 ? params.toSaveTemplate(removedTemplate.template) : null,
+    templateRemoved,
+  }
+}
+
+/**
+ * 後片づけの結果の文: 盤面から消した件数（消したときだけ）→ テンプレから外した件数＋「詳細:」（保存したときだけ）→ 保存の一言。
+ * テンプレの保存の段で断った・失敗したときは templateRemoved: 0 で盤面の行だけを作り、buildChecklistPrepTemplateFailedMessage に渡す。
+ */
+export function buildChecklistPrepCleanupMessage(params: {
+  removed: ChecklistPrepRemovedCounts
+  templateRemoved: number
+  templateSaved?: { effectiveStartDate: string; todayKey: string } & ChecklistPrepTemplateSaveResult
+}): string {
+  const { trials, memos, teachers } = params.removed
+  const lines: string[] = []
+  if (trials + memos + teachers > 0) lines.push(`盤面から消しました: 確認用の体験 ${trials} 人・確認用のメモ ${memos} 件・準備で置いた講師 ${teachers} 人。`)
+  if (params.templateRemoved > 0 && params.templateSaved) {
+    lines.push(`テンプレから確認用の生徒の登録 ${params.templateRemoved} 件を外して、テンプレを保存しました。`)
+    lines.push(...buildSavedDetailLines(params.templateSaved))
+  }
+  lines.push(CHECKLIST_PREP_CLEANUP_SAVE_REMINDER)
+  return lines.join('\n')
 }

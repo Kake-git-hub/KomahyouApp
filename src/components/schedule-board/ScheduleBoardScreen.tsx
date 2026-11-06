@@ -71,7 +71,8 @@ import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOr
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
-import { applyChecklistPrepOps, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestResult } from './checklistPrep'
+import { applyChecklistPrepOps, checklistPrepNeedsTemplate, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestResult } from './checklistPrep'
+import { buildChecklistPrepCleanupMessage, buildChecklistPrepTemplateFailedMessage, buildChecklistPrepTemplateSavedMessage, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepTemplatePhaseBlock, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
@@ -5469,22 +5470,26 @@ function findManagedPlacementTargetDesk(desks: DeskCell[]): DeskCell | undefined
     ?? desks.find((desk) => free(desk))
 }
 
-function clearTeacherAssignment(desk: DeskCell) {
+export function clearTeacherAssignment(desk: DeskCell) {
   desk.teacher = ''
   desk.manualTeacher = false
   desk.teacherAssignmentSource = undefined
   desk.teacherAssignmentSessionId = undefined
   desk.teacherAssignmentTeacherId = undefined
+  // 準備で置いた講師の印（§E-2-4-2）は落とす: 講師を書き換えた机は後片づけの対象から外す（別の講師を後片づけが消さない・INV-02）。
+  delete desk.checklistPrepTeacher
 }
 
 // setManualTeacherAssignment（講師を手で置く書き込み）は deskTeacherAssignment.ts へ切り出した（確認リストの「準備する」と共有・中身は同じ）。
 
-function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: string, sessionId: string, teacherId: string) {
+export function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: string, sessionId: string, teacherId: string) {
   desk.teacher = teacherName
   desk.manualTeacher = true
   desk.teacherAssignmentSource = 'schedule-registration'
   desk.teacherAssignmentSessionId = sessionId
   desk.teacherAssignmentTeacherId = teacherId
+  // 準備で置いた講師の印（§E-2-4-2）は落とす: 講師を書き換えた机は後片づけの対象から外す（別の講師を後片づけが消さない・INV-02）。
+  delete desk.checklistPrepTeacher
 }
 
 // 削除tombstone(手動で講師を削除した記録: teacher='' だが manualTeacher=true / source='deleted')かどうか。
@@ -5518,6 +5523,9 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
       teacherAssignmentSource: desk.teacherAssignmentSource,
       teacherAssignmentSessionId: desk.teacherAssignmentSessionId,
       teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
+      // 準備で置いた講師の印（§E-2-4-2）: 同じ机に詰め直したとき（動いていない）だけ残し、別の机へ動いたら落とす。
+      sourceDeskId: desk.id,
+      checklistPrepTeacher: desk.checklistPrepTeacher,
     }))
 
   const nextDesks = desks.map((desk) => {
@@ -5530,7 +5538,7 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
     if (isLockedDesk(desk)) return desk
     // 講師の休み（spec-template-conflict-v2 §2-4）の机も据え置く(削除記録と同じ守り方。詰めると休みのグレーが別の講師で隠れる／上書きした講師が動く)。
     if (hasDeskTeacherRest(desk)) return desk
-    return {
+    const cleared: DeskCell = {
       ...desk,
       teacher: '',
       manualTeacher: false,
@@ -5538,6 +5546,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
       teacherAssignmentSessionId: undefined,
       teacherAssignmentTeacherId: undefined,
     }
+    delete cleared.checklistPrepTeacher
+    return cleared
   })
 
   let teacherOnlyIndex = 0
@@ -5560,6 +5570,7 @@ export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: Readon
       teacherAssignmentSource: teacherOnlyDesk.teacherAssignmentSource,
       teacherAssignmentSessionId: teacherOnlyDesk.teacherAssignmentSessionId,
       teacherAssignmentTeacherId: teacherOnlyDesk.teacherAssignmentTeacherId,
+      ...(teacherOnlyDesk.checklistPrepTeacher && teacherOnlyDesk.sourceDeskId === nextDesks[deskIndex].id ? { checklistPrepTeacher: true as const } : {}),
     }
     teacherOnlyIndex += 1
   }
@@ -6509,6 +6520,9 @@ function applyDeskTeacherBlock(desk: DeskCell, block: DeskTeacherBlock) {
   desk.teacherAssignmentSessionId = block.teacherAssignmentSessionId
   desk.teacherAssignmentTeacherId = block.teacherAssignmentTeacherId
   desk.teacherUnavailableWarning = block.teacherUnavailableWarning
+  // 準備で置いた講師の印（§E-2-4-2）は講師ブロックに入れない＝講師を動かした・入れ替えた机（動かした先も元の机も）では落とす
+  // （動かした準備の講師は後片づけの対象から外す。元の机に入った別の講師を後片づけが消さない・INV-02）。
+  delete desk.checklistPrepTeacher
 }
 
 // 机の講師名から講師IDを解決して teacherAssignmentTeacherId を補完する(既に id があれば何もしない)。
@@ -6790,6 +6804,8 @@ function applyDeletedTeacherTombstone(desk: DeskCell, deletedTeacherName: string
   desk.teacherAssignmentSource = 'deleted'
   desk.teacherAssignmentSessionId = undefined
   desk.teacherAssignmentTeacherId = deletedTeacherName || undefined
+  // 準備で置いた講師の印（§E-2-4-2）は落とす: 講師を書き換えた机は後片づけの対象から外す（別の講師を後片づけが消さない・INV-02）。
+  delete desk.checklistPrepTeacher
 }
 
 // ユーザーが講師メニューで講師を削除したときの tombstone(handleDeleteTeacher)。
@@ -8687,6 +8703,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 確認リストの「準備する」: 処理済みの requestId と、そのリクエストで週を移った回数(保護者連絡の ref とは別)。
   const processedChecklistPrepRequestIdRef = useRef<number | null>(null)
   const checklistPrepJumpRef = useRef<{ requestId: number; count: number } | null>(null)
+  // 第 2 段（§E-2-4-2）: 盤面の準備・後片づけを当てたあと、次のレンダー（盤面の変化が入った weeks）で行うテンプレ保存の段。finish で捨てる。
+  const checklistPrepTemplatePhaseRef = useRef<ChecklistPrepTemplatePhase | null>(null)
   const parentAbsencePlacementActiveRef = useRef(false)
   const parentAbsencePlacementSelectedSeenRef = useRef(false)
   // null = 基準未取り込み(初回/再マウント直後)。初回は除去せず基準記録のみ行う(resolveNewlyUnsubmittedSessionStudents)。
@@ -8840,7 +8858,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // テンプレ保存（差分反映＋保留・機能フラグ templateDiffApply ON の教室だけ・Issue #72）。
   // 反映日以降の机ごとに突き合わせ（印の無い机だけ置き換え・印のある机は残す／採用／保留）、講師はテンプレに揃える。
   // 在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）は触らない。抑止は Q21-11 / Q35 の追加だけ、希望回数は Q35-8 の −1 だけ。
-  const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate, options?: { applyScope?: TemplateDiffApplyScope }) => {
+  // 戻り値（保存した計画の件数・生徒ごとの理由・範囲）は確認リストの「準備する」第 2 段が結果の文の「詳細」に使う（§E-2-4-2）。手で保存する呼び出しは使わない（動きは不変）。
+  const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate, options?: { applyScope?: TemplateDiffApplyScope }): ChecklistPrepTemplateSaveResult => {
     // テンプレ保存前にバックアップを保存（非同期、完了を待たない）。旧方式と同じ（Q32-2）。
     if (onPreTemplateSaveBackup) {
       void onPreTemplateSaveBackup()
@@ -8921,6 +8940,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
+    return { summary: plan.diff.summary, studentNotes: plan.diff.studentNotes, scopeNote: plan.scopeNote }
   }, [buildTemplateDiffSavePlan, fallbackLectureStockStudents, fallbackMakeupStudents, groupClassEntries, isLectureStockOpen, isMakeupStockOpen, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onBoardStateChange, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, scheduleCountAdjustments, selectedCellId, selectedDeskIndex, studentScheduleRange, suppressedMakeupOrigins, suppressedRegularLessonOccurrences, teacherScheduleRange, weekIndex, weeks])
 
   const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate, overwrite: boolean) => {
@@ -15646,6 +15666,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // --- 確認リストの「準備する」(2026-11-06 案 C 第 1 段・spec-developer-report §E-2-4・計画 docs/plan-2026-11-06-checklist-auto-prep.md) -----
   // 判断(断る・週を移る・置き場)は純関数 resolveChecklistPrepStep、置き方は applyChecklistPrepOps(体験・メモ・手で置く講師だけ＝在庫中立 INV-06・
   // 足すだけ INV-02)。ここは室長の操作と同じ commitWeeks を 1 回通すだけ(出自の印・Undo・保存ボタンは今どおり)。保存は自動でしない。
+  // 第 2 段(§E-2-4-2・計画 docs/plan-2026-11-06-checklist-auto-prep-stage2.md・まず tp-64): 盤面の準備に続けて、テンプレへ確認用の生徒を登録し、
+  // 手で保存するときと同じ handleSaveRegularLessonTemplateByDiff でテンプレを保存する(確認画面・保存前 PDF は出さない・サーバーへの保存はしない)。
+  // 保存は盤面の準備が入った**次のレンダー**で行う(buildTemplateDiffSavePlan のクロージャが準備後の weeks を見るため)。後片づけ(kind: 'cleanup')も同じ 2 段。
   useEffect(() => {
     // 押した教室とコマ表の教室が違う・教室データの読み込みが済んでいない間は処理しない（消費もせず待つ。取りやめは App が教室切り替え・
     // boardMountKey で行う。この effect が取りやめより先に走っても前の教室で押した準備を置かない・INV-08・regression-reviewer 要確認 1）。
@@ -15655,17 +15678,86 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })) return
     const request = checklistPrepRequest!
     const finish = (ok: boolean, message: string) => {
+      checklistPrepTemplatePhaseRef.current = null
       processedChecklistPrepRequestIdRef.current = request.requestId
       onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })
     }
-    const jumpCount = checklistPrepJumpRef.current?.requestId === request.requestId ? checklistPrepJumpRef.current.count : 0
     const todayKey = toDateKey(new Date())
     const savedEffectiveStartDate = classroomSettings.regularLessonTemplate?.effectiveStartDate
     // 反映開始日は、テンプレ作成を開いたときの既定と同じ(差分反映の教室は「来週の月曜」か保存済みの反映日の遅い方)。
     const effectiveStartDate = templateDiffApplyEnabled
       ? resolveDefaultTemplateEffectiveStartDate({ todayKey, savedEffectiveStartDate })
       : (savedEffectiveStartDate || todayKey)
+    // テンプレ保存の段(第 2 段): 見直し(教室・テンプレ編集中)→ 手で保存するときと同じ関数 → 結果の文。必ず finish する。
+    const runChecklistPrepTemplatePhase = (phase: ChecklistPrepTemplatePhase) => {
+      const blocked = resolveChecklistPrepTemplatePhaseBlock({ phaseClassroomId: phase.classroomId, classroomId: classroomStorageKey ?? null, isTemplateMode })
+      if (blocked) {
+        finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: blocked, boardMessage: phase.boardMessage }))
+        return
+      }
+      let saved: ChecklistPrepTemplateSaveResult
+      try {
+        saved = handleSaveRegularLessonTemplateByDiff(phase.template)
+      } catch (error) {
+        finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: error instanceof Error ? error.message : String(error), boardMessage: phase.boardMessage }))
+        return
+      }
+      if (phase.kind === 'cleanup') {
+        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
+        return
+      }
+      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
+    }
+    // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
+    const pendingTemplatePhase = checklistPrepTemplatePhaseRef.current
+    if (pendingTemplatePhase && pendingTemplatePhase.requestId !== request.requestId) checklistPrepTemplatePhaseRef.current = null
+    if (pendingTemplatePhase?.requestId === request.requestId) {
+      runChecklistPrepTemplatePhase(pendingTemplatePhase)
+      return
+    }
+    // 保存するテンプレの形(保存済みテンプレを buildTemplateDiffSavePlan の baseline と同じ在籍の絞り込みに通す・反映開始日・保存時刻)。
+    const toSaveTemplate = (template: RegularLessonTemplate): RegularLessonTemplate => ({ ...filterTemplateParticipantsForReferenceDate({ template, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey }), effectiveStartDate, savedAt: new Date().toISOString() })
+    // 後片づけ(§E-2-4-2 決定 4): 盤面の「確認用」と準備の印の講師・テンプレの確認用の生徒の登録だけを消す(INV-02)。件数 0 なら何も変えない。
+    if (request.kind === 'cleanup') {
+      const cleanupBlock = resolveChecklistPrepCleanupBlock({ isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }), isTemplateMode })
+      if (cleanupBlock) {
+        finish(false, cleanupBlock)
+        return
+      }
+      const cleanupPlan = planChecklistPrepCleanup({ weeks, pendingDesks: templatePendingDesks, savedTemplate: templateDiffApplyEnabled ? classroomSettings.regularLessonTemplate : null, students, toSaveTemplate })
+      if (cleanupPlan.nothing) {
+        finish(true, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE)
+        return
+      }
+      if (cleanupPlan.boardChanged) {
+        commitWeeks(
+          cleanupPlan.weeks, weekIndex, selectedCellId, selectedDeskIndex, undefined, undefined,
+          undefined, undefined, undefined, undefined, undefined, undefined,
+          undefined, undefined, undefined, cleanupPlan.pendingDesks ?? templatePendingDesks,
+        )
+        setStatusMessage('確認リストの後片づけをしました。保存を押してください。')
+      }
+      const boardMessage = cleanupPlan.boardChanged ? buildChecklistPrepCleanupMessage({ removed: cleanupPlan.removed, templateRemoved: 0 }) : ''
+      if (!cleanupPlan.template) {
+        finish(true, boardMessage)
+        return
+      }
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage }
+      if (cleanupPlan.boardChanged) {
+        checklistPrepTemplatePhaseRef.current = cleanupPhase
+        return
+      }
+      // 盤面を変えていなければ weeks は今のままなので、その場で保存する。
+      runChecklistPrepTemplatePhase(cleanupPhase)
+      return
+    }
+    const jumpCount = checklistPrepJumpRef.current?.requestId === request.requestId ? checklistPrepJumpRef.current.count : 0
     const profileStudent = pickChecklistPrepProfileStudent(students, todayKey)
+    // 第 2 段の項目は、テンプレの土台と確認用の生徒を planner へ渡す(テンプレの同じ席も空いている机だけを選ぶ)。差分反映の無い教室は第 1 段のまま。
+    const needsTemplate = checklistPrepNeedsTemplate(request.itemId) && templateDiffApplyEnabled
+    const prepTemplate = needsTemplate
+      ? (classroomSettings.regularLessonTemplate ? filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey }) : null)
+      : undefined
     const step = resolveChecklistPrepStep({
       request,
       isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }),
@@ -15680,6 +15772,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         teachers,
         teacherAliases: buildTeacherAliasResolver(teachers),
         trialProfile: profileStudent ? { grade: resolveSchoolGradeLabelForDateKey(profileStudent.birthDate, todayKey), subject: '英' } : undefined,
+        template: prepTemplate,
+        prepStudents: needsTemplate ? students.filter(isChecklistPrepStudent) : undefined,
       },
     })
     if (step.kind === 'finish') {
@@ -15692,6 +15786,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       if (!jumpToWeekByDate(step.dateKey)) finish(false, CHECKLIST_PREP_JUMP_FAILED_MESSAGE)
       return
     }
+    // 第 2 段: 保存するテンプレ(確認用の生徒の登録)を盤面を当てる前に作る。作れなければ盤面も変えない(それより後は行わない・§E-2-4-2 安全)。
+    const templateSave = step.plan.templateRegistrations.length > 0
+      ? prepareChecklistPrepTemplateSave({ registrations: step.plan.templateRegistrations, baseTemplate: prepTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
+      : null
+    if (templateSave && !templateSave.ok) {
+      finish(false, templateSave.reason)
+      return
+    }
     const applied = applyChecklistPrepOps(weeks, step.plan.ops, buildTeacherAliasResolver(teachers))
     // 机や席が見つからず 1 つでも置けなかったら何も変えずに失敗で返す（置いていないのに「置きました」と言わない・要確認 3）。
     if (applied.skipped > 0) {
@@ -15701,12 +15803,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)
     setSelectedCellId(step.plan.cellId)
     setSelectedDeskIndex(step.plan.deskIndex)
+    if (templateSave) {
+      setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message }
+      return
+    }
     setStatusMessage('確認リストの準備を置きました。保存を押してください。')
     finish(true, step.plan.message)
-    // jumpToWeekByDate / commitWeeks は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と App 側の消費で防ぐ
-    // (parentAbsenceRequest と同じ作法)。値の deps は漏らさない。
+    // jumpToWeekByDate / commitWeeks / handleSaveRegularLessonTemplateByDiff は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と
+    // App 側の消費で防ぐ(parentAbsenceRequest と同じ作法)。値の deps は漏らさない。テンプレ保存の段は commitWeeks が変えた weeks で次のレンダーに走る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.regularLessonTemplate?.effectiveStartDate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, students, teachers, templateDiffApplyEnabled, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, students, teachers, templateDiffApplyEnabled, templatePendingDesks, weekIndex, weeks])
 
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を

@@ -33,12 +33,12 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(body).toContain('onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })')
     expect(body).not.toContain('processedParentAbsenceRequestIdRef')
     expect(body).not.toContain('parentAbsenceJumpedRequestIdRef')
-    // 早期 return の直前は finish か、週を移る(次のレンダーで続ける)だけ。
+    // 早期 return の直前は finish か、週を移る・テンプレ保存の段を積む(次のレンダーで続ける)・保存の段をその場で行う(必ず finish する)だけ。
     const lines = body.split(/\r?\n/u)
     lines.forEach((line, index) => {
       if (line.trim() !== 'return') return
       const previous = (lines[index - 1] ?? '').trim()
-      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(/u)
+      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|checklistPrepTemplatePhaseRef\.current = |runChecklistPrepTemplatePhase\(/u)
     })
   })
 
@@ -70,11 +70,72 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     const skippedIndex = body.indexOf('if (applied.skipped > 0) {')
     expect(skippedIndex).toBeGreaterThan(0)
     expect(body.slice(skippedIndex, skippedIndex + 200)).toContain('finish(false, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE)')
-    expect(skippedIndex).toBeLessThan(body.indexOf('commitWeeks('))
+    expect(skippedIndex).toBeLessThan(body.indexOf('commitWeeks(applied.weeks'))
     expect(body).toContain('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
-    expect([...body.matchAll(/commitWeeks\(/gu)]).toHaveLength(1)
+    // 準備と後片づけで 1 回ずつ(どちらも 1 リクエストで 1 回だけ)。
+    expect([...body.matchAll(/commitWeeks\(/gu)]).toHaveLength(2)
     expect(body).not.toContain('onSaveBoard')
     expect(body).not.toContain('setWeeks(')
+  })
+
+  it('第 2 段(tp-64): テンプレの土台と確認用の生徒を planner へ渡し、assignChecklistPrepTemplateStudents の結果を盤面を当てる前に作る', () => {
+    const body = effectBody()
+    // 土台は保存済みテンプレを buildTemplateDiffSavePlan の baseline と同じ在籍の絞り込みに通したもの。
+    expect(body).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey })')
+    expect(body).toContain('template: prepTemplate,')
+    expect(body).toContain('prepStudents: needsTemplate ? students.filter(isChecklistPrepStudent) : undefined,')
+    // 差分反映が無い教室は第 1 段のまま(テンプレを渡さない)。
+    expect(body).toContain('const needsTemplate = checklistPrepNeedsTemplate(request.itemId) && templateDiffApplyEnabled')
+    // 登録は prepareChecklistPrepTemplateSave(内部で assignChecklistPrepTemplateStudents)。失敗なら盤面を当てずに finish。
+    const prepareIndex = body.indexOf('const templateSave = step.plan.templateRegistrations.length > 0')
+    expect(prepareIndex).toBeGreaterThan(0)
+    expect(body.slice(prepareIndex, prepareIndex + 400)).toContain('prepareChecklistPrepTemplateSave({')
+    expect(prepareIndex).toBeLessThan(body.indexOf('const applied = applyChecklistPrepOps('))
+    expect(body).toContain('if (templateSave && !templateSave.ok) {')
+  })
+
+  it('第 2 段: commitWeeks の後は ref に保存の段を積んで finish せず、次のレンダーで handleSaveRegularLessonTemplateByDiff → finish(true, buildChecklistPrepTemplateSavedMessage(', () => {
+    const body = effectBody()
+    expect(BOARD_TSX).toContain('const checklistPrepTemplatePhaseRef = useRef<ChecklistPrepTemplatePhase | null>(null)')
+    const commitIndex = body.indexOf('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
+    const deferIndex = body.indexOf("checklistPrepTemplatePhaseRef.current = { kind: 'prep',")
+    expect(deferIndex).toBeGreaterThan(commitIndex)
+    // 積んだら finish せずに return(次のレンダー=盤面の準備が入った weeks で buildTemplateDiffSavePlan が走る)。
+    expect(body.slice(deferIndex).split(/\r?\n/u)[1]?.trim()).toBe('return')
+    // 保存の段: 同じリクエストの段が積まれていれば、ほかより先にそれを行う。
+    const phaseIndex = body.indexOf('if (pendingTemplatePhase?.requestId === request.requestId) {')
+    expect(phaseIndex).toBeGreaterThan(0)
+    expect(phaseIndex).toBeLessThan(body.indexOf('resolveChecklistPrepStep({'))
+    const runner = body.slice(body.indexOf('const runChecklistPrepTemplatePhase = '), phaseIndex)
+    // 見直し(テンプレ編集中・教室)→ 違えば失敗の文(盤面は置いたまま)。
+    expect(runner).toContain('resolveChecklistPrepTemplatePhaseBlock({ phaseClassroomId: phase.classroomId, classroomId: classroomStorageKey ?? null, isTemplateMode })')
+    expect(runner).toContain('finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: blocked, boardMessage: phase.boardMessage }))')
+    // 手で保存するときと同じ関数(確認画面の「保存を実行」と同じ・反映範囲は既定)。
+    expect(runner).toContain('saved = handleSaveRegularLessonTemplateByDiff(phase.template)')
+    expect(runner).toContain('finish(true, buildChecklistPrepTemplateSavedMessage({')
+    expect(runner).toContain('finish(true, buildChecklistPrepCleanupMessage({')
+    // 保存前の盤面の PDF・確認画面は出さない。
+    expect(body).not.toContain('exportTemplateOverwriteReport')
+    expect(body).not.toContain('setTemplateSaveConfirm')
+    // finish は積んだ段を捨てる(次のリクエストへ持ち越さない)。
+    expect(body.slice(body.indexOf('const finish = '), body.indexOf('const finish = ') + 300)).toContain('checklistPrepTemplatePhaseRef.current = null')
+  })
+
+  it('後片づけ(kind: cleanup): 断る判断 → cleanupChecklistPrepBoard を含む計画 → commitWeeks → テンプレの確認用があれば同じ保存の段 → 消した件数の文。何も無ければ「片づけるものはありません」', () => {
+    const body = effectBody()
+    const cleanupIndex = body.indexOf("if (request.kind === 'cleanup') {")
+    expect(cleanupIndex).toBeGreaterThan(0)
+    expect(cleanupIndex).toBeLessThan(body.indexOf('resolveChecklistPrepStep({'))
+    const cleanup = body.slice(cleanupIndex, body.indexOf('resolveChecklistPrepStep({'))
+    expect(cleanup).toContain('resolveChecklistPrepCleanupBlock({ isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }), isTemplateMode })')
+    expect(cleanup).toContain('planChecklistPrepCleanup({ weeks, pendingDesks: templatePendingDesks,')
+    expect(cleanup).toContain('finish(true, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE)')
+    const commit = cleanup.indexOf('commitWeeks(')
+    expect(commit).toBeGreaterThan(cleanup.indexOf('if (cleanupPlan.nothing) {'))
+    expect(cleanup.slice(commit, commit + 300)).toContain('cleanupPlan.pendingDesks ?? templatePendingDesks')
+    // 盤面を変えたら次のレンダーで保存(準備と同じ段)、変えていなければその場で保存。
+    expect(cleanup).toContain('checklistPrepTemplatePhaseRef.current = cleanupPhase')
+    expect(cleanup).toContain('runChecklistPrepTemplatePhase(cleanupPhase)')
   })
 
   it('講師メニューの「保存」の出自は権威関数 resolveManualTeacherAssignmentSource(準備と同じ 1 本)を通す(式を画面に複製しない)', () => {
