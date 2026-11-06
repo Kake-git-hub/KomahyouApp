@@ -11,6 +11,8 @@
 
 import { getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
+import type { RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { isChecklistPrepTemplateSeatTaken, listAvailableChecklistPrepStudents, type ChecklistPrepTemplateRegistration } from './checklistPrepTemplate'
 import { resolveDeskTeacherOrigin, resolveStudentOrigin } from './placementOrigin'
 import { hasDeskTeacherRest } from './teacherRest'
 import { buildTemplatePendingDeskKey, collectTemplatePendingLowerTeacherNames, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -24,6 +26,20 @@ export type ChecklistPrepItemId = (typeof CHECKLIST_PREP_ITEM_IDS)[number]
 export function isChecklistPrepItemId(itemId: string): itemId is ChecklistPrepItemId {
   return (CHECKLIST_PREP_ITEM_IDS as readonly string[]).includes(itemId)
 }
+
+/**
+ * 第 2 段（§E-2-4-2・2026-11-06 オーナー選択「まず tp-64 だけ」）: 盤面の準備に続けてテンプレへの登録と保存まで行う項目。
+ * App はこの項目のとき確認用の生徒を名簿へ足してからリクエストを立て、コマ表は planChecklistPrep の templateRegistrations をテンプレへ登録して保存する。
+ */
+export const CHECKLIST_PREP_TEMPLATE_ITEM_IDS = ['tp-64'] as const
+export type ChecklistPrepTemplateItemId = (typeof CHECKLIST_PREP_TEMPLATE_ITEM_IDS)[number]
+
+export function checklistPrepNeedsTemplate(itemId: string): itemId is ChecklistPrepTemplateItemId {
+  return (CHECKLIST_PREP_TEMPLATE_ITEM_IDS as readonly string[]).includes(itemId)
+}
+
+/** テンプレに登録する確認用の生徒の数（項目ごと）。 */
+export const CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT: Record<ChecklistPrepTemplateItemId, number> = { 'tp-64': 2 }
 
 /**
  * App → コマ表の一過性リクエスト。classroomId は押したときに開いていた教室（App の actingClassroomId）。コマ表は自分の教室と違うリクエストを
@@ -62,7 +78,17 @@ export type ChecklistPrepOp =
   | { kind: 'memo'; cellId: string; deskIndex: number; studentIndex: number; text: string }
   | { kind: 'manual-teacher'; cellId: string; deskIndex: number; teacherName: string; teacherId: string }
 
-export type ChecklistPrepPlanOk = { ok: true; dateKey: string; weekIndex: number; cellId: string; deskIndex: number; ops: ChecklistPrepOp[]; message: string }
+export type ChecklistPrepPlanOk = {
+  ok: true
+  dateKey: string
+  weekIndex: number
+  cellId: string
+  deskIndex: number
+  ops: ChecklistPrepOp[]
+  /** テンプレへ登録する席（第 2 段の項目で template を渡したときだけ。v2-1・第 1 段は空）。 */
+  templateRegistrations: ChecklistPrepTemplateRegistration[]
+  message: string
+}
 export type ChecklistPrepPlan = ChecklistPrepPlanOk | { ok: false; reason: string }
 
 export type ChecklistPrepInput = {
@@ -78,6 +104,13 @@ export type ChecklistPrepInput = {
   teacherAliases?: TeacherAliasResolver
   /** 体験の学年・科目（無ければ 中1・英）。 */
   trialProfile?: { grade: GradeLabel; subject: SubjectLabel }
+  /**
+   * 第 2 段（§E-2-4-2）: 今のテンプレ（反映開始日で在籍に絞ったもの）。**渡したとき（null＝テンプレ未作成を含む）だけ**第 2 段として、
+   * テンプレのその曜日・時限・机の同じ席が空いている机だけを選び、その席を templateRegistrations に返す。undefined なら第 1 段のまま（手作業の文）。
+   */
+  template?: RegularLessonTemplate | null
+  /** 第 2 段: 名簿の確認用の生徒。渡したときは、その曜日・時限に登録できる確認用の生徒が足りないコマを使わない（INV-12）。 */
+  prepStudents?: readonly StudentRow[]
 }
 
 export const CHECKLIST_PREP_TRIAL_NAME_PREFIX = '確認用 体験'
@@ -209,6 +242,12 @@ function seatLabel(cell: SlotCell, deskIndex: number, seat: number) {
   return `${cellLabel(cell)} 机 ${deskIndex + 1} の生徒 ${seat + 1}`
 }
 
+/** 盤面のコマの曜日（0=日 … 6=土・テンプレの dayOfWeek と同じ）。 */
+function resolveCellDayOfWeek(cell: SlotCell) {
+  const [year, month, day] = cell.dateKey.split('-').map(Number)
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1)).getUTCDay()
+}
+
 function templateSeatLabel(cell: SlotCell, deskIndex: number, seat: number) {
   const day = cell.dayLabel ? `${cell.dayLabel}曜 ` : ''
   return `${day}${cell.slotLabel} 机 ${deskIndex + 1} の生徒 ${seat + 1}`
@@ -227,7 +266,7 @@ function listCandidateCells(input: ChecklistPrepInput): CellContext[] {
   return contexts.sort((left, right) => left.cell.dateKey.localeCompare(right.cell.dateKey) || left.cell.slotNumber - right.cell.slotNumber)
 }
 
-type CellPlan = { deskIndex: number; ops: ChecklistPrepOp[]; lines: string[] }
+type CellPlan = { deskIndex: number; ops: ChecklistPrepOp[]; lines: string[]; templateRegistrations: ChecklistPrepTemplateRegistration[] }
 
 // v2-1（青字・案 A の並び替え → テンプレ保存）: 講師も授業も無い空き机を 3 つ使う。1 つ目に体験 2 人（並び替えで「2 人の机」として上へ詰まる）・
 // 2 つ目の席 1 にメモ・3 つ目に手で置く講師（授業なし）。テンプレの講師と生徒の机は替えない（替えるとテンプレ保存で講師欄が緑 2 行になる）。
@@ -257,12 +296,27 @@ function planV21(context: CellContext, input: ChecklistPrepInput, aliases: Teach
       `${seatLabel(cell, memoDeskIndex, 0)} にメモ「${memoText}」を書きました。`,
       `${cellLabel(cell)} 机 ${teacherDeskIndex + 1} に講師 ${teacherName} を手で置きました（授業の無い空き机）。`,
     ],
+    templateRegistrations: [],
   }
 }
 
+// tp-64（講師欄の緑）: テンプレの講師と生徒 1 人の机を 2 つ使う。(1) は講師を手で替えて空いた席に体験、(2) は空いた席に体験。
+// 第 2 段（input.template を渡したとき）: テンプレのその曜日・時限・机の同じ席が空いている机だけを選び、その席を確認用の生徒の登録先に返す
+// （登録と保存はコマ表が assignChecklistPrepTemplateStudents → 手で保存するときと同じ差分反映で行う）。
 function planTp64(context: CellContext, input: ChecklistPrepInput, aliases: TeacherAliasResolver, serials: { trial: number; memo: number }): CellPlan | null {
   const { cell } = context
-  const seats = cell.desks.map((desk) => findTemplateSingleLessonSeat(context, desk))
+  const stage2 = input.template !== undefined
+  const dayOfWeek = resolveCellDayOfWeek(cell)
+  if (stage2 && input.prepStudents) {
+    const needed = CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT['tp-64']
+    if (listAvailableChecklistPrepStudents(input.template, dayOfWeek, cell.slotNumber, input.prepStudents).length < needed) return null
+  }
+  const seats = cell.desks.map((desk, deskIndex) => {
+    const seat = findTemplateSingleLessonSeat(context, desk)
+    if (seat == null) return null
+    if (stage2 && isChecklistPrepTemplateSeatTaken(input.template, dayOfWeek, cell.slotNumber, deskIndex, seat)) return null
+    return seat
+  })
   const firstIndex = seats.findIndex((seat) => seat != null)
   if (firstIndex < 0) return null
   const secondIndex = seats.findIndex((seat, index) => index !== firstIndex && seat != null)
@@ -276,6 +330,16 @@ function planTp64(context: CellContext, input: ChecklistPrepInput, aliases: Teac
   const secondName = `${CHECKLIST_PREP_TRIAL_NAME_PREFIX}${serials.trial + 1}`
   const replacementName = getTeacherDisplayName(replacement)
   const previousTeacher = cell.desks[firstIndex].teacher
+  const afterSave = `保存すると (1) の机は講師欄が緑の 2 行（上=${previousTeacher}・下=${replacementName}）＋生徒 ${firstSeat + 1} も緑の 2 行、(2) の机は生徒 ${secondSeat + 1} だけが緑で講師欄は白のままです。`
+  const templateRegistrations: ChecklistPrepTemplateRegistration[] = stage2
+    ? [
+        { dayOfWeek, slotNumber: cell.slotNumber, deskIndex: firstIndex, studentIndex: firstSeat as 0 | 1, subject: profile.subject, label: '(1)' },
+        { dayOfWeek, slotNumber: cell.slotNumber, deskIndex: secondIndex, studentIndex: secondSeat as 0 | 1, subject: profile.subject, label: '(2)' },
+      ]
+    : []
+  const templateLine = stage2
+    ? `テンプレの (1)・(2) の席に確認用の生徒を登録して保存します（${templateSeatLabel(cell, firstIndex, firstSeat)} と ${templateSeatLabel(cell, secondIndex, secondSeat)}）。${afterSave}`
+    : `残る手作業（必須）: 「通常授業テンプレ作成」で ${templateSeatLabel(cell, firstIndex, firstSeat)} と ${templateSeatLabel(cell, secondIndex, secondSeat)} の両方に誰かを登録して、テンプレを保存してください。${afterSave}`
   return {
     deskIndex: firstIndex,
     ops: [
@@ -286,9 +350,9 @@ function planTp64(context: CellContext, input: ChecklistPrepInput, aliases: Teac
     lines: [
       `(1) ${cellLabel(cell)} 机 ${firstIndex + 1} の講師を ${previousTeacher} から ${replacementName} に替え（手で置いた講師）、生徒 ${firstSeat + 1} に体験「${firstName}」を置きました。`,
       `(2) ${seatLabel(cell, secondIndex, secondSeat)} に体験「${secondName}」を置きました。`,
-      `残る手作業（必須）: 「通常授業テンプレ作成」で ${templateSeatLabel(cell, firstIndex, firstSeat)} と ${templateSeatLabel(cell, secondIndex, secondSeat)} の両方に誰かを登録して、テンプレを保存してください。`
-        + `保存すると (1) の机は講師欄が緑の 2 行（上=${previousTeacher}・下=${replacementName}）＋生徒 ${firstSeat + 1} も緑の 2 行、(2) の机は生徒 ${secondSeat + 1} だけが緑で講師欄は白のままです。`,
+      templateLine,
     ],
+    templateRegistrations,
   }
 }
 
@@ -321,13 +385,14 @@ export function planChecklistPrep(input: ChecklistPrepInput): ChecklistPrepPlan 
       cellId: context.cell.id,
       deskIndex: planned.deskIndex,
       ops: planned.ops,
+      templateRegistrations: planned.templateRegistrations,
       message: [...planned.lines, CHECKLIST_PREP_SAVE_REMINDER].join('\n'),
     }
   }
   const earliest = resolveChecklistPrepEarliestDateKey(input.todayKey, input.effectiveStartDate)
   return {
     ok: false,
-    reason: `${earliest} 以降の表示できる週に、${ITEM_NOT_FOUND_REASONS[input.itemId]}が見つかりませんでした（休校日・保留（2 行）の机・出欠記録のある机は使いません）。何も変えていません。`,
+    reason: `${earliest} 以降の表示できる週に、${ITEM_NOT_FOUND_REASONS[input.itemId]}${checklistPrepNeedsTemplate(input.itemId) && input.template !== undefined ? '（テンプレの同じ席も空いている机）' : ''}が見つかりませんでした（休校日・保留（2 行）の机・出欠記録のある机は使いません）。何も変えていません。`,
   }
 }
 
