@@ -473,7 +473,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '取り消すとその生徒が「在籍生徒」に戻り、通常授業がコマ表に戻る。消えた手置きの振替は戻らない',
         '未消化振替・未消化講習の一覧にその生徒が戻り、数は退塾の前と同じ',
       ],
-      introducedIn: 'v1.5.691',
+      introducedIn: 'v1.5.695',
     },
     {
       id: 'wc-2',
@@ -487,7 +487,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '「キャンセル」なら何も変わらず、その生徒は「退塾生徒」のまま',
         '高3を卒業して退塾生徒になった生徒の行には「退塾取消」が出ない(「生年月日を修正」は出る)',
       ],
-      introducedIn: 'v1.5.691',
+      introducedIn: 'v1.5.695',
     },
     {
       id: 'tp-64',

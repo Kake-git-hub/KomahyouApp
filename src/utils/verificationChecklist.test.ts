@@ -106,10 +106,10 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第111版(2026-11-05・v1.5.689 据え置き): 退塾取消の確認 wc-1・wc-2 を足した(開発用教室だけ・項目を足しただけなので版は上げない)', () => {
+  it('第115版(2026-11-06・v1.5.694 据え置き): 退塾取消の確認 wc-1・wc-2 を足した(開発用教室だけ・項目を足しただけなので版は上げない・本番反映は v1.5.695)', () => {
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     for (const id of ['wc-1', 'wc-2']) {
-      expect(byId.get(id)?.introducedIn, id).toBe('v1.5.691')
+      expect(byId.get(id)?.introducedIn, id).toBe('v1.5.695')
       expect(byId.get(id)?.area, id).toBe('基本データ')
       expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).not.toContain(id)
     }

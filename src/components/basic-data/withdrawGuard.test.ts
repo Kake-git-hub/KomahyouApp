@@ -120,7 +120,8 @@ describe('buildStudentWithdrawConfirmation', () => {
     // ★旧案内「手で置いた講習・振替のコマは残ります」へ戻さない(退塾スイープと食い違って室長が誤解する)。
     expect(confirmation.message).not.toContain('講習・振替のコマは残ります')
     expect(confirmation.message).toContain('今日以降の講習・振替などのコマと記録も消えます')
-    expect(confirmation.message).toContain('未消化へは戻りません')
+    // 2026-11-06(退塾取消のレビュー Minor-1): 取消で戻る「残数」と矛盾しないよう「消したコマの分は」と書き分ける。
+    expect(confirmation.message).toContain('消したコマの分は未消化へ戻りません')
     expect(confirmation.message).toContain('昨日以前の記録は残ります')
     // 2026-11-05 改定(退塾取消・オーナー確定): 在籍には戻せるが、消えたコマと記録は戻らないと伝える(「元に戻せません」とは言わない)。
     expect(confirmation.message).toContain('「退塾取消」で在籍に戻せます')
@@ -145,7 +146,7 @@ describe('buildStudentWithdrawConfirmation', () => {
     ]) {
       expect(confirmation.message).toContain('手で置いた講習・振替のコマは残ります')
       expect(confirmation.message).not.toContain('今日以降の講習・振替などのコマと記録も消えます')
-      expect(confirmation.message).not.toContain('未消化へは戻りません')
+      expect(confirmation.message).not.toContain('未消化へ戻りません')
       // 退塾取消はフラグに依らず全教室で使えるので OFF でも案内する。OFF の教室は手で置いたコマが消えないので「消えて戻りません」とは書かない。
       expect(confirmation.message).toContain('「退塾取消」で在籍に戻せます')
       expect(confirmation.message).not.toContain('消えて戻りません')
