@@ -947,8 +947,8 @@ describe('第109版(2026-11-05・v1.5.689): 11/4 夜〜11/5 の送信(受付 202
 
   it('mn-1: 緑の机のメニューの文言とハイライト(フリーメモ 20261105-052334430-d93d690d)。残す項目のボタン名も新しい文言', () => {
     const item = byId.get('mn-1')!
-    // 第113版(2026-11-06・tp-64 受付 20261105-234609713「クリックしている行だけハイライトして」): 両方の枠 → 押した行だけ。
-    expect(item.introducedIn).toBe('v1.5.693')
+    // 第113版(2026-11-06・tp-64 受付 20261105-234609713「クリックしている行だけハイライトして」): 両方の枠 → 押した行だけ(id と introducedIn は据え置き)。
+    expect(item.introducedIn).toBe('v1.5.689')
     expect(item.check?.join('\n')).toContain('「上段(テンプレ)を採用する」「下段(手入力)を採用する」「下段(手入力)を移動する」「下段(手入力)を削除する」')
     expect(item.check?.join('\n')).toContain('上の行を押すと上の行だけ、下の行を押すと下の行だけに選択中の枠')
     expect(item.check?.join('\n')).not.toContain('両方に選択中の枠')
@@ -1006,10 +1006,14 @@ describe('第111版(2026-11-05・v1.5.691): 11/5 深夜の送信(受付 20261105
 describe('「準備する」(自動準備・2026-11-06 案 C 第 1 段・spec-developer-report §E-2-4)', () => {
   // 第113版(2026-11-06): OK で外した項目(v2-1)の準備の処理は checklistPrep.ts に残してよい(再び載せるときにすぐ使える)。
   // 逆向き＝確認リストに autoPrep を付けたのに準備の処理が無い、は押しても断られるので許さない。
-  it('autoPrep の項目は必ず checklistPrep.ts の CHECKLIST_PREP_ITEM_IDS にある(準備の処理の無い項目にボタンを出さない)', () => {
+  // 確認リストから外したが準備の処理を残している項目(OK で外した順)。ここと autoPrep の項目を合わせると CHECKLIST_PREP_ITEM_IDS と一致する(打ち間違いを検出する)。
+  const PREP_RETAINED_AFTER_OK = ['v2-1']
+  it('autoPrep の項目は必ず checklistPrep.ts の CHECKLIST_PREP_ITEM_IDS にあり、外した項目の準備は PREP_RETAINED_AFTER_OK に明示する', () => {
     const autoPrepIds = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep).map((item) => item.id)
     expect(autoPrepIds.length).toBeGreaterThan(0)
     for (const id of autoPrepIds) expect(CHECKLIST_PREP_ITEM_IDS as readonly string[], id).toContain(id)
+    for (const id of PREP_RETAINED_AFTER_OK) expect(autoPrepIds, id).not.toContain(id)
+    expect([...autoPrepIds, ...PREP_RETAINED_AFTER_OK].sort()).toEqual([...CHECKLIST_PREP_ITEM_IDS].sort())
   })
 
   it('autoPrep の項目の準備は「準備する」を押す文から始まる', () => {

@@ -610,7 +610,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '講師欄の下の行を押すと講師欄の下の行だけに枠が付き、メニューは「上段(テンプレ)の講師を採用する」「下段(手入力)の講師を採用する」の 2 つ',
         'コマ表の PDF には選択中の枠は出ない',
       ],
-      introducedIn: 'v1.5.693',
+      introducedIn: 'v1.5.689',
     },
     // 第 2 版(11/5 夜・regression-reviewer の監査とオーナー決定 §9-14・§9-15): 下の行だけの手入力を上げる・手置き講師がテンプレの別の机にも居る形・同じ日に動かした授業を休みにした形。
     {
