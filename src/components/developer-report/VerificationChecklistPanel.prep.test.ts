@@ -109,4 +109,69 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     expect(button('tp-64')!.disabled).toBe(false)
     expect(container.querySelector('[data-testid="verification-checklist-prep-result"][data-item-id="tp-64"]')?.textContent).toContain('boom')
   })
+
+  // 「後片づけ」(2026-11-06 第 2 段・spec-developer-report §E-2-4-2 決定 4): パネルの上の方に 1 つ。onCleanup が無ければ出さない(本番 3 校)。
+  const cleanupButton = () => container.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-cleanup"]')
+  const cleanupResult = () => container.querySelector<HTMLElement>('[data-testid="verification-checklist-cleanup-result"]')
+
+  it('「後片づけ」は onCleanup があるときだけ出す(無ければ出さない＝本番 3 校)。項目より上(フリーメモより前)に 1 つ', () => {
+    render({})
+    expect(cleanupButton()).toBeNull()
+    render({ onCleanup: vi.fn(async () => ({ ok: true, message: '' })) })
+    expect(container.querySelectorAll('[data-testid="verification-checklist-cleanup"]')).toHaveLength(1)
+    const freeMemo = container.querySelector('[data-testid="verification-checklist-other-notes"]')!
+    expect(cleanupButton()!.compareDocumentPosition(freeMemo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(cleanupButton()!.textContent).toBe('後片づけ')
+  })
+
+  it('押すと onCleanup。実行中は「後片づけ中…」で無効、終われば結果文を出す(下書きには残さない)', async () => {
+    let resolveCleanup: (value: { ok: boolean; message: string }) => void = () => {}
+    const onCleanup = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { resolveCleanup = resolve }))
+    render({ onCleanup })
+    act(() => cleanupButton()!.click())
+    expect(onCleanup).toHaveBeenCalledTimes(1)
+    expect(cleanupButton()!.disabled).toBe(true)
+    expect(cleanupButton()!.textContent).toBe('後片づけ中…')
+    act(() => cleanupButton()!.click())
+    expect(onCleanup).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveCleanup({ ok: true, message: '盤面から消しました: 確認用の体験 2 人・確認用のメモ 0 件・準備で置いた講師 1 人。' }) })
+    expect(cleanupButton()!.disabled).toBe(false)
+    expect(cleanupButton()!.textContent).toBe('後片づけ')
+    expect(cleanupResult()?.textContent).toContain('確認用の体験 2 人')
+    expect(cleanupResult()?.className).toContain('is-ok')
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index) ?? ''
+      expect(window.localStorage.getItem(key) ?? '').not.toContain('確認用の体験 2 人')
+    }
+  })
+
+  it('失敗・投げたときは理由を出して押せる状態に戻す', async () => {
+    render({ onCleanup: vi.fn(async () => { throw new Error('boom') }) })
+    await act(async () => { cleanupButton()!.click() })
+    expect(cleanupButton()!.disabled).toBe(false)
+    expect(cleanupResult()?.textContent).toContain('boom')
+    expect(cleanupResult()?.className).toContain('is-error')
+  })
+
+  it('準備中は後片づけを押せない。後片づけ中は「準備する」を押せない(同時に 1 つだけ)', async () => {
+    let resolvePrepare: (value: { ok: boolean; message: string }) => void = () => {}
+    const onPrepare = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { resolvePrepare = resolve }))
+    let resolveCleanup: (value: { ok: boolean; message: string }) => void = () => {}
+    const onCleanup = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { resolveCleanup = resolve }))
+    render({ onPrepare, onCleanup })
+    act(() => button('tp-64')!.click())
+    expect(cleanupButton()!.disabled).toBe(true)
+    act(() => cleanupButton()!.click())
+    expect(onCleanup).not.toHaveBeenCalled()
+    await act(async () => { resolvePrepare({ ok: true, message: '' }) })
+    expect(cleanupButton()!.disabled).toBe(false)
+
+    act(() => cleanupButton()!.click())
+    expect(button('tp-64')!.disabled).toBe(true)
+    act(() => button('tp-64')!.click())
+    expect(onPrepare).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveCleanup({ ok: true, message: '片づけるものはありません。' }) })
+    expect(button('tp-64')!.disabled).toBe(false)
+    expect(cleanupResult()?.textContent).toBe('片づけるものはありません。')
+  })
 })

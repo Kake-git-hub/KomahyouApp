@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
-import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
+import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createNextManagedId, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import type { StudentDeletionStockSummary } from './components/basic-data/deleteGuard'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
@@ -65,7 +65,8 @@ import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
-import { CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE, consumeChecklistPrepRequest, type ChecklistPrepRequest, type ChecklistPrepRequestResult, type ChecklistPrepResult } from './components/schedule-board/checklistPrep'
+import { CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE, CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT, checklistPrepNeedsTemplate, consumeChecklistPrepRequest, type ChecklistPrepRequest, type ChecklistPrepRequestResult, type ChecklistPrepResult } from './components/schedule-board/checklistPrep'
+import { CHECKLIST_PREP_CLEANUP_NOT_VERIFICATION_MESSAGE, ensureChecklistPrepStudents, resolveChecklistPrepStudentCount } from './components/schedule-board/checklistPrepTemplate'
 import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
 import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
 import { getJstTodayDateKey } from './utils/jstDate'
@@ -1917,9 +1918,9 @@ function AuthenticatedApp() {
     const pending = checklistPrepPendingRef.current
     if (pending) settleChecklistPrep(pending.requestId, { ok: false, message })
   }, [settleChecklistPrep])
-  const handleChecklistPrepare = useCallback((itemId: string): Promise<ChecklistPrepResult> => {
-    // 二重のガード(パネルは検証用教室だけでマウント・コマ表も開いている教室で断る)。
-    if (!isActingDevelopmentClassroom) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE })
+  // 「準備する」と「後片づけ」(kind: 'cleanup'・§E-2-4-2 決定 4)の共通の入口。同じ待ち合わせ・同じ保険タイマー・同じ取りやめ(教室切り替え・boardMountKey)。
+  // 呼ぶ側が先に検証用教室かを確かめる(二重のガード)。
+  const startChecklistPrepRequest = useCallback((itemId: string, kind: 'prep' | 'cleanup'): Promise<ChecklistPrepResult> => {
     const previous = checklistPrepPendingRef.current
     if (previous) settleChecklistPrep(previous.requestId, { ok: false, message: CHECKLIST_PREP_SUPERSEDED_MESSAGE })
     // 準備はコマ表の上で行う。別の画面ならコマ表へ移る(コマ表がマウントされた最初のレンダーで effect が処理する)。
@@ -1933,9 +1934,29 @@ function AuthenticatedApp() {
       }, CHECKLIST_PREP_TIMEOUT_MS)
       checklistPrepPendingRef.current = { requestId, resolve, timeoutId }
       // 押した教室を載せる(コマ表は自分の教室と違うリクエストを処理しない・下の取りやめ effect より先にコマ表が走っても前の教室へ置かない・INV-08)。
-      setChecklistPrepRequest({ requestId, itemId, classroomId: actingClassroomId })
+      setChecklistPrepRequest({ requestId, itemId, classroomId: actingClassroomId, kind })
     })
-  }, [actingClassroomId, isActingDevelopmentClassroom, screenRef, settleChecklistPrep])
+  }, [actingClassroomId, screenRef, settleChecklistPrep])
+  const handleChecklistPrepare = useCallback((itemId: string): Promise<ChecklistPrepResult> => {
+    // 二重のガード(パネルは検証用教室だけでマウント・コマ表も開いている教室で断る)。名簿へ足す前に断る(本番 3 校の名簿に確認用の生徒を足さない)。
+    if (!isActingDevelopmentClassroom) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE })
+    // 第 2 段(§E-2-4-2 決定 3): テンプレへ登録する項目は、確認用の生徒を名簿へ足してからリクエストを立てる(同じレンダーでコマ表が足した名簿を受け取る)。
+    // 足す人数はどの曜日・時限に当たっても足りる数(同じ曜日・時限に既に居る確認用の生徒は使わない・INV-12)。名簿から消さない(使い回す)。
+    // id は基本データ画面の生徒追加と同じ作り方(createNextManagedId)。
+    if (checklistPrepNeedsTemplate(itemId)) {
+      const ensured = ensureChecklistPrepStudents(studentsRef.current, resolveChecklistPrepStudentCount(classroomSettingsRef.current.regularLessonTemplate, studentsRef.current, CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT[itemId]), {
+        todayKey: getJstTodayDateKey(),
+        createId: (taken) => createNextManagedId('student', [...taken]),
+      })
+      if (ensured.added.length > 0) setStudents(ensured.students)
+    }
+    return startChecklistPrepRequest(itemId, 'prep')
+  }, [classroomSettingsRef, isActingDevelopmentClassroom, setStudents, startChecklistPrepRequest, studentsRef])
+  // 「後片づけ」(§E-2-4-2 決定 4): 盤面の「確認用」・準備の印の講師・テンプレの確認用の生徒の登録だけをコマ表が消してテンプレを保存する。
+  const handleChecklistCleanup = useCallback((): Promise<ChecklistPrepResult> => {
+    if (!isActingDevelopmentClassroom) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_CLEANUP_NOT_VERIFICATION_MESSAGE })
+    return startChecklistPrepRequest('', 'cleanup')
+  }, [isActingDevelopmentClassroom, startChecklistPrepRequest])
   const handleChecklistPrepRequestProcessed = useCallback((result: ChecklistPrepRequestResult) => {
     setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))
     settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message })
@@ -2048,6 +2069,7 @@ function AuthenticatedApp() {
         loadSharedResults={loadVerificationChecklistSharedResults}
         resolveStudentName={resolveVerificationChecklistStudentName}
         onPrepare={handleChecklistPrepare}
+        onCleanup={handleChecklistCleanup}
         onCaptureTab={canCaptureBrowserTab(typeof navigator !== 'undefined' ? navigator.mediaDevices : null) ? captureBrowserTabFromView : undefined}
       />
     ) : null
