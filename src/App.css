@@ -6271,6 +6271,27 @@ body.verification-checklist-window {
   background: #fef2f2;
   color: #991b1b;
 }
+/* 確認リスト: 「後片づけ」(2026-11-06 第 2 段・§E-2-4-2 決定 4)。パネルの上の方に 1 つ。結果文は「準備する」と同じ見た目。 */
+.verification-checklist-cleanup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.verification-checklist-cleanup-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.verification-checklist-cleanup-help {
+  flex: 1;
+  color: #475569;
+  font-size: 24px;
+  line-height: 1.5;
+}
+.verification-checklist-cleanup-row .verification-checklist-prep-result {
+  flex-basis: 100%;
+}
 
 .verification-checklist-check {
   margin: 4px 0 8px;

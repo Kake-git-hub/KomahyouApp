@@ -253,7 +253,8 @@ function createManagedIdAllocator(kind: ManagedIdKind, existingIds: string[]) {
   }
 }
 
-function createNextManagedId(kind: ManagedIdKind, existingIds: string[]) {
+// 確認リストの「準備する」第 2 段(App が確認用の生徒を名簿へ足す・spec-developer-report §E-2-4-2)も同じ作り方で id を作る。
+export function createNextManagedId(kind: ManagedIdKind, existingIds: string[]) {
   return createManagedIdAllocator(kind, existingIds).next()
 }
 

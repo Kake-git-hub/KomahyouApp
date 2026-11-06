@@ -22,7 +22,8 @@ import type { DeskCell, DeskLesson, SlotCell, StudentEntry, StudentStatusEntry }
 type StudentPair = [StudentEntry | null, StudentEntry | null]
 
 /** 下段が持つ手置き講師（Q41・2026-10-21・オーナー決定 B）。保存前の机の講師フィールドの写し。表示と「既存を採用」の復元にだけ使う（INV-13）。 */
-export type TemplatePendingLowerTeacher = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>
+// checklistPrepTeacher: 確認リストの準備で置いた講師の印（types.ts・§E-2-4-2）。下の行へ移った準備の講師も後片づけで見分けられるように写す。
+export type TemplatePendingLowerTeacher = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId' | 'checklistPrepTeacher'>
 
 /** 保留の下段（既存側の生徒側）。講師は原則持たない（Q24-1・Q21-9）。例外＝Q41 の手置き講師（`teacher`）。 */
 export type TemplatePendingLower = {
@@ -154,6 +155,7 @@ export function normalizeTemplatePendingLowerTeacher(value: unknown): TemplatePe
     teacherAssignmentSource: source,
     teacherAssignmentSessionId: typeof record.teacherAssignmentSessionId === 'string' ? record.teacherAssignmentSessionId : undefined,
     teacherAssignmentTeacherId: typeof record.teacherAssignmentTeacherId === 'string' ? record.teacherAssignmentTeacherId : undefined,
+    ...(record.checklistPrepTeacher === true ? { checklistPrepTeacher: true as const } : {}),
   }
 }
 

@@ -105,6 +105,12 @@ export type VerificationChecklistPanelProps = {
    * App は検証用教室(開発用・テスト教室)のときだけ渡す。無ければボタンを出さない。保存はしない(「保存」を押してもらう)。
    */
   onPrepare?: (itemId: string) => Promise<{ ok: boolean; message: string }>
+  /**
+   * 「後片づけ」(2026-11-06 第 2 段・spec-developer-report §E-2-4-2 決定 4)。パネルの上の方に 1 つ出すボタンから呼ぶ。
+   * 盤面の「確認用」の体験・メモ・準備で置いた講師と、テンプレの確認用の生徒の登録だけを消してテンプレを保存し、消した件数の文を返す。
+   * App は検証用教室(開発用・テスト教室)のときだけ渡す(本番 3 校には出さない)。無ければボタンを出さない。サーバーへの保存はしない。
+   */
+  onCleanup?: () => Promise<{ ok: boolean; message: string }>
 }
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: VerificationChecklistStatus; label: string }> = [
@@ -153,7 +159,7 @@ type SharedResultsState =
   | { status: 'ready'; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
   | { status: 'error'; message: string; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
 
-export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
+export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, onCleanup, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
   const storageKey = verificationChecklistStorageKey(classroomId)
@@ -175,6 +181,9 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   const [preparingItemId, setPreparingItemId] = useState<string | null>(null)
   /** 「準備する」の結果文(項目ごと・画面だけ。下書きには保存しない)。 */
   const [prepResults, setPrepResults] = useState<Record<string, { ok: boolean; message: string }>>({})
+  /** 「後片づけ」を実行中か(準備と同時には行わない)。結果文は画面だけ(下書きには保存しない)。 */
+  const [cleaningUp, setCleaningUp] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [shared, setShared] = useState<SharedResultsState>({ status: 'idle' })
   /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
   const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
@@ -381,7 +390,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
 
   /** 「準備する」(2026-11-06)。同時に 1 件だけ。結果文は画面だけに出す(下書きには残さない)。 */
   const handlePrepare = useCallback(async (itemId: string) => {
-    if (!onPrepare || preparingItemId !== null) return
+    if (!onPrepare || preparingItemId !== null || cleaningUp) return
     setPreparingItemId(itemId)
     try {
       const result = await onPrepare(itemId)
@@ -392,7 +401,21 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     } finally {
       setPreparingItemId(null)
     }
-  }, [onPrepare, preparingItemId])
+  }, [cleaningUp, onPrepare, preparingItemId])
+
+  /** 「後片づけ」(2026-11-06 第 2 段)。準備と同時には行わない(同時に 1 つだけ)。 */
+  const handleCleanup = useCallback(async () => {
+    if (!onCleanup || cleaningUp || preparingItemId !== null) return
+    setCleaningUp(true)
+    try {
+      setCleanupResult(await onCleanup())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setCleanupResult({ ok: false, message: `後片づけできませんでした: ${message}` })
+    } finally {
+      setCleaningUp(false)
+    }
+  }, [cleaningUp, onCleanup, preparingItemId])
 
   /** 1 項目を送る(2026-11-03)。1 項目 = 1 通。送れたら下書きに「送った内容」を残し、その項目の画像を下書きから外す。 */
   const handleSendItem = useCallback(async (itemId: string) => {
@@ -516,6 +539,30 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
       </header>
 
       <div className="verification-checklist-body">
+        {/* 「後片づけ」(2026-11-06 第 2 段・§E-2-4-2 決定 4): パネルの上の方に 1 つ。App が onCleanup を渡したとき(検証用教室)だけ。 */}
+        {onCleanup ? (
+          <div className="verification-checklist-cleanup-row">
+            <button
+              type="button"
+              className="secondary-button verification-checklist-cleanup-button"
+              onClick={() => { void handleCleanup() }}
+              disabled={cleaningUp || preparingItemId !== null}
+              data-testid="verification-checklist-cleanup"
+            >
+              {cleaningUp ? '後片づけ中…' : '後片づけ'}
+            </button>
+            <span className="verification-checklist-cleanup-help">準備で置いた「確認用」のものだけを消して、テンプレを保存します(「保存」は手で押します)。</span>
+            {cleanupResult ? (
+              <p
+                className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
+                data-testid="verification-checklist-cleanup-result"
+                role="status"
+              >
+                {cleanupResult.message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {/* フリーメモ(2026-11-01 オーナー指示「フリーメモ欄を確認リストに追加」): 旧「その他の気づき」(末尾)を先頭へ移し、
             項目に関係ない気づき・判断項目への意見・質問を自由に書ける欄にした。送信本文では従来どおり「その他」として届く。 */}
         <div className="verification-checklist-group verification-checklist-free-memo">
@@ -599,7 +646,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                           type="button"
                           className="secondary-button verification-checklist-prep-button"
                           onClick={() => { void handlePrepare(item.id) }}
-                          disabled={preparingItemId !== null}
+                          disabled={preparingItemId !== null || cleaningUp}
                           data-testid={`verification-checklist-prep-${item.id}`}
                         >
                           {preparingItemId === item.id ? '準備中…' : '準備する'}

@@ -210,6 +210,13 @@ export type DeskCell = {
    * sessionId: 日程表登録（QR）の講師を休みにしたときの講習 ID（起動時の自己修復が「室長が外した」と数え、置き直さないため）。
    */
   teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
+  /**
+   * 確認リストの「準備する」（docs/spec-developer-report.md §E-2-4-2・開発用教室とテスト教室だけ）が置いた講師の印。
+   * 「後片づけ」（checklistPrepTemplate.ts の cleanupChecklistPrepBoard）が消す講師の見分けにだけ使う（画面・日程表・PDF には出さない）。
+   * 講師の項目と一緒に動く（保留の下の行の講師へ移る・「手入力の講師を採用」で戻る・テンプレの講師に替わると外れる）。
+   * 室長が講師メニューで講師を置き直したら外れる（setManualTeacherAssignment・あとで手で替えた講師は後片づけで消さない＝INV-02）。
+   */
+  checklistPrepTeacher?: true
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   /** §9-20: 付け替えの作成で移動元 D から移したメモ（席ごとに D と移した本文）。解除は今のメモが同じ本文のときだけ D の同じ席へ戻す（再監査 要修正-2）。 */

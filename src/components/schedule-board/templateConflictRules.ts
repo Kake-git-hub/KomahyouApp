@@ -288,7 +288,8 @@ export type TemplateManualFirstSkip = { student: StudentEntry; dateKey: string; 
 /** 席に入る手入力の 1 件（生徒かメモ）。 */
 type ManualSeatItem = { kind: 'student'; student: StudentEntry; seat: number } | { kind: 'memo'; memo: string; seat: number }
 
-const TEACHER_FIELD_KEYS = ['teacher', 'manualTeacher', 'teacherAssignmentSource', 'teacherAssignmentSessionId', 'teacherAssignmentTeacherId'] as const
+// checklistPrepTeacher（確認リストの準備で置いた講師の印・§E-2-4-2）も講師の項目として一緒に動かす（テンプレの講師に替わると外れる・下の行の講師へ移る）。
+const TEACHER_FIELD_KEYS = ['teacher', 'manualTeacher', 'teacherAssignmentSource', 'teacherAssignmentSessionId', 'teacherAssignmentTeacherId', 'checklistPrepTeacher'] as const
 
 function pickTeacher(desk: TemplatePendingLowerTeacher): TemplatePendingLowerTeacher {
   return {
@@ -297,6 +298,7 @@ function pickTeacher(desk: TemplatePendingLowerTeacher): TemplatePendingLowerTea
     teacherAssignmentSource: desk.teacherAssignmentSource,
     teacherAssignmentSessionId: desk.teacherAssignmentSessionId,
     teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
+    ...(desk.checklistPrepTeacher ? { checklistPrepTeacher: true as const } : {}),
   }
 }
 

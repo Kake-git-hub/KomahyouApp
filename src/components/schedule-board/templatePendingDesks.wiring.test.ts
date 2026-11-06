@@ -158,6 +158,31 @@ describe('保留マップの往復（保存 → 読込 → publish → undo/redo
   })
 })
 
+describe('準備の印（checklistPrepTeacher・確認リストの準備 第 2 段 §E-2-4-2）の往復', () => {
+  // 机の任意の項目なので teacherRest と同じく保存・読み込みは机を丸ごと持つ（配線不要）。下の行の講師は読込の正規化で形を作り直すので印を写す。
+  const MARKED_KEY = buildTemplatePendingDeskKey('2026-10-07_5', '2026-10-07_5_desk_1')
+  const MARKED: TemplatePendingDeskMap = {
+    [MARKED_KEY]: {
+      lower: { teacher: { teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true } },
+      effectiveStartDate: '2026-10-07',
+      createdAt: '2026-09-29T10:00:00.000Z',
+    },
+  }
+
+  it('机の印と下の行の講師の印が JSON スナップショット → 正規化 → 読込で残る（印の無い講師には項目自体が生えない）', () => {
+    const markedCell: SlotCell = { ...cell('2026-10-07_5', '2026-10-07'), desks: [{ id: '2026-10-07_5_desk_1', teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true }] }
+    const snapshot = { screen: 'board', classroomSettings: settings, managers: [], teachers: [], students: [], regularLessons: [], groupLessons: [], specialSessions: [], autoAssignRules: [], pairConstraints: [], boardState: boardState({ weeks: [[markedCell]], templatePendingDesks: MARKED }), updatedAt: 'x', schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot))
+    expect(parsed.boardState?.weeks[0][0].desks[0].checklistPrepTeacher).toBe(true)
+    expect(normalizeTemplatePendingDeskMap(parsed.boardState?.templatePendingDesks)).toEqual(MARKED)
+    const restored = createInitialBoardSnapshot({ classroomSettings: settings, teachers: [], students: [], regularLessons: [], initialBoardState: parsed.boardState })
+    expect(restored.templatePendingDesks?.[MARKED_KEY].lower.teacher?.checklistPrepTeacher).toBe(true)
+    expect(cloneTemplatePendingDeskMap(MARKED)[MARKED_KEY].lower.teacher?.checklistPrepTeacher).toBe(true)
+    const unmarked = normalizeTemplatePendingDeskMap({ [MARKED_KEY]: { ...MARKED[MARKED_KEY], lower: { teacher: { teacher: '講師D', manualTeacher: true, checklistPrepTeacher: 'yes' } } } })
+    expect('checklistPrepTeacher' in unmarked[MARKED_KEY].lower.teacher!).toBe(false)
+  })
+})
+
 describe('週トリム（Q24-4）: 保留のある週は破棄しない', () => {
   it('手動編集の無い遠い週でも、保留マップのキーが指すコマを含む週は残る', () => {
     const near = [cell('2026-09-30_5', '2026-09-30')]
@@ -349,7 +374,11 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).not.toContain('expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks')
     // 範囲の権威は計画関数 1 か所: 基準は保存時点の保存済みテンプレ（編集画面と同じ在籍フィルタ）、範囲は定義の差 ∪ 盤面の行との差（regression-reviewer H-2）。
     const planFn = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
-    expect(planFn).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })')
+    // 基準は 1 つの関数 resolveTemplateDiffBaseline（中身は同じ filterTemplateParticipantsForReferenceDate・今日を基準日。テンプレ作成を開くとき・確認リストの準備も同じ関数・2026-11-06 M-4）。
+    expect(planFn).toContain('const baselineTemplate = resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey: toDateKey(new Date()) })')
+    const TEMPLATE_TS = readFileSync(fileURLToPath(new URL('../regular-template/regularLessonTemplate.ts', import.meta.url)), 'utf8')
+    const baselineFn = sliceBody(TEMPLATE_TS, 'export function resolveTemplateDiffBaseline(', 'export function hasRegularLessonTemplateAssignments(')
+    expect(baselineFn).toContain('return filterTemplateParticipantsForReferenceDate({ template: params.template, deskCount: params.deskCount, teachers: params.teachers, students: params.students, referenceDate: params.todayKey })')
     expect(planFn).toContain('const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)')
     expect(planFn).toContain('const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))')
     expect(planFn).toContain('resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })')
