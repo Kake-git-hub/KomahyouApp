@@ -480,6 +480,21 @@ describe('applyChecklistPrepOps', () => {
     expect(next[0][0].desks[2]).toMatchObject({ teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 't5' })
   })
 
+  it('準備で置いた講師の机に準備の印（checklistPrepTeacher）を付ける。体験・メモの机には付けない（後片づけの見分け・§E-2-4-2）', () => {
+    const weeks = [[fullCell('2026-11-12', 1)]]
+    const plan = planChecklistPrep(baseInput('v2-1', weeks))
+    if (!plan.ok) throw new Error('plan failed')
+    const desks = applyChecklistPrepOps(weeks, plan.ops, aliases, { now: 1 }).weeks[0][0].desks
+    expect(desks[5].checklistPrepTeacher).toBe(true)
+    expect(desks.filter((desk) => desk.checklistPrepTeacher).map((desk) => desk.id)).toEqual([desks[5].id])
+    const tp64 = planChecklistPrep(baseInput('tp-64', weeks))
+    if (!tp64.ok) throw new Error('plan failed')
+    const tpDesks = applyChecklistPrepOps(weeks, tp64.ops, aliases, { now: 1 }).weeks[0][0].desks
+    expect(tpDesks.filter((desk) => desk.checklistPrepTeacher).map((desk) => desk.id)).toEqual([tpDesks[0].id])
+    // 入力の週には印を付けない。
+    expect(weeks[0][0].desks.some((desk) => desk.checklistPrepTeacher)).toBe(false)
+  })
+
   it('埋まっている席・メモのある席には置かない（既存を消さない）。置かなかった操作は skipped に数える', () => {
     const weeks = [[fullCell('2026-11-12', 1)]]
     weeks[0][0].desks[3].memoSlots = ['既存のメモ', null]

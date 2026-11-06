@@ -376,7 +376,8 @@ export function isTemplateDeskStudentContentEqual(templateDesk: Pick<DeskCell, '
 // Q21-9：机の講師
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type TemplateDeskTeacherFields = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId'>
+// checklistPrepTeacher: 確認リストの準備で置いた講師の印（types.ts・§E-2-4-2）。講師の項目と一緒に写す（applyTeacherFields は渡された項目に無ければ外す）。
+export type TemplateDeskTeacherFields = Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentSessionId' | 'teacherAssignmentTeacherId' | 'checklistPrepTeacher'>
 
 export type TemplateDeskTeacherReason = 'template' | 'template-over-deleted' | 'kept-user' | 'kept-qr' | 'kept-deleted' | 'cleared'
 
@@ -453,6 +454,7 @@ function pickTeacherFields(desk: TemplateDeskTeacherFields): TemplateDeskTeacher
     teacherAssignmentSource: desk.teacherAssignmentSource,
     teacherAssignmentSessionId: desk.teacherAssignmentSessionId,
     teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
+    ...(desk.checklistPrepTeacher ? { checklistPrepTeacher: true as const } : {}),
   }
 }
 
@@ -555,6 +557,8 @@ function applyTeacherFields(desk: DeskCell, fields: TemplateDeskTeacherFields): 
   if (fields.teacher !== desk.teacher) delete next.teacherUnavailableWarning
   // Q41-13 の「ずらして置いた講師」の印は、講師が替わったら外す（置き直しの印は手順 0.5 の後処理が付け直す）。
   if (fields.teacher !== desk.teacher) delete next.templateTeacherShift
+  // 準備の講師の印は講師の項目の一部（渡された項目に無ければ外す＝テンプレの講師・講師なしに替わった机に古い印を残さない・§E-2-4-2）。
+  if (!fields.checklistPrepTeacher) delete next.checklistPrepTeacher
   return next
 }
 

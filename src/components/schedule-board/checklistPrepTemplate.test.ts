@@ -6,10 +6,13 @@ import { describe, expect, it } from 'vitest'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { RegularLessonTemplate, RegularLessonTemplateCell, RegularLessonTemplateDesk } from '../regular-template/regularLessonTemplate'
 import { resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import type { DeskCell, SlotCell, StudentEntry } from './types'
 import {
   CHECKLIST_PREP_STUDENT_BIRTH_DATE,
   CHECKLIST_PREP_STUDENT_NAME_PREFIX,
   assignChecklistPrepTemplateStudents,
+  cleanupChecklistPrepBoard,
   ensureChecklistPrepStudents,
   isChecklistPrepStudent,
   removeChecklistPrepTemplateStudents,
@@ -268,5 +271,114 @@ describe('removeChecklistPrepTemplateStudents（テンプレの確認用の生�
     const result = removeChecklistPrepTemplateStudents(base, new Set(['s050']))
     expect(result).toEqual({ template: base, removed: 0 })
     expect(result.template).toBe(base)
+  })
+})
+
+describe('cleanupChecklistPrepBoard（後片づけ: 盤面の確認用だけを消す・INV-02）', () => {
+  const CELL = '2026-11-12_1'
+  const trial = (id: string, name: string, overrides: Partial<StudentEntry> = {}): StudentEntry => ({ id, name, grade: '中1', subject: '英', lessonType: 'trial', teacherType: 'normal', manualAdded: true, ...overrides })
+  const regular = (id: string, managedStudentId: string): StudentEntry => ({ id, name: `生徒${managedStudentId}`, managedStudentId, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' })
+  const slotCell = (desks: DeskCell[], id = CELL): SlotCell => ({ id, dateKey: id.slice(0, 10), dayLabel: '木', dateLabel: '11/12', slotLabel: '1限', slotNumber: 1, timeLabel: '', isOpenDay: true, desks })
+  const prepTeacher = (id: string, extra: Partial<DeskCell> = {}): DeskCell => ({ id, teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true, ...extra })
+
+  it('上の行の「確認用 体験」（手で足した体験だけ）と「確認用メモ」を消し、ほかの生徒・メモは残す', () => {
+    const weeks = deepFreeze([[slotCell([
+      { id: 'd1', teacher: '講師A', lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), trial('t1', '確認用 体験1')] } },
+      { id: 'd2', teacher: '', lesson: { id: `${CELL}_desk_2_manual`, studentSlots: [trial('t2', '確認用 体験2'), trial('t3', '確認用 体験3')] } },
+      { id: 'd3', teacher: '', memoSlots: ['確認用メモ1', '連絡'] },
+      // 名前が「確認用」で始まらない体験・手で足していない「確認用 体験」は残す。
+      { id: 'd4', teacher: '', lesson: { id: 'x4', studentSlots: [trial('t4', '体験X'), trial('t5', '確認用 体験9', { manualAdded: false })] } },
+      { id: 'd5', teacher: '', memoSlots: ['確認用メモ2', null] },
+    ])]])
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.removed).toEqual({ trials: 3, memos: 2, teachers: 0 })
+    const desks = result.weeks[0][0].desks
+    expect(desks[0].lesson?.studentSlots).toEqual([regular('r1', 's001'), null])
+    // 体験だけの机は授業ごと無くなる。
+    expect(desks[1].lesson).toBeUndefined()
+    expect(desks[2].memoSlots).toEqual([null, '連絡'])
+    expect(desks[3]).toBe(weeks[0][0].desks[3])
+    expect(desks[4].memoSlots).toBeUndefined()
+    expect(result.pendingDesks).toBeNull()
+  })
+
+  it('準備の印の付いた机の講師を外す（teacher 空・手置きの項目と印も外す）。印の無い手置き講師は残す', () => {
+    const weeks = deepFreeze([[slotCell([
+      prepTeacher('d1', { lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), null] } }),
+      { id: 'd2', teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't5' },
+    ])]])
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.removed).toEqual({ trials: 0, memos: 0, teachers: 1 })
+    const [first, second] = result.weeks[0][0].desks
+    expect(first).toEqual({ id: 'd1', teacher: '', lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), null] } })
+    expect(second).toBe(weeks[0][0].desks[1])
+  })
+
+  it('印が残っていても手置きの講師でなくなった机（削除の記録・QR の講師・講師なし）は講師を外さず、古い印だけ外す', () => {
+    const weeks = deepFreeze([[slotCell([
+      { id: 'd1', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '講師D', checklistPrepTeacher: true },
+      { id: 'd2', teacher: '講師F', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't6', checklistPrepTeacher: true },
+    ])]])
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.removed).toEqual({ trials: 0, memos: 0, teachers: 0 })
+    const [first, second] = result.weeks[0][0].desks
+    expect(first).toEqual({ id: 'd1', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '講師D' })
+    expect(second).toEqual({ id: 'd2', teacher: '講師F', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't6' })
+  })
+
+  it('保留の下の行: 「確認用 体験」・「確認用メモ」・印の付いた講師を消し、空になった保留は消す（講師のぶつかりが解けてテンプレの講師の 1 行）', () => {
+    const upper: DeskCell = { id: 'd1', teacher: '講師A', lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), regular('r2', 's950')] } }
+    const keepUpper: DeskCell = { id: 'd2', teacher: '講師B', lesson: { id: 'managed_d2', studentSlots: [regular('r3', 's002'), null] } }
+    const pendingDesks: TemplatePendingDeskMap = deepFreeze({
+      [buildTemplatePendingDeskKey(CELL, 'd1')]: {
+        lower: {
+          lesson: { id: 'pending_lower_1', studentSlots: [null, trial('t1', '確認用 体験1')] },
+          teacher: { teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true },
+        },
+        effectiveStartDate: '2026-11-11',
+        createdAt: '2026-11-10T00:00:00.000Z',
+      },
+      // 下の行にほかの手入力が残る保留は残す（確認用のものだけ消す）。
+      [buildTemplatePendingDeskKey(CELL, 'd2')]: {
+        lower: {
+          lesson: { id: 'pending_lower_2', studentSlots: [trial('t2', '体験X'), trial('t3', '確認用 体験2')] },
+          memoSlots: ['確認用メモ1', null],
+          teacher: { teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual' },
+        },
+        effectiveStartDate: '2026-11-11',
+        createdAt: '2026-11-10T00:00:00.000Z',
+      },
+    })
+    const weeks = deepFreeze([[slotCell([upper, keepUpper])]])
+    const result = cleanupChecklistPrepBoard(weeks, pendingDesks)
+    expect(result.removed).toEqual({ trials: 2, memos: 1, teachers: 1 })
+    expect(result.pendingDesks?.[buildTemplatePendingDeskKey(CELL, 'd1')]).toBeUndefined()
+    expect(result.pendingDesks?.[buildTemplatePendingDeskKey(CELL, 'd2')]).toEqual({
+      lower: { lesson: { id: 'pending_lower_2', studentSlots: [trial('t2', '体験X'), null] }, teacher: { teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual' } },
+      effectiveStartDate: '2026-11-11',
+      createdAt: '2026-11-10T00:00:00.000Z',
+    })
+    // 上の行（テンプレの講師と生徒）は変えない。テンプレの確認用の生徒の登録はテンプレの保存で消す（removeChecklistPrepTemplateStudents）。
+    expect(result.weeks).toBe(weeks)
+  })
+
+  it('確認用が何も無ければ removed はすべて 0 で、weeks・pendingDesks は入力と同じ参照', () => {
+    const weeks = deepFreeze([[slotCell([{ id: 'd1', teacher: '講師A', lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), trial('t1', '体験X')] } }])]])
+    const pendingDesks: TemplatePendingDeskMap = deepFreeze({
+      [buildTemplatePendingDeskKey(CELL, 'd1')]: { lower: { memoSlots: ['連絡', null] }, effectiveStartDate: '2026-11-11', createdAt: 'x' },
+    })
+    const result = cleanupChecklistPrepBoard(weeks, pendingDesks)
+    expect(result.removed).toEqual({ trials: 0, memos: 0, teachers: 0 })
+    expect(result.weeks).toBe(weeks)
+    expect(result.pendingDesks).toBe(pendingDesks)
+    expect(cleanupChecklistPrepBoard(weeks, null).pendingDesks).toBeNull()
+  })
+
+  it('触ったコマ・週だけ作り直す（ほかの週・コマは同じ参照）', () => {
+    const other = slotCell([{ id: 'o1', teacher: '講師A' }], '2026-11-12_2')
+    const weeks = deepFreeze([[slotCell([{ id: 'd1', teacher: '', memoSlots: ['確認用メモ1', null] }]), other], [slotCell([{ id: 'w1', teacher: '' }], '2026-11-19_1')]])
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.weeks[0][1]).toBe(other)
+    expect(result.weeks[1]).toBe(weeks[1])
   })
 })

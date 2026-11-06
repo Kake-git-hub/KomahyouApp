@@ -158,6 +158,31 @@ describe('保留マップの往復（保存 → 読込 → publish → undo/redo
   })
 })
 
+describe('準備の印（checklistPrepTeacher・確認リストの準備 第 2 段 §E-2-4-2）の往復', () => {
+  // 机の任意の項目なので teacherRest と同じく保存・読み込みは机を丸ごと持つ（配線不要）。下の行の講師は読込の正規化で形を作り直すので印を写す。
+  const MARKED_KEY = buildTemplatePendingDeskKey('2026-10-07_5', '2026-10-07_5_desk_1')
+  const MARKED: TemplatePendingDeskMap = {
+    [MARKED_KEY]: {
+      lower: { teacher: { teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true } },
+      effectiveStartDate: '2026-10-07',
+      createdAt: '2026-09-29T10:00:00.000Z',
+    },
+  }
+
+  it('机の印と下の行の講師の印が JSON スナップショット → 正規化 → 読込で残る（印の無い講師には項目自体が生えない）', () => {
+    const markedCell: SlotCell = { ...cell('2026-10-07_5', '2026-10-07'), desks: [{ id: '2026-10-07_5_desk_1', teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true }] }
+    const snapshot = { screen: 'board', classroomSettings: settings, managers: [], teachers: [], students: [], regularLessons: [], groupLessons: [], specialSessions: [], autoAssignRules: [], pairConstraints: [], boardState: boardState({ weeks: [[markedCell]], templatePendingDesks: MARKED }), updatedAt: 'x', schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot))
+    expect(parsed.boardState?.weeks[0][0].desks[0].checklistPrepTeacher).toBe(true)
+    expect(normalizeTemplatePendingDeskMap(parsed.boardState?.templatePendingDesks)).toEqual(MARKED)
+    const restored = createInitialBoardSnapshot({ classroomSettings: settings, teachers: [], students: [], regularLessons: [], initialBoardState: parsed.boardState })
+    expect(restored.templatePendingDesks?.[MARKED_KEY].lower.teacher?.checklistPrepTeacher).toBe(true)
+    expect(cloneTemplatePendingDeskMap(MARKED)[MARKED_KEY].lower.teacher?.checklistPrepTeacher).toBe(true)
+    const unmarked = normalizeTemplatePendingDeskMap({ [MARKED_KEY]: { ...MARKED[MARKED_KEY], lower: { teacher: { teacher: '講師D', manualTeacher: true, checklistPrepTeacher: 'yes' } } } })
+    expect('checklistPrepTeacher' in unmarked[MARKED_KEY].lower.teacher!).toBe(false)
+  })
+})
+
 describe('週トリム（Q24-4）: 保留のある週は破棄しない', () => {
   it('手動編集の無い遠い週でも、保留マップのキーが指すコマを含む週は残る', () => {
     const near = [cell('2026-09-30_5', '2026-09-30')]

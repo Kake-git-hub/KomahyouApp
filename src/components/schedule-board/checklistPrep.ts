@@ -12,7 +12,13 @@
 import { getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
 import type { RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
-import { isChecklistPrepTemplateSeatTaken, listAvailableChecklistPrepStudents, type ChecklistPrepTemplateRegistration } from './checklistPrepTemplate'
+import {
+  CHECKLIST_PREP_MEMO_PREFIX,
+  CHECKLIST_PREP_TRIAL_NAME_PREFIX,
+  isChecklistPrepTemplateSeatTaken,
+  listAvailableChecklistPrepStudents,
+  type ChecklistPrepTemplateRegistration,
+} from './checklistPrepTemplate'
 import { resolveDeskTeacherOrigin, resolveStudentOrigin } from './placementOrigin'
 import { hasDeskTeacherRest } from './teacherRest'
 import { buildTemplatePendingDeskKey, collectTemplatePendingLowerTeacherNames, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -113,8 +119,8 @@ export type ChecklistPrepInput = {
   prepStudents?: readonly StudentRow[]
 }
 
-export const CHECKLIST_PREP_TRIAL_NAME_PREFIX = '確認用 体験'
-export const CHECKLIST_PREP_MEMO_PREFIX = '確認用メモ'
+// 体験・メモの名前の頭（第 1 段から不変）。定義は後片づけ（checklistPrepTemplate.ts）と共有するため向こうに置き、ここから再公開する（読み込みの向きを一方向に保つ）。
+export { CHECKLIST_PREP_MEMO_PREFIX, CHECKLIST_PREP_TRIAL_NAME_PREFIX }
 export const CHECKLIST_PREP_SAVE_REMINDER = '盤面はまだ保存していません。「保存」を押してから、項目の「やること」を行ってください。'
 export const CHECKLIST_PREP_NOT_VERIFICATION_MESSAGE = '開発用教室・テスト教室でだけ準備できます。'
 export const CHECKLIST_PREP_TEMPLATE_MODE_MESSAGE = 'テンプレート編集中は準備できません。編集を終了してから、もう一度押してください。'
@@ -425,6 +431,8 @@ export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly Checkli
         if (!desk) continue
         if (op.kind === 'manual-teacher') {
           setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases)
+          // 準備で置いた講師の印（後片づけの見分け・§E-2-4-2）。setManualTeacherAssignment は印を外すので、その後で付ける。
+          desk.checklistPrepTeacher = true
           applied += 1
           continue
         }

@@ -11,8 +11,13 @@
 import { getStudentDisplayName, isStudentDeletedFromApp, normalizeDateText, type StudentRow } from '../basic-data/basicDataModel'
 import { regularTemplateDayLabelByValue, type RegularLessonTemplate, type RegularLessonTemplateCell, type RegularLessonTemplateDesk } from '../regular-template/regularLessonTemplate'
 import { normalizeRequestedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
-import type { SubjectLabel } from './types'
+import { isTemplatePendingLowerEmpty, type TemplatePendingDeskMap, type TemplatePendingLower } from './templatePendingDesks'
+import type { DeskCell, DeskLesson, SlotCell, StudentEntry, SubjectLabel } from './types'
 
+/** 準備で置く体験の名前の頭（第 1 段から不変・checklistPrep.ts が再公開する）。 */
+export const CHECKLIST_PREP_TRIAL_NAME_PREFIX = '確認用 体験'
+/** 準備で書くメモの頭（第 1 段から不変・checklistPrep.ts が再公開する）。 */
+export const CHECKLIST_PREP_MEMO_PREFIX = '確認用メモ'
 export const CHECKLIST_PREP_STUDENT_NAME_PREFIX = '確認用 生徒'
 
 /**
@@ -203,4 +208,152 @@ export function removeChecklistPrepTemplateStudents(template: RegularLessonTempl
   })
   if (removed === 0) return { template, removed: 0 }
   return { template: { ...template, cells }, removed }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 後片づけ（§E-2-4-2 決定 4）: 盤面の「確認用」だけを消す
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 準備で置いた体験（手で足した体験で、名前が「確認用 体験」で始まる）。名前が違う体験・手で足していない体験は消さない（INV-02）。 */
+function isChecklistPrepTrial(student: StudentEntry | null | undefined): boolean {
+  return Boolean(student) && student!.lessonType === 'trial' && student!.manualAdded === true && student!.name.trim().startsWith(CHECKLIST_PREP_TRIAL_NAME_PREFIX)
+}
+
+function isChecklistPrepMemo(memo: string | null | undefined): boolean {
+  return typeof memo === 'string' && memo.trim().startsWith(CHECKLIST_PREP_MEMO_PREFIX)
+}
+
+/**
+ * 印の付いた講師が今も「準備で手で置いた講師」の形か（講師が居て・手置き〔manual／manual-replaced〕）。
+ * 講師を消した記録（deleted）・日程表登録（QR）の講師・講師なしに変わった机は、印が残っていても講師を外さない（室長や自動処理が置き直したもの・INV-02）。
+ */
+function isLivePrepTeacher(fields: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource'>): boolean {
+  return Boolean(fields.teacher.trim()) && fields.manualTeacher === true && (fields.teacherAssignmentSource === 'manual' || fields.teacherAssignmentSource === 'manual-replaced')
+}
+
+type RemovedCounts = { trials: number; memos: number; teachers: number }
+
+/** 授業から準備の体験を外す。外したものが無ければ同じ授業、全部の席が空けば undefined。 */
+function stripPrepTrials(lesson: DeskLesson | undefined, counts: RemovedCounts): DeskLesson | undefined {
+  if (!lesson || !lesson.studentSlots.some(isChecklistPrepTrial)) return lesson
+  const studentSlots = lesson.studentSlots.map((student) => {
+    if (!isChecklistPrepTrial(student)) return student
+    counts.trials += 1
+    return null
+  }) as DeskLesson['studentSlots']
+  if (!studentSlots.some(Boolean)) return undefined
+  return { ...lesson, studentSlots }
+}
+
+/** メモから準備のメモを外す。外したものが無ければ同じ配列、両方の席が空けば undefined。 */
+function stripPrepMemos(memoSlots: [string | null, string | null] | undefined, counts: RemovedCounts): [string | null, string | null] | undefined {
+  if (!memoSlots || !memoSlots.some(isChecklistPrepMemo)) return memoSlots
+  const next = memoSlots.map((memo) => {
+    if (!isChecklistPrepMemo(memo)) return memo
+    counts.memos += 1
+    return null
+  }) as [string | null, string | null]
+  if (next[0] == null && next[1] == null) return undefined
+  return next
+}
+
+function cleanupDesk(desk: DeskCell, counts: RemovedCounts): DeskCell {
+  const lesson = stripPrepTrials(desk.lesson, counts)
+  const memoSlots = stripPrepMemos(desk.memoSlots, counts)
+  const marked = desk.checklistPrepTeacher === true
+  if (lesson === desk.lesson && memoSlots === desk.memoSlots && !marked) return desk
+  const next: DeskCell = { ...desk }
+  if (lesson) next.lesson = lesson
+  else delete next.lesson
+  if (memoSlots) next.memoSlots = memoSlots
+  else delete next.memoSlots
+  if (marked) {
+    delete next.checklistPrepTeacher
+    if (isLivePrepTeacher(desk)) {
+      // 講師なしの机へ戻す（手置きの項目を外す）。テンプレの講師の机だったなら、再マージがテンプレの講師を置き直す。
+      next.teacher = ''
+      delete next.manualTeacher
+      delete next.teacherAssignmentSource
+      delete next.teacherAssignmentSessionId
+      delete next.teacherAssignmentTeacherId
+      delete next.teacherUnavailableWarning
+      counts.teachers += 1
+    }
+  }
+  return next
+}
+
+function cleanupPendingLower(lower: TemplatePendingLower, counts: RemovedCounts): TemplatePendingLower {
+  const lesson = stripPrepTrials(lower.lesson, counts)
+  const memoSlots = stripPrepMemos(lower.memoSlots, counts)
+  const teacher = lower.teacher
+  const dropTeacher = Boolean(teacher?.checklistPrepTeacher) && isLivePrepTeacher(teacher!)
+  const staleMark = Boolean(teacher?.checklistPrepTeacher) && !dropTeacher
+  if (lesson === lower.lesson && memoSlots === lower.memoSlots && !teacher?.checklistPrepTeacher) return lower
+  const next: TemplatePendingLower = { ...lower }
+  if (lesson) next.lesson = lesson
+  else delete next.lesson
+  if (memoSlots) next.memoSlots = memoSlots
+  else delete next.memoSlots
+  if (dropTeacher) {
+    // 下の行の準備の講師を消す（講師のぶつかりが解け、講師欄はテンプレの講師の 1 行に戻る）。
+    delete next.teacher
+    counts.teachers += 1
+  } else if (staleMark) {
+    const rest = { ...teacher! }
+    delete rest.checklistPrepTeacher
+    next.teacher = rest
+  }
+  return next
+}
+
+/**
+ * 後片づけ（純関数・入力は書き換えない）: 盤面（上の行）と保留の下の行から、準備で置いた「確認用 体験」（手で足した体験だけ）・「確認用メモ」・
+ * 準備の印の付いた手置き講師を消す。下の行が空になった保留は消す。名前が「確認用」で始まらない体験・印の無い講師は残す（INV-02）。
+ * 印が残っていても手置きの講師でなくなった机（削除の記録・QR の講師など）は講師を外さず古い印だけ外す（数には入れない）。
+ * 触ったコマ・週だけ作り直す。何も無ければ removed はすべて 0 で、weeks・pendingDesks は入力と同じ参照。
+ * テンプレの確認用の生徒の登録はここでは消さない（removeChecklistPrepTemplateStudents → テンプレの保存で消す）。
+ */
+export function cleanupChecklistPrepBoard(
+  weeks: SlotCell[][],
+  pendingDesks: TemplatePendingDeskMap | null,
+): { weeks: SlotCell[][]; pendingDesks: TemplatePendingDeskMap | null; removed: RemovedCounts } {
+  const counts: RemovedCounts = { trials: 0, memos: 0, teachers: 0 }
+  let weeksChanged = false
+  const nextWeeks = weeks.map((week) => {
+    let weekChanged = false
+    const nextWeek = week.map((cell) => {
+      let cellChanged = false
+      const desks = cell.desks.map((desk) => {
+        const next = cleanupDesk(desk, counts)
+        if (next !== desk) cellChanged = true
+        return next
+      })
+      if (!cellChanged) return cell
+      weekChanged = true
+      return { ...cell, desks }
+    })
+    if (!weekChanged) return week
+    weeksChanged = true
+    return nextWeek
+  })
+
+  let nextPendingDesks = pendingDesks
+  if (pendingDesks) {
+    let pendingChanged = false
+    const rebuilt: TemplatePendingDeskMap = {}
+    for (const [key, entry] of Object.entries(pendingDesks)) {
+      const lower = cleanupPendingLower(entry.lower, counts)
+      if (lower === entry.lower) {
+        rebuilt[key] = entry
+        continue
+      }
+      pendingChanged = true
+      if (isTemplatePendingLowerEmpty(lower)) continue
+      rebuilt[key] = { ...entry, lower }
+    }
+    if (pendingChanged) nextPendingDesks = rebuilt
+  }
+
+  return { weeks: weeksChanged ? nextWeeks : weeks, pendingDesks: nextPendingDesks, removed: counts }
 }
