@@ -4,7 +4,7 @@ import { getJstTodayDateKey } from '../../utils/jstDate'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isHiddenAutoAssignRule, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
 import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specialSessionModel'
 import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, selectStudentFacingSpecialSessions } from '../special-data/specialSessionModel'
@@ -71,8 +71,8 @@ import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOr
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
-import { applyChecklistPrepOps, checklistPrepNeedsTemplate, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestResult } from './checklistPrep'
-import { buildChecklistPrepCleanupMessage, buildChecklistPrepTemplateFailedMessage, buildChecklistPrepTemplateSavedMessage, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepTemplatePhaseBlock, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
+import { applyChecklistPrepOps, checklistPrepNeedsTemplate, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestProgress, type ChecklistPrepRequestResult } from './checklistPrep'
+import { buildChecklistPrepCleanupMessage, buildChecklistPrepTemplateFailedMessage, buildChecklistPrepTemplateSavedMessage, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepCleanupEffectiveStartDate, resolveChecklistPrepTemplatePhaseBlock, resolveChecklistPrepTemplatePhaseTiming, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
@@ -1016,6 +1016,8 @@ type ScheduleBoardScreenProps = {
   // ここでも開いている教室で断る)。Issue #46 同型: 処理し終えたら成功でも失敗でも結果を返し、App 側が state を消費(null)する。
   checklistPrepRequest?: ChecklistPrepRequest | null
   onChecklistPrepRequestProcessed?: (result: ChecklistPrepRequestResult) => void
+  /** テンプレ保存の段を伴う準備・後片づけで、盤面を当てたことを App へ知らせる(保険タイマーを延ばす・取りやめの文を切り替える・§E-2-4-2)。 */
+  onChecklistPrepRequestProgress?: (progress: ChecklistPrepRequestProgress) => void
   /**
    * 退塾スイープ(オーナー確定 2026-09-20 夜)の実行可否ガード。
    * App の `loadedEditingClassroomIdRef === actingClassroomId`(= いま画面にある名簿・盤面が、開いている教室から
@@ -8452,7 +8454,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, checklistPrepRequest, onChecklistPrepRequestProcessed, onParentAbsencePlacementSettled, isEditingStateLoadedForActingClassroom = false, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, reportAnswerUnreadCount, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, checklistPrepRequest, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, onParentAbsencePlacementSettled, isEditingStateLoadedForActingClassroom = false, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, reportAnswerUnreadCount, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
@@ -8726,9 +8728,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleEnterTemplateMode = useCallback(() => {
     const savedTemplate = classroomSettings.regularLessonTemplate
     const today = toDateKey(new Date())
-    const filteredTemplate = savedTemplate
-      ? filterTemplateParticipantsForReferenceDate({ template: savedTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: today })
-      : null
+    const filteredTemplate = resolveTemplateDiffBaseline({ template: savedTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey: today })
     const templateBoardCells = filteredTemplate
       ? buildTemplateBoardCells({ template: filteredTemplate, teachers, students, deskCount: classroomSettings.deskCount })
       : copyBoardCellsForTemplate(cells)
@@ -8804,9 +8804,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       teachers,
       students,
     })
-    const baselineTemplate = classroomSettings.regularLessonTemplate
-      ? filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })
-      : null
+    const baselineTemplate = resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey: toDateKey(new Date()) })
     const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)
     const applyScope = options?.applyScope ?? resolveDefaultTemplateDiffApplyScope(definitionDiff)
     const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))
@@ -15695,6 +15693,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: blocked, boardMessage: phase.boardMessage }))
         return
       }
+      // INV-12: 手で保存するときと同じ重複ガード(同じコマに同じ生徒が 2 か所あるテンプレは保存しない)。テンプレを盤面の形にして当てる(取り込みと同じ)。
+      const duplicates = findTemplateDuplicateStudents(buildTemplateBoardCells({ template: phase.template, teachers, students, deskCount: classroomSettings.deskCount }), (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+      if (duplicates.length > 0) {
+        finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`), boardMessage: phase.boardMessage }))
+        return
+      }
       let saved: ChecklistPrepTemplateSaveResult
       try {
         saved = handleSaveRegularLessonTemplateByDiff(phase.template)
@@ -15709,14 +15713,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
     }
     // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
-    const pendingTemplatePhase = checklistPrepTemplatePhaseRef.current
-    if (pendingTemplatePhase && pendingTemplatePhase.requestId !== request.requestId) checklistPrepTemplatePhaseRef.current = null
-    if (pendingTemplatePhase?.requestId === request.requestId) {
-      runChecklistPrepTemplatePhase(pendingTemplatePhase)
+    // ★盤面を当てたのと同じレンダーのクロージャ(準備前の weeks)では保存しない(StrictMode の effect の 2 回目など。保存すると準備前の weeks から
+    //   盤面を作り直した setWeeks が準備を上書きして消す・修正ラウンド 1 I-1)。weeks が変わった次のレンダーで走る。
+    const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks })
+    if (templatePhaseTiming === 'stale') checklistPrepTemplatePhaseRef.current = null
+    if (templatePhaseTiming === 'wait') return
+    if (templatePhaseTiming === 'run') {
+      runChecklistPrepTemplatePhase(checklistPrepTemplatePhaseRef.current!)
       return
     }
-    // 保存するテンプレの形(保存済みテンプレを buildTemplateDiffSavePlan の baseline と同じ在籍の絞り込みに通す・反映開始日・保存時刻)。
-    const toSaveTemplate = (template: RegularLessonTemplate): RegularLessonTemplate => ({ ...filterTemplateParticipantsForReferenceDate({ template, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey }), effectiveStartDate, savedAt: new Date().toISOString() })
+    // 後片づけで保存するテンプレの形(基準と同じ在籍の絞り込み・保存時刻)。反映開始日は max(今日, 保存済みの反映開始日)(主セッションの判断:
+    // 今日より前の週に確認用の生徒を残さない・保存済みの先日付の版を前倒ししない)。
+    const toSaveTemplate = (template: RegularLessonTemplate): RegularLessonTemplate => ({ ...(resolveTemplateDiffBaseline({ template, deskCount: classroomSettings.deskCount, teachers, students, todayKey }) ?? template), effectiveStartDate: resolveChecklistPrepCleanupEffectiveStartDate(todayKey, savedEffectiveStartDate), savedAt: new Date().toISOString() })
     // 後片づけ(§E-2-4-2 決定 4): 盤面の「確認用」と準備の印の講師・テンプレの確認用の生徒の登録だけを消す(INV-02)。件数 0 なら何も変えない。
     if (request.kind === 'cleanup') {
       const cleanupBlock = resolveChecklistPrepCleanupBlock({ isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }), isTemplateMode })
@@ -15742,9 +15750,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         finish(true, boardMessage)
         return
       }
-      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage }
+      // queuedFromWeeks は盤面を当てる前の weeks(この参照のままのレンダーでは保存しない・I-1)。
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage, queuedFromWeeks: weeks }
       if (cleanupPlan.boardChanged) {
         checklistPrepTemplatePhaseRef.current = cleanupPhase
+        onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })
         return
       }
       // 盤面を変えていなければ weeks は今のままなので、その場で保存する。
@@ -15756,7 +15766,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 第 2 段の項目は、テンプレの土台と確認用の生徒を planner へ渡す(テンプレの同じ席も空いている机だけを選ぶ)。差分反映の無い教室は第 1 段のまま。
     const needsTemplate = checklistPrepNeedsTemplate(request.itemId) && templateDiffApplyEnabled
     const prepTemplate = needsTemplate
-      ? (classroomSettings.regularLessonTemplate ? filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey }) : null)
+      ? resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey })
       : undefined
     const step = resolveChecklistPrepStep({
       request,
@@ -15800,12 +15810,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       finish(false, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE)
       return
     }
+    // 手の操作のハンドラと同じく、このレンダーの weeks から作って確定する(同じ flush の再マージの結果を上書きしうるが、同じクリックで App が足すのは
+    // テンプレに居ない確認用の生徒だけ=再マージの結果は変わらず、ほかの再マージの差は次の再マージとテンプレ保存の段の差分反映が作り直すので実害は無い・M-7)。
     commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)
     setSelectedCellId(step.plan.cellId)
     setSelectedDeskIndex(step.plan.deskIndex)
     if (templateSave) {
       setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
-      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message }
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message, queuedFromWeeks: weeks }
+      onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })
       return
     }
     setStatusMessage('確認リストの準備を置きました。保存を押してください。')
@@ -15813,7 +15826,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // jumpToWeekByDate / commitWeeks / handleSaveRegularLessonTemplateByDiff は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と
     // App 側の消費で防ぐ(parentAbsenceRequest と同じ作法)。値の deps は漏らさない。テンプレ保存の段は commitWeeks が変えた weeks で次のレンダーに走る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, students, teachers, templateDiffApplyEnabled, templatePendingDesks, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, students, teachers, templateDiffApplyEnabled, templatePendingDesks, weekIndex, weeks])
 
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を

@@ -39,6 +39,12 @@ export const CHECKLIST_PREP_CLEANUP_NOT_VERIFICATION_MESSAGE = '開発用教室�
 export const CHECKLIST_PREP_CLEANUP_TEMPLATE_MODE_MESSAGE = 'テンプレート編集中は後片づけできません。編集を終了してから、もう一度押してください。'
 export const CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX = '盤面からは消しましたが、テンプレは保存していません: '
 export const CHECKLIST_PREP_CLEANUP_SAVE_REMINDER = '盤面とテンプレはまだサーバーに保存していません。「保存」を押してください。'
+/** 後片づけで盤面だけ消したとき（テンプレは保存していない）の最後の一言（M-1）。 */
+export const CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER = '盤面はまだサーバーに保存していません。「保存」を押してください。'
+/** 準備でテンプレの保存の段を断った・失敗したときの最後の一言（テンプレが無いので「やること」はまだできない・M-1）。 */
+export const CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER = '盤面はまだサーバーに保存していません。テンプレは保存していないので、項目の「やること」はまだ行えません。「後片づけ」で盤面の準備を消せます。'
+/** テンプレ保存は「元に戻す」の履歴を空にする（handleSaveRegularLessonTemplateByDiff）ので、戻し方を結果の文に書く（M-9）。 */
+export const CHECKLIST_PREP_TEMPLATE_UNDO_NOTE = 'テンプレ保存で「元に戻す」は使えません。戻すときは「後片づけ」を押してください。'
 
 /**
  * 確認用の生徒の生年月日: todayKey の属する年度（4/1 始まり）に小 4 になる 4/2 生まれ（＝年度の開始年の 10 年前の 4/2）。
@@ -430,8 +436,37 @@ export function cleanupChecklistPrepBoard(
  * （保存の段で断った・失敗したときにも黙って消さずに出す。後片づけで盤面を変えていなければ空）。
  */
 export type ChecklistPrepTemplatePhase =
-  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string }
-  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string }
+  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string; queuedFromWeeks: SlotCell[][] }
+  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string; queuedFromWeeks: SlotCell[][] }
+
+/**
+ * 積んだテンプレ保存の段をこのレンダーで走らせてよいか（修正ラウンド 1 I-1）。
+ *  - none … 段が無い。 stale … 別のリクエストの段（捨てる）。
+ *  - wait … 段を積んだときの weeks（盤面を当てる前の参照）のまま＝盤面を当てたのと同じレンダーのクロージャ（StrictMode の effect の 2 回目など）。
+ *    ここで保存すると buildTemplateDiffSavePlan が準備前の weeks から盤面を作り直し、その setWeeks が準備を上書きして消す。次のレンダーを待つ。
+ *  - run … weeks が変わった（盤面の準備が入った）レンダー。
+ */
+export function resolveChecklistPrepTemplatePhaseTiming(params: { phase: ChecklistPrepTemplatePhase | null; requestId: number; weeks: SlotCell[][] }): 'none' | 'stale' | 'wait' | 'run' {
+  if (!params.phase) return 'none'
+  if (params.phase.requestId !== params.requestId) return 'stale'
+  return params.weeks === params.phase.queuedFromWeeks ? 'wait' : 'run'
+}
+
+/** 後片づけのテンプレ保存の反映開始日（主セッションの判断 2026-11-06）: 今日と保存済みの反映開始日の遅い方（今日より前の週に確認用の生徒を残さない・保存済みの先日付の版を前倒ししない）。 */
+export function resolveChecklistPrepCleanupEffectiveStartDate(todayKey: string, savedEffectiveStartDate: string | null | undefined): string {
+  return savedEffectiveStartDate && savedEffectiveStartDate > todayKey ? savedEffectiveStartDate : todayKey
+}
+
+/**
+ * App が名簿へ確認用の生徒を足したことを結果の文に書く（M-2）。足したあとで断られても名簿は変わっているので、断った文の「何も変えていません」は
+ * 「盤面とテンプレは変えていません」にする（名簿の確認用の生徒は次の準備で使うので残す）。足していなければ同じ結果を返す。
+ */
+export function annotateChecklistPrepResultWithAddedStudents(result: { ok: boolean; message: string }, added: readonly Pick<StudentRow, 'name'>[]): { ok: boolean; message: string } {
+  if (added.length === 0) return result
+  const line = `名簿に確認用の生徒（${added.map((student) => student.name.trim()).join('・')}）を足しました（次の準備でも使うので残します）。`
+  const message = result.ok ? result.message : result.message.split('何も変えていません。').join('盤面とテンプレは変えていません。')
+  return { ok: result.ok, message: [line, message].filter(Boolean).join('\n') }
+}
 
 /** handleSaveRegularLessonTemplateByDiff が返す、保存した計画の中身（確認画面の「詳細」と同じ材料）。 */
 export type ChecklistPrepTemplateSaveResult = { summary: TemplateDiffApplySummary; studentNotes?: readonly TemplateDiffStudentNote[]; scopeNote?: TemplateDiffScopeNote }
@@ -466,6 +501,7 @@ export function buildChecklistPrepTemplateSavedMessage(params: {
     ...stripBoardSaveReminder(params.boardMessage),
     `テンプレの ${seats}を登録して、テンプレを保存しました。`,
     ...buildSavedDetailLines(params),
+    CHECKLIST_PREP_TEMPLATE_UNDO_NOTE,
     CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER,
   ].join('\n')
 }
@@ -476,9 +512,13 @@ export function buildChecklistPrepTemplateSavedMessage(params: {
  * 後片づけ: 盤面を変えていれば「盤面からは消しましたが…」＋消した件数の文、変えていなければ「テンプレは保存していません: 理由」だけ。
  */
 export function buildChecklistPrepTemplateFailedMessage(params: { kind: 'prep' | 'cleanup'; reason: string; boardMessage: string }): string {
-  if (params.kind === 'cleanup' && !params.boardMessage) return `テンプレは保存していません: ${params.reason}`
-  const prefix = params.kind === 'prep' ? CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX : CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX
-  return `${prefix}${params.reason}\n${params.boardMessage}`
+  if (params.kind === 'cleanup') {
+    if (!params.boardMessage) return `テンプレは保存していません: ${params.reason}`
+    // 後片づけの盤面の文は盤面だけの一言（CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER）で終わる＝テンプレを保存していないことと食い違わない。
+    return `${CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX}${params.reason}\n${params.boardMessage}`
+  }
+  // 準備の盤面の文の最後の一言（「保存」を押してから「やること」を）はテンプレが無いと食い違うので、外して失敗用の一言に替える（M-1）。
+  return [`${CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX}${params.reason}`, ...stripBoardSaveReminder(params.boardMessage), CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER].join('\n')
 }
 
 /** 保存の段の見直し: 積んだときの教室と違う・テンプレ編集中になったら理由を返す（教室の切り替えで取りやめ・INV-08）。問題が無ければ null。 */
@@ -573,6 +613,7 @@ export function buildChecklistPrepCleanupMessage(params: {
     lines.push(`テンプレから確認用の生徒の登録 ${params.templateRemoved} 件を外して、テンプレを保存しました。`)
     lines.push(...buildSavedDetailLines(params.templateSaved))
   }
-  lines.push(CHECKLIST_PREP_CLEANUP_SAVE_REMINDER)
+  // テンプレも保存したときは「盤面とテンプレ」、盤面だけのときは「盤面」（M-1）。
+  lines.push(params.templateRemoved > 0 && params.templateSaved ? CHECKLIST_PREP_CLEANUP_SAVE_REMINDER : CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER)
   return lines.join('\n')
 }

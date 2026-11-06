@@ -55,9 +55,24 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(cleanupBody).toContain("return startChecklistPrepRequest('', 'cleanup')")
     // 準備と後片づけは同じ入口(同じ待ち合わせ・同じ保険タイマー・同じ取りやめ)。
     const startBody = APP_TSX.slice(APP_TSX.indexOf('const startChecklistPrepRequest = useCallback('), APP_TSX.indexOf('const handleChecklistPrepare = useCallback('))
-    expect(startBody).toContain('}, CHECKLIST_PREP_TIMEOUT_MS)')
+    expect(startBody).toContain('const timeoutId = armChecklistPrepTimeout(requestId, CHECKLIST_PREP_TIMEOUT_MS)')
     expect(startBody).toContain('checklistPrepPendingRef.current = { requestId, resolve, timeoutId }')
     expect(startBody).toContain('setChecklistPrepRequest({ requestId, itemId, classroomId: actingClassroomId, kind })')
+  })
+
+  it('盤面を置いた後(I-2): コマ表の知らせで保険タイマーを 30 秒延ばし、以後のタイムアウト・取りやめ・差し替えの文を「盤面には置きましたが…」に切り替える', () => {
+    expect(APP_TSX).toContain('onChecklistPrepRequestProgress={handleChecklistPrepRequestProgress}')
+    const start = APP_TSX.indexOf('const handleChecklistPrepRequestProgress = useCallback(')
+    expect(start).toBeGreaterThan(0)
+    const body = APP_TSX.slice(start, APP_TSX.indexOf('}, [', start))
+    expect(body).toContain('if (!pending || pending.requestId !== progress.requestId) return')
+    expect(body).toContain('window.clearTimeout(pending.timeoutId)')
+    expect(body).toContain('pending.boardApplied = { kind: progress.kind }')
+    expect(body).toContain('pending.timeoutId = armChecklistPrepTimeout(progress.requestId, CHECKLIST_PREP_TEMPLATE_PHASE_TIMEOUT_MS)')
+    // タイムアウト・取りやめ・差し替えはどれも resolveChecklistPrepAbortMessage を通す(盤面を置いたかで文を変える)。
+    expect(APP_TSX).toContain("resolveChecklistPrepAbortMessage('timeout', CHECKLIST_PREP_TIMEOUT_MESSAGE, pending.boardApplied ?? null)")
+    expect(APP_TSX).toContain("resolveChecklistPrepAbortMessage('cancelled', message, pending.boardApplied ?? null)")
+    expect(APP_TSX).toContain("resolveChecklistPrepAbortMessage('superseded', CHECKLIST_PREP_SUPERSEDED_MESSAGE, previous.boardApplied ?? null)")
   })
 
   it('「準備する」(第 2 段): テンプレへ登録する項目は、確認用の生徒を名簿へ足してからリクエストを立てる(id は基本データの生徒追加と同じ作り方)', () => {
@@ -75,6 +90,12 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     // 足す人数はどの曜日・時限に当たっても足りる数(Task 1 の resolveChecklistPrepStudentCount)。
     expect(body).toContain('resolveChecklistPrepStudentCount(classroomSettingsRef.current.regularLessonTemplate, studentsRef.current, CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT[itemId])')
     expect(body).toContain("createId: (taken) => createNextManagedId('student', [...taken])")
+    // M-6: 名簿へ足すのは教室データの読み込みが済んだ教室だけ(読み込み前に足すと前の教室の名簿へ足す・INV-08)。
+    const loaded = body.indexOf('if (loadedEditingClassroomIdRef.current !== actingClassroomId) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_NOT_LOADED_MESSAGE })')
+    expect(loaded).toBeGreaterThan(needs)
+    expect(loaded).toBeLessThan(ensure)
+    // M-2: 足したあとで断られても、名簿に足したことを結果の文に書く(「何も変えていません」と言わない)。
+    expect(body).toContain("return startChecklistPrepRequest(itemId, 'prep').then((result) => annotateChecklistPrepResultWithAddedStudents(result, added))")
     // 二重のガードは名簿へ足す前(本番 3 校の名簿に確認用の生徒を足さない)。
     expect(body.indexOf('if (!isActingDevelopmentClassroom) return Promise.resolve(')).toBeLessThan(needs)
     // 基本データ画面の生徒追加と同じ関数(BasicDataScreen.tsx の addStudent)。

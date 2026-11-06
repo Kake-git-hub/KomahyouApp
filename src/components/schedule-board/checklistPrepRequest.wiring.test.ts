@@ -33,12 +33,12 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(body).toContain('onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })')
     expect(body).not.toContain('processedParentAbsenceRequestIdRef')
     expect(body).not.toContain('parentAbsenceJumpedRequestIdRef')
-    // 早期 return の直前は finish か、週を移る・テンプレ保存の段を積む(次のレンダーで続ける)・保存の段をその場で行う(必ず finish する)だけ。
+    // 早期 return の直前は finish か、週を移る・テンプレ保存の段を積んで App へ知らせる(次のレンダーで続ける)・保存の段をその場で行う(必ず finish する)だけ。
     const lines = body.split(/\r?\n/u)
     lines.forEach((line, index) => {
       if (line.trim() !== 'return') return
       const previous = (lines[index - 1] ?? '').trim()
-      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|checklistPrepTemplatePhaseRef\.current = |runChecklistPrepTemplatePhase\(/u)
+      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|checklistPrepTemplatePhaseRef\.current = |onChecklistPrepRequestProgress\?\.\(\{ requestId: request\.requestId, stage: 'board-applied'|runChecklistPrepTemplatePhase\(/u)
     })
   })
 
@@ -81,7 +81,12 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
   it('第 2 段(tp-64): テンプレの土台と確認用の生徒を planner へ渡し、assignChecklistPrepTemplateStudents の結果を盤面を当てる前に作る', () => {
     const body = effectBody()
     // 土台は保存済みテンプレを buildTemplateDiffSavePlan の baseline と同じ在籍の絞り込みに通したもの。
-    expect(body).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: todayKey })')
+    // M-4: 基準は 1 つの関数 resolveTemplateDiffBaseline(buildTemplateDiffSavePlan・テンプレ作成を開くときと同じ)。
+    expect(body).toContain('resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey })')
+    expect(BOARD_TSX).not.toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate')
+    expect(BOARD_TSX).not.toContain('filterTemplateParticipantsForReferenceDate({ template: savedTemplate')
+    const planStart = BOARD_TSX.indexOf('const buildTemplateDiffSavePlan = useCallback(')
+    expect(BOARD_TSX.slice(planStart, planStart + 800)).toContain('const baselineTemplate = resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey: toDateKey(new Date()) })')
     expect(body).toContain('template: prepTemplate,')
     expect(body).toContain('prepStudents: needsTemplate ? students.filter(isChecklistPrepStudent) : undefined,')
     // 差分反映が無い教室は第 1 段のまま(テンプレを渡さない)。
@@ -100,18 +105,32 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     const commitIndex = body.indexOf('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
     const deferIndex = body.indexOf("checklistPrepTemplatePhaseRef.current = { kind: 'prep',")
     expect(deferIndex).toBeGreaterThan(commitIndex)
-    // 積んだら finish せずに return(次のレンダー=盤面の準備が入った weeks で buildTemplateDiffSavePlan が走る)。
-    expect(body.slice(deferIndex).split(/\r?\n/u)[1]?.trim()).toBe('return')
-    // 保存の段: 同じリクエストの段が積まれていれば、ほかより先にそれを行う。
-    const phaseIndex = body.indexOf('if (pendingTemplatePhase?.requestId === request.requestId) {')
-    expect(phaseIndex).toBeGreaterThan(0)
+    // 積むときは盤面を当てる前の weeks の参照を持つ(I-1: 同じレンダーのクロージャ=準備前の weeks では保存しない)。
+    expect(body.slice(deferIndex, deferIndex + 400)).toContain('queuedFromWeeks: weeks')
+    // 積んだら App へ「盤面を置いた」を知らせ(I-2: 保険タイマーを延ばし、以後の取りやめの文を切り替える)、finish せずに return。
+    const deferLines = body.slice(deferIndex).split(/\r?\n/u)
+    expect(deferLines[1]?.trim()).toBe("onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })")
+    expect(deferLines[2]?.trim()).toBe('return')
+    // 保存の段: 同じリクエストの段が積まれていれば、ほかより先にそれを行う。いつ走らせるかは純関数で決める(none / stale / wait / run)。
+    const timingIndex = body.indexOf('const templatePhaseTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepTemplatePhaseRef.current, requestId: request.requestId, weeks })')
+    expect(timingIndex).toBeGreaterThan(0)
+    const phaseIndex = body.indexOf("if (templatePhaseTiming === 'run') {")
+    expect(phaseIndex).toBeGreaterThan(timingIndex)
     expect(phaseIndex).toBeLessThan(body.indexOf('resolveChecklistPrepStep({'))
+    expect(body.slice(timingIndex, phaseIndex)).toContain("if (templatePhaseTiming === 'stale') checklistPrepTemplatePhaseRef.current = null")
+    // wait(StrictMode の 2 回目など盤面を当てたのと同じレンダー)は何もせず待つ(finish も保存もしない)。
+    expect(body.slice(timingIndex, phaseIndex)).toContain("if (templatePhaseTiming === 'wait') return")
     const runner = body.slice(body.indexOf('const runChecklistPrepTemplatePhase = '), phaseIndex)
     // 見直し(テンプレ編集中・教室)→ 違えば失敗の文(盤面は置いたまま)。
     expect(runner).toContain('resolveChecklistPrepTemplatePhaseBlock({ phaseClassroomId: phase.classroomId, classroomId: classroomStorageKey ?? null, isTemplateMode })')
     expect(runner).toContain('finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: blocked, boardMessage: phase.boardMessage }))')
     // 手で保存するときと同じ関数(確認画面の「保存を実行」と同じ・反映範囲は既定)。
     expect(runner).toContain('saved = handleSaveRegularLessonTemplateByDiff(phase.template)')
+    // M-3: 手で保存するときと同じ INV-12 の重複ガード(findTemplateDuplicateStudents)をテンプレの盤面の形に当て、重複があれば保存しない。
+    const duplicateIndex = runner.indexOf('const duplicates = findTemplateDuplicateStudents(buildTemplateBoardCells({ template: phase.template, teachers, students, deskCount: classroomSettings.deskCount }), (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))')
+    expect(duplicateIndex).toBeGreaterThan(0)
+    expect(duplicateIndex).toBeLessThan(runner.indexOf('saved = handleSaveRegularLessonTemplateByDiff(phase.template)'))
+    expect(runner).toContain('finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`), boardMessage: phase.boardMessage }))')
     expect(runner).toContain('finish(true, buildChecklistPrepTemplateSavedMessage({')
     expect(runner).toContain('finish(true, buildChecklistPrepCleanupMessage({')
     // 保存前の盤面の PDF・確認画面は出さない。
@@ -135,7 +154,25 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(cleanup.slice(commit, commit + 300)).toContain('cleanupPlan.pendingDesks ?? templatePendingDesks')
     // 盤面を変えたら次のレンダーで保存(準備と同じ段)、変えていなければその場で保存。
     expect(cleanup).toContain('checklistPrepTemplatePhaseRef.current = cleanupPhase')
+    expect(cleanup).toContain("onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })")
     expect(cleanup).toContain('runChecklistPrepTemplatePhase(cleanupPhase)')
+    // 後片づけの段も盤面を当てる前の weeks を持つ(I-1 と同じ守り)。
+    expect(cleanup).toContain('queuedFromWeeks: weeks')
+    // 主セッションの判断: 後片づけのテンプレ保存の反映開始日は max(今日, 保存済みの反映開始日)。
+    expect(body).toContain('effectiveStartDate: resolveChecklistPrepCleanupEffectiveStartDate(todayKey, savedEffectiveStartDate)')
+  })
+
+  it('effect の deps に weeks と templatePendingDesks がある(テンプレ保存の段は commitWeeks が変えた weeks で次のレンダーに走る・M-8)', () => {
+    const body = effectBody()
+    const depsStart = BOARD_TSX.indexOf('}, [', BOARD_TSX.indexOf(body))
+    const deps = BOARD_TSX.slice(depsStart + 4, BOARD_TSX.indexOf('])', depsStart)).split(',').map((token) => token.trim())
+    expect(deps).toContain('weeks')
+    expect(deps).toContain('templatePendingDesks')
+    expect(deps).toContain('checklistPrepRequest')
+  })
+
+  it('props でコマ表 → App の途中経過(盤面を置いた)の知らせ口を受ける(I-2)', () => {
+    expect(BOARD_TSX).toContain('onChecklistPrepRequestProgress?: (progress: ChecklistPrepRequestProgress) => void')
   })
 
   it('講師メニューの「保存」の出自は権威関数 resolveManualTeacherAssignmentSource(準備と同じ 1 本)を通す(式を画面に複製しない)', () => {

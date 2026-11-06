@@ -66,6 +66,33 @@ export type ChecklistPrepRequest = {
    */
   kind?: 'prep' | 'cleanup'
 }
+/**
+ * コマ表 → App の途中経過（§E-2-4-2・修正ラウンド 1 I-2）。テンプレ保存の段を伴う準備・後片づけで、盤面を当てた（stage: 'board-applied'）ことを知らせる。
+ * App は保険タイマーを延ばし（CHECKLIST_PREP_TEMPLATE_PHASE_TIMEOUT_MS）、以後のタイムアウト・取りやめ・差し替えの文を「盤面には置きましたが…」に切り替える
+ * （途中まで進んだものは結果の文に書く・黙って消さない）。
+ */
+export type ChecklistPrepRequestProgress = { requestId: number; stage: 'board-applied'; kind: 'prep' | 'cleanup' }
+/** 盤面を当てた後に延ばす保険タイマー（テンプレ保存の計算は確認画面の試し実行と同じ重さで数秒かかる）。 */
+export const CHECKLIST_PREP_TEMPLATE_PHASE_TIMEOUT_MS = 30000
+/** 教室データの読み込みが済む前に押された（App が名簿へ確認用の生徒を足す前に断る・INV-08）。 */
+export const CHECKLIST_PREP_NOT_LOADED_MESSAGE = '教室のデータを読み込み中です。読み込みが終わってから、もう一度押してください。'
+
+const ABORT_REASON_TEXT: Record<'timeout' | 'cancelled' | 'superseded', string> = {
+  timeout: 'コマ表から返事がありませんでした',
+  cancelled: '教室が切り替わったか、教室のデータが読み直されました',
+  superseded: '新しい準備を始めました',
+}
+
+/**
+ * App の保険タイマー・取りやめ・差し替えで返す文。盤面をまだ当てていなければ元の文（fallback）。当てた後（boardApplied）は、盤面に残っていることを書く。
+ */
+export function resolveChecklistPrepAbortMessage(reason: 'timeout' | 'cancelled' | 'superseded', fallback: string, boardApplied: { kind: 'prep' | 'cleanup' } | null): string {
+  if (!boardApplied) return fallback
+  const head = boardApplied.kind === 'cleanup' ? '盤面からは消しましたが、テンプレは保存していません' : '盤面には置きましたが、テンプレは保存していません'
+  const tail = boardApplied.kind === 'cleanup' ? '保存前なら盤面を確かめてください。' : '保存前なら盤面を確かめてください（「後片づけ」で準備を消せます）。'
+  return `${head}（${ABORT_REASON_TEXT[reason]}）。${tail}`
+}
+
 /** パネルへ返す結果（結果文はそのまま項目の下に出す）。 */
 export type ChecklistPrepResult = { ok: boolean; message: string }
 /** コマ表 → App の処理結果。 */

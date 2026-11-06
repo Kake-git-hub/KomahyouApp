@@ -250,6 +250,15 @@ export function filterTemplateParticipantsForReferenceDate(params: {
   }
 }
 
+/**
+ * テンプレ差分反映の基準（保存済みテンプレを、テンプレ作成の編集画面と同じ在籍の絞り込みに通したもの・今日を基準日）。テンプレが無ければ null。
+ * 保存の計画（buildTemplateDiffSavePlan の baseline）・テンプレ作成を開くとき・確認リストの「準備する」の土台が同じこの 1 つを通す（基準を経路ごとに写さない）。
+ */
+export function resolveTemplateDiffBaseline(params: { template: RegularLessonTemplate | null | undefined; deskCount: number; teachers: TeacherRow[]; students: StudentRow[]; todayKey: string }): RegularLessonTemplate | null {
+  if (!params.template) return null
+  return filterTemplateParticipantsForReferenceDate({ template: params.template, deskCount: params.deskCount, teachers: params.teachers, students: params.students, referenceDate: params.todayKey })
+}
+
 export function hasRegularLessonTemplateAssignments(template: RegularLessonTemplate | null | undefined) {
   return (template?.cells ?? []).some((cell) => cell.desks.some((desk) => (
     Boolean(desk.teacherId)

@@ -374,7 +374,11 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).not.toContain('expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks')
     // 範囲の権威は計画関数 1 か所: 基準は保存時点の保存済みテンプレ（編集画面と同じ在籍フィルタ）、範囲は定義の差 ∪ 盤面の行との差（regression-reviewer H-2）。
     const planFn = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
-    expect(planFn).toContain('filterTemplateParticipantsForReferenceDate({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })')
+    // 基準は 1 つの関数 resolveTemplateDiffBaseline（中身は同じ filterTemplateParticipantsForReferenceDate・今日を基準日。テンプレ作成を開くとき・確認リストの準備も同じ関数・2026-11-06 M-4）。
+    expect(planFn).toContain('const baselineTemplate = resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey: toDateKey(new Date()) })')
+    const TEMPLATE_TS = readFileSync(fileURLToPath(new URL('../regular-template/regularLessonTemplate.ts', import.meta.url)), 'utf8')
+    const baselineFn = sliceBody(TEMPLATE_TS, 'export function resolveTemplateDiffBaseline(', 'export function hasRegularLessonTemplateAssignments(')
+    expect(baselineFn).toContain('return filterTemplateParticipantsForReferenceDate({ template: params.template, deskCount: params.deskCount, teachers: params.teachers, students: params.students, referenceDate: params.todayKey })')
     expect(planFn).toContain('const definitionDiff = diffTemplateDefinitions(baselineTemplate, template)')
     expect(planFn).toContain('const extraSlotKeys = diffRegularLessonRowsBySlot(regularLessons, normalizedTemplateRegularLessons, resolveTemplateSchoolYear(template.effectiveStartDate))')
     expect(planFn).toContain('resolveTemplateDiffSlotFilter({ diff: definitionDiff, scope: applyScope, previousEffectiveStartDate, extraSlotKeys })')

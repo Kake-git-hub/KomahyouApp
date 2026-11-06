@@ -9,6 +9,7 @@ import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import {
   applyStudentEdit,
   applyTeacherAutoAssignRequest,
+  computeTeacherMove,
   buildStudentStatusEntry,
   buildManagedOccurrenceKey,
   buildManagedScheduleCellsForRange,
@@ -45,6 +46,7 @@ import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import * as FX from './templateTransferFollow.fixture'
 import * as pairFx from './wholeDayTransferPair.fixture'
 import { cleanupChecklistPrepBoard } from './checklistPrepTemplate'
+import { setManualTeacherAssignment } from './deskTeacherAssignment'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -2915,5 +2917,46 @@ describe('INV-02 × 確認リストの後片づけ（cleanupChecklistPrepBoard�
     expect(result.pendingDesks?.[lowerKey]?.lower).toEqual({ lesson: { id: 'pl', studentSlots: [manualMakeup, null] }, teacher: { teacher: '講師G', manualTeacher: true, teacherAssignmentSource: 'manual' } })
     // 入力は書き換えない。
     expect({ weeks, pendingDesks }).toEqual(snapshot)
+  })
+})
+
+describe('INV-02 × 確認リストの後片づけ（列「後片づけ」）: 準備の講師を室長が動かす・入れ替える・消したあとは、室長の講師を消さない（修正ラウンド 1 M-5）', () => {
+  const CELL = '2026-11-12_1'
+  const student = (id: string): StudentEntry => ({ id, name: `生徒${id}`, managedStudentId: id, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' })
+  const slotCell = (desks: DeskCell[]): SlotCell => ({ id: CELL, dateKey: '2026-11-12', dayLabel: '木', dateLabel: '11/12', slotLabel: '1限', slotNumber: 1, timeLabel: '', isOpenDay: true, desks })
+  const prepDesk = (): DeskCell => ({ id: 'd0', teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true, lesson: { id: 'la', studentSlots: [student('s001'), null] } })
+  const teacherOf = (weeks: SlotCell[][], deskId: string) => weeks[0][0].desks.find((desk) => desk.id === deskId)?.teacher
+
+  it('動かす: 準備の講師を空き机へ動かし、元の机に室長が別の講師を手で置く → 後片づけはどちらの講師も消さない', () => {
+    const weeks = [[slotCell([prepDesk(), { id: 'd1', teacher: '', lesson: { id: 'lb', studentSlots: [student('s002'), null] } }])]]
+    const moved = computeTeacherMove({ weeks, weekIndex: 0, cellId: CELL, sourceDeskIndex: 0, targetDeskIndex: 1 })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    setManualTeacherAssignment(moved.nextWeeks[0][0].desks[0], '講師E', 't5')
+    const result = cleanupChecklistPrepBoard(moved.nextWeeks, null)
+    expect(result.removed.teachers).toBe(0)
+    expect(teacherOf(result.weeks, 'd0')).toBe('講師E')
+    expect(teacherOf(result.weeks, 'd1')).toBe('講師D')
+  })
+
+  it('入れ替える: 準備の講師と室長の講師を入れ替える → 後片づけはどちらの講師も消さない（講師だけ入替・席ごと入替）', () => {
+    for (const swapMode of ['teacher', 'seat'] as const) {
+      const weeks = [[slotCell([prepDesk(), { id: 'd1', teacher: '講師B', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't2', lesson: { id: 'lb', studentSlots: [student('s002'), null] } }])]]
+      const swapped = computeTeacherMove({ weeks, weekIndex: 0, cellId: CELL, sourceDeskIndex: 0, targetDeskIndex: 1, swapMode })
+      if (swapped.status !== 'moved') throw new Error(swapped.message)
+      const result = cleanupChecklistPrepBoard(swapped.nextWeeks, null)
+      expect(result.removed.teachers, swapMode).toBe(0)
+      expect(result.weeks[0][0].desks.map((desk) => desk.teacher).sort(), swapMode).toEqual(['講師B', '講師D'])
+    }
+  })
+
+  it('消す: 準備の講師を講師メニューで削除し、室長が別の講師を手で置く → 後片づけは室長の講師を消さない', () => {
+    const weeks = [[slotCell([prepDesk()])]]
+    const desk = weeks[0][0].desks[0]
+    applyUserDeletedTeacherTombstone(desk)
+    setManualTeacherAssignment(desk, '講師E', 't5')
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.removed.teachers).toBe(0)
+    expect(teacherOf(result.weeks, 'd0')).toBe('講師E')
+    expect(result.weeks).toBe(weeks)
   })
 })
