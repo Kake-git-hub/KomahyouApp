@@ -14,7 +14,9 @@
 
 ## 未リリース
 
-- feat: **確認リストの「準備する」第 2 段(tp-64・開発用/テスト教室だけ)**: 準備が確認用の生徒(「確認用 生徒A」…を名簿へ足して使い回す)のテンプレ登録と保存(差分反映・確認画面と保存前 PDF なし・詳細は結果の文へ)まで進み、「後片づけ」ボタンで確認用の体験・メモ・準備の講師・テンプレの確認用の生徒の登録だけを消せる(確認リスト ap-3)。INV-02(消すのは確認用と準備の印のものだけ・室長が替えた講師は消さない)・INV-06(ほかの生徒の未消化は不変)・INV-08(教室切替で取りやめ)・INV-12(同じコマに同じ生徒を 2 か所置かない)。`ensureChecklistPrepStudents`・`assignChecklistPrepTemplateStudents`・`cleanupChecklistPrepBoard`・`removeChecklistPrepTemplateStudents`(checklistPrepTemplate.test.ts ほか)。確認リストを v1.5.694 へ。
+## v1.5.694 (2026-11-06)
+
+- feat: **確認リストの「準備する」第 2 段(tp-64・開発用/テスト教室だけ)**: 準備が確認用の生徒(「確認用 生徒A」…を名簿へ足して使い回す)のテンプレ登録と保存(差分反映・確認画面と保存前 PDF なし・詳細は結果の文へ)まで進み、「後片づけ」ボタンで確認用の体験・メモ・準備の講師・テンプレの確認用の生徒の登録だけを消せる(確認リスト ap-3)。INV-02(消すのは確認用と準備の印のものだけ・室長が替えた講師は消さない)・INV-06(ほかの生徒の未消化は不変)・INV-08(教室切替で取りやめ)・INV-12(同じコマに同じ生徒を 2 か所置かない)。`ensureChecklistPrepStudents`・`assignChecklistPrepTemplateStudents`・`cleanupChecklistPrepBoard`・`removeChecklistPrepTemplateStudents`(checklistPrepTemplate.test.ts ほか)。確認リストを v1.5.694 へ。 触れる INV はほかに INV-01(出欠記録のある机の講師は後片づけで外さない)・INV-10(後片づけの反映開始日は今日と保存済みの反映開始日の遅い方)・INV-13(保留の下の行の講師へ準備の印が移る)。
 
 ## v1.5.693 (2026-11-06)
 
