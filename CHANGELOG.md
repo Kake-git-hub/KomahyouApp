@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.695 (2026-11-06)
+
+- docs: 退塾の確認文と使い方の「未消化へは戻りません」を「消したコマの分は未消化へ戻りません」に書き分け(取消で戻る残数と矛盾しないように・退塾取消のレビュー Minor-1)。確認リスト wc-1・wc-2 の版の記載を実際に入る v1.5.695 へ。
+- feat: **退塾取消**(オーナー確定 2026-11-05・本番教室で室長が誤って生徒を退塾にした件)。「退塾生徒」一覧の各行に「退塾取消」(全教室・フラグなし・出す条件 `canCancelStudentWithdrawal`＝削除済みでなく行ロック中で、退塾日を外せば在籍になる生徒＝高3卒業済みは除く)。確定 `applyStudentWithdrawCancel` は退塾日を未入力 `''` に戻し、卒業の自動入力の印と記録を外すだけ(盤面・在庫台帳は触らない＝通常授業は再マージで、未消化は一覧の絞り込みが外れて戻る・INV-06)。今後の退塾は、退塾スイープ(`computeStudentWithdrawSweep`)が消した席・出欠記録(保留の下段を含む)を `removedLessons` で返し、盤面→App(`onStudentWithdrawSweepApplied`・開いている教室のときだけ＝INV-08)が名簿行 `withdrawSweepRemovedLessons` へ追記、取消の確認画面に「戻らない授業」として出す(`buildStudentWithdrawCancelConfirmation`・退塾ボタンは `[]` で記録開始)。退塾の確認文を「元に戻せません」→「「退塾取消」で在籍に戻せますが、今日以降に手で置いたコマと記録は消えて戻りません」へ。退塾・退塾取消を操作痕跡に記録。spec-basic-data §B・§H、user-manual(AI 回答の写し functions/src/generated/userManual.ts も再生成＝main マージで Functions デプロイが走る)、確認リスト wc-1・wc-2(開発用教室だけ・版は v1.5.694 据え置き)。テスト `withdrawCancel.test.ts`・`studentWithdrawCancel.test.ts`・sweep テスト拡張。 2026-11-06 オーナー指示「退塾生徒の取り消し機能は先に全教室展開して」で、ブランチ claude/keen-goldberg-jkbg80 を main へ合わせて全教室へ出す(機能フラグなし・確認リスト wc-1・wc-2 は開発用教室だけ・main との衝突 4 ファイルは両側を残して解決)。 触れる INV: INV-02・INV-03・INV-06・INV-08。オーナー確定 2026-11-06: 退塾日より後に取り消したときは、退塾していた間の過去の日の通常授業も再マージで戻る(出欠は空のまま・室長が付け直す)。
+
 ## v1.5.694 (2026-11-06)
 
 - feat: **確認リストの「準備する」第 2 段(tp-64・開発用/テスト教室だけ)**: 準備が確認用の生徒(「確認用 生徒A」…を名簿へ足して使い回す)のテンプレ登録と保存(差分反映・確認画面と保存前 PDF なし・詳細は結果の文へ)まで進み、「後片づけ」ボタンで確認用の体験・メモ・準備の講師・テンプレの確認用の生徒の登録だけを消せる(確認リスト ap-3)。INV-02(消すのは確認用と準備の印のものだけ・室長が替えた講師は消さない)・INV-06(ほかの生徒の未消化は不変)・INV-08(教室切替で取りやめ)・INV-12(同じコマに同じ生徒を 2 か所置かない)。`ensureChecklistPrepStudents`・`assignChecklistPrepTemplateStudents`・`cleanupChecklistPrepBoard`・`removeChecklistPrepTemplateStudents`(checklistPrepTemplate.test.ts ほか)。確認リストを v1.5.694 へ。 触れる INV はほかに INV-01(出欠記録のある机の講師は後片づけで外さない)・INV-10(後片づけの反映開始日は今日と保存済みの反映開始日の遅い方)・INV-13(保留の下の行の講師へ準備の印が移る)。

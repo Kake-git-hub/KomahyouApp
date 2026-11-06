@@ -1,4 +1,5 @@
 import { hasGraduatedHighSchool, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import type { LessonType, StudentStatusKind } from '../schedule-board/types'
 
 export type GradeCeiling = '小' | '中' | '高1' | '高2' | '高3'
 export type ManagerRow = { id: string; name: string; email: string }
@@ -46,6 +47,24 @@ export type StudentRow = {
   // withdrawDate へ 3/31 を**実データとして**1 回だけ入れた印(ISO 日時)。印があれば二度と自動入力しない
   // (室長が後で退塾日を消しても勝手に戻さない)。後方互換のため optional(未設定=自動入力していない)。
   graduationWithdrawAutoFilledAt?: string
+  // 退塾取消(オーナー確定 2026-11-05・withdrawGuard.ts)の確認画面に出す「戻らない授業」の記録。
+  // 退塾スイープ(computeStudentWithdrawSweep)が消した今日以降の手置きの席・出欠記録を、盤面から App 経由で**追記**する。
+  // 退塾ボタン(applyStudentWithdrawToday)で退塾したときは [] で始める ＝ 「記録あり・0 件」と
+  // 「未設定 ＝ この機能より前の退塾など(記録が無い)」を区別する。退塾取消(applyStudentWithdrawCancel)で外す。
+  // 表示のためだけの写しで、在庫・請求・盤面の計算には使わない。後方互換のため optional。
+  withdrawSweepRemovedLessons?: StudentWithdrawRemovedLesson[]
+}
+
+// 退塾スイープが消した席・出欠記録 1 件分(退塾取消の確認画面の「戻らない授業」1 行)。
+export type StudentWithdrawRemovedLesson = {
+  dateKey: string
+  slotNumber: number
+  /** seat = 席(手で置いた講習・振替など) / status = 出欠記録 */
+  kind: 'seat' | 'status'
+  lessonType: LessonType
+  subject: string
+  /** 出欠記録のときだけ */
+  status?: StudentStatusKind
 }
 
 // 基本データ画面から削除済みかの唯一の判定。呼び出し側で row.deletedAt を直読みしない。

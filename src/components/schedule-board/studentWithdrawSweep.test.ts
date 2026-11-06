@@ -287,6 +287,16 @@ describe('computeStudentWithdrawSweep(今日以降の痕跡を消し切る)', ()
     expect(ownedEntries(result.nextWeeks)).toEqual([`${YESTERDAY}:seat:special`, `${YESTERDAY}:status:absent`])
     expect(result.removedSeatCount).toBe(4)
     expect(result.removedStatusCount).toBe(3)
+    // 退塾取消(2026-11-05): 消した席・記録を 1 件ずつ返す(取消の確認画面の「戻らない授業」の元)。昨日以前は含まない。
+    expect(result.removedLessons).toEqual([
+      { dateKey: TODAY, slotNumber: 1, kind: 'seat', lessonType: 'special', subject: '数' },
+      { dateKey: TODAY, slotNumber: 1, kind: 'status', lessonType: 'regular', subject: '数', status: 'moved' },
+      { dateKey: TODAY, slotNumber: 1, kind: 'status', lessonType: 'regular', subject: '英', status: 'absent' },
+      { dateKey: TOMORROW, slotNumber: 1, kind: 'seat', lessonType: 'makeup', subject: '数' },
+      { dateKey: TOMORROW, slotNumber: 1, kind: 'seat', lessonType: 'extra', subject: '英' },
+      { dateKey: TOMORROW, slotNumber: 1, kind: 'seat', lessonType: 'trial', subject: '数' },
+      { dateKey: TOMORROW, slotNumber: 1, kind: 'status', lessonType: 'regular', subject: '数', status: 'attended' },
+    ])
     // 他の生徒の席・記録は不変。
     const sweptToday = result.nextWeeks[0][1]
     expect(sweptToday.desks[0].lesson?.studentSlots[1]?.managedStudentId).toBe('sB')
@@ -300,6 +310,7 @@ describe('computeStudentWithdrawSweep(今日以降の痕跡を消し切る)', ()
     expect(result.nextWeeks).toBe(weeks)
     expect(result.removedSeatCount).toBe(0)
     expect(result.removedStatusCount).toBe(0)
+    expect(result.removedLessons).toEqual([])
   })
 
   it('席が空いた机の講師(manualTeacher)とメモは触らない(INV-01・既存の削除系と同じ)', () => {
@@ -332,7 +343,8 @@ describe('computeStudentWithdrawSweep(今日以降の痕跡を消し切る)', ()
       sW__英: [{ dateKey: TODAY }],
     })
     // 返り値に台帳(manualMakeupAdjustments / manualLectureStockCounts / 希望数)は無い＝構造的に増えない。
-    expect(Object.keys(result).sort()).toEqual(['changed', 'nextSuppressedMakeupOrigins', 'nextWeeks', 'removedSeatCount', 'removedStatusCount'])
+    // removedLessons(2026-11-05・退塾取消の表示用)は消した席・記録の写しで、台帳ではない。
+    expect(Object.keys(result).sort()).toEqual(['changed', 'nextSuppressedMakeupOrigins', 'nextWeeks', 'removedLessons', 'removedSeatCount', 'removedStatusCount'])
   })
 
   it('INV-06: 出欠記録は消化に数える種別だけ抑止する(休み・移動元・休)の記録には積まない=立っている在庫を消さない)', () => {
@@ -454,6 +466,8 @@ describe('★掃除は再マージ適用後の盤面を土台にする(他の生
 
     expect(result.changed).toBe(true)
     expect(result.results.map((entry) => entry.studentId)).toEqual(['sW'])
+    // 退塾取消(2026-11-05): App が名簿行へ追記する「戻らない授業」も結果に載る。
+    expect(result.results[0].removedLessons).toEqual([{ dateKey: TUE, slotNumber: 5, kind: 'seat', lessonType: 'special', subject: '数' }])
     // B の手置き講習は消えている(掃除の本体)。
     expect(ownedEntries(result.nextWeeks)).toEqual([])
     // ★A の通常授業(= 同じ flush の再マージ結果)が commit 対象の weeks に残っている。
@@ -537,6 +551,18 @@ describe('退塾スイープの配線', () => {
     const guards = sliceFrom(BOARD_TSX, 'if (!studentWithdrawAutoSweepEnabled) return\n    if (isTemplateMode) return', 260)
     expect(guards).toContain('if (!isEditingStateLoadedForActingClassroom) return')
     expect(guards).toContain('if (students.length === 0) return')
+  })
+
+  // 退塾取消(2026-11-05): 掃除で消した内容は App へ知らせ、App が名簿行(withdrawSweepRemovedLessons)へ追記する。
+  //   知らせるのは commitWeeks の後・実際に何かを消したときだけ(対象 0 / 変化なしは early return の先)。
+  it('掃除で消した内容は commitWeeks の後に onStudentWithdrawSweepApplied で App へ知らせる', () => {
+    const effect = sliceFrom(BOARD_TSX, 'const sweep = applyStudentWithdrawSweepToBoard({', 4000)
+    const commitIndex = effect.indexOf('commitWeeks(')
+    const notifyIndex = effect.indexOf('onStudentWithdrawSweepApplied?.(sweep.results.map(')
+    expect(commitIndex).toBeGreaterThan(0)
+    expect(notifyIndex).toBeGreaterThan(commitIndex)
+    expect(effect.indexOf('if (!sweep.changed) return')).toBeLessThan(notifyIndex)
+    expect(APP_TSX.replace(/\r\n/g, '\n')).toContain('onStudentWithdrawSweepApplied={handleStudentWithdrawSweepApplied}')
   })
 
   it('再マージ・読込の経路にスイープを混ぜない(毎回走ると INV-03/INV-06 違反になる)', () => {
