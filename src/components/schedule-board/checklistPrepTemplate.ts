@@ -9,6 +9,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import { getStudentDisplayName, isStudentDeletedFromApp, normalizeDateText, type StudentRow } from '../basic-data/basicDataModel'
+import { resolveStudentOrigin } from './placementOrigin'
 import { regularTemplateDayLabelByValue, type RegularLessonTemplate, type RegularLessonTemplateCell, type RegularLessonTemplateDesk } from '../regular-template/regularLessonTemplate'
 import { normalizeRequestedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isTemplatePendingLowerEmpty, type TemplatePendingDeskMap, type TemplatePendingLower } from './templatePendingDesks'
@@ -79,10 +80,13 @@ export function ensureChecklistPrepStudents(
 }
 
 /**
- * テンプレへの 1 件の登録。deskIndex は盤面の机番号（0 始まり・ChecklistPrepOp と同じ）。テンプレの机（RegularLessonTemplateDesk.deskIndex）は 1 始まりなので +1 で引く。
+ * テンプレへの 1 件の登録。
+ *  - deskIndex … 盤面の机番号（0 始まり・ChecklistPrepOp と同じ・結果の文の盤面側）。
+ *  - templateDeskIndex … 登録先のテンプレの机番号（RegularLessonTemplateDesk.deskIndex・1 始まり）。**盤面の机番号 + 1 とは限らない**
+ *    （盤面はテンプレの中身のある机を最初の空き机へ詰めて置く・並び替えた週は机が動く）。resolveChecklistPrepTemplateDeskIndex で引く。
  * dayOfWeek は 0=日 … 6=土（Date#getDay・テンプレと同じ）。label は結果の文の「(1)」「(2)」。
  */
-export type ChecklistPrepTemplateRegistration = { dayOfWeek: number; slotNumber: number; deskIndex: number; studentIndex: 0 | 1; subject: SubjectLabel; label: string }
+export type ChecklistPrepTemplateRegistration = { dayOfWeek: number; slotNumber: number; deskIndex: number; templateDeskIndex: number; studentIndex: 0 | 1; subject: SubjectLabel; label: string }
 
 export type ChecklistPrepTemplateAssignment = ChecklistPrepTemplateRegistration & { studentId: string; studentName: string }
 
@@ -90,10 +94,41 @@ function findTemplateCell(template: RegularLessonTemplate | null | undefined, da
   return template?.cells.find((cell) => cell.dayOfWeek === dayOfWeek && cell.slotNumber === slotNumber)
 }
 
-/** テンプレのその曜日・時限・机（盤面の 0 始まりの机番号）・席に生徒の登録があるか。 */
-export function isChecklistPrepTemplateSeatTaken(template: RegularLessonTemplate | null | undefined, dayOfWeek: number, slotNumber: number, boardDeskIndex: number, seat: number): boolean {
-  const desk = findTemplateCell(template, dayOfWeek, slotNumber)?.desks.find((entry) => entry.deskIndex === boardDeskIndex + 1)
-  return Boolean(desk?.students[seat]?.studentId)
+/** テンプレのその曜日・時限・机（テンプレの机番号・1 始まり）を返す。 */
+export function findChecklistPrepTemplateDesk(template: RegularLessonTemplate | null | undefined, dayOfWeek: number, slotNumber: number, templateDeskIndex: number): RegularLessonTemplateDesk | undefined {
+  return findTemplateCell(template, dayOfWeek, slotNumber)?.desks.find((entry) => entry.deskIndex === templateDeskIndex)
+}
+
+/** テンプレのその曜日・時限・机（テンプレの机番号・1 始まり）・席に生徒の登録があるか。 */
+export function isChecklistPrepTemplateSeatTaken(template: RegularLessonTemplate | null | undefined, dayOfWeek: number, slotNumber: number, templateDeskIndex: number, seat: number): boolean {
+  return Boolean(findChecklistPrepTemplateDesk(template, dayOfWeek, slotNumber, templateDeskIndex)?.students[seat]?.studentId)
+}
+
+// 盤面のテンプレの授業 id: `managed_${row.id}_${dateKey}`（ScheduleBoardScreen の buildManagedRegularLessonsRange）、
+// テンプレから作る行の id: `template_${年度}_${曜}_${限}_${机}`（regularLessonTemplate.ts の buildRegularLessonsFromTemplate）。形を変えるときはここも直す。
+const TEMPLATE_MANAGED_LESSON_ID = /^managed_template_\d+_(\d+)_(\d+)_(\d+)_/u
+
+/**
+ * 盤面の机に対応するテンプレの机番号（1 始まり）。引けなければ null（その机は準備に使わない）。
+ *  1. 授業 id（managed_template_<年度>_<曜>_<限>_<机>_<日付>）が同じ曜日・時限を指し、テンプレにその机があればその机。
+ *  2. 引けなければ、その机のテンプレの生徒（出自がテンプレ・managedStudentId）を持つテンプレの机（同じ曜日・時限）。
+ * 差分反映の並びの戻し（templateDeskOrderRestore.ts の resolveAnchorCandidates）と同じ順の手がかり（授業 id → 生徒）。向こうは盤面の形の
+ * テンプレの机を相手にするので、ここは保存するテンプレ（RegularLessonTemplate）を相手に同じ順で引く。
+ */
+export function resolveChecklistPrepTemplateDeskIndex(desk: Pick<DeskCell, 'lesson'>, template: RegularLessonTemplate | null | undefined, dayOfWeek: number, slotNumber: number): number | null {
+  const cell = findTemplateCell(template, dayOfWeek, slotNumber)
+  if (!cell || !desk.lesson) return null
+  const matched = TEMPLATE_MANAGED_LESSON_ID.exec(desk.lesson.id)
+  if (matched && Number(matched[1]) === dayOfWeek && Number(matched[2]) === slotNumber) {
+    const byId = cell.desks.find((entry) => entry.deskIndex === Number(matched[3]))
+    if (byId) return byId.deskIndex
+  }
+  const templateStudentIds = desk.lesson.studentSlots
+    .filter((student): student is StudentEntry => Boolean(student?.managedStudentId) && resolveStudentOrigin(student!) === 'template')
+    .map((student) => student.managedStudentId!)
+  if (templateStudentIds.length === 0) return null
+  const byStudent = cell.desks.find((entry) => entry.students.some((student) => student?.studentId && templateStudentIds.includes(student.studentId)))
+  return byStudent ? byStudent.deskIndex : null
 }
 
 function collectTemplateStudentIdsInSlot(cell: RegularLessonTemplateCell | undefined): Set<string> {
@@ -128,9 +163,9 @@ export function resolveChecklistPrepStudentCount(template: RegularLessonTemplate
   return base + maxInSlot
 }
 
-function templateSeatLabel(registration: Pick<ChecklistPrepTemplateRegistration, 'dayOfWeek' | 'slotNumber' | 'deskIndex' | 'studentIndex'>) {
+function templateSeatLabel(registration: Pick<ChecklistPrepTemplateRegistration, 'dayOfWeek' | 'slotNumber' | 'templateDeskIndex' | 'studentIndex'>) {
   const day = regularTemplateDayLabelByValue[registration.dayOfWeek] ?? ''
-  return `${day}曜 ${registration.slotNumber}限 机 ${registration.deskIndex + 1} の生徒 ${registration.studentIndex + 1}`
+  return `${day}曜 ${registration.slotNumber}限 机 ${registration.templateDeskIndex} の生徒 ${registration.studentIndex + 1}`
 }
 
 function cloneTemplateCell(cell: RegularLessonTemplateCell): RegularLessonTemplateCell {
@@ -140,7 +175,7 @@ function cloneTemplateCell(cell: RegularLessonTemplateCell): RegularLessonTempla
 /**
  * テンプレの席に確認用の生徒を登録した新しいテンプレを返す（入力は書き換えない・触る曜日×時限だけ作り直す）。
  * 席が埋まっていれば失敗（既存の登録を消さない・INV-02）。その曜日・時限に既に居る確認用の生徒は使わない（INV-12）。1 回の準備で同じ生徒を 2 つ使わない。
- * テンプレにその曜日・時限・机が無ければ作る（講師なし）。科目は確認用の生徒の学年で使えるものに直す（数→算 など・normalizeRequestedSubjectForGrade）。
+ * 登録先はテンプレの机番号（registration.templateDeskIndex）。テンプレにその曜日・時限・机が無ければ作る（講師なし）。科目は確認用の生徒の学年で使えるものに直す（数→算 など・normalizeRequestedSubjectForGrade）。
  * 失敗したら何も登録しない（途中まで登録した形を返さない）。
  */
 export function assignChecklistPrepTemplateStudents(
@@ -164,7 +199,7 @@ export function assignChecklistPrepTemplateStudents(
       clonedIndexes.add(cellIndex)
     }
     const cell = cells[cellIndex]
-    const templateDeskIndex = registration.deskIndex + 1
+    const templateDeskIndex = registration.templateDeskIndex
     let desk = cell.desks.find((entry) => entry.deskIndex === templateDeskIndex)
     if (!desk) {
       desk = { deskIndex: templateDeskIndex, teacherId: '', students: [null, null] }
@@ -231,6 +266,11 @@ function isLivePrepTeacher(fields: Pick<DeskCell, 'teacher' | 'manualTeacher' | 
   return Boolean(fields.teacher.trim()) && fields.manualTeacher === true && (fields.teacherAssignmentSource === 'manual' || fields.teacherAssignmentSource === 'manual-replaced')
 }
 
+/** 出欠記録のある机（行）。講師を外すと記録の講師の帰属が空になる（INV-01）ので、準備の講師は外さず印だけ外す。 */
+function hasStatusRecords(statusSlots: DeskCell['statusSlots']): boolean {
+  return Boolean(statusSlots?.some(Boolean))
+}
+
 type RemovedCounts = { trials: number; memos: number; teachers: number }
 
 /** 授業から準備の体験を外す。外したものが無ければ同じ授業、全部の席が空けば undefined。 */
@@ -269,13 +309,14 @@ function cleanupDesk(desk: DeskCell, counts: RemovedCounts): DeskCell {
   else delete next.memoSlots
   if (marked) {
     delete next.checklistPrepTeacher
-    if (isLivePrepTeacher(desk)) {
-      // 講師なしの机へ戻す（手置きの項目を外す）。テンプレの講師の机だったなら、再マージがテンプレの講師を置き直す。
+    if (isLivePrepTeacher(desk) && !hasStatusRecords(desk.statusSlots)) {
+      // 講師なしの机へ戻す（盤面の clearTeacherAssignment と同じ形）。テンプレの講師の机だったなら、再マージがテンプレの講師を置き直す
+      // （準備 → 後片づけ → 再マージの通しテストで固定・checklistPrep.templateSave.test.ts）。
       next.teacher = ''
-      delete next.manualTeacher
-      delete next.teacherAssignmentSource
-      delete next.teacherAssignmentSessionId
-      delete next.teacherAssignmentTeacherId
+      next.manualTeacher = false
+      next.teacherAssignmentSource = undefined
+      next.teacherAssignmentSessionId = undefined
+      next.teacherAssignmentTeacherId = undefined
       delete next.teacherUnavailableWarning
       counts.teachers += 1
     }
@@ -287,7 +328,7 @@ function cleanupPendingLower(lower: TemplatePendingLower, counts: RemovedCounts)
   const lesson = stripPrepTrials(lower.lesson, counts)
   const memoSlots = stripPrepMemos(lower.memoSlots, counts)
   const teacher = lower.teacher
-  const dropTeacher = Boolean(teacher?.checklistPrepTeacher) && isLivePrepTeacher(teacher!)
+  const dropTeacher = Boolean(teacher?.checklistPrepTeacher) && isLivePrepTeacher(teacher!) && !hasStatusRecords(lower.statusSlots)
   const staleMark = Boolean(teacher?.checklistPrepTeacher) && !dropTeacher
   if (lesson === lower.lesson && memoSlots === lower.memoSlots && !teacher?.checklistPrepTeacher) return lower
   const next: TemplatePendingLower = { ...lower }
@@ -310,7 +351,7 @@ function cleanupPendingLower(lower: TemplatePendingLower, counts: RemovedCounts)
 /**
  * 後片づけ（純関数・入力は書き換えない）: 盤面（上の行）と保留の下の行から、準備で置いた「確認用 体験」（手で足した体験だけ）・「確認用メモ」・
  * 準備の印の付いた手置き講師を消す。下の行が空になった保留は消す。名前が「確認用」で始まらない体験・印の無い講師は残す（INV-02）。
- * 印が残っていても手置きの講師でなくなった机（削除の記録・QR の講師など）は講師を外さず古い印だけ外す（数には入れない）。
+ * 印が残っていても手置きの講師でなくなった机（削除の記録・QR の講師など）・出欠記録のある机（記録の講師の帰属・INV-01）は講師を外さず古い印だけ外す（数には入れない）。
  * 触ったコマ・週だけ作り直す。何も無ければ removed はすべて 0 で、weeks・pendingDesks は入力と同じ参照。
  * テンプレの確認用の生徒の登録はここでは消さない（removeChecklistPrepTemplateStudents → テンプレの保存で消す）。
  */

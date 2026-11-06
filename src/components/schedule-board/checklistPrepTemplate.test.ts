@@ -17,6 +17,7 @@ import {
   isChecklistPrepStudent,
   removeChecklistPrepTemplateStudents,
   resolveChecklistPrepStudentCount,
+  resolveChecklistPrepTemplateDeskIndex,
   type ChecklistPrepTemplateRegistration,
 } from './checklistPrepTemplate'
 
@@ -56,7 +57,7 @@ function template(cells: RegularLessonTemplateCell[]): RegularLessonTemplate {
 }
 
 function registration(deskIndex: number, studentIndex: 0 | 1, label: string, overrides: Partial<ChecklistPrepTemplateRegistration> = {}): ChecklistPrepTemplateRegistration {
-  return { dayOfWeek: 4, slotNumber: 1, deskIndex, studentIndex, subject: '英', label, ...overrides }
+  return { dayOfWeek: 4, slotNumber: 1, deskIndex, templateDeskIndex: deskIndex + 1, studentIndex, subject: '英', label, ...overrides }
 }
 
 function deepFreeze<T>(value: T): T {
@@ -217,6 +218,27 @@ describe('assignChecklistPrepTemplateStudents（テンプレの席に確認用�
     expect(result.reason).toContain('木曜 1限 机 2 の生徒 2')
   })
 
+  it('登録先はテンプレの机番号（templateDeskIndex）。盤面の机番号（deskIndex）では引かない', () => {
+    const base = template([
+      templateCell(4, 1, [
+        templateDesk(1, 't1', [{ studentId: 's001', subject: '数' }, null]),
+        templateDesk(2, '', [null, null]),
+        templateDesk(3, 't2', [{ studentId: 's002', subject: '数' }, null]),
+      ]),
+    ])
+    const result = assignChecklistPrepTemplateStudents(base, [registration(1, 1, '(2)', { templateDeskIndex: 3 })], prepStudents)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.template.cells[0].desks.map((desk) => desk.students)).toEqual([
+      [{ studentId: 's001', subject: '数' }, null],
+      [null, null],
+      [{ studentId: 's002', subject: '数' }, { studentId: 's050', subject: '英' }],
+    ])
+    // 埋まっていたときの理由もテンプレの机番号で書く。
+    const taken = assignChecklistPrepTemplateStudents(base, [registration(1, 0, '(2)', { templateDeskIndex: 3 })], prepStudents)
+    expect(!taken.ok && taken.reason).toContain('木曜 1限 机 3 の生徒 1')
+  })
+
   it('テンプレにその曜日・時限・机が無ければ作る（講師なし）', () => {
     const base = template([templateCell(4, 1, [templateDesk(1, 't1', [{ studentId: 's001', subject: '数' }, null])])])
     const result = assignChecklistPrepTemplateStudents(base, [registration(2, 0, '(1)', { dayOfWeek: 5, slotNumber: 2 })], prepStudents)
@@ -232,6 +254,37 @@ describe('assignChecklistPrepTemplateStudents（テンプレの席に確認用�
     const base = template([templateCell(4, 1, [templateDesk(1, 't1', [{ studentId: 's001', subject: '数' }, null])])])
     const result = assignChecklistPrepTemplateStudents(base, [registration(0, 1, '(1)', { subject: '数' })], prepStudents)
     expect(result.ok && result.template.cells[0].desks[0].students[1]).toEqual({ studentId: 's050', subject: '算' })
+  })
+})
+
+describe('resolveChecklistPrepTemplateDeskIndex（盤面の机 → テンプレの机番号）', () => {
+  const base = template([
+    templateCell(4, 5, [
+      templateDesk(1, 't1', [{ studentId: 's001', subject: '数' }, null]),
+      templateDesk(2, '', [null, null]),
+      templateDesk(3, 't2', [{ studentId: 's002', subject: '数' }, null]),
+    ]),
+  ])
+  const student = (managedStudentId: string): StudentEntry => ({ id: `e_${managedStudentId}`, name: `生徒${managedStudentId}`, managedStudentId, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' })
+  const desk = (lessonId: string, managedStudentId: string): DeskCell => ({ id: 'd', teacher: '講師B', lesson: { id: lessonId, note: '管理データ反映', studentSlots: [student(managedStudentId), null] } })
+
+  it('まず授業 id（managed_template_<年度>_<曜>_<限>_<机>_<日付>）で引く', () => {
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_template_2026_4_5_3_2026-11-12', 's002'), base, 4, 5)).toBe(3)
+    // 授業 id がほかの曜日・時限なら使わず、生徒で引く。
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_template_2026_2_5_1_2026-11-10', 's002'), base, 4, 5)).toBe(3)
+  })
+
+  it('授業 id で引けなければ、その机のテンプレの生徒を持つテンプレの机で引く', () => {
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_r9_2026-11-12', 's002'), base, 4, 5)).toBe(3)
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('d_template_kept', 's001'), base, 4, 5)).toBe(1)
+    // 授業 id が指すテンプレの机が無い（行を消した）ときも生徒で引く。
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_template_2026_4_5_9_2026-11-12', 's001'), base, 4, 5)).toBe(1)
+  })
+
+  it('どちらでも引けなければ null（テンプレに居ない生徒・授業の無い机・テンプレ無し）', () => {
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_r9_2026-11-12', 's777'), base, 4, 5)).toBeNull()
+    expect(resolveChecklistPrepTemplateDeskIndex({ lesson: undefined }, base, 4, 5)).toBeNull()
+    expect(resolveChecklistPrepTemplateDeskIndex(desk('managed_r9_2026-11-12', 's001'), null, 4, 5)).toBeNull()
   })
 })
 
@@ -310,7 +363,7 @@ describe('cleanupChecklistPrepBoard（後片づけ: 盤面の確認用だけを�
     const result = cleanupChecklistPrepBoard(weeks, null)
     expect(result.removed).toEqual({ trials: 0, memos: 0, teachers: 1 })
     const [first, second] = result.weeks[0][0].desks
-    expect(first).toEqual({ id: 'd1', teacher: '', lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), null] } })
+    expect(first).toEqual({ id: 'd1', teacher: '', manualTeacher: false, lesson: { id: 'managed_d1', studentSlots: [regular('r1', 's001'), null] } })
     expect(second).toBe(weeks[0][0].desks[1])
   })
 
@@ -360,6 +413,20 @@ describe('cleanupChecklistPrepBoard（後片づけ: 盤面の確認用だけを�
     })
     // 上の行（テンプレの講師と生徒）は変えない。テンプレの確認用の生徒の登録はテンプレの保存で消す（removeChecklistPrepTemplateStudents）。
     expect(result.weeks).toBe(weeks)
+  })
+
+  it('出欠記録のある机では準備の講師を外さず印だけ外す（記録の講師の帰属を空にしない・INV-01）', () => {
+    const record = {
+      id: 'st1', studentId: 'e1', sourceManagedLesson: true, name: '生徒s001', managedStudentId: 's001', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal',
+      teacherName: '講師D', dateKey: '2026-11-12', slotNumber: 1, recordedAt: '2026-11-12T10:00:00Z', status: 'attended', sourceLessonId: 'managed_d1',
+    } as const
+    const weeks = deepFreeze([[slotCell([prepTeacher('d1', { statusSlots: [{ ...record }, null], lesson: { id: 'managed_d1', studentSlots: [null, trial('t1', '確認用 体験1')] } })])]])
+    const result = cleanupChecklistPrepBoard(weeks, null)
+    expect(result.removed).toEqual({ trials: 1, memos: 0, teachers: 0 })
+    const desk = result.weeks[0][0].desks[0]
+    expect(desk).toMatchObject({ teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4' })
+    expect(desk.statusSlots?.[0]).toEqual(record)
+    expect('checklistPrepTeacher' in desk).toBe(false)
   })
 
   it('確認用が何も無ければ removed はすべて 0 で、weeks・pendingDesks は入力と同じ参照', () => {

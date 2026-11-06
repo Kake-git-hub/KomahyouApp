@@ -44,6 +44,7 @@ import { trimBoardWeeksForMemory } from './boardWeekTrim'
 import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import * as FX from './templateTransferFollow.fixture'
 import * as pairFx from './wholeDayTransferPair.fixture'
+import { cleanupChecklistPrepBoard } from './checklistPrepTemplate'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -66,7 +67,8 @@ import * as pairFx from './wholeDayTransferPair.fixture'
 //   自動処理 = { テンプレ再マージ(overlay=mergeManagedWeek)
 //                / 講習自動割当(reconcileSubmittedTeacherPlacements=reconcile+autoAssign)
 //                / 詰め直し(repackTeacherOnlyDesks / packSortCellDesks)
-//                / リロード相当(serialize/snapshot 往復) }
+//                / リロード相当(serialize/snapshot 往復)
+//                / 確認リストの後片づけ(cleanupChecklistPrepBoard・開発用/テスト教室だけ・§E-2-4-2) }
 //
 // 各セル = 小さな fixture + 手動編集1回 + 自動処理1回 + 「編集が残る」assert。
 //
@@ -2861,5 +2863,57 @@ describe('INV-02 マトリクス: 丸ごと振替の付け替えの解除（段 
     if (released.status !== 'transferred') throw new Error(released.message)
     expect(pairFx.cellAt(released.nextWeeks, pairFx.D).desks[0].lesson?.studentSlots[1]).toEqual(makeup)
     expect(pairFx.cellAt(released.nextWeeks, pairFx.D2).desks[0].lesson?.studentSlots[1] ?? null).toBeNull()
+  })
+})
+
+describe('INV-02 × 確認リストの後片づけ（cleanupChecklistPrepBoard・列「後片づけ」・§E-2-4-2）: 消すのは「確認用」と準備の印だけ', () => {
+  const CELL = '2026-11-12_1'
+  const entry = (id: string, name: string, overrides: Partial<StudentEntry> = {}): StudentEntry => ({ id, name, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', ...overrides })
+  const slotCell = (desks: DeskCell[]): SlotCell => ({ id: CELL, dateKey: '2026-11-12', dayLabel: '木', dateLabel: '11/12', slotLabel: '1限', slotNumber: 1, timeLabel: '', isOpenDay: true, desks })
+
+  it('手動追加の通常・振替・講習・名前の違う体験・メモ・印の無い手置き講師・確認用の生徒（テンプレ由来）・保留の下の行の手入力は残る', () => {
+    const manualRegular = entry('m1', '生徒M', { managedStudentId: 'sM', manualAdded: true })
+    const manualMakeup = entry('m2', '生徒N', { managedStudentId: 'sN', lessonType: 'makeup', makeupSourceDate: '2026-11-05', manualAdded: true })
+    const special = entry('m3', '生徒P', { managedStudentId: 'sP', lessonType: 'special', manualAdded: true })
+    const otherTrial = entry('m4', '体験X', { lessonType: 'trial', manualAdded: true })
+    const prepStudentFromTemplate = entry('m5', '確認用 生徒A', { managedStudentId: 's950' })
+    const prepTrial = entry('p1', '確認用 体験1', { lessonType: 'trial', manualAdded: true })
+    const keptDesks: DeskCell[] = [
+      { id: 'd1', teacher: '講師E', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't5', lesson: { id: 'hand1', studentSlots: [manualRegular, manualMakeup] } },
+      { id: 'd2', teacher: '講師F', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', lesson: { id: 'hand2', studentSlots: [special, otherTrial] } },
+      { id: 'd3', teacher: '講師A', lesson: { id: 'managed_template_2026_4_1_3_2026-11-12', note: '管理データ反映', studentSlots: [prepStudentFromTemplate, null] }, memoSlots: [null, '連絡'] },
+    ]
+    const prepDesks: DeskCell[] = [
+      { id: 'd4', teacher: '講師D', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', checklistPrepTeacher: true, lesson: { id: 'hand4', studentSlots: [null, prepTrial] } },
+      { id: 'd5', teacher: '', memoSlots: ['確認用メモ1', null] },
+    ]
+    const weeks = [[slotCell([...keptDesks, ...prepDesks])]]
+    const lowerKey = buildTemplatePendingDeskKey(CELL, 'd3')
+    const pendingDesks: TemplatePendingDeskMap = {
+      [lowerKey]: {
+        lower: { lesson: { id: 'pl', studentSlots: [manualMakeup, entry('p2', '確認用 体験2', { lessonType: 'trial', manualAdded: true })] }, teacher: { teacher: '講師G', manualTeacher: true, teacherAssignmentSource: 'manual' } },
+        effectiveStartDate: '2026-11-11',
+        createdAt: '2026-11-10T00:00:00.000Z',
+      },
+    }
+    const snapshot = structuredClone({ weeks, pendingDesks })
+    const result = cleanupChecklistPrepBoard(weeks, pendingDesks)
+
+    expect(result.removed).toEqual({ trials: 2, memos: 1, teachers: 1 })
+    const desks = result.weeks[0][0].desks
+    // 確認用以外の手入力の机は中身も参照も変わらない。
+    keptDesks.forEach((desk, index) => expect(desks[index]).toBe(desk))
+    expect(desks[0].lesson?.studentSlots).toEqual([manualRegular, manualMakeup])
+    expect(desks[1]).toMatchObject({ teacher: '講師F', manualTeacher: true, teacherAssignmentSource: 'manual-replaced' })
+    expect(desks[1].lesson?.studentSlots).toEqual([special, otherTrial])
+    expect(desks[2].lesson?.studentSlots[0]).toEqual(prepStudentFromTemplate)
+    // 準備のものだけ消える。
+    expect(desks[3]).toMatchObject({ teacher: '', manualTeacher: false })
+    expect(desks[3].lesson).toBeUndefined()
+    expect(desks[4].memoSlots).toBeUndefined()
+    // 保留の下の行: 手入力の振替と印の無い手置き講師は残り、確認用の体験だけ消える。
+    expect(result.pendingDesks?.[lowerKey]?.lower).toEqual({ lesson: { id: 'pl', studentSlots: [manualMakeup, null] }, teacher: { teacher: '講師G', manualTeacher: true, teacherAssignmentSource: 'manual' } })
+    // 入力は書き換えない。
+    expect({ weeks, pendingDesks }).toEqual(snapshot)
   })
 })

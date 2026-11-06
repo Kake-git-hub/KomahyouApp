@@ -323,14 +323,20 @@ describe('planChecklistPrep: tp-64（講師欄の緑）', () => {
 
 describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存まで・§E-2-4-2）', () => {
   // 2026-11-12 は木曜（dayOfWeek 4）。fullCell の机 1・2 はテンプレの講師＋生徒 1 人（席 1）で、席 2 が空いている。
-  function templateFor(desks: Array<[RegularLessonTemplate['cells'][number]['desks'][number]['students'][0], RegularLessonTemplate['cells'][number]['desks'][number]['students'][1]]>, dayOfWeek = 4, slotNumber = 1): RegularLessonTemplate {
+  type TemplateSeats = Array<[RegularLessonTemplate['cells'][number]['desks'][number]['students'][0], RegularLessonTemplate['cells'][number]['desks'][number]['students'][1]]>
+  function templateCellFor(desks: TemplateSeats, dayOfWeek = 4, slotNumber = 1): RegularLessonTemplate['cells'][number] {
+    return { dayOfWeek, slotNumber, desks: desks.map((students, index) => ({ deskIndex: index + 1, teacherId: `t${index + 1}`, students })) }
+  }
+  function templateFor(desks: TemplateSeats, dayOfWeek = 4, slotNumber = 1, extraCells: RegularLessonTemplate['cells'] = []): RegularLessonTemplate {
     return {
       version: 1,
       effectiveStartDate: EFFECTIVE,
       savedAt: '2026-11-01T00:00:00.000Z',
-      cells: [{ dayOfWeek, slotNumber, desks: desks.map((students, index) => ({ deskIndex: index + 1, teacherId: `t${index + 1}`, students })) }],
+      cells: [templateCellFor(desks, dayOfWeek, slotNumber), ...extraCells],
     }
   }
+  // 金曜（2026-11-13・dayOfWeek 5）1 限のテンプレ（fullCell の机 1・2 と同じ生徒）。
+  const FRIDAY_CELL = () => templateCellFor([[{ studentId: 's001', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, null]], 5, 1)
   const prepStudent = (id: string, letter: string): StudentRow => ({
     id, name: `確認用 生徒${letter}`, displayName: `確認用 生徒${letter}`, email: '', entryDate: TODAY, withdrawDate: '', birthDate: CHECKLIST_PREP_STUDENT_BIRTH_DATE(TODAY),
   })
@@ -358,8 +364,8 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 1, studentIndex: 1, name: '確認用 体験2', grade: '中1', subject: '英' },
     ])
     expect(plan.templateRegistrations).toEqual<ChecklistPrepTemplateRegistration[]>([
-      { dayOfWeek: 4, slotNumber: 1, deskIndex: 0, studentIndex: 1, subject: '英', label: '(1)' },
-      { dayOfWeek: 4, slotNumber: 1, deskIndex: 1, studentIndex: 1, subject: '英', label: '(2)' },
+      { dayOfWeek: 4, slotNumber: 1, deskIndex: 0, templateDeskIndex: 1, studentIndex: 1, subject: '英', label: '(1)' },
+      { dayOfWeek: 4, slotNumber: 1, deskIndex: 1, templateDeskIndex: 2, studentIndex: 1, subject: '英', label: '(2)' },
     ])
     expect(plan.message).not.toContain('残る手作業')
     expect(plan.message).toContain('テンプレの (1)・(2) の席に確認用の生徒を登録して保存します')
@@ -394,27 +400,49 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
     expect(plan.message).toContain('講師を 講師B から 講師D に替え')
   })
 
-  it('テンプレの席が 2 つ揃わないコマは使わず次のコマを探す（別の曜日のテンプレは見ない）', () => {
+  it('テンプレの席が 2 つ揃わないコマは使わず次のコマを探す（コマの曜日のテンプレで見る）', () => {
     const weeks = [[fullCell('2026-11-12', 1), fullCell('2026-11-13', 1)]]
-    const template: RegularLessonTemplate = {
-      ...templateFor([[{ studentId: 's001', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, { studentId: 's009', subject: '英' }]]),
-    }
+    const template = templateFor([[{ studentId: 's001', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, { studentId: 's009', subject: '英' }]], 4, 1, [FRIDAY_CELL()])
     const plan = planChecklistPrep(baseInput('tp-64', weeks, { template }))
     expect(plan.ok && plan.cellId).toBe('2026-11-13_1')
     expect(plan.ok && plan.templateRegistrations.map((entry) => entry.dayOfWeek)).toEqual([5, 5])
   })
 
-  it('template が null（テンプレ未作成）でも第 2 段（全部の席が空き）', () => {
+  it('template が null（テンプレ未作成）なら盤面の机をテンプレの机に引けないので選ばない（理由を返して何もしない）', () => {
     const plan = planChecklistPrep(baseInput('tp-64', [[fullCell('2026-11-12', 1)]], { template: null }))
-    expect(plan.ok && plan.templateRegistrations).toHaveLength(2)
-    expect(plan.ok && plan.message).not.toContain('残る手作業')
+    expect(plan.ok).toBe(false)
+    expect(!plan.ok && plan.reason).toContain('テンプレの机')
+  })
+
+  it('盤面の机に対応するテンプレの机が引けない机（テンプレに居ない生徒）は (1)・(2) に選ばない', () => {
+    // 机 1 の生徒 s001 はテンプレに居ない（テンプレは s002・s003）。
+    const template = templateFor([[{ studentId: 's009', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, null], [{ studentId: 's003', subject: '数' }, null]])
+    const prefix = '2026-11-12_1'
+    const threeDesks = cell('2026-11-12', 1, [
+      templateDesk(`${prefix}_d1`, '講師A', templateStudent(`${prefix}_s1`, 's001')),
+      templateDesk(`${prefix}_d2`, '講師B', templateStudent(`${prefix}_s2`, 's002')),
+      templateDesk(`${prefix}_d3`, '講師C', templateStudent(`${prefix}_s3`, 's003')),
+    ])
+    const plan = planChecklistPrep(baseInput('tp-64', [[threeDesks]], { template }))
+    expect(plan.ok && plan.templateRegistrations.map((entry) => [entry.deskIndex, entry.templateDeskIndex])).toEqual([[1, 2], [2, 3]])
+  })
+
+  it('テンプレの生徒の席が盤面とずれている机（テンプレは生徒 2 に居るのに盤面は生徒 1）は選ばない', () => {
+    // 盤面は生徒 1 だけ居ないテンプレの机を [生徒 2, 空] に詰めて置く（buildManagedRegularLessonsRange）。そのまま席 2 に登録すると別の席になる。
+    const template = templateFor([[null, { studentId: 's001', subject: '数' }], [{ studentId: 's002', subject: '数' }, null], [{ studentId: 's003', subject: '数' }, null]])
+    const prefix = '2026-11-12_1'
+    const threeDesks = cell('2026-11-12', 1, [
+      templateDesk(`${prefix}_d1`, '講師A', templateStudent(`${prefix}_s1`, 's001')),
+      templateDesk(`${prefix}_d2`, '講師B', templateStudent(`${prefix}_s2`, 's002')),
+      templateDesk(`${prefix}_d3`, '講師C', templateStudent(`${prefix}_s3`, 's003')),
+    ])
+    const plan = planChecklistPrep(baseInput('tp-64', [[threeDesks]], { template }))
+    expect(plan.ok && plan.templateRegistrations.map((entry) => entry.templateDeskIndex)).toEqual([2, 3])
   })
 
   it('prepStudents を渡すと、その曜日・時限に登録できる確認用の生徒が 2 人居ないコマは使わない（INV-12）', () => {
     const weeks = [[fullCell('2026-11-12', 1), fullCell('2026-11-13', 1)]]
-    const template: RegularLessonTemplate = {
-      ...templateFor([[{ studentId: 's001', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, null], [{ studentId: 's950', subject: '英' }, null]]),
-    }
+    const template = templateFor([[{ studentId: 's001', subject: '数' }, null], [{ studentId: 's002', subject: '数' }, null], [{ studentId: 's950', subject: '英' }, null]], 4, 1, [FRIDAY_CELL()])
     const prepStudents = [prepStudent('s950', 'A'), prepStudent('s951', 'B')]
     const plan = planChecklistPrep(baseInput('tp-64', weeks, { template, prepStudents }))
     expect(plan.ok && plan.cellId).toBe('2026-11-13_1')
