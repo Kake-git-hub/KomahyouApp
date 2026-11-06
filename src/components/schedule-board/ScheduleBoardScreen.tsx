@@ -66,6 +66,7 @@ import {
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
 import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
+import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from './templatePendingRowHighlight'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
@@ -8601,7 +8602,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null
   // 保留の机のメニュー（下段の中身・採用ボタン）。deskId で持つ（机の並べ替えで index がずれても同じ机を指す）。
   // target: 'teacher'＝下段の講師欄から開いた講師の選択（テンプレの講師を採用／手入力の講師を採用・tp-64 2026-10-27）。無し＝席の 4 択。
-  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number; target?: 'teacher' } | null>(null)
+  // pressed＝席のメニューを開いたときに押した行（上段／下段）。盤面の選択中の枠は押した行だけに付ける（tp-64・2026-11-06・resolveOpenedPendingRowHighlight）。
+  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number; target?: 'teacher'; pressed?: TemplatePendingPressedRow } | null>(null)
   const templatePendingDeskMenuRef = useRef<HTMLDivElement | null>(null)
   // 保留の机の週をまたいだ一覧（決定記録 48 §3・spec-template-behavior §H Q42-6）。「保留 n」バッジで開く。読むだけ（解決は保留の机メニュー）。
   const [isTemplatePendingListOpen, setTemplatePendingListOpen] = useState(false)
@@ -11098,6 +11100,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const menuStudentOnTemplatePendingDesk = Boolean(menuStudentPendingEntry && menuStudent && studentMenu && isTemplatePendingSeatLinked(menuStudent.desk, menuStudentPendingEntry.entry.lower, studentMenu.studentIndex))
   // 「保留を片づける」の対象の席: 押した席に下段があればその席、無ければ帯の席（regression-reviewer M-2）。
   const menuStudentPendingLowerSeat = menuStudentPendingEntry && studentMenu && hasTemplatePendingLowerSeatContent(menuStudentPendingEntry.entry.lower, studentMenu.studentIndex) ? studentMenu.studentIndex : null
+  // 盤面の選択中の枠は押した行だけ（オーナー指示 2026-11-06・確認リスト tp-64 受付 20261105-234609713「クリックしている行だけハイライトして」）。
+  // 保留の席の上段の生徒メニュー＝上段・保留メニュー＝押した行（pressed）・講師の 2 択＝講師欄の下段。BoardGrid は memo なので値が変わるときだけ作り直す。
+  const studentMenuPendingUpperSeat = menuStudentOnTemplatePendingDesk && studentMenu && menuStudent
+    ? { cellId: studentMenu.cellId, deskId: menuStudent.desk.id, seatIndex: studentMenu.studentIndex }
+    : null
+  const pendingUpperCellId = studentMenuPendingUpperSeat?.cellId ?? null
+  const pendingUpperDeskId = studentMenuPendingUpperSeat?.deskId ?? null
+  const pendingUpperSeatIndex = studentMenuPendingUpperSeat?.seatIndex ?? null
+  const openedPendingRowHighlight = useMemo(() => resolveOpenedPendingRowHighlight({
+    isTemplateMode,
+    pendingDeskMenu: templatePendingDeskMenu,
+    studentMenuPendingUpperSeat: pendingUpperCellId !== null && pendingUpperDeskId !== null && pendingUpperSeatIndex !== null
+      ? { cellId: pendingUpperCellId, deskId: pendingUpperDeskId, seatIndex: pendingUpperSeatIndex }
+      : null,
+  }), [isTemplateMode, templatePendingDeskMenu, pendingUpperCellId, pendingUpperDeskId, pendingUpperSeatIndex])
   const emptyMenuVariant = resolveEmptySeatMenuVariant(emptyMenuContext?.statusEntry?.status, emptyMenuContext?.cell.isOpenDay ?? true)
   const displayRecordClearButton = resolveDisplayRecordClearButton(emptyMenuContext?.statusEntry?.status, transferSourceRestDisplayEnabled)
 
@@ -13910,7 +13927,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   // lowerIndex＝対象の席（押した下段の席。上段メニューの「保留を片づける」からは下段のある最初の席）。
   // メニューは 4 択（テンプレ授業を採用／手入力データを採用／手入力データを削除／手入力データを移動・確認リスト v1.5.576 その他欄）。
-  const openTemplatePendingDeskMenu = (cellId: string, deskIndex: number, x: number, y: number, lowerIndex?: number) => {
+  // pressed＝押した行（下段・帯＝lower／上段の空席・「保留を片づける」＝upper）。盤面の枠は押した行だけ（オーナー指示 2026-11-06・tp-64）。
+  const openTemplatePendingDeskMenu = (cellId: string, deskIndex: number, x: number, y: number, lowerIndex: number | undefined, pressed: TemplatePendingPressedRow) => {
     const deskId = cells.find((item) => item.id === cellId)?.desks[deskIndex]?.id
     const found = deskId ? resolveTemplatePendingDeskAt(cellId, deskIndex) : null
     if (!deskId || !found) return false
@@ -13924,7 +13942,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage('講師の保留です。テンプレの講師か手入力の講師かを選んでください。')
       return true
     }
-    setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y })
+    setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y, pressed })
     setStatusMessage('保留の席です。残す方を選んでください。')
     return true
   }
@@ -13956,7 +13974,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       executeTemplatePendingLowerMove(cellId, deskIndex, lowerIndex)
       return
     }
-    openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)
+    openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex, { row: 'lower', seatIndex: lowerIndex })
   }
 
   const buildTemplatePendingLedgers = (): TemplatePendingResolutionLedgers => ({
@@ -14236,7 +14254,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         setStatusMessage(TEMPLATE_PENDING_MESSAGES.landingBlocked)
         return
       }
-      openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex)
+      openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex, { row: 'upper', seatIndex: studentIndex })
       return
     }
     setSelectedCellId(cellId)
@@ -16739,7 +16757,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
             dragMoveActive={isDragMoveActive}
             highlightedPendingLower={isTemplateMode ? null : templatePendingLowerMove}
-            openedPendingSeat={isTemplateMode || !templatePendingDeskMenu || templatePendingDeskMenu.target === 'teacher' ? null : templatePendingDeskMenu}
+            openedPendingSeat={openedPendingRowHighlight}
             onStudentMouseDown={isTemplateMode ? undefined : stableHandleStudentMouseDown}
             onTeacherMouseDown={isTemplateMode ? undefined : stableHandleTeacherMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}
@@ -17445,7 +17463,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   </div>
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
-                  <button type="button" className="menu-link-button subtle" onClick={() => openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y, menuStudentPendingLowerSeat ?? undefined)} data-testid="template-pending-open-desk-menu-button">保留を片づける</button>
+                  <button type="button" className="menu-link-button subtle" onClick={() => openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y, menuStudentPendingLowerSeat ?? undefined, { row: 'upper', seatIndex: studentMenu.studentIndex })} data-testid="template-pending-open-desk-menu-button">保留を片づける</button>
                 </div>
               ) : studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">

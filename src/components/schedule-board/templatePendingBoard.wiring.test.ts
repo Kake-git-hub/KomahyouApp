@@ -20,7 +20,7 @@ import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './temp
 vi.mock('html2canvas', () => ({ default: vi.fn() }))
 vi.mock('jspdf', () => ({ default: class {} }))
 
-const { BoardGrid, fitStudentNameAndDetailTextForBoard } = await import('./BoardGrid')
+const { BoardGrid, fitStudentNameAndDetailTextForBoard, fitTeacherTextForBoard } = await import('./BoardGrid')
 const { stripTemplatePendingLowerForPdf } = await import('../../utils/pdf')
 
 const BOARD_TSX = readFileSync(fileURLToPath(new NodeURL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
@@ -160,26 +160,72 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       expect(toContainer(renderGrid(PENDING, { highlightedPendingLower: null })).querySelector('.sa-pending-lower-picked')).toBeNull()
     })
 
-    // 2026-11-05 オーナー指示(フリーメモ 20261105-052334430): メニューを開いている席は上段・下段の両方に選択中の枠を付ける。
-    it('保留メニューを開いている席(openedPendingSeat)は上段(.sa-student-inner)と下段の両方にだけ選択中のクラスが付く', () => {
-      const container = toContainer(renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 0 } }))
-      expect(container.querySelectorAll('.sa-pending-upper-selected')).toHaveLength(1)
-      expect(container.querySelectorAll('.sa-pending-lower-selected')).toHaveLength(1)
+    // 押した行だけに選択中の枠を付ける（オーナー指示 2026-11-06・確認リスト tp-64 受付 20261105-234609713「上の行クリック時は誰もハイライトされず、
+    // 下の行クリック時は両方ハイライトされてしまっています。クリックしている行だけハイライトして。」）。
+    // v1.5.689（2026-11-05 フリーメモ 20261105-052334430）は「上段・下段の両方」に付けていた＝読み違い。どの行かは resolveOpenedPendingRowHighlight が決める。
+    const DESK_1 = `${CELL_ID}_desk_1`
+    const SELECTED = '.sa-pending-upper-selected, .sa-pending-lower-selected'
+    it('上段を押した(row=upper)ときは、その席の上段(.sa-student-inner)だけに枠。下段には付けない', () => {
+      const container = toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: DESK_1, seatIndex: 0, row: 'upper' } }))
       const td = container.querySelector(`[data-testid="student-cell-${CELL_ID}-0-0"]`)!
+      expect(container.querySelectorAll('.sa-pending-upper-selected')).toHaveLength(1)
       expect(td.querySelector('.sa-student-inner')!.className).toContain('sa-pending-upper-selected')
+      expect(container.querySelector('.sa-pending-lower-selected')).toBeNull()
+      expect(td.className).not.toContain('sa-student-picked')
+    })
+
+    it('下段を押した(row=lower)ときは、その席の下段だけに枠。上段には付けない', () => {
+      const container = toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: DESK_1, seatIndex: 0, row: 'lower' } }))
+      expect(container.querySelectorAll('.sa-pending-lower-selected')).toHaveLength(1)
       expect(container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!.className).toContain('sa-pending-lower-selected')
       expect(container.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-1"]`)!.className).not.toContain('sa-pending-lower-selected')
-      expect(td.className).not.toContain('sa-student-picked')
-      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: null })).querySelector('.sa-pending-upper-selected, .sa-pending-lower-selected')).toBeNull()
-      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_2`, lowerIndex: 0 } })).querySelector('.sa-pending-upper-selected, .sa-pending-lower-selected')).toBeNull()
+      expect(container.querySelector('.sa-pending-upper-selected')).toBeNull()
+    })
+
+    it('講師欄の下段の講師名を押した(teacher-lower)ときは、講師欄の下段だけに枠。席の上段・下段には付けない', () => {
+      const teacherAndSeatPending: TemplatePendingDeskMap = {
+        [buildTemplatePendingDeskKey(CELL_ID, DESK_1)]: { ...PENDING[buildTemplatePendingDeskKey(CELL_ID, DESK_1)], lower: { ...PENDING[buildTemplatePendingDeskKey(CELL_ID, DESK_1)].lower, teacher: { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' } } },
+      }
+      const container = toContainer(renderGrid(teacherAndSeatPending, { openedPendingSeat: { kind: 'teacher-lower', cellId: CELL_ID, deskId: DESK_1 } }))
+      expect(container.querySelectorAll('.sa-pending-lower-selected')).toHaveLength(1)
+      expect(container.querySelector(`[data-testid="pending-lower-teacher-${CELL_ID}-0"]`)!.className).toContain('sa-pending-lower-selected')
+      expect(container.querySelector('.sa-pending-upper-selected')).toBeNull()
+      // 席の枠（上段/下段）を指していれば講師欄の下段には付けない
+      const seatLower = toContainer(renderGrid(teacherAndSeatPending, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: DESK_1, seatIndex: 0, row: 'lower' } }))
+      expect(seatLower.querySelector(`[data-testid="pending-lower-teacher-${CELL_ID}-0"]`)!.className).not.toContain('sa-pending-lower-selected')
+      // 盤面 PDF の複製では講師欄の下段ごと外れる（INV-13）
+      stripTemplatePendingLowerForPdf(container)
+      expect(container.querySelector(SELECTED)).toBeNull()
+      expect(container.querySelector(`[data-testid="pending-lower-teacher-${CELL_ID}-0"]`)).toBeNull()
+    })
+
+    it('机 id・席が違えば付かない。null（メニューを閉じた）なら誰にも付かない', () => {
+      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: null })).querySelector(SELECTED)).toBeNull()
+      for (const row of ['upper', 'lower'] as const) {
+        expect(toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: `${CELL_ID}_desk_2`, seatIndex: 0, row } })).querySelector(SELECTED)).toBeNull()
+        expect(toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: 'other_cell', deskId: DESK_1, seatIndex: 0, row } })).querySelector(SELECTED)).toBeNull()
+        const otherSeat = toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: DESK_1, seatIndex: 1, row } }))
+        expect(otherSeat.querySelector(`[data-testid="student-cell-${CELL_ID}-0-0"] .sa-student-inner`)!.className).not.toContain('sa-pending-upper-selected')
+        expect(otherSeat.querySelector(`[data-testid="pending-lower-${CELL_ID}-0-0"]`)!.className).not.toContain('sa-pending-lower-selected')
+      }
+      // 講師の下段の無い机（席だけの保留）では teacher-lower を指しても何も付かない
+      expect(toContainer(renderGrid(PENDING, { openedPendingSeat: { kind: 'teacher-lower', cellId: CELL_ID, deskId: DESK_1 } })).querySelector(SELECTED)).toBeNull()
     })
 
     it('盤面 PDF のクローンから上段の選択中の印も外れる(下段は丸ごと外れる)', () => {
-      const root = document.createElement('div')
-      root.innerHTML = renderGrid(PENDING, { openedPendingSeat: { cellId: CELL_ID, deskId: `${CELL_ID}_desk_1`, lowerIndex: 0 } })
-      stripTemplatePendingLowerForPdf(root)
-      expect(root.querySelector('.sa-pending-upper-selected')).toBeNull()
-      expect(root.querySelector('.sa-pending-lower')).toBeNull()
+      for (const row of ['upper', 'lower'] as const) {
+        const root = document.createElement('div')
+        root.innerHTML = renderGrid(PENDING, { openedPendingSeat: { kind: 'seat', cellId: CELL_ID, deskId: DESK_1, seatIndex: 0, row } })
+        stripTemplatePendingLowerForPdf(root)
+        expect(root.querySelector(SELECTED)).toBeNull()
+        expect(root.querySelector('.sa-pending-lower')).toBeNull()
+      }
+    })
+
+    it('CSS: 選択中の枠の説明は「押した行だけ」（両方に付ける旧文が残っていない）', () => {
+      const css = readFileSync(fileURLToPath(new NodeURL('../../App.css', import.meta.url)), 'utf8')
+      expect(css).toContain('.sa-student-inner.sa-pending-upper-selected,\n.sa-pending-lower.sa-pending-lower-selected {')
+      expect(css).not.toContain('上段・下段の両方に太い青枠')
     })
 
     it('上段の生徒を掴んでいる(selectedStudentId)ときは td が sa-student-picked になるが、下段には picked を付けない', () => {
@@ -335,6 +381,121 @@ describe('Q41-13 のずらしの印は緑にしない（2026-11-05 オーナー�
   })
 })
 
+// オーナー報告 2026-11-06（確認リスト tp-64 受付 20261105-234609713・v1.5.692「講師欄が緑の 2 行（上＝テンプレの講師・下＝手置き講師）になっていない」。
+// テスト教室の 11/1・11/4 の報告「手置き講師が抹消される／2 段表示されない」も同じ）。保存データ（templatePendingDesks の lower.teacher）は正しく、
+// 真因は表示: 講師名の枠（.sa-teacher-name）が CSS と文字合わせの直書きで height:100% になり、生徒の 2 行で伸びた行いっぱいに上段の名前が広がって、
+// 下段の手置き講師を td の下へ押し出していた（次の机の講師欄の背景に塗りつぶされて見えない・Chromium で実測 72px/78px）。
+// jsdom はレイアウトを測れないので、文字合わせの直書きと CSS の字面で固定する（実ブラウザの確認は確認リストで）。
+describe('講師のぶつかりの講師欄は上段＝テンプレの講師・下段＝手置き講師の 2 行で見える（tp-64・2026-11-06・INV-13）', () => {
+  const DESK_1_KEY = buildTemplatePendingDeskKey(CELL_ID, `${CELL_ID}_desk_1`)
+  const TEACHER_AND_SEAT_PENDING: TemplatePendingDeskMap = {
+    [DESK_1_KEY]: { ...PENDING[DESK_1_KEY], lower: { ...PENDING[DESK_1_KEY].lower, teacher: { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' } } },
+  }
+  const render = (pending: TemplatePendingDeskMap, cells?: SlotCell[]) => {
+    const root = document.createElement('div')
+    root.innerHTML = renderGrid(pending, cells ? { cells } : undefined)
+    return root
+  }
+  const upperNameOf = (root: HTMLElement, deskIndex: number) => root.querySelector<HTMLElement>(`[data-testid="teacher-cell-${CELL_ID}-${deskIndex}"] > .sa-teacher-name`)!
+  const lowerNameOf = (root: HTMLElement, deskIndex: number) => root.querySelector<HTMLElement>(`[data-testid="pending-lower-teacher-${CELL_ID}-${deskIndex}"] .sa-teacher-name`)!
+
+  it('文字合わせは講師のぶつかりの講師欄の上段・下段の名前に height:100% を直書きしない（前に付いた直書きも外す）。保留でない講師欄は今どおり直書きする', () => {
+    const root = render(TEACHER_AND_SEAT_PENDING)
+    // 保留になる前に文字合わせが走っていた机を再現する（React は同じ要素を使い回すので、前の直書きが残っている）
+    root.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => { node.style.height = '100%' })
+    fitTeacherTextForBoard(root)
+    expect(upperNameOf(root, 0).style.height).toBe('')
+    expect(lowerNameOf(root, 0).style.height).toBe('')
+    // 1 行・はみ出し隠し・文字サイズの直書きは今どおり当てる
+    for (const node of [upperNameOf(root, 0), lowerNameOf(root, 0)]) {
+      expect(node.style.whiteSpace).toBe('nowrap')
+      expect(node.style.overflow).toBe('hidden')
+      expect(node.style.width).toBe('100%')
+      expect(node.style.fontSize).toBe('20px')
+    }
+    // 保留でない机（机 2）の講師名は従来どおり height:100% を直書きする
+    expect(upperNameOf(root, 1).style.height).toBe('100%')
+    expect(upperNameOf(root, 1).style.fontSize).toBe('20px')
+  })
+
+  it('上段が空（上＝講師なし／下＝手置き講師）の講師欄も、上段の名前の直書きの高さを外す（空の枠が行いっぱいに広がって下段を押し出さない）', () => {
+    const cell = boardCell()
+    cell.desks[0] = { ...cell.desks[0], teacher: '' }
+    const root = render(TEACHER_AND_SEAT_PENDING, [cell])
+    upperNameOf(root, 0).style.height = '100%'
+    fitTeacherTextForBoard(root)
+    expect(upperNameOf(root, 0).textContent).toBe('')
+    expect(upperNameOf(root, 0).style.height).toBe('')
+    expect(lowerNameOf(root, 0).textContent).toBe('佐藤')
+  })
+
+  it('席だけの保留（講師欄は白）・保留の無い盤面の講師名は今どおり（height:100% を直書き）', () => {
+    for (const pending of [PENDING, {}] as TemplatePendingDeskMap[]) {
+      const root = render(pending)
+      fitTeacherTextForBoard(root)
+      expect(upperNameOf(root, 0).style.height).toBe('100%')
+      expect(upperNameOf(root, 1).style.height).toBe('100%')
+    }
+  })
+
+  // 生徒の上段・下段と同じ規則（オーナー指示 2026-10-02「保留の 2 行目も…テンプレと同じテキストスタイル、サイズにして」）。
+  // jsdom は幅を測れないので、名前の scrollWidth を「文字数 × 文字サイズ」、clientWidth を固定 60px にしてはみ出しを文字サイズに依存させる。
+  it('上段と下段の講師名は小さい方の文字サイズに揃う（長い名前の側に合わせる）。保留でない講師名は自分だけで合わせる', () => {
+    const pending: TemplatePendingDeskMap = {
+      [DESK_1_KEY]: { ...PENDING[DESK_1_KEY], lower: { teacher: { teacher: '佐藤佐藤佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' } } },
+    }
+    const root = render(pending)
+    for (const node of Array.from(root.querySelectorAll<HTMLElement>('.sa-teacher-name'))) {
+      Object.defineProperty(node, 'clientWidth', { get: () => 60 })
+      Object.defineProperty(node, 'scrollWidth', { get: () => (node.textContent?.length ?? 0) * parseFloat(node.style.fontSize || '13') })
+    }
+    fitTeacherTextForBoard(root)
+    const lowerSize = parseFloat(lowerNameOf(root, 0).style.fontSize)
+    expect(lowerSize).toBeLessThan(20)
+    expect(lowerSize).toBeGreaterThanOrEqual(7.5)
+    expect(upperNameOf(root, 0).style.fontSize).toBe(lowerNameOf(root, 0).style.fontSize)
+    expect(upperNameOf(root, 0).style.lineHeight).toBe(lowerNameOf(root, 0).style.lineHeight)
+    // 保留でない机（机 2「田中」）: 2 文字 × 20px = 40 ≤ 60 → 従来どおり 20px
+    expect(upperNameOf(root, 1).style.fontSize).toBe('20px')
+  })
+
+  it('CSS: 講師のぶつかりの講師欄は上詰め・上段の名前は上段の生徒の行と同じ固定の高さ（100% ではない）・下段の名前も固定の高さ。基本の講師名は 100% のまま', () => {
+    const css = readFileSync(fileURLToPath(new NodeURL('../../App.css', import.meta.url)), 'utf8')
+    const ruleOf = (selector: string) => {
+      const start = css.indexOf(`\n${selector} {`)
+      expect(start, selector).toBeGreaterThanOrEqual(0)
+      return css.slice(start, css.indexOf('}', start))
+    }
+    expect(ruleOf('.sa-teacher.sa-pending')).toMatch(/vertical-align:\s*top;/u)
+    const upper = ruleOf('.sa-teacher.sa-pending > .sa-teacher-name')
+    expect(upper).toMatch(/\n\s*height:\s*\d+px;/u)
+    expect(upper).not.toMatch(/height:\s*100%/u)
+    expect(upper).not.toMatch(/display:/u)
+    const lower = ruleOf('.sa-pending-lower-teacher > .sa-pending-lower-inner.sa-teacher-name')
+    expect(lower).toMatch(/\n\s*height:\s*\d+px;/u)
+    expect(lower).not.toMatch(/height:\s*100%/u)
+    // 狭い画面で下段の名前を隠す（帯「講師」を出す）規則に勝たないよう、display は書かない
+    expect(lower).not.toMatch(/display:/u)
+    // 保留でない講師名（.sa-teacher-name の基本）は今どおり行いっぱいの高さで上下中央
+    expect(ruleOf('.sa-teacher-name')).toMatch(/\n\s*height:\s*100%;/u)
+  })
+
+  it('盤面 PDF の複製では講師欄の保留の印と下段の講師が外れ、上段の講師名は保留でない講師名と同じ規則に戻る（INV-13）', () => {
+    const root = render(TEACHER_AND_SEAT_PENDING)
+    fitTeacherTextForBoard(root)
+    const clone = root.cloneNode(true) as HTMLElement
+    stripTemplatePendingLowerForPdf(clone)
+    expect(clone.querySelector('.sa-teacher.sa-pending')).toBeNull()
+    expect(clone.querySelector('.sa-pending-lower-teacher')).toBeNull()
+    expect(clone.textContent).not.toContain('佐藤')
+    const upper = upperNameOf(clone, 0)
+    expect(upper.textContent).toBe('鈴木')
+    // 新しい上詰め・固定の高さの規則（.sa-teacher.sa-pending 配下）は当たらなくなり、直書きの高さも無いので基本の 100% に従う
+    expect(upper.closest('.sa-pending, .sa-pending-lower')).toBeNull()
+    expect(upper.style.height).toBe('')
+  })
+})
+
 describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分）', () => {
   it('複製から下段（.sa-pending-lower）と保留の緑を外す。上段の生徒は残る', () => {
     const container = document.createElement('div')
@@ -459,7 +620,8 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     expect(scheduleMove).toContain('resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex, null, resolvedSeat.studentIndex)')
     const click = sliceBody(BOARD_TSX, 'const handleStudentClick = (', 'if (hasStudent) {')
     expect(click).toContain('TEMPLATE_PENDING_MESSAGES.landingBlocked')
-    expect(click).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex)')
+    // 上段の空席を押して開く保留メニューは「押した行＝上段」（tp-64・2026-11-06・押した行だけに枠）
+    expect(click).toContain("openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex, { row: 'upper', seatIndex: studentIndex })")
   })
 
   // オーナー決定 2026-10-02「席単位にする」（Q34-12）: 保留の制限（出席・空席クリック→保留メニュー・着地不可・上段メニューの制限）は
@@ -509,10 +671,35 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     expect(confirmFn).toContain('planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry, seatIndex: lowerIndex })')
     // 下段を押した席がメニューの対象（帯・下段のクリックは lowerIndex を渡す）
     const lowerClick = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerClick = (', 'const buildTemplatePendingLedgers = ')
-    expect(lowerClick).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)')
+    // 下段（帯「保留 n」も下段の中）を押して開く保留メニューは「押した行＝下段」（tp-64・2026-11-06）
+    expect(lowerClick).toContain("openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex, { row: 'lower', seatIndex: lowerIndex })")
     // 上段メニューの「保留を片づける」は、押した席に下段があればその席を対象にする（regression-reviewer M-2）
     expect(BOARD_TSX).toContain('const menuStudentPendingLowerSeat = menuStudentPendingEntry && studentMenu && hasTemplatePendingLowerSeatContent(menuStudentPendingEntry.entry.lower, studentMenu.studentIndex) ? studentMenu.studentIndex : null')
-    expect(BOARD_TSX).toContain('openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y, menuStudentPendingLowerSeat ?? undefined)')
+    // 「保留を片づける」は上段の生徒メニューから開くので「押した行＝上段（押した席）」（tp-64・2026-11-06）
+    expect(BOARD_TSX).toContain("openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y, menuStudentPendingLowerSeat ?? undefined, { row: 'upper', seatIndex: studentMenu.studentIndex })")
+  })
+
+  // オーナー指示 2026-11-06（確認リスト tp-64 受付 20261105-234609713）「クリックしている行だけハイライトして」。
+  it('押した行だけの枠: 盤面へは resolveOpenedPendingRowHighlight の結果だけを渡し、保留メニューは押した行（pressed）を持つ', () => {
+    // 盤面へ保留メニューの state をそのまま渡さない（旧: 上段・下段の両方に枠）
+    expect(BOARD_TSX).not.toContain('openedPendingSeat={isTemplateMode || !templatePendingDeskMenu')
+    expect(BOARD_TSX).toContain('openedPendingSeat={openedPendingRowHighlight}')
+    // 判定は純関数 1 つ。生徒メニューの上段（保留の席・menuStudentOnTemplatePendingDesk）と保留メニューの押した行・テンプレ編集中を入力にする
+    const highlight = sliceBody(BOARD_TSX, 'const openedPendingRowHighlight = useMemo(', '\n  }), [')
+    expect(highlight).toContain('resolveOpenedPendingRowHighlight({')
+    expect(highlight).toContain('isTemplateMode,')
+    expect(highlight).toContain('pendingDeskMenu: templatePendingDeskMenu,')
+    expect(highlight).toContain('studentMenuPendingUpperSeat: pendingUpperCellId !== null')
+    // 生徒メニューの上段の席は「保留の席の上段の生徒メニュー」（menuStudentOnTemplatePendingDesk・isTemplatePendingSeatLinked）のときだけ
+    expect(BOARD_TSX).toContain('const studentMenuPendingUpperSeat = menuStudentOnTemplatePendingDesk && studentMenu && menuStudent')
+    // BoardGrid は memo（再描画コストが大きい）なので、生徒メニューの x/y が変わるたびに新しいオブジェクトを渡さない（席の 3 値だけを依存にする）
+    expect(BOARD_TSX).toContain('}), [isTemplateMode, templatePendingDeskMenu, pendingUpperCellId, pendingUpperDeskId, pendingUpperSeatIndex])')
+    // 保留メニューを開く口は押した行を受け取り、席のメニューの state に入れる（講師の 2 択は target='teacher' で講師欄の下段）
+    const open = sliceBody(BOARD_TSX, 'const openTemplatePendingDeskMenu = (', 'const handleTemplatePendingLowerTeacherClick = (')
+    expect(open).toContain('pressed: TemplatePendingPressedRow')
+    expect(open).toContain('setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y, pressed })')
+    const teacherClick = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerTeacherClick = (', 'const handleTemplatePendingLowerClick = (')
+    expect(teacherClick).toContain("setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: 0, x, y, target: 'teacher' })")
   })
 
   // オーナー指示 2026-10-02: テンプレ編集画面の見出し行（題名・反映開始日・机数）とボタン行を 1 行に。反映開始日はエクセル取込の右・机数は出さない。

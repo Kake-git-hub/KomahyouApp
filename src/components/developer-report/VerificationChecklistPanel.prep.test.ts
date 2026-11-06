@@ -43,8 +43,9 @@ describe('VerificationChecklistPanel の「準備する」', () => {
   }
   const button = (itemId: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-prep-${itemId}"]`)
 
-  it('autoPrep の項目(v2-1・tp-64)だけに出す', () => {
-    expect(autoPrepIds.sort()).toEqual(['tp-64', 'v2-1'])
+  // 第113版(2026-11-06): v2-1 は OK で確認リストから外したので、autoPrep の項目は tp-64 だけ。
+  it('autoPrep の項目(tp-64)だけに出す', () => {
+    expect(autoPrepIds.sort()).toEqual(['tp-64'])
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(button(id), id).not.toBeNull()
     expect(button(plainItem.id)).toBeNull()
@@ -56,6 +57,16 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     for (const id of autoPrepIds) expect(button(id), id).toBeNull()
   })
 
+  it('ボタンは準備の行の左(準備の文より前)に出る(オーナー指示 2026-11-06 ap-1)', () => {
+    render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
+    for (const id of autoPrepIds) {
+      const row = button(id)!.closest('.verification-checklist-prep-row')!
+      const text = row.querySelector('.verification-checklist-prep')!
+      expect(row.firstElementChild, id).toBe(button(id))
+      expect(button(id)!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+    }
+  })
+
   it('押すと onPrepare(itemId)。実行中は無効で「準備中…」、終われば結果文を出し下書きには残さない', async () => {
     let resolvePrepare: (value: { ok: boolean; message: string }) => void = () => {}
     const onPrepare = vi.fn((itemId: string) => {
@@ -63,20 +74,19 @@ describe('VerificationChecklistPanel の「準備する」', () => {
       return new Promise<{ ok: boolean; message: string }>((resolve) => { resolvePrepare = resolve })
     })
     render({ onPrepare })
-    act(() => button('v2-1')!.click())
-    expect(onPrepare).toHaveBeenCalledWith('v2-1')
-    expect(button('v2-1')!.disabled).toBe(true)
-    expect(button('v2-1')!.textContent).toContain('準備中…')
-    // 1 つずつ(実行中はほかの項目の「準備する」も押せない)。
+    act(() => button('tp-64')!.click())
+    expect(onPrepare).toHaveBeenCalledWith('tp-64')
     expect(button('tp-64')!.disabled).toBe(true)
-    act(() => button('v2-1')!.click())
+    expect(button('tp-64')!.textContent).toContain('準備中…')
+    // 1 つずつ(実行中は同じボタンをもう一度押しても呼ばない。ほかの項目の「準備する」も同じ preparingItemId で無効になる)。
+    act(() => button('tp-64')!.click())
     expect(onPrepare).toHaveBeenCalledTimes(1)
     await act(async () => { resolvePrepare({ ok: true, message: '11/12(木) 1限 机 3 の生徒 1 に体験「確認用 体験1」を置きました。' }) })
-    expect(button('v2-1')!.disabled).toBe(false)
-    expect(button('v2-1')!.textContent).toBe('準備する')
+    expect(button('tp-64')!.disabled).toBe(false)
+    expect(button('tp-64')!.textContent).toBe('準備する')
     const result = container.querySelector<HTMLElement>('[data-testid="verification-checklist-prep-result"]')
     expect(result?.textContent).toContain('11/12(木) 1限 机 3 の生徒 1 に体験「確認用 体験1」を置きました。')
-    expect(result?.getAttribute('data-item-id')).toBe('v2-1')
+    expect(result?.getAttribute('data-item-id')).toBe('tp-64')
     expect(result?.className).toContain('is-ok')
     // 結果文は画面だけ(下書きに保存しない)。
     for (let index = 0; index < window.localStorage.length; index += 1) {
@@ -95,8 +105,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
 
     const throwing = vi.fn(async () => { throw new Error('boom') })
     render({ onPrepare: throwing })
-    await act(async () => { button('v2-1')!.click() })
-    expect(button('v2-1')!.disabled).toBe(false)
-    expect(container.querySelector('[data-testid="verification-checklist-prep-result"][data-item-id="v2-1"]')?.textContent).toContain('boom')
+    await act(async () => { button('tp-64')!.click() })
+    expect(button('tp-64')!.disabled).toBe(false)
+    expect(container.querySelector('[data-testid="verification-checklist-prep-result"][data-item-id="tp-64"]')?.textContent).toContain('boom')
   })
 })
