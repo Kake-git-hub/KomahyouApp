@@ -2806,6 +2806,24 @@ tr.sa-group-row td {
   gap: 1px;
 }
 
+/* 講師のぶつかりの講師欄（上段＝テンプレの講師・下段＝手置き講師・spec-template-conflict-v2 §2-3）。生徒の席の保留（.sa-student.sa-pending-desk）と同じく
+   上詰めにし、上段の名前の枠は上段の生徒の行と同じ固定の高さ、下段（.sa-pending-lower-teacher）はその下に下段の生徒の行と並ぶ高さで描く。
+   回帰防止（オーナー報告 2026-11-06・確認リスト tp-64「講師欄が緑の 2 行になっていない」）: 上段の名前を基本の .sa-teacher-name の height:100% のままにすると、
+   生徒の 2 行で伸びた行いっぱいに上段の枠が広がり、下段の手置き講師が td の下へ押し出されて次の机の講師欄に塗りつぶされる（Chromium で実測）。
+   文字合わせ（BoardGrid fitTeacherTextForBoard）もこの講師欄の名前には高さを直書きしない。display は書かない（狭い画面で下段の名前を隠し帯「講師」を出す規則を残す）。
+   盤面 PDF は stripTemplatePendingLowerForPdf が sa-pending と下段を外すので、ここの規則は当たらず従来の講師欄に戻る（INV-13）。 */
+.sa-teacher.sa-pending {
+  vertical-align: top;
+}
+
+.sa-teacher.sa-pending > .sa-teacher-name {
+  height: 38px;
+}
+
+.sa-pending-lower-teacher > .sa-pending-lower-inner.sa-teacher-name {
+  height: 38px;
+}
+
 /* 下段を長押しで掴んでいる間は、その下段だけ白抜き(上段と同じ青地・白文字)。上段の td は青くしない(BoardGrid highlightedPendingLower)。 */
 .sa-pending-lower.sa-pending-lower-picked {
   background: #1a73e8;
@@ -2821,7 +2839,9 @@ tr.sa-group-row td {
   color: #fff;
 }
 
-/* 保留メニューを開いている席(2026-11-05 オーナー指示): 上段・下段の両方に太い青枠。印刷/PDF には出さない(PDF は strip で外す・印刷は下の @media print で無効化)。 */
+/* 押した行だけに太い青枠(オーナー指示 2026-11-06・確認リスト tp-64「クリックしている行だけハイライトして」): 席の上段・席の下段・講師欄の下段のどれか 1 つ
+   (どの行かは resolveOpenedPendingRowHighlight)。回帰防止: v1.5.689 は同じ席の上段と下段の両方に付けていた。
+   印刷/PDF には出さない(PDF は strip で外す・印刷は下の @media print で無効化)。 */
 .sa-student-inner.sa-pending-upper-selected,
 .sa-pending-lower.sa-pending-lower-selected {
   outline: 3px solid #1a73e8;

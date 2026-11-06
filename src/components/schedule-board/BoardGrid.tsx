@@ -12,6 +12,7 @@ import { isManualOriginDeskTeacher, isManualOriginStudent, MANUAL_ORIGIN_CLASS }
 import { hasDeskTeacherRest, TEACHER_REST_CELL_CLASS, TEACHER_REST_LABEL_CLASS } from './teacherRest'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
+import type { OpenedPendingRowHighlight } from './templatePendingRowHighlight'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -90,8 +91,21 @@ function fitFontSize(options: {
   apply(low)
 }
 
-function fitTeacherTextForBoard(root: HTMLElement) {
+function applyTeacherNameFontSize(node: HTMLElement, fontSize: number) {
+  node.style.fontSize = `${fontSize}px`
+  node.style.lineHeight = fontSize > 15 ? '1.02' : '1.08'
+}
+
+// export はテスト用（講師のぶつかりの講師欄の上段・下段の直書きを jsdom で固定する・templatePendingBoard.wiring.test.ts）。
+export function fitTeacherTextForBoard(root: HTMLElement) {
+  const fittedSizes = new Map<HTMLElement, number>()
   root.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
+    // 回帰防止（オーナー報告 2026-11-06・確認リスト tp-64「講師欄が緑の 2 行（上＝テンプレの講師・下＝手置き講師）になっていない」）:
+    // 講師のぶつかりの講師欄（.sa-teacher.sa-pending＝上段のテンプレの講師＋下段の手置き講師）の名前には高さを直書きしない（CSS の固定の高さに任せる）。
+    // height:100% を直書きすると、生徒の 2 行で伸びた行いっぱいに上段の名前の枠が広がり、下段の手置き講師が td の下へ押し出されて
+    // 次の机の講師欄に塗りつぶされる（Chromium で実測）。React は同じ要素を使い回し、前に当てた直書きが残るので、名前が空の枠でも外す。
+    const inPendingTeacher = Boolean(node.closest('.sa-teacher.sa-pending'))
+    if (inPendingTeacher) node.style.removeProperty('height')
     if (!node.textContent?.trim()) return
 
     node.style.overflow = 'hidden'
@@ -99,17 +113,31 @@ function fitTeacherTextForBoard(root: HTMLElement) {
     // 講師名は必ず 1 行で表示し、幅が足りない場合はフォントを縮める (縦書き見えを避ける)
     node.style.whiteSpace = 'nowrap'
     node.style.width = '100%'
-    node.style.height = '100%'
+    if (!inPendingTeacher) node.style.height = '100%'
 
+    let applied = 20
     fitFontSize({
       initialFontSize: 20,
       minFontSize: 7.5,
       apply: (fontSize) => {
-        node.style.fontSize = `${fontSize}px`
-        node.style.lineHeight = fontSize > 15 ? '1.02' : '1.08'
+        applied = fontSize
+        applyTeacherNameFontSize(node, fontSize)
       },
       overflows: () => node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1,
     })
+    if (inPendingTeacher) fittedSizes.set(node, applied)
+  })
+  // 講師のぶつかりの講師欄は、上段（テンプレの講師）と下段（手置き講師）を小さい方の文字サイズに揃える（生徒の上段・下段と同じ規則・
+  // オーナー指示 2026-10-02「保留の 2 行目も…テンプレと同じテキストスタイル、サイズにして」）。
+  root.querySelectorAll<HTMLElement>('.sa-teacher.sa-pending').forEach((cell) => {
+    const upper = cell.querySelector<HTMLElement>(':scope > .sa-teacher-name')
+    const lower = cell.querySelector<HTMLElement>(':scope > .sa-pending-lower-teacher .sa-teacher-name')
+    const upperSize = upper ? fittedSizes.get(upper) : undefined
+    const lowerSize = lower ? fittedSizes.get(lower) : undefined
+    if (!upper || !lower || upperSize === undefined || lowerSize === undefined) return
+    const shared = Math.min(upperSize, lowerSize)
+    if (shared !== upperSize) applyTeacherNameFontSize(upper, shared)
+    if (shared !== lowerSize) applyTeacherNameFontSize(lower, shared)
   })
 }
 
@@ -291,9 +319,11 @@ type BoardGridProps = {
   // 上段を掴んだときは td の .sa-student-picked（下段は緑のまま・CSS で .sa-student-inner に限定）、下段を掴んだときはこの席の
   // .sa-pending-lower だけに .sa-pending-lower-picked を付ける＝掴んでいる方だけ白抜き。
   highlightedPendingLower?: { cellId: string; deskId: string; lowerIndex: number } | null
-  // 保留メニューを開いている席（2026-11-05 オーナー指示「上段をクリックしたら上段を、下段も同様にハイライト」）。上段(.sa-student-inner に
-  // sa-pending-upper-selected)と下段(.sa-pending-lower に sa-pending-lower-selected)の両方に選択中の枠を付ける。画面専用(PDF は strip で外す)。
-  openedPendingSeat?: { cellId: string; deskId: string; lowerIndex: number } | null
+  // 押した行だけに選択中の枠を付ける（オーナー指示 2026-11-06・確認リスト tp-64 受付 20261105-234609713「クリックしている行だけハイライトして」）。
+  // どの行かは resolveOpenedPendingRowHighlight（templatePendingRowHighlight.ts）が決める: 席の上段（.sa-student-inner に sa-pending-upper-selected）・
+  // 席の下段（.sa-pending-lower に sa-pending-lower-selected）・講師欄の下段（.sa-pending-lower-teacher に sa-pending-lower-selected）のどれか 1 つ。
+  // 回帰防止: v1.5.689 は同じ席の上段・下段の両方に付けていた（読み違い）。画面専用（PDF は strip で外す・INV-13）。
+  openedPendingSeat?: OpenedPendingRowHighlight | null
 }
 
 function BoardGridComponent({
@@ -357,8 +387,12 @@ function BoardGridComponent({
     // 上段のサイズを合わせ直す・regression-reviewer 低-4・2026-10-02)。
   }, [cells, linkResolutionCells, groupClassEntries, templatePendingDesks])
 
-  const isOpenedPendingSeat = (cellId: string, deskId: string | undefined, seat: number) => Boolean(
-    openedPendingSeat && deskId && openedPendingSeat.cellId === cellId && openedPendingSeat.deskId === deskId && openedPendingSeat.lowerIndex === seat,
+  const isOpenedPendingRow = (cellId: string, deskId: string | undefined, seat: number, row: 'upper' | 'lower') => Boolean(
+    openedPendingSeat && openedPendingSeat.kind === 'seat' && deskId
+    && openedPendingSeat.cellId === cellId && openedPendingSeat.deskId === deskId && openedPendingSeat.seatIndex === seat && openedPendingSeat.row === row,
+  )
+  const isOpenedPendingTeacherLower = (cellId: string, deskId: string | undefined) => Boolean(
+    openedPendingSeat && openedPendingSeat.kind === 'teacher-lower' && deskId && openedPendingSeat.cellId === cellId && openedPendingSeat.deskId === deskId,
   )
   const renderStudentCell = (
     cell: SlotCell,
@@ -461,7 +495,7 @@ function BoardGridComponent({
         data-slot-number={cell.slotNumber}
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >
-        <div className={`sa-student-inner${pendingLowerNode && isOpenedPendingSeat(cell.id, cell.desks[deskIndex]?.id, studentIndex) ? ' sa-pending-upper-selected' : ''}`}>
+        <div className={`sa-student-inner${pendingLowerNode && isOpenedPendingRow(cell.id, cell.desks[deskIndex]?.id, studentIndex, 'upper') ? ' sa-pending-upper-selected' : ''}`}>
           {hasMemo ? (
             <span
               className={`sa-student-name sa-student-name-note${hasWarning ? ' sa-student-name-warning' : ''}${showManualOriginColor ? ` ${MANUAL_ORIGIN_CLASS}` : ''}`}
@@ -589,7 +623,7 @@ function BoardGridComponent({
     )
     return (
       <div
-        className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}${isOpenedPendingSeat(cell.id, desk?.id, studentIndex) ? ' sa-pending-lower-selected' : ''}`}
+        className={`sa-pending-lower${isLowerPicked ? ' sa-pending-lower-picked' : ''}${isOpenedPendingRow(cell.id, desk?.id, studentIndex, 'lower') ? ' sa-pending-lower-selected' : ''}`}
         // 決定記録 48（2026-10-25）: テンプレ保存以外（丸ごと振替の押し出しなど）が作った保留は理由文を添える。色は同じ緑（種別の区別は文だけ）。
         title={pending.origin?.note ? `保留中の下段（${pending.origin.note}）。押すと保留の机のメニューを開きます。` : '保留中の下段（既存）。押すと保留の机のメニューを開きます。'}
         data-testid={`pending-lower-${cell.id}-${deskIndex}-${studentIndex}`}
@@ -884,7 +918,7 @@ function BoardGridComponent({
                           {/* Q41（2026-10-21・オーナー決定 B）: 下段の手置き講師。生徒の下段と同じ緑・同じクラス（PDF はクローンから .sa-pending-lower を外す＝INV-13）。 */}
                           {cell.isOpenDay && pendingEntry?.lower.teacher ? (
                             <div
-                              className="sa-pending-lower sa-pending-lower-teacher"
+                              className={`sa-pending-lower sa-pending-lower-teacher${isOpenedPendingTeacherLower(cell.id, desk.id) ? ' sa-pending-lower-selected' : ''}`}
                               title="保留中の下段（手で置いた講師）。押すとテンプレの講師か手入力の講師かを選べます。"
                               data-testid={`pending-lower-teacher-${cell.id}-${deskIndex}`}
                               onClick={(event) => {
