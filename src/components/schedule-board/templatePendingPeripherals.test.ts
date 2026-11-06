@@ -476,6 +476,8 @@ describe('退塾スイープ: 保留の下段の生徒・記録も消す（在�
     })
     expect(sweep.changed).toBe(true)
     expect(sweep.removedSeatCount).toBe(1)
+    // 退塾取消(2026-11-05): 下段から消した分も「戻らない授業」に数える(日付・時限はキーのコマから引く)。
+    expect(sweep.removedLessons).toEqual([{ dateKey: DATE, slotNumber: SLOT, kind: 'seat', lessonType: 'makeup', subject: '数' }])
     expect(sweep.nextWeeks[0]).toBe(diff.nextWeeks[0])
     expect(sweep.nextTemplatePendingDesks![key].lower.lesson).toBeUndefined()
     expect(sweep.nextSuppressedMakeupOrigins).toEqual({ 'sM__数': [{ dateKey: '2026-09-30' }] })
@@ -520,6 +522,7 @@ describe('退塾スイープ: 保留の下段の生徒・記録も消す（在�
     })
     expect(batch.changed).toBe(true)
     expect(batch.results.map((result) => [result.studentId, result.removedSeatCount])).toEqual([['sM', 1]])
+    expect(batch.results[0].removedLessons).toEqual([{ dateKey: DATE, slotNumber: SLOT, kind: 'seat', lessonType: 'makeup', subject: '数' }])
     expect(batch.nextTemplatePendingDesks![key].lower.lesson).toBeUndefined()
   })
 })

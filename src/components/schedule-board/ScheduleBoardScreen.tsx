@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, isExternalStudentRow, isStudentWithdrawnOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, isExternalStudentRow, isStudentWithdrawnOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type StudentWithdrawRemovedLesson, type TeacherRow } from '../basic-data/basicDataModel'
 import { getJstTodayDateKey } from '../../utils/jstDate'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isHiddenAutoAssignRule, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
@@ -1061,6 +1061,9 @@ type ScheduleBoardScreenProps = {
   syncElapsedSeconds?: number | null
   // 削除ガード用: 未消化の講習/振替が残る生徒ID→残数を親(App)へ通知する（BasicDataScreen の誤削除警告に使う）。
   onDeletionStockSummaryChange?: (summary: StudentDeletionStockSummary) => void
+  // 退塾取消(2026-11-05): 退塾スイープが消した席・出欠記録を親(App)へ知らせる。App が名簿行の withdrawSweepRemovedLessons へ追記し、
+  // 「退塾取消」の確認画面の「戻らない授業」に出す。掃除で実際に何かを消したとき(commitWeeks の後)だけ呼ぶ。
+  onStudentWithdrawSweepApplied?: (results: Array<{ studentId: string; removedLessons: StudentWithdrawRemovedLesson[] }>) => void
 }
 
 export type ScheduleRangePreference = {
@@ -4516,6 +4519,11 @@ export type StudentWithdrawSweepOutcome = {
   nextTemplatePendingDesks?: TemplatePendingDeskMap
   removedSeatCount: number
   removedStatusCount: number
+  /**
+   * 消した席・出欠記録 1 件ずつ(退塾取消の確認画面の「戻らない授業」・2026-11-05)。件数は removedSeatCount + removedStatusCount と同じ。
+   * 表示のための写しで台帳ではない(在庫・請求の計算には使わない)。
+   */
+  removedLessons: StudentWithdrawRemovedLesson[]
 }
 
 export function computeStudentWithdrawSweep(params: {
@@ -4537,6 +4545,7 @@ export function computeStudentWithdrawSweep(params: {
     ...(params.templatePendingDesks ? { nextTemplatePendingDesks: params.templatePendingDesks } : {}),
     removedSeatCount: 0,
     removedStatusCount: 0,
+    removedLessons: [],
   }
   if (!studentId || !fromDateKey) return unchanged
 
@@ -4553,6 +4562,13 @@ export function computeStudentWithdrawSweep(params: {
 
   let removedSeatCount = 0
   let removedStatusCount = 0
+  const removedLessons: StudentWithdrawRemovedLesson[] = []
+  const recordRemovedSeat = (seat: StudentEntry, dateKey: string, slotNumber: number) => {
+    removedLessons.push({ dateKey, slotNumber, kind: 'seat', lessonType: seat.lessonType, subject: seat.subject })
+  }
+  const recordRemovedStatus = (statusEntry: StudentStatusEntry, dateKey: string, slotNumber: number) => {
+    removedLessons.push({ dateKey, slotNumber, kind: 'status', lessonType: statusEntry.lessonType, subject: statusEntry.subject, status: statusEntry.status })
+  }
   let nextSuppressedMakeupOrigins = params.suppressedMakeupOrigins
   const appendedSuppressionTokens = new Set<string>()
   // 席・記録 1 件分の抑止(上のコメントの表がそのまま条件)。status は出欠記録を消すときだけ渡す。
@@ -4587,6 +4603,7 @@ export function computeStudentWithdrawSweep(params: {
           const seat = desk.lesson?.studentSlots[studentIndex]
           if (!seat) continue
           suppressForRemovedEntry(seat, nextCell.dateKey)
+          recordRemovedSeat(seat, nextCell.dateKey, nextCell.slotNumber)
           removeStudentFromDeskLesson(desk, studentIndex)
           removedSeatCount += 1
         }
@@ -4598,6 +4615,7 @@ export function computeStudentWithdrawSweep(params: {
           const statusEntry = desk.statusSlots?.[statusIndex]
           if (!statusEntry) continue
           suppressForRemovedEntry(buildStudentEntryFromStatus(statusEntry), nextCell.dateKey, statusEntry.status)
+          recordRemovedStatus(statusEntry, nextCell.dateKey, nextCell.slotNumber)
           setDeskStudentStatus(desk, statusIndex, null)
           removedStatusCount += 1
         }
@@ -4611,12 +4629,20 @@ export function computeStudentWithdrawSweep(params: {
   let nextTemplatePendingDesks = params.templatePendingDesks ?? undefined
   if (params.templatePendingDesks && hasTemplatePendingDesks(params.templatePendingDesks)) {
     const dateKeyByCellId = new Map<string, string>()
-    for (const week of weeks) for (const cell of week) dateKeyByCellId.set(cell.id, cell.dateKey)
+    // 退塾取消(2026-11-05): 下段から消した分の時限も「戻らない授業」に載せるため、キーのコマの時限も引く。
+    const slotNumberByCellId = new Map<string, number>()
+    for (const week of weeks) {
+      for (const cell of week) {
+        dateKeyByCellId.set(cell.id, cell.dateKey)
+        slotNumberByCellId.set(cell.id, cell.slotNumber)
+      }
+    }
     let pendingChanged = false
     const updated: TemplatePendingDeskMap = {}
     for (const [key, pending] of Object.entries(params.templatePendingDesks)) {
       const parsed = parseTemplatePendingDeskKey(key)
       const cellDateKey = parsed ? dateKeyByCellId.get(parsed.cellId) : undefined
+      const cellSlotNumber = parsed ? slotNumberByCellId.get(parsed.cellId) ?? 0 : 0
       const lower = pending.lower
       const ownedSeatIndexes = (lower.lesson?.studentSlots ?? []).map((student, index) => (owns(student) ? index : -1)).filter((index) => index >= 0)
       const ownedStatusIndexes = (lower.statusSlots ?? []).map((entry, index) => (owns(entry) ? index : -1)).filter((index) => index >= 0)
@@ -4629,7 +4655,9 @@ export function computeStudentWithdrawSweep(params: {
       if (ownedSeatIndexes.length > 0) {
         for (const index of ownedSeatIndexes) {
           const seat = lower.lesson?.studentSlots[index]
-          if (seat) suppressForRemovedEntry(seat, cellDateKey)
+          if (!seat) continue
+          suppressForRemovedEntry(seat, cellDateKey)
+          recordRemovedSeat(seat, cellDateKey, cellSlotNumber)
         }
         nextEntry = removeTemplatePendingLowerStudents(nextEntry, ownedSeatIndexes).nextEntry
         removedSeatCount += ownedSeatIndexes.length
@@ -4640,6 +4668,7 @@ export function computeStudentWithdrawSweep(params: {
           const statusEntry = statusSlots[index]
           if (!statusEntry) continue
           suppressForRemovedEntry(buildStudentEntryFromStatus(statusEntry), cellDateKey, statusEntry.status)
+          recordRemovedStatus(statusEntry, cellDateKey, cellSlotNumber)
           statusSlots[index] = null
           removedStatusCount += 1
         }
@@ -4664,6 +4693,7 @@ export function computeStudentWithdrawSweep(params: {
     ...(nextTemplatePendingDesks ? { nextTemplatePendingDesks } : {}),
     removedSeatCount,
     removedStatusCount,
+    removedLessons,
   }
 }
 
@@ -4674,7 +4704,7 @@ export type StudentWithdrawSweepBatch = {
   /** Q31: 保留マップ（templatePendingDesks を渡したときだけ）。 */
   nextTemplatePendingDesks?: TemplatePendingDeskMap
   /** 実際に何かを消した生徒だけ(メッセージ・操作ログ用)。 */
-  results: Array<{ studentId: string; displayName: string; fromDateKey: string; removedSeatCount: number; removedStatusCount: number }>
+  results: Array<{ studentId: string; displayName: string; fromDateKey: string; removedSeatCount: number; removedStatusCount: number; removedLessons: StudentWithdrawRemovedLesson[] }>
   /** 検出した対象集合の署名(同一マウント内での二重実行を抑える副ガード用。対象 0 なら空文字)。 */
   signature: string
 }
@@ -4755,6 +4785,7 @@ export function applyStudentWithdrawSweepToBoard(params: {
       fromDateKey: target.fromDateKey,
       removedSeatCount: sweep.removedSeatCount,
       removedStatusCount: sweep.removedStatusCount,
+      removedLessons: sweep.removedLessons,
     })
   }
   // 掃除で何も消えなかったときは盤面を差し替えない(再マージだけの差分を userInitiated な commit に載せない
@@ -8454,7 +8485,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, checklistPrepRequest, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, onParentAbsencePlacementSettled, isEditingStateLoadedForActingClassroom = false, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, reportAnswerUnreadCount, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, checklistPrepRequest, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, onParentAbsencePlacementSettled, isEditingStateLoadedForActingClassroom = false, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, reportAnswerUnreadCount, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange, onStudentWithdrawSweepApplied }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
@@ -15909,6 +15940,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // 下段を消した保留の机は commitWeeks の中の Q28 で 1 行へ戻る（同じ 1 操作）。フラグ OFF は従来どおり現在の保留マップ。
       sweep.nextTemplatePendingDesks ?? templatePendingDesks,
     )
+    // 退塾取消(2026-11-05): 消した席・記録を App へ知らせ、名簿行へ「戻らない授業」として残す(取消の確認画面に出す)。
+    //   commitWeeks の後・実際に消したときだけ(上の early return より後)。教室の一致は App 側でも確かめる(INV-08)。
+    onStudentWithdrawSweepApplied?.(sweep.results.map((result) => ({ studentId: result.studentId, removedLessons: result.removedLessons })))
     setStatusMessage(buildStudentWithdrawSweepMessage(sweep.results))
     // commitWeeks などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
     // 二重実行は「掃除で対象が 0 になる(冪等)」と対象集合の署名 ref で防いでいる。
