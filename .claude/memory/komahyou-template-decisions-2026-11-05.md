@@ -55,3 +55,9 @@ type: project
 - v2-1 は **案 A**: 並び替えは全部の机を動かし(保留だけ固定)、読み込み直しでも残る。テンプレ保存の直前に `restoreTemplateDeskOrder`(templateDeskOrderRestore.ts)で**保存前のテンプレ**を基準に戻す(新テンプレを基準にすると講師を替えただけの保存が並び替えに見える)。再マージの講師規則は `resolveBoardDeskIndexForManagedDesk` で授業 ID の対応に(机番号比較だと並び替えた週で W が消える)。
 - 確認リストの準備の自動化は **案 C**(段階導入): 計画 docs/plan-2026-11-06-checklist-auto-prep.md・仕様 spec-developer-report §E-2-4。第 1 段は v2-1・tp-64 に「準備する」ボタン(体験・メモ・手置き講師だけ＝会計中立・保存は手動)。
 - 「準備する」第 1 段(v1.5.692)の監査の教訓: 準備の中身は、その項目の OK の目安と**第 2 版の規則で突き合わせる**(テンプレの机の講師を手で替えると §2-3 で講師欄が 2 行＝「緑 2 行は出ない」と矛盾)。確認リストの項目を自動準備にするときは「準備 → やること → 目安」を規則表で一度通す。
+
+# 2026-11-06 確認リスト(v1.5.692 の送信)→ v1.5.693
+- v2-1(並び替え・案 A)・ap-1(「準備する」)は OK で外した。v2-1 の準備の処理は checklistPrep.ts に残す(テストの PREP_RETAINED_AFTER_OK に明示)。
+- tp-64「講師欄が緑の 2 行になっていない」の正体は**表示だけ**: 保存データには lower.teacher があった。`.sa-teacher-name` の height:100%(CSS＋fitTeacherTextForBoard の直書き)で上段の枠が伸びた行いっぱいに広がり、下段の講師が td の下へ押し出されて**次の机の講師欄の背景に塗りつぶされていた**(jsdom では見えない・Chromium の elementFromPoint で確かめた)。テスト教室の「手置き講師が抹消される」(11/1・11/4)も同じ原因。教訓: 「出ていない」報告は先に**報告時点の教室データ**(developerReports の snapshotStoragePath)で有無を見て、データか表示かを切り分ける。表示の重なりは実ブラウザで測る。
+- ハイライトは**押した行だけ**(11/5 のフリーメモを v1.5.689 で「上下両方」と読み違えた)。権威は resolveOpenedPendingRowHighlight(templatePendingRowHighlight.ts)。spec-template-conflict-v2 §5 に規則を書いた。
+- ap-1 のメモ「やることも手順ごとに準備と同じように自動化して」はオーナー判断待ち(台帳 checklist-auto-prep)。懸案: 確かめたい操作そのものを機械が行うと画面の不具合を見逃す(今回の 2 件は手で押して見つかった)・テンプレ保存の自動化は重い・項目ごとに専用の処理・開発用教室のテンプレに確認用の登録が溜まる。
