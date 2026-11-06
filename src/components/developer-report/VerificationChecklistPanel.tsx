@@ -593,8 +593,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                   {item.ownerDecision ? <p className="verification-checklist-owner-decision" data-testid={`verification-checklist-owner-decision-${item.id}`}><span className="verification-checklist-label">オーナーの決定</span>{text(item.ownerDecision)}</p> : null}
                   {item.prep ? (
                     <div className="verification-checklist-prep-row">
-                      <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
-                      {/* 「準備する」(2026-11-06・案 C 第 1 段): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
+                      {/* 「準備する」(2026-11-06・案 C 第 1 段・ボタンは文の左=ap-1): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
                       {item.autoPrep && onPrepare ? (
                         <button
                           type="button"
@@ -606,6 +605,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                           {preparingItemId === item.id ? '準備中…' : '準備する'}
                         </button>
                       ) : null}
+                      <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
                     </div>
                   ) : null}
                   {prepResults[item.id] ? (

@@ -6221,7 +6221,7 @@ body.verification-checklist-window {
   margin: 0 8px 0 0;
 }
 
-/* 確認リスト: 「準備する」(2026-11-06・案 C 第 1 段)。準備の行の右にボタン、結果文は項目の下に出す(改行を残す)。 */
+/* 確認リスト: 「準備する」(2026-11-06・案 C 第 1 段)。準備の行の左にボタン(ap-1)、結果文は項目の下に出す(改行を残す)。 */
 .verification-checklist-prep-row {
   display: flex;
   align-items: flex-start;
