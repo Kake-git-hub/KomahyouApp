@@ -220,6 +220,7 @@
 - tp-64 の第 2 段の中身: 第 1 段と同じ (1)・(2) の机（テンプレのその曜日・時限・机番号の席 2 も空いている机を選ぶ）に体験と手置き講師を置き、
   テンプレのその曜日・時限の (1)・(2) の机の席 2 に確認用の生徒を登録して保存する。結果の文の「残る手作業」は無くなり、やることは
   「(1)・(2) の机の見え方を見る → 採用のメニューを押す」だけになる。
+- 実装（v1.5.694）: `src/components/schedule-board/checklistPrepTemplate.ts` の `ensureChecklistPrepStudents`（確認用の生徒）・`assignChecklistPrepTemplateStudents`（テンプレの席へ登録）・`cleanupChecklistPrepBoard` / `removeChecklistPrepTemplateStudents`（後片づけ）、App の `checklistPrepRequest`（kind は prep / cleanup）。
 - 安全（第 1 段と同じ）: 本番 3 校にはボタンも処理も出さない（`isActingDevelopmentClassroom` の二重のガード）。リクエストは教室 ID を持ち、教室の切り替えで
   取りやめる（INV-08）。テンプレ編集中は断る。名簿への追加・盤面の準備・テンプレの保存のどれかができなければ、それより後は行わず理由を出す
   （途中まで進んだものは結果の文に書く。黙って消さない）。
