@@ -46,8 +46,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
   const button = (itemId: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-prep-${itemId}"]`)
 
   // 第113版(2026-11-06): v2-1 は OK で確認リストから外した。第116版(2026-11-07・v1.5.696): tp-64 も OK で外し、tp-59・tp-69・tp-70・mn-1・tp-66 に広げた。
-  it('autoPrep の項目(tp-59・tp-69・tp-70・mn-1・tp-66)だけに出す', () => {
-    expect([...autoPrepIds].sort()).toEqual(['mn-1', 'tp-59', 'tp-66', 'tp-69', 'tp-70'])
+  it('autoPrep の項目(tp-59・tp-69・tp-70・mn-1・tp-66・第 4 段の tp-71・tp-72・tp-75・v2-3・v2-6)だけに出す', () => {
+    expect([...autoPrepIds].sort()).toEqual(['mn-1', 'tp-59', 'tp-66', 'tp-69', 'tp-70', 'tp-71', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(button(id), id).not.toBeNull()
     expect(button(plainItem.id)).toBeNull()

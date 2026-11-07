@@ -477,7 +477,7 @@ describe('テンプレへの講師の登録と準備の印（checklistPrepTeache
     }
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 0)).toBe(0)
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 1)).toBe(2)
-    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1 })
+    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1, 'tp-71': 2, 'tp-72': 2, 'tp-75': 2, 'v2-3': 3, 'v2-6': 2 })
   })
 })
 

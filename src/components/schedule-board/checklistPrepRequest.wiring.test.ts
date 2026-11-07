@@ -39,7 +39,8 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
       if (line.trim() !== 'return') return
       const previous = (lines[index - 1] ?? '').trim()
       // wait(盤面を当てたのと同じレンダー)は何もしないで次のレンダーを待つ(このガードの対象に入れるため if ブロックの中の単独の return にしてある)。
-      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|if \(templatePhaseTiming === 'wait'\) \{|checklistPrepTemplatePhaseRef\.current = |onChecklistPrepRequestProgress\?\.\(\{ requestId: request\.requestId, stage: 'board-applied'|runChecklistPrepTemplatePhase\(/u)
+      // 第 4 段(§6): 段を続ける準備の wait(段を当てたのと同じレンダー)と、必ず finish か次の段を積んで知らせる runChecklistPrepSequence も同じ扱い。
+      expect(previous, `return without finish: ${previous}`).toMatch(/finish\(|jumpToWeekByDate\(|if \(templatePhaseTiming === 'wait'\) \{|if \(sequenceTiming === 'wait'\) \{|checklistPrepTemplatePhaseRef\.current = |onChecklistPrepRequestProgress\?\.\(\{ requestId: request\.requestId, stage: 'board-applied'|runChecklistPrepTemplatePhase\(|runChecklistPrepSequence\(/u)
     })
   })
 
@@ -73,8 +74,8 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(body.slice(skippedIndex, skippedIndex + 200)).toContain('finish(false, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE)')
     expect(skippedIndex).toBeLessThan(body.indexOf('commitWeeks(applied.weeks'))
     expect(body).toContain('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
-    // 準備と後片づけで 1 回ずつ(どちらも 1 リクエストで 1 回だけ)。
-    expect([...body.matchAll(/commitWeeks\(/gu)]).toHaveLength(2)
+    // 準備と後片づけで 1 回ずつ(どちらも 1 リクエストで 1 回だけ)。第 4 段(§6)の段を続ける準備は盤面の段ごとに 1 回(1 レンダーに 1 段)。
+    expect([...body.matchAll(/commitWeeks\(/gu)]).toHaveLength(3)
     expect(body).not.toContain('onSaveBoard')
     expect(body).not.toContain('setWeeks(')
   })
@@ -152,7 +153,8 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(cleanup).toContain('finish(true, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE)')
     const commit = cleanup.indexOf('commitWeeks(')
     expect(commit).toBeGreaterThan(cleanup.indexOf('if (cleanupPlan.nothing) {'))
-    expect(cleanup.slice(commit, commit + 300)).toContain('cleanupPlan.pendingDesks ?? templatePendingDesks')
+    // 第 4 段(§6): 確認用の生徒の台帳の分を外した台帳(led)も渡すので引数が長くなった(窓を広げた・保留マップを渡すことは同じ)。
+    expect(cleanup.slice(commit, commit + 500)).toContain('cleanupPlan.pendingDesks ?? templatePendingDesks')
     // 盤面を変えたら次のレンダーで保存(準備と同じ段)、変えていなければその場で保存。
     expect(cleanup).toContain('checklistPrepTemplatePhaseRef.current = cleanupPhase')
     expect(cleanup).toContain("onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })")

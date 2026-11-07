@@ -108,10 +108,10 @@ function statusEntry(): StudentStatusEntry {
 }
 
 describe('CHECKLIST_PREP_ITEM_IDS', () => {
-  it('第 1 段は v2-1 と tp-64 の 2 項目。第 3 段(2026-11-07・§E-2-4-3)で tp-59・tp-69・tp-70・mn-1・tp-66 を足した', () => {
-    expect([...CHECKLIST_PREP_ITEM_IDS].sort()).toEqual(['mn-1', 'tp-59', 'tp-64', 'tp-66', 'tp-69', 'tp-70', 'v2-1'])
-    // テンプレへ講師も登録する新しい置き方の項目は、テンプレが無いと準備しない(第 1 段の手作業の文に落とさない)。
-    expect([...CHECKLIST_PREP_TEMPLATE_ONLY_ITEM_IDS].sort()).toEqual(['tp-59', 'tp-69', 'tp-70'])
+  it('第 1 段は v2-1 と tp-64 の 2 項目。第 3 段(2026-11-07・§E-2-4-3)で tp-59・tp-69・tp-70・mn-1・tp-66、第 4 段(§6)で tp-71・tp-72・tp-75・v2-3・v2-6 を足した', () => {
+    expect([...CHECKLIST_PREP_ITEM_IDS].sort()).toEqual(['mn-1', 'tp-59', 'tp-64', 'tp-66', 'tp-69', 'tp-70', 'tp-71', 'tp-72', 'tp-75', 'v2-1', 'v2-3', 'v2-6'])
+    // テンプレへ講師も登録する新しい置き方の項目・段を続ける項目(第 4 段)は、テンプレが無いと準備しない(第 1 段の手作業の文に落とさない)。
+    expect([...CHECKLIST_PREP_TEMPLATE_ONLY_ITEM_IDS].sort()).toEqual(['tp-59', 'tp-69', 'tp-70', 'tp-71', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
   })
 })
 
@@ -344,12 +344,12 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
     id, name: `確認用 生徒${letter}`, displayName: `確認用 生徒${letter}`, email: '', entryDate: TODAY, withdrawDate: '', birthDate: CHECKLIST_PREP_STUDENT_BIRTH_DATE(TODAY),
   })
 
-  it('テンプレを要る項目は v2-1 以外（第 2 段は tp-64 だけ・第 3 段で広げた）。確認用の生徒は tp-64 と同じ置き方の項目が 2 人・tp-69 / tp-59 は 1 人・tp-70 は 0 人', () => {
-    expect([...CHECKLIST_PREP_TEMPLATE_ITEM_IDS]).toEqual(['tp-64', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'tp-66'])
+  it('テンプレを要る項目は v2-1 以外（第 2 段は tp-64 だけ・第 3 段・第 4 段で広げた）。確認用の生徒は tp-64 と同じ置き方の項目が 2 人・tp-69 / tp-59 は 1 人・tp-70 は 0 人・第 4 段は 2 人(v2-3 は 3 人)', () => {
+    expect([...CHECKLIST_PREP_TEMPLATE_ITEM_IDS]).toEqual(['tp-64', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
     expect(checklistPrepNeedsTemplate('tp-64')).toBe(true)
     expect(checklistPrepNeedsTemplate('v2-1')).toBe(false)
     expect(checklistPrepNeedsTemplate('nope')).toBe(false)
-    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1 })
+    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1, 'tp-71': 2, 'tp-72': 2, 'tp-75': 2, 'v2-3': 3, 'v2-6': 2 })
     // テンプレを要る項目は「準備する」の項目に含まれる。
     for (const itemId of CHECKLIST_PREP_TEMPLATE_ITEM_IDS) expect(CHECKLIST_PREP_ITEM_IDS).toContain(itemId)
   })
