@@ -7675,6 +7675,121 @@ export function disposeDayDeskEntries(params: {
   }
 }
 
+/**
+ * 日付メニュー「生徒を空にする」（handleClearStudentsOnDate）の本体（純関数・2026-11-07 にハンドラから挙動不変で切り出し・入力は変えない）。
+ * 会計（INV-06・2026-08-02 オーナー確定）: 在庫から出したコマ（振替・ストック由来の講習）は未消化へ返す／通常・体験・増コマ・手動追加は返さず回数 −1
+ * （disposeDayDeskEntries）。処分した通常授業の振替の抑止（collectClearedDayMakeupSuppressions・Issue #58）と、テンプレの通常授業を再マージで
+ * 置き直さない抑止キー（予定行の row-scan・collectManagedOccurrenceSuppressionsForDate）を積む。
+ */
+export function computeClearStudentsOnDate(params: {
+  weeks: SlotCell[][]
+  dateKey: string
+  ledgers: HolidayStockLedgers
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+  suppressedMakeupOrigins: MakeupOriginMap
+  suppressedRegularLessonOccurrences: string[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+  ledgerOriginDatesByKey: Record<string, string[]>
+  /** 機能フラグ templateDiffApply の教室だけ true（丸ごと振替の付け替えの日の扱い）。省略＝OFF（本番の教室の答えは変えない）。 */
+  templateOriginRules?: boolean
+}): {
+  nextWeeks: SlotCell[][]
+  ledgers: HolidayStockLedgers
+  nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+  nextSuppressedMakeupOrigins: MakeupOriginMap
+  nextSuppressedRegularLessonOccurrences: string[]
+  clearedCount: number
+  returnedCount: number
+} {
+  const { dateKey } = params
+  const nextWeeks = cloneWeeks(params.weeks)
+  let clearedCount = 0
+  let returnedCount = 0
+  let nextScheduleCountAdjustments = params.scheduleCountAdjustments
+  // Issue #58(INV-06): 処分した通常授業が後からの休日設定(テンプレ根拠の自動計算)で振替に積み直されないよう、
+  // 単発削除と同じ振替抑制を積む(詳細は collectClearedDayMakeupSuppressions のコメント)。
+  let nextSuppressedMakeupOrigins = cloneOriginMap(params.suppressedMakeupOrigins)
+  let clearLedgers: HolidayStockLedgers = {
+    manualLectureStockCounts: { ...params.ledgers.manualLectureStockCounts },
+    manualLectureStockOrigins: cloneManualLectureStockOrigins(params.ledgers.manualLectureStockOrigins),
+    manualMakeupAdjustments: cloneOriginMap(params.ledgers.manualMakeupAdjustments),
+    fallbackLectureStockStudents: { ...params.ledgers.fallbackLectureStockStudents },
+    fallbackMakeupStudents: { ...params.ledgers.fallbackMakeupStudents },
+  }
+
+  for (const week of nextWeeks) {
+    for (const cell of week) {
+      if (cell.dateKey !== dateKey) continue
+      // 抑制の収集は disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に行う。
+      nextSuppressedMakeupOrigins = collectClearedDayMakeupSuppressions({
+        cell,
+        suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+        resolveStockId: params.resolveStockId,
+      })
+      for (const desk of cell.desks) {
+        // 処分の裁定は丸ごと振替(Phase A)と**同一の共通関数**へ委譲する（判定を2か所に分散させない）。
+        // 在庫会計はさらに休日設定と同じ権威関数へ委譲され、違いは includeRegularLessons だけ:
+        // 休日設定＝教室都合で全部返す／全コマ削除・丸ごと振替＝在庫由来だけ返す。
+        // この経路は**講師とメモを残す**ので clearMemoSlots は false、通常授業の抑止は下の row-scan が担う。
+        const disposal = disposeDayDeskEntries({
+          desk,
+          cellDateKey: cell.dateKey,
+          cellSlotNumber: cell.slotNumber,
+          ledgers: clearLedgers,
+          scheduleCountAdjustments: nextScheduleCountAdjustments,
+          suppressedRegularLessonOccurrences: [],
+          managedStudentByAnyName: params.managedStudentByAnyName,
+          resolveDisplayName: params.resolveDisplayName,
+          resolveStockId: params.resolveStockId,
+          ledgerOriginDatesByKey: params.ledgerOriginDatesByKey,
+          suppressClearedRegularOccurrences: false,
+          clearMemoSlots: false,
+        })
+        clearLedgers = disposal.ledgers
+        nextScheduleCountAdjustments = disposal.nextScheduleCountAdjustments
+        clearedCount += disposal.counts.clearedEntryCount
+        returnedCount += disposal.counts.returnedEntryCount
+      }
+    }
+  }
+
+  // Suppress managed regular lessons so the overlay doesn't re-place them
+  // (row-scan の実体は丸ごと振替と共有の collectManagedOccurrenceSuppressionsForDate へ一本化。
+  //  休日解除側 :7703 の同型ループは講師在籍フィルタが1行多い意図的な差があるため残している)。
+  // ★丸ごと振替の付け替え（段 4・フラグ ON の教室だけ）の移動先 D' を空にしたら、予定行の削除記録は**移動元 D の日付**で積む
+  //   （2026-11-07 オーナー指示「直して」・選択「戻さない」・INV-03/INV-12）。D' には D の曜日のテンプレを展開していて、その展開は D の日付の削除記録でしか外れない
+  //   （buildAppliedManagedPostFreezeCells）。D' の日付で積むと、空にした D のテンプレの生徒（展開した授業・作成で D から移したその生徒自身の授業も §2-2 の根拠が
+  //   消えて）が再マージ・テンプレ保存で D' に戻っていた。D' の日付では積まない（組がある間は効かず、解除の後に D' 自身のテンプレを消す＝resolveSuppressedRegularLessonOccurrenceKey の
+  //   監査 要修正-B と同じ）。組を解除しても D の授業は D に戻らない（v1.5.706 の D' での削除と同じ）。D と D' は同じ曜日なので予定行は同じ。
+  //   在庫・回数は上の disposeDayDeskEntries のまま（付け替えの授業は振替＝ふだんの日の移動由来の振替と同じく未消化へ返す）。
+  // ★移動元 D を空にしたときは予定行の削除記録を積まない（兄弟監査 2026-11-07）。D のテンプレの授業は D' に展開していて D には無い（D は「休)」の記録だけ）。
+  //   D の日付で積むと D' の付け替えの授業が会計なしで消えていた（「対象の生徒はいませんでした」と出るのに D' が空になる）。ふだんの日に別の日へ動かした授業の
+  //   移動元を空にしても移動先の授業が残るのと同じ。D に後から置いた手入力は上の disposeDayDeskEntries がふだんどおり処分する。
+  const pairOnDate = params.templateOriginRules ? findWholeDayTransferPairForDate(params.suppressedRegularLessonOccurrences, dateKey) : null
+  const nextSuppressedRegularLessonOccurrences = pairOnDate?.role === 'source'
+    ? params.suppressedRegularLessonOccurrences
+    : collectManagedOccurrenceSuppressionsForDate({
+      dateKey: pairOnDate?.role === 'target' ? pairOnDate.sourceDateKey : dateKey,
+      students: params.students,
+      regularLessons: params.regularLessons,
+      suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
+    })
+
+  return {
+    nextWeeks,
+    ledgers: clearLedgers,
+    nextScheduleCountAdjustments,
+    nextSuppressedMakeupOrigins,
+    nextSuppressedRegularLessonOccurrences,
+    clearedCount,
+    returnedCount,
+  }
+}
+
 // ============================================================================
 // テンプレ差分反映の保留（2 行）の解決操作（Issue #72・第 1 段 (B)・docs/spec-template-behavior.md §H Q26〜Q28）
 //
@@ -13668,65 +13783,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const nextWeeks = cloneWeeks(weeks)
-    let clearedCount = 0
-    let returnedCount = 0
-    let nextScheduleCountAdjustments = scheduleCountAdjustments
-    // Issue #58(INV-06): 処分した通常授業が後からの休日設定(テンプレ根拠の自動計算)で振替に積み直されないよう、
-    // 単発削除と同じ振替抑制を積む(詳細は collectClearedDayMakeupSuppressions のコメント)。
-    let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
-    let clearLedgers: HolidayStockLedgers = {
-      manualLectureStockCounts: { ...manualLectureStockCounts },
-      manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
-      manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
-      fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
-      fallbackMakeupStudents: { ...fallbackMakeupStudents },
-    }
-
-    for (const week of nextWeeks) {
-      for (const cell of week) {
-        if (cell.dateKey !== dateKey) continue
-        // 抑制の収集は disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に行う。
-        nextSuppressedMakeupOrigins = collectClearedDayMakeupSuppressions({
-          cell,
-          suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
-          resolveStockId: resolveBoardStudentStockId,
-        })
-        for (const desk of cell.desks) {
-          // 処分の裁定は丸ごと振替(Phase A)と**同一の共通関数**へ委譲する（判定を2か所に分散させない）。
-          // 在庫会計はさらに休日設定と同じ権威関数へ委譲され、違いは includeRegularLessons だけ:
-          // 休日設定＝教室都合で全部返す／全コマ削除・丸ごと振替＝在庫由来だけ返す。
-          // この経路は**講師とメモを残す**ので clearMemoSlots は false、通常授業の抑止は下の row-scan が担う。
-          const disposal = disposeDayDeskEntries({
-            desk,
-            cellDateKey: cell.dateKey,
-            cellSlotNumber: cell.slotNumber,
-            ledgers: clearLedgers,
-            scheduleCountAdjustments: nextScheduleCountAdjustments,
-            suppressedRegularLessonOccurrences: [],
-            managedStudentByAnyName,
-            resolveDisplayName: resolveBoardStudentDisplayName,
-            resolveStockId: resolveBoardStudentStockId,
-            ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
-            suppressClearedRegularOccurrences: false,
-            clearMemoSlots: false,
-          })
-          clearLedgers = disposal.ledgers
-          nextScheduleCountAdjustments = disposal.nextScheduleCountAdjustments
-          clearedCount += disposal.counts.clearedEntryCount
-          returnedCount += disposal.counts.returnedEntryCount
-        }
-      }
-    }
-
-    // Suppress managed regular lessons so the overlay doesn't re-place them
-    // (row-scan の実体は丸ごと振替と共有の collectManagedOccurrenceSuppressionsForDate へ一本化。
-    //  休日解除側 :7703 の同型ループは講師在籍フィルタが1行多い意図的な差があるため残している)。
-    const nextSuppressedRegularLessonOccurrences = collectManagedOccurrenceSuppressionsForDate({
+    // 本体は純関数 computeClearStudentsOnDate（2026-11-07 に挙動不変で切り出し・丸ごと振替の付け替えの日の扱いもそこ）。
+    const {
+      nextWeeks,
+      ledgers: clearLedgers,
+      nextScheduleCountAdjustments,
+      nextSuppressedMakeupOrigins,
+      nextSuppressedRegularLessonOccurrences,
+      clearedCount,
+      returnedCount,
+    } = computeClearStudentsOnDate({
+      weeks,
       dateKey,
+      ledgers: { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents },
+      scheduleCountAdjustments,
+      suppressedMakeupOrigins,
+      suppressedRegularLessonOccurrences,
       students,
       regularLessons,
-      suppressedRegularLessonOccurrences,
+      managedStudentByAnyName,
+      resolveDisplayName: resolveBoardStudentDisplayName,
+      resolveStockId: resolveBoardStudentStockId,
+      ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+      templateOriginRules: templateDiffApplyEnabled,
     })
 
     commitWeeks(
