@@ -519,6 +519,33 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       expect(outcome.targetDesk.memoSlots).toEqual(['メモだけの日', null])
     })
 
+    // 2026-11-07（オーナー指示「直して」・INV-01 / INV-02）: 講師の居ない行の机の埋め草「講師未割当」は講師ではない（utils/deskTeacherLabel.ts）。
+    // 移す講師にも消える講師にも数えず、振替先へ手置きの講師として固定しない（振替先の本物の講師は「振替元机は講師なし」と同じく削除記録）。
+    it('振替元の机が埋め草「講師未割当」（講師の居ない行）→ 講師として移さない・数えない。振替先の本物の講師は削除記録（振替元机は講師なしと同じ）', () => {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(boardStudent(), { teacher: '講師未割当' }),
+        targetDesk: teacherDesk(),
+      }))
+      expect(outcome.result.summary.movedTeacherCount).toBe(0)
+      expect(outcome.result.summary.clearedTeacherCount).toBe(1)
+      expect(outcome.targetDesk.teacher).toBe('')
+      expect(outcome.targetDesk.teacherAssignmentSource).toBe('deleted')
+      expect(outcome.targetDesk.teacherAssignmentTeacherId).toBe('田中講師')
+      // 生徒は従来どおり移る
+      expect(outcome.targetDesk.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', lessonType: 'makeup' })
+    })
+
+    it('振替元も振替先も埋め草（どちらも講師なし）→ 講師の数は 0・振替先の埋め草を手置きの講師にも削除記録にもしない', () => {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(boardStudent(), { teacher: '講師未割当' }),
+        targetDesk: emptyDesk({ teacher: '講師未割当' }),
+      }))
+      expect(outcome.result.summary.movedTeacherCount).toBe(0)
+      expect(outcome.result.summary.clearedTeacherCount).toBe(0)
+      expect(Boolean(outcome.targetDesk.manualTeacher)).toBe(false)
+      expect(outcome.targetDesk.teacherAssignmentSource).toBeUndefined()
+    })
+
     // オーナー指示 2026-08-03: 丸ごと振替した日は**講師の顔ぶれもユーザーの操作結果で固定**する。
     // テンプレ足場講師（非manual）は本来テンプレに追従する（INV-02 確定仕様）が、丸ごと振替の両日だけは
     // 日単位の抑止キー（buildTemplateTeacherSuppressionKey）で再付与を止める。

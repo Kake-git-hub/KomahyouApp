@@ -112,7 +112,7 @@
 |--------|-------------|------|
 | スクールIE 日大前校 | `5w5OMueETerSKrSf14HC` | 本番（読み取り専用） |
 | スクールIE 緑が丘校 | `KzFnOQoTFLsCxwUp1tvh` | 本番（読み取り専用） |
-| スクールIE 薬円台校 | `6xnnbSTbwgGrBLy0EJKb` | 本番（読み取り専用） |
+| スクールIE 薬円台校 | `6xnnbSTbwgGrBLy0EJKb` | 削除済み（2026-11-07 オーナー「もう消したから考えなくて良い」・影響件数の計測対象から外す） |
 | 開発用教室           | `v8OZ7zH8vONNHjjYVcR1` | **書き込み可能な唯一の教室** |
 | テスト教室           | `test_classroom_20260507_dai` | 開発用に準じて扱う |
 

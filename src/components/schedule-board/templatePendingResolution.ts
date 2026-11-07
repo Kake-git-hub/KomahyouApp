@@ -11,6 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, buildTemplateTeacherDeclined, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell, type TeacherAliasResolver } from './templateDiffApply'
 import { releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import {
@@ -475,7 +476,7 @@ export function findTemplatePendingTeacherElsewhereDeskNumber(cell: Pick<SlotCel
 export function buildTemplatePendingTeacherChoiceConfirm(desk: Pick<DeskCell, 'teacher' | 'lesson'>, entry: TemplatePendingDesk, choice: TemplatePendingTeacherChoice) {
   const manualName = entry.lower.teacher?.teacher.trim()
   if (!manualName) return ''
-  const templateName = desk.teacher.trim() || 'なし'
+  const templateName = formatDeskTeacherLabel(desk.teacher).trim() || 'なし'
   if (choice === 'template') return `テンプレの講師 ${templateName} を採用します。手で置いた講師 ${manualName} はこの机から外れます。よろしいですか？`
   const upperNote = liveStudentsOf(desk.lesson).length > 0 ? `この机の生徒は ${manualName} の担当になります。` : ''
   return `手入力の講師 ${manualName} を採用します。テンプレの講師 ${templateName} はこの机から外れます。${upperNote}よろしいですか？`
@@ -503,7 +504,7 @@ export function computePendingTeacherChoice(params: {
   const teacher = found.entry.lower.teacher
   const manualName = teacher?.teacher.trim()
   if (!teacher || !manualName) return { status: 'blocked', message: 'この机には選ぶ講師がありません。' }
-  const templateName = location.desk.teacher.trim() || 'なし'
+  const templateName = formatDeskTeacherLabel(location.desk.teacher).trim() || 'なし'
   let nextWeeks = params.weeks
   if (params.choice === 'manual') {
     const elsewhere = findTemplatePendingTeacherElsewhereDeskNumber(location.cell, location.desk.id, teacher)

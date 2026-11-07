@@ -67,8 +67,10 @@ import {
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
 import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
+import { hasDeskSeatContent } from './teacherDragSource'
 import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from './templatePendingRowHighlight'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
+import { formatDeskTeacherLabel, hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
@@ -3659,7 +3661,7 @@ export function findDuplicateStudentInCellByKey(
 }
 
 function resolveDeskLabel(desk: DeskCell, deskIndex: number) {
-  return desk.teacher.trim() || `${deskIndex + 1}机目`
+  return formatDeskTeacherLabel(desk.teacher).trim() || `${deskIndex + 1}机目`
 }
 
 export function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell, status: StudentStatusKind): StudentStatusEntry {
@@ -5209,7 +5211,15 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
     // 下の据え置き判定(consumed 判定の後)で残す／消すを決める。
     const scaffoldCandidateIndexes = new Set<number>()
 
-    const nextDesks = cell.desks.map((desk, deskIndex) => {
+    const nextDesks = cell.desks.map((rawDesk, deskIndex) => {
+      // 2026-11-07(オーナー指示・INV-02): 授業も出欠記録も無い机で、講師の居ない行の埋め草「講師未割当」を手置きの印で固定したもの
+      // (v1.5.349 のガードが生徒を動かして空いた机の埋め草まで固定していた・既に保存されたデータ)は、講師なしの机(足場)として読む。
+      // 本物の講師は対象外(isPinnedPlaceholderTeacherDesk は埋め草の文字だけを見る)。授業のある机の固定は外さない(講師の D&D で
+      // 本物の講師を動かした跡の印で、外すと再マージがテンプレの講師をその机へ戻し同じ講師が 2 机になる＝INV-01)。
+      // メモだけの机も外さない(外すと空き机としてテンプレの授業の置き場になる＝findManagedPlacementTargetDesk はメモを見ない・regression-reviewer 指摘 4)。
+      const desk = !rawDesk.lesson && !hasRecordedStatusSlots(rawDesk) && !hasDeskSeatContent(rawDesk) && isPinnedPlaceholderTeacherDesk(rawDesk)
+        ? { ...rawDesk, manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentSessionId: undefined, teacherAssignmentTeacherId: undefined }
+        : rawDesk
       const lesson = desk.lesson
       if (!lesson || !isManagedLesson(lesson)) {
         const hasRecordedStatus = hasRecordedStatusSlots(desk)
@@ -6064,7 +6074,9 @@ function autoAssignTeacherToSpecialSession(params: {
         continue
       }
 
-      const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && !isLockedDesk(desk) && desk.teacher.trim())
+      // 講師の居ない行の机の埋め草「講師未割当」だけの机は講師だけの机に数えない(空き机・2026-11-07・utils/deskTeacherLabel.ts)。
+      // 数えると空き机のあるコマを満席と見なし、提出済みの講師が置かれなかった。
+      const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && !isLockedDesk(desk) && hasRealDeskTeacher(desk.teacher))
       // 削除tombstone(teacher='' だが source='deleted'=室長が意図的に消した机)は「空き机」ではない。
       // 空き机としてカウント/配置先に選ぶと、講習の自動割当が tombstone を上書きして削除記録を壊し、
       // 次の再マージで削除した講師が赤く復活する(回帰防止 2026-07-10。repack だけでなくこの経路も塞ぐ)。
@@ -6079,6 +6091,8 @@ function autoAssignTeacherToSpecialSession(params: {
 
       const nextDesks = cell.desks.map((desk) => ({ ...desk }))
       const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk))
+        // 埋め草だけの机は本物の講師だけの机より先に使う(本物の講師を上書きしない・2026-11-07)。
+        ?? nextDesks.find((desk) => !desk.lesson && !hasRealDeskTeacher(desk.teacher) && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk))
         ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && !hasDeskTeacherRest(desk))
       if (!candidateDesk) {
         skippedFullCellCount += 1
@@ -6513,9 +6527,11 @@ export function computeStudentMove(params: {
   // 仕様(v1.5.349): 生徒を移動して移動元の机が0人(レッスン無し)になっても講師名を保持する。
   // managed 再マージ(mergeManagedWeek 2467行付近)が非manualの自動割当講師を消すため、空き机を manual 扱いに固定する。
   // ※入れ替え(swap)では移動元に相手生徒が入り lesson が残るため、この分岐には入らない。
+  // ★2026-11-07(オーナー指示・INV-02): 固定するのは本物の講師だけ(hasRealDeskTeacher)。講師の居ない行の机の埋め草「講師未割当」を固定すると、
+  //   以後のテンプレ保存が手置きの講師として講師の一意に数え、詳細に「講師 講師未割当: 同じコマの机 n に手で置いた同じ講師が先にある…」が出続けた。
   const emptiedSourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
   const emptiedSourceDesk = emptiedSourceCell?.desks.find((d) => d.id === sourceDeskId)
-  if (emptiedSourceDesk && !emptiedSourceDesk.lesson && emptiedSourceDesk.teacher.trim() && !emptiedSourceDesk.manualTeacher) {
+  if (emptiedSourceDesk && !emptiedSourceDesk.lesson && hasRealDeskTeacher(emptiedSourceDesk.teacher) && !emptiedSourceDesk.manualTeacher) {
     emptiedSourceDesk.manualTeacher = true
   }
 
@@ -6928,8 +6944,20 @@ export function computeTeacherMove(params: {
 
   const sourceBlock = extractDeskTeacherBlock(sourceDesk)
   const targetBlock = extractDeskTeacherBlock(targetDesk)
-  const movedName = sourceBlock.teacher.trim()
-  const swappedName = targetBlock.teacher.trim()
+  // 文に出す講師名は本物の講師だけ(講師の居ない行の机の埋め草「講師未割当」は講師ではない・2026-11-07)。
+  // 埋め草の机(見た目は空欄)から本物の講師の机へ落としたときは、その講師が埋め草の机へ移ったと書く。
+  const sourceIsReal = hasRealDeskTeacher(sourceBlock.teacher)
+  const targetIsReal = hasRealDeskTeacher(targetBlock.teacher)
+  const movedName = sourceIsReal ? sourceBlock.teacher.trim() : targetBlock.teacher.trim()
+  const swappedName = sourceIsReal && targetIsReal ? targetBlock.teacher.trim() : ''
+  const movedToDeskIndex = sourceIsReal ? targetDeskIndex : sourceDeskIndex
+  // 埋め草の机(講師なし)から講師の居ない机へ: 講師だけ入替は動かすものが無い(見た目も空欄どうし)。生徒ごと席入替は、どちらかの机に
+  // 生徒・出欠記録・メモがあれば中身を動かす(埋め草の修正の前からできた操作・regression-reviewer 指摘 1)。中身も無ければ何もしない。
+  const seatContentOnly = !sourceIsReal && !targetIsReal
+  if (seatContentOnly && !(swapMode === 'seat' && (hasDeskSeatContent(sourceDesk) || hasDeskSeatContent(targetDesk)))) {
+    return { status: 'blocked', message: '移動する講師がいません。' }
+  }
+  const targetHadSeatContent = hasDeskSeatContent(targetDesk)
 
   applyDeskTeacherBlock(sourceDesk, targetBlock)
   applyDeskTeacherBlock(targetDesk, sourceBlock)
@@ -6945,6 +6973,9 @@ export function computeTeacherMove(params: {
   }
 
   // 講師が入った机(lesson の有無に関わらず)は manual 固定にして再マージで消えないようにする。
+  // ★埋め草「講師未割当」が入った机もここでは固定したまま(2026-11-07)。本物の講師を講師の居ない行の机へ動かした跡の印で、外すと
+  //   再マージがテンプレの講師を元の机(生徒が残る机)へ戻し同じ講師が 2 机になる(INV-01)。手置きの講師としては数えない
+  //   (placementOrigin の isPinnedPlaceholderTeacherDesk)。授業の無い机の固定は再マージ(mergeManagedWeek)が外す。
   if (sourceDesk.teacher.trim() && !sourceDesk.manualTeacher) sourceDesk.manualTeacher = true
   if (targetDesk.teacher.trim() && !targetDesk.manualTeacher) targetDesk.manualTeacher = true
 
@@ -6961,13 +6992,17 @@ export function computeTeacherMove(params: {
   releaseTeacherRestIfSameTeacherPlaced(sourceDesk, restAliases)
   releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)
 
-  const message = swapMode === 'seat'
+  const message = seatContentOnly
+    ? (targetHadSeatContent
+        ? `${sourceDeskIndex + 1}机目と ${targetDeskIndex + 1}机目の席を生徒ごと入れ替えました。`
+        : `${sourceDeskIndex + 1}机目の席を生徒ごと ${targetDeskIndex + 1}机目へ移動しました。`)
+    : swapMode === 'seat'
     ? (swappedName
         ? `講師 ${movedName} と ${swappedName} を生徒ごと席入れ替えしました。`
-        : `講師 ${movedName} を生徒ごと ${targetDeskIndex + 1}机目へ移動しました。`)
+        : `講師 ${movedName} を生徒ごと ${movedToDeskIndex + 1}机目へ移動しました。`)
     : (swappedName
         ? `講師 ${movedName} と ${swappedName} を入れ替えました。`
-        : `講師 ${movedName} を ${targetDeskIndex + 1}机目へ移動しました。`)
+        : `講師 ${movedName} を ${movedToDeskIndex + 1}机目へ移動しました。`)
 
   return { status: 'moved', message, nextWeeks }
 }
@@ -8135,8 +8170,10 @@ export function computeWholeDayTransfer(params: {
       if (!srcDesk || !dstDesk) continue
 
       const srcTeacherBlock = extractDeskTeacherBlock(srcDesk)
-      const srcTeacherName = srcTeacherBlock.teacher.trim()
-      const dstTeacherName = dstDesk.teacher.trim()
+      // 講師の居ない行の机の埋め草「講師未割当」は講師ではない(2026-11-07・INV-01 / INV-02): 移す講師にも消える講師にも数えず、
+      // 振替先へ手置きの講師として固定しない(振替元が埋め草の机は「振替元机は講師なし」と同じ扱い)。
+      const srcTeacherName = hasRealDeskTeacher(srcTeacherBlock.teacher) ? srcTeacherBlock.teacher.trim() : ''
+      const dstTeacherName = hasRealDeskTeacher(dstDesk.teacher) ? dstDesk.teacher.trim() : ''
 
       // 振替先に元からいた講師は上書きで消える(破壊的操作なので確認ダイアログで人数を開示する)。
       if (dstTeacherName && dstTeacherName !== srcTeacherName) clearedTeacherNames.add(dstTeacherName)
@@ -17272,7 +17309,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             >
               <div className="student-menu-head">
                 <strong>{templatePendingDeskMenu.target === 'teacher'
-                  ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${templatePendingDeskMenuContext.desk.teacher.trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
+                  ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${formatDeskTeacherLabel(templatePendingDeskMenuContext.desk.teacher).trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
                   : `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目・席 ${templatePendingDeskMenu.lowerIndex + 1}（上段＝テンプレ／下段＝手入力）`}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setTemplatePendingDeskMenu(null)}>x</button>
               </div>
@@ -17541,11 +17578,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               </div>
               <div className="student-menu-section student-menu-actions">
                 <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
-                {teacherMenuContext?.desk.teacher ? (
+                {/* 講師の居ない行の机の埋め草「講師未割当」（表示は空欄）は講師ではないので、削除・休みのボタンを出さない（2026-11-07・utils/deskTeacherLabel.ts）。 */}
+                {hasRealDeskTeacher(teacherMenuContext?.desk.teacher) ? (
                   <button type="button" className="menu-link-button danger" onClick={isTemplateMode ? handleTemplateDeleteTeacher : handleDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
                 ) : null}
                 {/* 講師の休み（spec-template-conflict-v2 §2-4・段 3）: フラグ ON の教室のコマ表だけ。休みの机は同じボタンで解除。 */}
-                {!isTemplateMode && templateDiffApplyEnabled && teacherMenuContext && (teacherMenuContext.desk.teacher.trim() || hasDeskTeacherRest(teacherMenuContext.desk)) ? (
+                {!isTemplateMode && templateDiffApplyEnabled && teacherMenuContext && (hasRealDeskTeacher(teacherMenuContext.desk.teacher) || hasDeskTeacherRest(teacherMenuContext.desk)) ? (
                   <button type="button" className="menu-link-button" onClick={handleToggleTeacherRest} data-testid="teacher-rest-button">
                     {hasDeskTeacherRest(teacherMenuContext.desk) ? `休みを解除する(${teacherMenuContext.desk.teacherRest!.teacher})` : '休み'}
                   </button>

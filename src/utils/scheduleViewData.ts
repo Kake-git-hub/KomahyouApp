@@ -16,6 +16,7 @@ import type {
 } from './scheduleHtml'
 import type { GroupClassEntry } from '../components/schedule-board/groupClass'
 import { getJstTodayDateKey } from './jstDate'
+import { formatDeskTeacherLabel } from './deskTeacherLabel'
 import { resolveWholeDayPairCountDateKey } from '../components/schedule-board/wholeDayTransferPair'
 
 export type ScheduleViewType = 'student' | 'teacher'
@@ -349,7 +350,7 @@ export function buildStudentAssignments(cells: SerializedCell[]) {
           const studentKey = student.linkedStudentId || getNameAssignmentKey(student.name)
           if (!studentKey) return
           if (!map.has(studentKey)) map.set(studentKey, [])
-          map.get(studentKey)!.push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: desk.teacher, timeLabel: cell.timeLabel, lesson: student })
+          map.get(studentKey)!.push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: formatDeskTeacherLabel(desk.teacher), timeLabel: cell.timeLabel, lesson: student })
         })
       }
       ;(Array.isArray(desk.statuses) ? desk.statuses : []).forEach((statusEntry) => {
@@ -358,7 +359,7 @@ export function buildStudentAssignments(cells: SerializedCell[]) {
         const studentKey = statusEntry.linkedStudentId || getNameAssignmentKey(statusEntry.name)
         if (!studentKey) return
         if (!map.has(studentKey)) map.set(studentKey, [])
-        map.get(studentKey)!.push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: statusEntry.teacherName || desk.teacher, timeLabel: cell.timeLabel, lesson: statusEntry })
+        map.get(studentKey)!.push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: formatDeskTeacherLabel(statusEntry.teacherName || desk.teacher), timeLabel: cell.timeLabel, lesson: statusEntry })
       })
     })
   })
@@ -1112,7 +1113,7 @@ export function collectStudentAbsenceNotes(cells: SerializedCell[], student: Ser
         const isSameStudent = linkedStudentId === student.id
           || (Boolean(entryNameKey) && (entryNameKey === studentNameKey || entryNameKey === studentFullNameKey))
         if (!isSameStudent) return
-        notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, entry.teacherName || desk.teacher, entry.subject, entry.lessonType, entry.status, entry.linkedDestinationDateKey, entry.linkedDestinationSlotNumber))
+        notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, formatDeskTeacherLabel(entry.teacherName || desk.teacher), entry.subject, entry.lessonType, entry.status, entry.linkedDestinationDateKey, entry.linkedDestinationSlotNumber))
       })
     })
   })

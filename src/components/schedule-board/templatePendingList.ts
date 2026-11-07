@@ -9,6 +9,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { hasTemplatePendingDesks, parseTemplatePendingDeskKey, type TemplatePendingDeskMap, type TemplatePendingOriginKind } from './templatePendingDesks'
 
 export type TemplatePendingListRow = {
@@ -104,10 +105,10 @@ export function buildTemplatePendingList(map: TemplatePendingDeskMap | null | un
     const upperSlots: ReadonlyArray<StudentEntry | null> = desk.lesson?.studentSlots ?? []
     const upperLabels = upperSlots.filter((student): student is StudentEntry => Boolean(student)).map(studentLabel)
     // tp-64: 講師の保留は上の行の講師も並べ、理由文に講師の選び方を足す（講師だけが残った机は講師の理由だけ）。
-    if (lower.teacher?.teacher && desk.teacher.trim()) upperLabels.push(`講師 ${desk.teacher.trim()}`)
+    if (lower.teacher?.teacher && formatDeskTeacherLabel(desk.teacher).trim()) upperLabels.push(`講師 ${formatDeskTeacherLabel(desk.teacher).trim()}`)
     const teacherOnly = Boolean(lower.teacher?.teacher) && lowerLabels.length === 1 && !(lower.memoSlots ?? []).some((memo) => typeof memo === 'string' && memo.trim() !== '')
     const baseReason = entry.origin?.note || TEMPLATE_SAVE_PENDING_REASON
-    const teacherReason = lower.teacher?.teacher ? describeTemplatePendingTeacherReason(desk.teacher.trim(), lower.teacher.teacher) : ''
+    const teacherReason = lower.teacher?.teacher ? describeTemplatePendingTeacherReason(formatDeskTeacherLabel(desk.teacher).trim(), lower.teacher.teacher) : ''
     rows.push({
       key,
       cellId: cell.id,

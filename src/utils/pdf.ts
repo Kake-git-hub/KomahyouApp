@@ -10,6 +10,7 @@ import {
   resolveBoardPrintStudentMaxFontSizeByRelief,
   type BoardPrintSelection,
 } from './boardPrintSelection'
+import { hasRealDeskTeacher } from './deskTeacherLabel'
 
 type ExportBoardPdfParams = {
   element: HTMLElement
@@ -832,7 +833,7 @@ export type OverwriteReportRow = {
   detail: string
 }
 
-function collectOverwriteReportRows(
+export function collectOverwriteReportRows(
   weeks: SlotCell[][],
   effectiveStartDate: string,
   resolveDisplayName: (name: string) => string,
@@ -931,7 +932,8 @@ function collectOverwriteReportRows(
         }
 
         // Collect manual teacher assignments
-        if (desk.manualTeacher && desk.teacher) {
+        // 講師の居ない行の机の埋め草「講師未割当」は手入力の講師ではない（2026-11-07・utils/deskTeacherLabel.ts）。
+        if (desk.manualTeacher && hasRealDeskTeacher(desk.teacher)) {
           rows.push({
             dateLabel,
             slotLabel: cell.slotLabel,

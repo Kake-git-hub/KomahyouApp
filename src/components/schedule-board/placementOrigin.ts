@@ -12,6 +12,7 @@
 
 import type { DeskCell, DeskLesson, PlacementOriginMark, SlotCell, StudentEntry } from './types'
 import type { TemplatePendingDeskMap } from './templatePendingDesks'
+import { isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
 
 export type PlacementOrigin = PlacementOriginMark
 
@@ -55,6 +56,9 @@ export function isManualOriginStudent(student: Pick<StudentEntry, 'origin' | 'le
  */
 export function resolveDeskTeacherOrigin(desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource'>): PlacementOrigin | null {
   if (!desk.teacher.trim()) return null
+  // 2026-11-07（オーナー指示・INV-02 / INV-01）: 講師の居ない行の机の埋め草「講師未割当」は講師ではない。手置きの印で固定されていても
+  // 手入力の講師にしない（講師なし）。印の無い埋め草は従来どおりテンプレ（再マージが机を確保するために入れる足場・並びの復元が使う）。
+  if (isPinnedPlaceholderTeacherDesk(desk)) return null
   const source = desk.teacherAssignmentSource
   if (source === 'manual' || source === 'manual-replaced' || source === 'schedule-registration') return 'manual'
   // 盤面の操作で名前を固定した講師（生徒を動かして空いた机・丸ごと振替で移した机＝manualTeacher のみ）も、人の操作の結果なので手入力
