@@ -21,6 +21,7 @@ import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate } from './templateLessonAccounting'
 import type { DeskCell, DeskLesson, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
 import { isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
+import { isManualOriginDeskTeacher } from './placementOrigin'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -568,6 +569,40 @@ function applyTeacherFields(desk: DeskCell, fields: TemplateDeskTeacherFields): 
  */
 export function applyTemplatePendingLowerTeacherToDesk(desk: DeskCell, teacher: TemplateDeskTeacherFields): DeskCell {
   return applyTeacherFields(desk, teacher)
+}
+
+/**
+ * 「下段(手入力)の講師を採用する」で取り下げるテンプレの講師の記録（DeskCell.templateTeacherDeclined）。採用する前の机の講師（上の行＝テンプレの講師）から作る。
+ * 上の行が講師なしなら取り下げるものが無いので undefined。
+ */
+export function buildTemplateTeacherDeclined(templateTeacherDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>): DeskCell['templateTeacherDeclined'] {
+  const teacher = templateTeacherDesk.teacher.trim()
+  if (!teacher) return undefined
+  const teacherId = templateTeacherDesk.teacherAssignmentTeacherId?.trim()
+  return teacherId ? { teacher, teacherId } : { teacher }
+}
+
+/**
+ * テンプレのこの机の講師（templateTeacher）が、この机で「下段(手入力)の講師を採用する」により取り下げた講師か（spec-template-conflict-v2 §4-1 の講師欄版・2026-11-07）。
+ * 机に手置き講師（QR を含む手入力の講師）が居る間だけ効く。真なら反映はその講師をこの机に置かず、手置き講師の 1 行のまま（§2-3 の「テンプレに講師なし → Y のまま」と同じ形）。
+ * ★使うのは差分反映（templateConflictRules の applyRulesToDesk）だけ。再マージ（mergeManagedWeek）は机の手置き講師をもともと替えない（INV-02）ので、
+ *   採用後の机は記録が無くても再マージで変わらない。記録が要るのは「毎回全コマを当て直す」差分反映が §2-3 で講師欄を 2 行に戻さないため
+ *   （保存直後の再マージ・読み込みの不動点は inv02-manual-teacher-pending.matrix.test.ts の「講師欄の採用は次の反映でも残る」で固定）。
+ */
+export function isTemplateTeacherDeclinedAtDesk(
+  desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'templateTeacherDeclined'>,
+  templateTeacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): boolean {
+  const declined = desk.templateTeacherDeclined
+  if (!declined || !isManualOriginDeskTeacher(desk)) return false
+  const target = templateTeacher?.teacher?.trim() ?? ''
+  if (!target) return false
+  if (isSameTeacherByAliases(declined.teacher, target, resolveAliases)) return true
+  const declinedId = declined.teacherId?.trim() ?? ''
+  if (!declinedId) return false
+  const targetId = templateTeacher?.teacherAssignmentTeacherId?.trim() ?? ''
+  return declinedId === targetId || isSameTeacherByAliases(declinedId, target, resolveAliases)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

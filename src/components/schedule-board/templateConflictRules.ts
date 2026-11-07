@@ -32,6 +32,7 @@ import {
   isSameTemplateStudent,
   isTemplateDiffTeacherTombstone,
   isTemplateManagedLesson,
+  isTemplateTeacherDeclinedAtDesk,
   resolveAdoptExistingCountAdjustments,
   resolveWholeDayTransferSettlement,
   stripTemplateScaffoldTeacherDesk,
@@ -426,8 +427,11 @@ function applyRulesToDesk(params: {
   let upperTeacher: TemplatePendingLowerTeacher
   let lowerTeacher: TemplatePendingLowerTeacher | null = null
   const hasUpperStudents = Boolean(upperSlots[0] || upperSlots[1])
+  // 2026-11-07（§4-1 の講師欄版・tp-64 / tp-69 / tp-70）: 「下段(手入力)の講師を採用する」でこの机で取り下げたテンプレの講師は、机に手置き講師が居る間この机に置かない
+  // （§2-3「手置き講師 Y × テンプレに講師なし → Y のまま」と同じ形）。下段にまだ講師の選択が残っている机（未解決のぶつかり）には使わない。
+  const declinedHere = !pending?.lower.teacher?.teacher.trim() && isTemplateTeacherDeclinedAtDesk(desk, templateDesk, params.aliases)
   if (manualTeacher) {
-    if (!placeableTemplateTeacher || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
+    if (!placeableTemplateTeacher || declinedHere || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
     else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases, (templateDesk) => params.isTeacherOnRest(cell, templateDesk))) {
       // §9-15: X がテンプレの別の机にも居る → この机は X のまま（W を置かない・講師欄は 1 行）。別の机の X は §2-3 で置かない。
       upperTeacher = pickTeacher(manualTeacher)
@@ -486,6 +490,8 @@ function applyRulesToDesk(params: {
 
   const base = withTeacher(desk, upperTeacher)
   const nextDesk: DeskCell = { ...base }
+  // 取り下げの記録は、テンプレがこの机に同じ講師を置き続ける間だけ残す（別の講師・講師なしになった反映で使い切り。戻ってきたら新しいぶつかりとして 2 行）。
+  if (!declinedHere) delete nextDesk.templateTeacherDeclined
   if (upperLesson) nextDesk.lesson = upperLesson
   else delete nextDesk.lesson
   if (upperStatus[0] || upperStatus[1]) nextDesk.statusSlots = upperStatus
