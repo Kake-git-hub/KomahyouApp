@@ -208,7 +208,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
   const itemCleanupButton = (itemId: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-cleanup-${itemId}"]`)
   const itemCleanupResult = (itemId: string) => container.querySelector<HTMLElement>(`[data-testid="verification-checklist-cleanup-result-${itemId}"]`)
 
-  it('autoPrep の項目の準備の行に、「準備する」の右に「後片づけ」を出す(onCleanup があるときだけ・上の 1 つも残す)', () => {
+  // 第121版(2026-11-07・オーナー指示「後片づけは確認の最後に持ってきて」): 項目の「後片づけ」は準備の行ではなく、確認の一覧のすぐ後ろに出す。
+  it('autoPrep の項目の「後片づけ」は確認の最後(確認の一覧のすぐ後ろ)に出す(onCleanup があるときだけ・上の 1 つも残す)', () => {
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(itemCleanupButton(id), id).toBeNull()
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })), onCleanup: vi.fn(async () => ({ ok: true, message: '' })) })
@@ -217,10 +218,16 @@ describe('VerificationChecklistPanel の「準備する」', () => {
       const cleanup = itemCleanupButton(id)!
       expect(cleanup, id).not.toBeNull()
       expect(cleanup.textContent).toBe('後片づけ')
-      const row = button(id)!.closest('.verification-checklist-prep-row')!
-      expect(cleanup.closest('.verification-checklist-prep-row'), id).toBe(row)
-      expect(button(id)!.nextElementSibling, id).toBe(cleanup)
-      expect(cleanup.compareDocumentPosition(row.querySelector('.verification-checklist-step-text')!) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+      // 準備の行には出さない(「準備する」の隣は手順の文)。
+      expect(button(id)!.closest('.verification-checklist-prep-row')!.contains(cleanup), id).toBe(false)
+      const row = cleanup.closest('.verification-checklist-cleanup-item-row')!
+      expect(row, id).not.toBeNull()
+      // 確認の一覧のすぐ後ろ(状態の選択より前)。
+      const card = button(id)!.closest('[data-testid^="verification-checklist-item-"]')!
+      const checkList = card.querySelector('.verification-checklist-check')!
+      expect(checkList.nextElementSibling, id).toBe(row)
+      expect(row.nextElementSibling?.classList.contains('verification-checklist-status'), id).toBe(true)
+      expect(row.firstElementChild, id).toBe(cleanup)
       // regression-reviewer S-1: 項目の「後片づけ」もその項目の分だけでなく準備で作ったもの全部を消すので、ボタンの横に短く書く(title にも)。
       expect(cleanup.getAttribute('title'), id).toBe(ITEM_CLEANUP_NOTE)
       const note = row.querySelector('.verification-checklist-cleanup-note')
@@ -255,9 +262,10 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     const result = itemCleanupResult(PREP_ITEM)
     expect(result?.textContent).toContain('確認用の体験 1 人')
     expect(result?.className).toContain('is-ok')
-    // 結果の欄はその項目の中(準備の行の後ろ)にあり、上の結果欄には出さない。
-    const itemCard = button(PREP_ITEM)!.closest('.verification-checklist-prep-row')!.parentElement!
+    // 結果の欄はその項目の中(確認の最後の「後片づけ」のすぐ下)にあり、上の結果欄には出さない。
+    const itemCard = button(PREP_ITEM)!.closest('[data-testid^="verification-checklist-item-"]')!
     expect(itemCard.contains(result!)).toBe(true)
+    expect(itemCleanupButton(PREP_ITEM)!.closest('.verification-checklist-cleanup-item-row')!.nextElementSibling).toBe(result)
     expect(cleanupResult()).toBeNull()
     // 上の「後片づけ」を押すと、結果は上の欄に出る(項目の下の古い結果は消える)。
     const onCleanupTop = vi.fn(async () => ({ ok: true, message: '片づけるものはありません。' }))

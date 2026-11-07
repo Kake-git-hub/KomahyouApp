@@ -1098,7 +1098,8 @@ describe('第116版(2026-11-07・v1.5.696): 11/7 未明の送信(版 v1.5.695)�
   it('ap-3: 「後片づけ」は項目の「準備する」の右にも出る(要改善「後片付けのボタンが出てこない」)。準備は tp-69 で作る', () => {
     const item = byId.get('ap-3')!
     expect(item.steps[0]).toContain('tp-69 の「準備する」')
-    expect(item.steps.join('\n')).toContain('「準備する」の右にある「後片づけ」')
+    // 第121版(2026-11-07 オーナー指示「後片づけは確認の最後に持ってきて」): 項目の「後片づけ」は確認の最後に出す。
+    expect(item.steps.join('\n')).toContain('確認の最後にある「後片づけ」')
     expect(item.check!.join('\n')).toContain('準備で置いた体験・メモ・講師がコマ表から消える')
     expect(item.check!.join('\n')).toContain('確認用の生徒は名簿に残る')
   })
@@ -1182,7 +1183,7 @@ describe('第120版(2026-11-07): 項目は「操作 → 確認」の 2 段(準�
   })
 
   it('準備だった手順は操作の最初に正しい順で入っている(後ろの手順は元のまま)', () => {
-    expect(byId.get('ap-3')!.steps).toEqual(['tp-69 の「準備する」を押す', 'tp-69 の「準備する」の右にある「後片づけ」を押す'])
+    expect(byId.get('ap-3')!.steps).toEqual(['tp-69 の「準備する」を押す', 'tp-69 の確認の最後にある「後片づけ」を押す'])
     expect(byId.get('ta-1')!.steps[0]).toBe('tp-69 の「準備する」を押して「保存」')
     expect(byId.get('v2-5')!.steps).toEqual(['未消化の数と「保留 n」の数をメモする', 'テンプレを何も変えずに 2 回保存する'])
     expect(byId.get('sd-1')!.steps[0]).toBe('生徒 1 人を同じ日の 4限・5限に同じ科目で置いて「保存」')
@@ -1197,6 +1198,7 @@ describe('第120版(2026-11-07): 項目は「操作 → 確認」の 2 段(準�
     expect(item.area).toBe('確認リスト')
     expect(item.introducedIn).toBe('v1.5.701')
     expect(item.check!.join('\n')).toContain('「操作」と「確認」')
+    expect(item.check!.join('\n')).toContain('確認の最後に「後片づけ」')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('c-8')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.697')
   })

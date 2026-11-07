@@ -669,21 +669,6 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                                 {preparingItemId === item.id ? '準備中…' : '準備する'}
                               </button>
                             ) : null}
-                            {/* 「後片づけ」を準備の行にも出す(2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」・§E-2-4-3): 上の 1 つと同じ処理・同時に 1 つだけ。 */}
-                            {onPrepare && onCleanup ? (
-                              <button
-                                type="button"
-                                className="secondary-button verification-checklist-cleanup-button"
-                                onClick={() => { void handleCleanup(item.id) }}
-                                disabled={cleaningUp || preparingItemId !== null}
-                                data-testid={`verification-checklist-cleanup-${item.id}`}
-                                title={ITEM_CLEANUP_NOTE}
-                              >
-                                {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
-                              </button>
-                            ) : null}
-                            {/* この項目の分だけでなく、準備で作ったもの全部を消す(上の「後片づけ」と同じ処理・regression-reviewer S-1)。 */}
-                            {onPrepare && onCleanup ? <span className="verification-checklist-cleanup-note">{ITEM_CLEANUP_NOTE}</span> : null}
                             <span className="verification-checklist-step-text">{text(step)}</span>
                           </div>
                           {prepResults[item.id] ? (
@@ -694,15 +679,6 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                               role="status"
                             >
                               {prepResults[item.id].message}
-                            </p>
-                          ) : null}
-                          {cleanupResult && cleanupResult.source === item.id ? (
-                            <p
-                              className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
-                              data-testid={`verification-checklist-cleanup-result-${item.id}`}
-                              role="status"
-                            >
-                              {cleanupResult.message}
                             </p>
                           ) : null}
                         </li>
@@ -716,6 +692,33 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                         {item.check.map((line) => <li key={line}>{text(line)}</li>)}
                       </ul>
                     </>
+                  ) : null}
+                  {/* 「後片づけ」は確認の最後に出す(2026-11-07 オーナー指示「後片づけは確認の最後に持ってきて」・第121版。それまでは準備の行の「準備する」の右)。
+                      上の 1 つと同じ処理・同時に 1 つだけ(確認リスト ap-3「後片付けのボタンが出てこない」・§E-2-4-3)。結果文はそのすぐ下に出す。 */}
+                  {prepStepIndex >= 0 && onPrepare && onCleanup ? (
+                    <div className="verification-checklist-cleanup-item-row">
+                      <button
+                        type="button"
+                        className="secondary-button verification-checklist-cleanup-button"
+                        onClick={() => { void handleCleanup(item.id) }}
+                        disabled={cleaningUp || preparingItemId !== null}
+                        data-testid={`verification-checklist-cleanup-${item.id}`}
+                        title={ITEM_CLEANUP_NOTE}
+                      >
+                        {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
+                      </button>
+                      {/* この項目の分だけでなく、準備で作ったもの全部を消す(上の「後片づけ」と同じ処理・regression-reviewer S-1)。 */}
+                      <span className="verification-checklist-cleanup-note">{ITEM_CLEANUP_NOTE}</span>
+                    </div>
+                  ) : null}
+                  {cleanupResult && cleanupResult.source === item.id ? (
+                    <p
+                      className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
+                      data-testid={`verification-checklist-cleanup-result-${item.id}`}
+                      role="status"
+                    >
+                      {cleanupResult.message}
+                    </p>
                   ) : null}
                   <div className="verification-checklist-status" role="group" aria-label={`${item.title} の結果`}>
                     {STATUS_OPTIONS.map((option) => (
