@@ -130,8 +130,6 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
   // 自動割当候補探索)は findDuplicateStudentInCell が配線済みでコードに穴は無いが、マトリクスでの
   // ロックは未整備(UIハンドラ内のためテスト不能。純関数化とあわせて上の todo と同時に固定する)。
   it.todo('配置/追加系4経路(振替配置・講習配置・手動追加・自動割当)の重複ガードをマトリクスで固定する')
-  it.todo('保留の片づけ(computePendingDeskResolution)の重複検査も席で除外する: 下段を戻すとき、同じ授業 ID の同じ生徒が別の机に居れば止める(今は [student.id] で除外・戻した席の番号が要るので保留・2026-11-07 INV-12 修正のレビュー)')
-  it.todo('フラグ ON で科目を編集してから単発削除すると、再マージでテンプレの元の科目の授業が戻る(OFF は戻らない)。templateDiffApply を全教室へ出す前にどちらへ揃えるかオーナー判断(進行中テーマ台帳 template-diff-apply)')
 
   // 2026-10-14(確認リスト v1.5.587 その他「テンプレの講師が追従していない日がある」の実データ調査): 開発用教室のテンプレで
   // 金 3 限の机 4 と机 7 に同じ生徒(s017)が入っていた。テンプレ編集の「生徒追加」「生徒変更」に同コマ重複の検査が無く(移動だけ Issue #56 で配線済み)、
@@ -308,6 +306,43 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     })
     expect(r.status).toBe('blocked')
     if (r.status === 'blocked') expect(r.message).toContain('移動できません')
+  })
+
+  // 2026-11-07（INV-12・v1.5.704 のレビューの残り）: 「既存を採用」の後段の重複検査（findDuplicateStudentInCellByKey）は、戻した下段の生徒の
+  // **授業 ID** で除外していたので、同じ ID の同じ生徒（呼び名だけ違い管理 ID の無い旧い写し＝合流の判定 isSameTemplateStudent では別人に見える）が
+  // 別の机や同じ机の上段に居ても素通りした。戻した**席**（planTemplatePendingAdoptExisting の surfacedSeats）だけを除外する。
+  describe('既存を採用の重複検査は席で除外する（授業 ID で除外しない）', () => {
+    const ALIAS = '青木（旧）'
+    const aliasContext = { ...context, managedStudentByAnyName: new Map([[ALIAS, { id: 'mA', name: ALIAS } as StudentRow]]) }
+    const aliasStudent = (extra: Partial<StudentEntry> = {}) => mkStudent('a-lower', ALIAS, { managedStudentId: undefined, ...extra })
+    const adopt = (weeks: SlotCell[][], pending: TemplatePendingDeskMap) => computePendingDeskResolution({ mode: 'adopt-existing', weeks, cellId: CELL, deskId: 'p0', templatePendingDesks: pending, ledgers, ...aliasContext })
+
+    it('別の机に同じ授業 ID の同じ生徒（呼び名違い）が居れば止める（修正前は通って同じコマに 2 か所）', () => {
+      const { weeks, pending } = fixture(false)
+      weeks[0][0].desks[1].lesson = mkLesson('la', [aliasStudent({ manualAdded: true }), null])
+      const snapshot = JSON.stringify({ weeks, pending })
+      const r = adopt(weeks, pending)
+      expect(r.status).toBe('blocked')
+      if (r.status === 'blocked') expect(r.message).toContain('2 か所')
+      expect(JSON.stringify({ weeks, pending })).toBe(snapshot)
+    })
+
+    it('同じ机の上段の残る席に同じ授業 ID の同じ生徒（呼び名違い）が居ても止める', () => {
+      const { weeks, pending } = fixture(false)
+      weeks[0][0].desks[0].lesson!.studentSlots[1] = aliasStudent({ manualAdded: true })
+      const r = adopt(weeks, pending)
+      expect(r.status).toBe('blocked')
+    })
+
+    it('ロック: 戻した席の生徒自身では止めない（同じコマに他に居なければ成立し、A は 1 か所）・呼び名違いの別の生徒（別の管理 ID）でも止めない', () => {
+      const { weeks, pending } = fixture(false)
+      const r = adopt(weeks, pending)
+      expect(r.status).toBe('applied')
+      if (r.status === 'applied') expect(liveCount(r.nextWeeks, 'mA')).toBe(1)
+      const other = fixture(false)
+      other.weeks[0][0].desks[1].lesson = mkLesson('lb', [mkStudent('a-lower', '別人', { managedStudentId: 'mZ', manualAdded: true }), null])
+      expect(adopt(other.weeks, other.pending).status).toBe('applied')
+    })
   })
 
   // ── 決定記録 57（2026-11-01・A-10）と regression-reviewer 2026-11-01 P-2: 「手入力データを採用」が別の机 T のテンプレの通常授業を外すのは、
@@ -789,7 +824,8 @@ describe('INV-12 マトリクス: 丸ごと振替の付け替え（第 2 版・�
 // 直し方: 抑止キーを積む全経路が 1 つの権威関数 resolveSuppressedRegularLessonOccurrenceKeys を通し、フラグ OFF では
 // テンプレの科目（授業 ID `生徒ID_日付_科目` から読む＝既存の保存データでも効く）のキーも積む。外す側（休み解除・出席解除・休日解除）も同じ関数。
 // 移動の重複検査は、動かす生徒の授業 ID ではなく移動元・入れ替え相手の**席**を除外する（同じ ID の 2 人の片方を空き机へ動かしても止める）。
-// フラグ ON（第 2 版）は従来どおり編集後の科目の 1 本だけ（§2-2 の規則で起きない・抑止キーを外す処理が 1 本前提）。
+// フラグ ON（第 2 版）も同じ 2 本（2026-11-07 オーナー決定「本番の教室での、削除したあと戻らなくなる方に揃えて」・spec-template-conflict-v2 §4-1-2）。
+// 以前は ON だけ 1 本で、科目を編集した授業を削除・別の時限や別の日へ移動すると再マージ・テンプレ保存で元の机にテンプレの授業が戻った（下の「フラグ ON も戻らない」）。
 // ============================================================================
 describe('INV-12 × 科目だけ編集したテンプレの授業（フラグ OFF）: 編集の後の移動・削除・休みで元の机にテンプレの生徒が戻らない', () => {
   // 水 5限: 机 0＝田中（A・D）・机 1＝鈴木（B・空き）。木 5限: 佐藤（講師だけ）。
@@ -1038,19 +1074,153 @@ describe('INV-12 × 科目だけ編集したテンプレの授業（フラグ OF
     expect(resolveSameDayMoveCopyKeysToRemove({ student: { ...copy, subject: '数' }, dateKey: FX.WED }, [keyOf('国'), keyOf('数')])).toEqual([keyOf('数')])
   })
 
-  describe('フラグ ON（第 2 版）は不変', () => {
-    it('編集（印つき）→ 同じコマの別の机へ移動: 積む抑止キーは編集後の科目の 1 本だけ・再マージ（第 2 版）で A は 1 か所', () => {
-      const base = FX.remerge([FX.buildWeek(ROWS)], ROWS, [])
-      const edited = edit(base, [], { stampOrigin: true })
-      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, FREE_SEAT, true))
-      expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([keyOf('国')])
-      expect(countIn(FX.remerge(moved.nextWeeks, ROWS, moved.nextSuppressedRegularLessonOccurrences), FX.WED_CELL)).toBe(1)
-    })
-    it('権威関数はフラグ ON では今の科目の 1 本だけ（削除・休みの経路も同じ）', () => {
-      const edited = edit(FX.remerge([FX.buildWeek(ROWS)], ROWS, []), [], { stampOrigin: true })
+  // 2026-11-07 オーナー決定「本番の教室での、削除したあと戻らなくなる方に揃えて」（spec-template-conflict-v2 §4-1-2）: フラグ ON（第 2 版）でも、
+  // 科目だけ編集したテンプレの授業（手入力の印つき）を外す・動かす・記録にすると、テンプレの元の科目の授業はそのコマに戻らない。
+  // 権威関数 resolveSuppressedRegularLessonOccurrenceKeys は ON でもテンプレの科目のキーを積む・外す（修正前は ON だけ 1 本で、再マージ・テンプレ保存で元の机にテンプレの A〔数〕が戻った）。
+  // 差分反映（FX.save＝computeTemplateDiffApplyForBoard）と再マージ（FX.remerge）の両方で同じ答え（INV-03）。
+  describe('フラグ ON（第 2 版）も戻らない（2026-11-07 オーナー決定・OFF と同じ答え）', () => {
+    const baseOn = (rows = ROWS) => FX.remerge([FX.buildWeek(rows)], rows, [], FX.settings(), {})
+    const editOn = (weeks: SlotCell[][], suppressed: string[], options: { subject?: SubjectLabel; lessonType?: StudentEntry['lessonType'] } = {}) => edit(weeks, suppressed, { ...options, stampOrigin: true })
+    /** 再マージ・テンプレ保存・保存の後の再マージの 3 つで、そのコマの A の席を返す（3 つが同じでなければ落とす＝INV-03）。 */
+    function seatsAcross(weeks: SlotCell[][], suppressed: string[], cellId: string, rows = ROWS, id = 'sA') {
+      const remerged = seatsOf(FX.remerge(weeks, rows, suppressed), cellId, id)
+      const saved = FX.save(weeks, rows, suppressed)
+      const savedSeats = seatsOf(saved.nextWeeks, cellId, id)
+      const afterSave = seatsOf(FX.remerge(saved.nextWeeks, rows, FX.suppressedAfter(suppressed, saved), FX.settings(), saved.nextPendingDesks), cellId, id)
+      expect({ savedSeats, afterSave }).toEqual({ savedSeats: remerged, afterSave: remerged })
+      return remerged
+    }
+
+    it('科目編集（数→国・印つき）→ 単発削除（格納も同じ関数）: 積むキーは 国・数 の 2 本・再マージでもテンプレ保存でも A は 0（テンプレの A〔数〕が戻らない）', () => {
+      const edited = editOn(baseOn(), [])
       const target = FX.cellOf(edited.weeks, FX.WED_CELL).desks[0].lesson!.studentSlots[0]!
-      expect(resolveSuppressedRegularLessonOccurrenceKeys(target, FX.WED, FX.SLOT, { templateOriginRules: true })).toEqual([keyOf('国')])
+      expect(target.origin).toBe('manual')
+      const keys = resolveRemovedLessonOccurrenceKeysFor(target, FX.WED, FX.SLOT, true)
+      expect(keys).toEqual([keyOf('国'), keyOf('数')])
+      const next = structuredClone(edited.weeks)
+      FX.cellOf(next, FX.WED_CELL).desks[0].lesson!.studentSlots[0] = null
+      // 修正前は ['0-0:数']（テンプレの A〔数〕が元の机に戻る）。
+      expect(seatsAcross(next, keys, FX.WED_CELL)).toEqual([])
+      expect(countIn(FX.remerge(next, ROWS, keys), FX.WED_CELL, 'sD')).toBe(1)
+    })
+
+    it('科目編集 → 休み（振無休・出席も同じ権威関数）: 席にテンプレの A が戻らず記録だけ（保存しても同じ）。休み解除で積んだキーが全部外れ、A（国）が 1 か所に戻る', () => {
+      const edited = editOn(baseOn(), [])
+      const result = computeStudentAbsentMark({
+        weeks: edited.weeks, weekIndex: 0, seat: A_SEAT, manualMakeupAdjustments: {}, suppressedMakeupOrigins: {}, fallbackMakeupStudents: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {},
+        fallbackLectureStockStudents: {}, suppressedRegularLessonOccurrences: edited.suppressed, ledgerOriginDatesByKey: {}, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name,
+        resolveStockId: FX.resolveStudentKey, templateOriginRules: true,
+      })
+      if (!result) throw new Error('not found')
+      const keys = result.ledgers.suppressedRegularLessonOccurrences
+      expect(keys).toEqual([keyOf('国'), keyOf('数')])
+      expect(seatsAcross(result.nextWeeks, keys, FX.WED_CELL)).toEqual([])
+      const after = FX.remerge(result.nextWeeks, ROWS, keys)
+      const record = FX.cellOf(after, FX.WED_CELL).desks[0].statusSlots?.[0]
+      expect(record).toMatchObject({ status: 'absent', managedStudentId: 'sA', subject: '国' })
+      const restored = buildStudentEntryFromStatus(record!)
+      expect(resolveSuppressedRegularLessonOccurrenceKeys(restored, FX.WED, FX.SLOT, { templateOriginRules: true })).toEqual(keys)
+      const cleared = structuredClone(after)
+      clearStudentStatusFromDesk(FX.cellOf(cleared, FX.WED_CELL).desks[0], 0, record!)
+      expect(seatsAcross(cleared, [], FX.WED_CELL)).toEqual(['0-0:国'])
+    })
+
+    it('科目編集 → 別の日へ移動（振替）: 元の水 5限にテンプレの A（数）は戻らない（再マージ・保存とも 0）・木に 1 か所', () => {
+      const edited = editOn(baseOn(), [])
+      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, { cellId: FX.THU_CELL, deskIndex: 1, studentIndex: 0 }, true))
+      expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([keyOf('国'), keyOf('数')])
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, FX.WED_CELL)).toEqual([])
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, FX.THU_CELL)).toHaveLength(1)
+    })
+
+    it('科目編集 → 別の日へ移動 → テンプレから水の A を外して保存: 振替は根拠を失って外れ（Q40-1）、水の 国・数 の 2 本のキーとも外れる（残すと後で A を水へ戻す保存で置かれない）', () => {
+      const edited = editOn(baseOn(), [])
+      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, { cellId: FX.THU_CELL, deskIndex: 1, studentIndex: 0 }, true))
+      const withoutA = [FX.row('r0', 't1', '', 'sD'), FX.row('r1', 't2', 'sB'), FX.row('r2', 't3', '', '', 4)]
+      const saved = FX.save(moved.nextWeeks, withoutA, moved.nextSuppressedRegularLessonOccurrences)
+      expect(saved.orphanedMakeups.map((item) => item.student.managedStudentId)).toEqual(['sA'])
+      expect(countIn(saved.nextWeeks, FX.THU_CELL)).toBe(0)
+      expect(saved.removedSuppressedRegularLessonOccurrences).toEqual(expect.arrayContaining([keyOf('国'), keyOf('数')]))
+      expect(FX.suppressedAfter(moved.nextSuppressedRegularLessonOccurrences, saved)).not.toEqual(expect.arrayContaining([keyOf('数')]))
+    })
+
+    it('科目編集 → 同じ日の別の時限の空き席へ移動: 5限にテンプレの A（数）が戻らない（修正前は 4限の国と 5限の数の 2 コマになった）', () => {
+      const base = baseOn(ROWS_SWAP)
+      const edited = editOn(base, [])
+      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, { cellId: CELL4, deskIndex: 0, studentIndex: 1 }, true))
+      expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([keyOf('国'), keyOf('数')])
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, FX.WED_CELL, ROWS_SWAP)).toEqual([])
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, CELL4, ROWS_SWAP)).toEqual(['0-1:国'])
+    })
+
+    it('科目編集 → 同じ日の別の時限の生徒と入れ替え: 5限にテンプレの A（数）は戻らない（再マージ・保存とも）。4限の A（国）は 1 か所（保存では C の写しがテンプレの席へ戻るので下の行）', () => {
+      const edited = editOn(baseOn(ROWS_SWAP), [])
+      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, { cellId: CELL4, deskIndex: 0, studentIndex: 0 }, true))
+      const suppressed = moved.nextSuppressedRegularLessonOccurrences
+      expect(suppressed).toEqual([keyOf('国'), keyOf('数')])
+      // 修正前は保存で 5限に ['0-0:数']（再マージは §2-4 で置かず 0＝答えが割れていた）。
+      expect(seatsAcross(moved.nextWeeks, suppressed, FX.WED_CELL, ROWS_SWAP)).toEqual([])
+      expect(seatsOf(FX.remerge(moved.nextWeeks, ROWS_SWAP, suppressed), CELL4)).toEqual(['0-0:国'])
+      // 保存: C（テンプレの授業を同じ日の中で動かした写し）は 4限のテンプレの席へ戻り（§1-1 #2）、手入力の A（国）は同じ席の下の行（§2-1）＝4限に 1 か所。
+      const saved = FX.save(moved.nextWeeks, ROWS_SWAP, suppressed)
+      const lowerA = Object.entries(saved.nextPendingDesks).filter(([key]) => key.startsWith(`${CELL4}`)).flatMap(([, entry]) => entry.lower.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA')
+      expect(seatsOf(saved.nextWeeks, CELL4).length + lowerA.length).toBe(1)
+      expect(seatsOf(saved.nextWeeks, CELL4, 'sC')).toEqual(['0-0:数'])
+    })
+
+    it('科目編集 → 同じコマの別の机へ移動: A は移動先の 1 か所（国）。続けて移動先の A を単発削除しても元の机にテンプレの A（数）は戻らない', () => {
+      const edited = editOn(baseOn(), [])
+      const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, FREE_SEAT, true))
+      expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([keyOf('国'), keyOf('数')])
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, FX.WED_CELL)).toEqual(['1-1:国'])
+      const remerged = FX.remerge(moved.nextWeeks, ROWS, moved.nextSuppressedRegularLessonOccurrences)
+      const movedA = FX.cellOf(remerged, FX.WED_CELL).desks[1].lesson!.studentSlots[1]!
+      const deleteKeys = resolveRemovedLessonOccurrenceKeysFor(movedA, FX.WED, FX.SLOT, true)
+      const suppressed = [...new Set([...moved.nextSuppressedRegularLessonOccurrences, ...deleteKeys])]
+      const next = structuredClone(remerged)
+      FX.cellOf(next, FX.WED_CELL).desks[1].lesson!.studentSlots[1] = null
+      expect(seatsAcross(next, suppressed, FX.WED_CELL)).toEqual([])
+    })
+
+    it('科目編集 → 編集で振替に → 別の机へ移動: 元の机にテンプレの A（数）は戻らない。振替 → 通常に戻すと積んだ 2 本とも外れる', () => {
+      const edited = editOn(baseOn(), [])
+      const toMakeup = editOn(edited.weeks, edited.suppressed, { lessonType: 'makeup' })
+      expect(toMakeup.suppressed).toEqual([keyOf('国'), keyOf('数')])
+      const moved = movedOrThrow(move(toMakeup.weeks, toMakeup.suppressed, A_SEAT, FREE_SEAT, true))
+      expect(seatsAcross(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences, FX.WED_CELL)).toHaveLength(1)
+      const back = editOn(toMakeup.weeks, toMakeup.suppressed, { lessonType: 'regular' })
+      expect(back.suppressed).toEqual([])
+      expect(seatsAcross(back.weeks, back.suppressed, FX.WED_CELL)).toEqual(['0-0:国'])
+    })
+
+    it('科目編集 → 休日設定 → 休日解除: 解除がテンプレの科目のキーを積まず、戻した A（国）が 1 か所（再マージ・保存とも）', () => {
+      const edited = editOn(baseOn(), [])
+      const holidaySet = structuredClone(edited.weeks)
+      let ledgers = { manualLectureStockCounts: {}, manualLectureStockOrigins: {}, manualMakeupAdjustments: {}, fallbackLectureStockStudents: {}, fallbackMakeupStudents: {} }
+      for (const cell of holidaySet.flat()) {
+        if (cell.dateKey !== FX.WED) continue
+        for (const desk of cell.desks) {
+          const returned = reconcileHolidayDeskStockReturns({ desk, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: FX.resolveStudentKey, ledgerOriginDatesByKey: {}, includeManualAddedLessons: true })
+          ledgers = returned.ledgers
+          convertHolidayDeskEntriesToRecords({ desk, cell, enabled: true, stockReturns: returned.stockReturnStamps })
+        }
+      }
+      const released = computeHolidayReleaseRestoration({ weeks: holidaySet, dateKey: FX.WED, ledgers, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: FX.resolveStudentKey, templateOriginRules: true })
+      expect(released.restoredOccurrenceKeys).toEqual(expect.arrayContaining([keyOf('国'), keyOf('数')]))
+      const suppressed = resolveHolidayReleaseSuppressedOccurrences({ dateKey: FX.WED, regularLessons: ROWS, students: FX.students, teachers: FX.teachers, suppressedRegularLessonOccurrences: [], restoredOccurrenceKeys: new Set(released.restoredOccurrenceKeys) })
+      expect(suppressed).not.toContain(keyOf('数'))
+      expect(seatsAcross(released.nextWeeks, suppressed, FX.WED_CELL)).toEqual(['0-0:国'])
+    })
+
+    it('ロック: 科目を変えていない授業・印だけの授業（授業時間の編集）は従来どおり 1 本（テンプレの授業そのもの）', () => {
+      const base = baseOn()
+      const target = FX.cellOf(base, FX.WED_CELL).desks[0].lesson!.studentSlots[0]!
+      expect(resolveSuppressedRegularLessonOccurrenceKeys(target, FX.WED, FX.SLOT, { templateOriginRules: true })).toEqual([keyOf('数')])
+      expect(resolveRemovedLessonOccurrenceKeysFor({ ...target, origin: 'manual' }, FX.WED, FX.SLOT, true)).toEqual([keyOf('数')])
       expect(resolveRemovedLessonOccurrenceKeysFor(target, FX.WED, FX.SLOT, true)).toEqual([resolveRemovedLessonOccurrenceKeyFor(target, FX.WED, FX.SLOT, true)])
+      // 編集なしの同じコマの別の机への移動（テンプレの授業の同日移動）は従来どおりキーを積まない（写し・Q36）。
+      const moved = movedOrThrow(move(base, [], A_SEAT, FREE_SEAT, true))
+      expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([])
     })
   })
 

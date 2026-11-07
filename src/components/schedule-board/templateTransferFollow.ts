@@ -13,7 +13,7 @@
 import type { ClassroomSettings } from '../../types/appState'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { studentHasManualMark, studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { resolveMovedTemplateLessonSubjectFromId, studentHasManualMark, studentSubjectKey, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { resolveDayOfWeekFromDateKey, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import { buildMakeupStockKey, isClosedDate, originTokenDateKey, parseOriginSlotNumberFromLabel, type ManualMakeupOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey, isTemplatePendingLowerEmpty, placeIntoPendingLower, type TemplatePendingDeskMap } from './templatePendingDesks'
@@ -176,9 +176,17 @@ export function collectOrphanedMakeups(params: {
   }
   const originDatesByKey = params.resolveLedgerOriginDates(ledgerAfterRemovals)
 
+  const templateHasSubject = (student: StudentEntry, subject: string, dateKey: string) => {
+    if (templateByDate.get(dateKey)?.has(studentSubjectKey({ ...student, subject: subject as StudentEntry['subject'] }))) return true
+    return Boolean(rowKeysByDay.get(resolveDayOfWeekFromDateKey(dateKey))?.has(`${student.managedStudentId}__${subject}`))
+  }
+  // 2026-11-07（INV-12 / INV-02 / INV-03・spec-template-conflict-v2 §4-1-2）: 「編集」で科目を変えた（数→国）テンプレの授業を別の日へ動かした振替は、
+  //   振替元の日のテンプレの授業（数）そのもの。科目（国）だけで突き合わせると根拠が無いと見なされ、テンプレ保存のたびに振替が外れ、
+  //   振替元の日の抑止キー（国）も外れて元の机にテンプレの授業（数）が戻っていた（再マージは振替を残す＝保存と答えが割れる）。授業 ID のテンプレの科目でも根拠を引く。
   const templateHas = (student: StudentEntry, dateKey: string) => {
-    if (templateByDate.get(dateKey)?.has(studentSubjectKey(student))) return true
-    return Boolean(rowKeysByDay.get(resolveDayOfWeekFromDateKey(dateKey))?.has(`${student.managedStudentId}__${student.subject}`))
+    if (templateHasSubject(student, student.subject, dateKey)) return true
+    const movedTemplateSubject = resolveMovedTemplateLessonSubjectFromId(student)
+    return Boolean(movedTemplateSubject && movedTemplateSubject !== student.subject && student.makeupSourceDate === dateKey && templateHasSubject(student, movedTemplateSubject, dateKey))
   }
   const ledgerHas = (student: StudentEntry, dateKey: string) => (originDatesByKey[buildMakeupStockKey(student.managedStudentId ?? student.name, student.subject)] ?? []).some((token) => originTokenDateKey(token) === dateKey)
   const hasBasis = (student: StudentEntry, dateKey: string) => templateHas(student, dateKey) || ledgerHas(student, dateKey)
@@ -287,7 +295,14 @@ export function removeOrphanedMakeups(weeks: SlotCell[][], removals: readonly Or
  */
 export function collectOrphanedMakeupSuppressionKeys(removals: readonly OrphanedMakeupRemoval[], suppressed: readonly string[]): string[] {
   if (removals.length === 0) return []
-  const prefixes = new Set(removals.map((removal) => `${studentSubjectKey(removal.student)}__${removal.sourceDateKey}__`))
+  // 「編集」で科目を変えた振替は、振替元の日に授業 ID のテンプレの科目のキーも積んでいる（resolveSuppressedRegularLessonOccurrenceKeys・2026-11-07）。
+  // 外した振替のその科目のキーも外す（残すと、その生徒×科目をその曜日へ戻す保存で授業が置かれず消える＝下の tp-51 と同じ穴）。
+  const prefixes = new Set(removals.flatMap((removal) => {
+    const subjects = [removal.student.subject as string]
+    const movedTemplateSubject = resolveMovedTemplateLessonSubjectFromId(removal.student)
+    if (movedTemplateSubject && movedTemplateSubject !== removal.student.subject && removal.student.makeupSourceDate === removal.sourceDateKey) subjects.push(movedTemplateSubject)
+    return subjects.map((subject) => `${studentSubjectKey({ ...removal.student, subject: subject as StudentEntry['subject'] })}__${removal.sourceDateKey}__`)
+  }))
   return suppressed.filter((key) => {
     for (const prefix of prefixes) if (key.startsWith(prefix) && /^\d+$/u.test(key.slice(prefix.length))) return true
     return false
