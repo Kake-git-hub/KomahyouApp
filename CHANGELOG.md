@@ -14,6 +14,13 @@
 
 ## 未リリース
 
+## v1.5.697 (2026-11-07)
+
+- feat: 確認リストの「準備する」第 4 段(オーナー回答 2026-11-07「残りの項目にも生徒や講師の配置の前提条件が必要な場合、準備するをつけて」)。tp-71・tp-72・tp-75・v2-3・v2-6 に付けた(v2-5 は配置が要らないので付けない)。確認用の生徒に限り、準備で休み・在庫からの振替の配置・同じ日の移動を室長の操作と同じ処理で行う(`checklistPrepSequence.ts`)。確かめたい操作(丸ごと振替・何も変えないテンプレ保存)は手で行う。後片づけは確認用の生徒の授業・出欠記録・未消化の分も消す(ほかの生徒は触らない)。休みの印と在庫からの振替配置の本体を純関数 `computeStudentAbsentMark`・`computeMakeupStockPlacement` へ切り出した(挙動不変・テスト `boardAbsentAndStockPlacement.test.ts`)。テスト `checklistPrepStage4.test.ts`。確認リスト第117版(v1.5.697)。 触れる INV: INV-02・INV-03・INV-06・INV-08・INV-12。
+
+- fix: テンプレ保存の「詳細」の「テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります」に、席に残る生徒の名前を出す(2026-11-07 オーナー指示・確認リスト tp-70)。名前が無いときは従来の文。
+- docs: 採用した手置き講師を休みにした机は次の反映でテンプレの講師が戻る、をオーナー確認(2026-11-07「OK」)として spec-template-conflict-v2 §4-1 に記録。
+
 ## v1.5.696 (2026-11-07)
 
 - fix: 講師欄の緑 2 行で「下段(手入力)の講師を採用する」を選んだ机が、次のテンプレ保存(別の時限だけ変えた保存・確認リストの準備を含む)でテンプレの講師へ戻り、手置き講師が下段へ戻されていた(11/7 開発用教室の操作痕跡で発見)。採用時に取り下げたテンプレ講師と採用した講師を机に記録し(`DeskCell.templateTeacherDeclined`・使い切り・今の講師が採用した本人のときだけ効く)、差分反映(`applyRulesToDesk`)と再マージ(`placeManagedTeacherOnlyDesk`)の両方で同じ `isTemplateTeacherDeclinedAtDesk` で判定する。講師の照合は休みと共通の `isSameTeacherRecord`。回帰防止テスト `inv02-manual-teacher-pending.matrix.test.ts`(講師だけの机・空き机のあるコマ・講師の手替え・入れ替え・休み・丸ごと振替)。仕様 spec-template-conflict-v2 §4-1。確認リスト ta-1。 触れる INV: INV-02・INV-03。

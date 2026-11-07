@@ -1906,7 +1906,7 @@ function AuthenticatedApp() {
   const checklistPrepRequestIdRef = useRef(0)
   // 結果待ちのパネル(同時に 1 件だけ)。保険タイマーもここで持ち、結果・タイムアウト・取りやめのどれか 1 回で解く。
   // boardApplied: コマ表が盤面を当てた(テンプレ保存の段が残っている)。以後のタイムアウト・取りやめ・差し替えの文は「盤面には置きましたが…」(I-2)。
-  const checklistPrepPendingRef = useRef<{ requestId: number; resolve: (result: ChecklistPrepResult) => void; timeoutId: number; boardApplied?: { kind: 'prep' | 'cleanup' } } | null>(null)
+  const checklistPrepPendingRef = useRef<{ requestId: number; resolve: (result: ChecklistPrepResult) => void; timeoutId: number; boardApplied?: { kind: 'prep' | 'cleanup'; summary?: string } } | null>(null)
   const settleChecklistPrep = useCallback((requestId: number, result: ChecklistPrepResult) => {
     const pending = checklistPrepPendingRef.current
     if (!pending || pending.requestId !== requestId) return
@@ -1971,7 +1971,8 @@ function AuthenticatedApp() {
     const pending = checklistPrepPendingRef.current
     if (!pending || pending.requestId !== progress.requestId) return
     window.clearTimeout(pending.timeoutId)
-    pending.boardApplied = { kind: progress.kind }
+    // 第 4 段(§6): 段を続ける準備は「ここまでに行ったこと」(テンプレの保存を含む)も持ち、取りやめ・タイムアウトの文に使う。
+    pending.boardApplied = { kind: progress.kind, ...(progress.summary ? { summary: progress.summary } : {}) }
     pending.timeoutId = armChecklistPrepTimeout(progress.requestId, CHECKLIST_PREP_TEMPLATE_PHASE_TIMEOUT_MS)
   }, [armChecklistPrepTimeout])
   const handleChecklistPrepRequestProcessed = useCallback((result: ChecklistPrepRequestResult) => {

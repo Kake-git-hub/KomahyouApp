@@ -67,7 +67,8 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     const body = APP_TSX.slice(start, APP_TSX.indexOf('}, [', start))
     expect(body).toContain('if (!pending || pending.requestId !== progress.requestId) return')
     expect(body).toContain('window.clearTimeout(pending.timeoutId)')
-    expect(body).toContain('pending.boardApplied = { kind: progress.kind }')
+    // 第 4 段(§6): 段を続ける準備は「ここまでに行ったこと」(summary)も持つ(取りやめの文がテンプレの保存を含めて書ける)。
+    expect(body).toContain('pending.boardApplied = { kind: progress.kind, ...(progress.summary ? { summary: progress.summary } : {}) }')
     expect(body).toContain('pending.timeoutId = armChecklistPrepTimeout(progress.requestId, CHECKLIST_PREP_TEMPLATE_PHASE_TIMEOUT_MS)')
     // タイムアウト・取りやめ・差し替えはどれも resolveChecklistPrepAbortMessage を通す(盤面を置いたかで文を変える)。
     expect(APP_TSX).toContain("resolveChecklistPrepAbortMessage('timeout', CHECKLIST_PREP_TIMEOUT_MESSAGE, pending.boardApplied ?? null)")

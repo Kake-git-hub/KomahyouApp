@@ -71,7 +71,8 @@ import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOr
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
-import { applyChecklistPrepOps, checklistPrepNeedsTemplate, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, type ChecklistPrepRequest, type ChecklistPrepRequestProgress, type ChecklistPrepRequestResult } from './checklistPrep'
+import { applyChecklistPrepOps, checklistPrepNeedsTemplate, isChecklistPrepSequenceItemId, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, CHECKLIST_PREP_MAX_JUMPS, type ChecklistPrepRequest, type ChecklistPrepRequestProgress, type ChecklistPrepRequestResult } from './checklistPrep'
+import { buildChecklistPrepSequenceFailedMessage, buildChecklistPrepSequenceMessage, isChecklistPrepSequenceComplete, planChecklistPrepSequenceStep, recordChecklistPrepSequenceTemplateSaved, resolveChecklistPrepSequenceStartBlock, summarizeChecklistPrepSequenceProgress, type ChecklistPrepBoardOperations, type ChecklistPrepSequenceState } from './checklistPrepSequence'
 import { buildChecklistPrepCleanupMessage, buildChecklistPrepTemplateFailedMessage, buildChecklistPrepTemplateSavedMessage, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepCleanupEffectiveStartDate, resolveChecklistPrepTemplatePhaseBlock, resolveChecklistPrepTemplatePhaseTiming, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
@@ -6529,6 +6530,258 @@ export function computeStudentMove(params: {
   return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences, displacedStatusEntries }
 }
 
+/** 休みの本体（computeStudentAbsentMark）が読む・返す台帳（commitWeeks の引数と同じもの）。 */
+export type StudentAbsentMarkLedgers = {
+  manualMakeupAdjustments: MakeupOriginMap
+  suppressedMakeupOrigins: MakeupOriginMap
+  fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+  manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+  fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
+  suppressedRegularLessonOccurrences: string[]
+}
+
+export type ComputeStudentAbsentMarkResult = {
+  /** lecture-kept＝講習期間が特定できず未消化講習へ戻さない／lecture-returned＝未消化講習へ戻した／makeup-returned＝未消化振替へ戻した。 */
+  kind: 'lecture-kept' | 'lecture-returned' | 'makeup-returned'
+  nextWeeks: SlotCell[][]
+  targetCell: SlotCell
+  targetStudent: StudentEntry
+  /** 休みの記録で上書きした前の生徒の出欠記録（台帳へは確定済み・操作ログ用）。 */
+  displacedStatusEntry: StudentStatusEntry | null
+  ledgers: StudentAbsentMarkLedgers
+  /** 未消化振替へ戻したときの在庫キーと振替元（講習は null）。 */
+  makeupStock: { stockKey: string; originDate: string; originSlotNumber: number | null } | null
+}
+
+// 「休み」の本体の純粋ロジック（2026-11-07・確認リストの「準備する」第 4 段が室長の操作と同じ処理を通すため markStudentAbsentAt から挙動不変で抽出）。
+// 席（セル・机・生徒枠）を引数で受け、weekIndex の週だけを作り直す（cloneWeeksForActiveWeek）。分岐・順序・台帳の扱いは元と 1:1（INV-06）。
+// 副作用（commitWeeks・操作ログ・メッセージ）は呼び出し側。席が見つからなければ null。
+export function computeStudentAbsentMark(params: {
+  weeks: SlotCell[][]
+  weekIndex: number
+  seat: { cellId: string; deskIndex: number; studentIndex: number }
+  ledgerOriginDatesByKey: Record<string, string[]>
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => string
+} & StudentAbsentMarkLedgers): ComputeStudentAbsentMarkResult | null {
+  const { weekIndex, seat, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  const nextWeeks = cloneWeeksForActiveWeek(params.weeks, weekIndex)
+  const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === seat.cellId)
+  const targetDesk = targetCell?.desks[seat.deskIndex]
+  const targetLesson = targetDesk?.lesson
+  const targetStudent = targetLesson?.studentSlots[seat.studentIndex]
+  if (!targetCell || !targetDesk || !targetStudent) return null
+
+  const unchanged: StudentAbsentMarkLedgers = {
+    manualMakeupAdjustments: params.manualMakeupAdjustments,
+    suppressedMakeupOrigins: params.suppressedMakeupOrigins,
+    fallbackMakeupStudents: params.fallbackMakeupStudents,
+    manualLectureStockCounts: params.manualLectureStockCounts,
+    manualLectureStockOrigins: params.manualLectureStockOrigins,
+    fallbackLectureStockStudents: params.fallbackLectureStockStudents,
+    suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
+  }
+  const absentStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent')
+  // Issue #57(INV-06): このスロットに保持されている前の生徒の出欠記録(移動時に保持されたもの)を
+  // 上書きで消す前に、振替コマの記録なら台帳へ確定する(「破棄する側で確定」)。
+  const displacedStatusEntry = targetDesk.statusSlots?.[seat.studentIndex] ?? null
+  const displacedLedgers = displacedStatusEntry
+    ? materializeDisplacedStatusEntryIntoLedgers({
+        statusEntry: displacedStatusEntry,
+        manualMakeupAdjustments: params.manualMakeupAdjustments,
+        fallbackMakeupStudents: params.fallbackMakeupStudents,
+        ledgerOriginDatesByKey: params.ledgerOriginDatesByKey,
+        managedStudentByAnyName,
+        resolveDisplayName,
+        resolveStockId,
+      })
+    : { manualMakeupAdjustments: params.manualMakeupAdjustments, fallbackMakeupStudents: params.fallbackMakeupStudents, materialized: false }
+  removeStudentFromDeskLesson(targetDesk, seat.studentIndex)
+  setDeskStudentStatus(targetDesk, seat.studentIndex, absentStatusEntry)
+
+  if (targetStudent.lessonType === 'special') {
+    if (!shouldReturnLectureStockOnAbsence(targetStudent)) {
+      return {
+        kind: 'lecture-kept', nextWeeks, targetCell, targetStudent, displacedStatusEntry, makeupStock: null,
+        ledgers: { ...unchanged, manualMakeupAdjustments: displacedLedgers.manualMakeupAdjustments, fallbackMakeupStudents: displacedLedgers.fallbackMakeupStudents },
+      }
+    }
+
+    const lectureStudentKey = resolveLectureStockStudentKey(targetStudent, managedStudentByAnyName, resolveDisplayName)
+    const lectureStockKey = buildLectureStockKey(lectureStudentKey, targetStudent.subject, targetStudent.specialSessionId)
+    const nextManualLectureStockCounts = appendLectureStockCount(params.manualLectureStockCounts, lectureStockKey)
+    const nextManualLectureStockOrigins = appendManualLectureStockOrigin(params.manualLectureStockOrigins, lectureStockKey, {
+      displayName: resolveDisplayName(targetStudent.name),
+      sessionId: targetStudent.specialSessionId,
+      originDateKey: targetCell.dateKey,
+      originSlotNumber: targetCell.slotNumber,
+    })
+    const nextFallbackLectureStockStudents = managedStudentByAnyName.get(targetStudent.name)
+      ? params.fallbackLectureStockStudents
+      : {
+          ...params.fallbackLectureStockStudents,
+          [lectureStockKey]: {
+            displayName: resolveDisplayName(targetStudent.name),
+            subject: targetStudent.subject,
+          },
+        }
+    return {
+      kind: 'lecture-returned', nextWeeks, targetCell, targetStudent, displacedStatusEntry, makeupStock: null,
+      ledgers: {
+        ...unchanged,
+        manualMakeupAdjustments: displacedLedgers.manualMakeupAdjustments,
+        fallbackMakeupStudents: displacedLedgers.fallbackMakeupStudents,
+        manualLectureStockCounts: nextManualLectureStockCounts,
+        manualLectureStockOrigins: nextManualLectureStockOrigins,
+        fallbackLectureStockStudents: nextFallbackLectureStockStudents,
+      },
+    }
+  }
+
+  const stockKey = buildMakeupStockKey(resolveStockId(targetStudent), targetStudent.subject)
+  const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
+  const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
+    ? appendSuppressedRegularLessonOccurrence(params.suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
+    : params.suppressedRegularLessonOccurrences
+  // INV-06（回帰防止・2026-07-31）: 振替コマ（makeupSourceDate あり）を休みにしたときは、ここで
+  // origin を積んではいけない。台帳に origin がある在庫由来の振替は「積む＋再浮上」で二重計上になり、
+  // 台帳に origin が無い（＝別日へ移動しただけの）振替は makeupStock.ts の collectAbsentMakeupOrigins が
+  // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
+  // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
+  const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
+    ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
+    : displacedLedgers.manualMakeupAdjustments
+  // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
+  // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
+  // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
+  // 台帳 origin を取り下げるだけ）。
+  const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+    params.suppressedMakeupOrigins,
+    stockKey,
+    resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+    resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+  )
+  const managedStudent = managedStudentByAnyName.get(targetStudent.name)
+  const nextFallbackMakeupStudents = managedStudent
+    ? displacedLedgers.fallbackMakeupStudents
+    : {
+        ...displacedLedgers.fallbackMakeupStudents,
+        [stockKey]: {
+          studentName: targetStudent.name,
+          displayName: resolveDisplayName(targetStudent.name),
+          subject: targetStudent.subject,
+        },
+      }
+  return {
+    kind: 'makeup-returned', nextWeeks, targetCell, targetStudent, displacedStatusEntry,
+    ledgers: {
+      ...unchanged,
+      manualMakeupAdjustments: nextManualMakeupAdjustments,
+      suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+      fallbackMakeupStudents: nextFallbackMakeupStudents,
+      suppressedRegularLessonOccurrences: nextSuppressedRegularLessonOccurrences,
+    },
+    // 振替元は日付と**時限**の両方を返す（呼び出し側の markStudentAbsentAt も同じ値を返す・INV-06/INV-11）。
+    makeupStock: {
+      stockKey,
+      originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+      originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+    },
+  }
+}
+
+export type ComputeMakeupStockPlacementResult =
+  /** 席（セル・机）が見つからない（呼び出し側は何も言わずに戻る＝元の挙動）。 */
+  | { status: 'missing' }
+  | { status: 'blocked'; message: string }
+  | { status: 'placed'; nextWeeks: SlotCell[][]; targetCell: SlotCell; targetDesk: DeskCell; nextStudent: StudentEntry; resolvedOriginDate: string | null }
+
+// 未消化振替の配置の本体の純粋ロジック（2026-11-07・確認リストの「準備する」第 4 段のため handlePlaceMakeupFromStock から挙動不変で抽出）。
+// 席の検査（埋まっている・メモ・同じコマに同じ生徒）→ 振替元（選んだ日付#限・無ければ最古）→ 振替の生徒と授業を作る、の順は元と 1:1。
+// 休日の判定・出席不可コマの確認・commit・一覧の後始末は呼び出し側（UI の段）。台帳は触らない（置いた振替が在庫を消化する＝算出・INV-06）。
+export function computeMakeupStockPlacement(params: {
+  weeks: SlotCell[][]
+  weekIndex: number
+  cellId: string
+  deskIndex: number
+  studentIndex: number
+  /** 同じコマの重複判定に使う生徒の鍵（一覧の行の studentId。無ければ name:表示名）。 */
+  stockStudentKey: string | null
+  stockDisplayName: string
+  placementEntry: Pick<MakeupStockEntry, 'studentId' | 'subject' | 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'> & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>
+  selectedOriginToken: string | null
+  students: readonly StudentRow[]
+  createStudentId: (cellId: string, deskIndex: number, studentIndex: number) => string
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+}): ComputeMakeupStockPlacementResult {
+  const { cellId, deskIndex, studentIndex, placementEntry, managedStudentByAnyName, resolveDisplayName } = params
+  const nextWeeks = cloneWeeks(params.weeks)
+  const targetCell = nextWeeks[params.weekIndex]?.find((cell) => cell.id === cellId)
+  const targetDesk = targetCell?.desks[deskIndex]
+  if (!targetCell || !targetDesk) return { status: 'missing' }
+
+  if (targetDesk.lesson?.studentSlots[studentIndex]) {
+    return { status: 'blocked', message: 'クリックした移動先は埋まっています。空欄の生徒マスを選んでください。' }
+  }
+  if (hasMemoInStudentSlot(targetDesk, studentIndex)) {
+    return { status: 'blocked', message: 'クリックした移動先にはメモがあります。メモを削除してから配置してください。' }
+  }
+
+  const comparableStudentKey = params.stockStudentKey ?? `name:${params.stockDisplayName}`
+  // コマ表の findDuplicateStudentInCell（移動と同じ権威関数）と同じ鍵の比べ方。
+  const duplicateStudent = findDuplicateStudentInCellByKey(targetCell, comparableStudentKey, (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveDisplayName))
+  if (duplicateStudent) {
+    return { status: 'blocked', message: `同コマにすでに${resolveDisplayName(duplicateStudent.name)}が組まれているため振替できません。` }
+  }
+
+  // ユーザーが未消化振替一覧で選んだ振替元日付を割り当てる(最古へ巻き戻さない)。
+  const { originDate: resolvedOriginDate, originLabel: resolvedOriginLabel, originReasonLabel: resolvedOriginReasonLabel } =
+    resolveSelectedMakeupOrigin(placementEntry, params.selectedOriginToken)
+
+  const managedStudent = placementEntry.studentId ? params.students.find((student) => student.id === placementEntry.studentId) : null
+  const studentName = managedStudent ? getStudentDisplayName(managedStudent) : params.stockDisplayName
+  const studentGrade = managedStudent?.birthDate ? resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey)) : '中1'
+  const nextStudent: StudentEntry = normalizeLessonPlacement({
+    id: params.createStudentId(cellId, deskIndex, studentIndex),
+    name: studentName,
+    managedStudentId: managedStudent?.id,
+    grade: studentGrade,
+    birthDate: managedStudent?.birthDate,
+    makeupSourceDate: resolvedOriginDate ?? undefined,
+    makeupSourceLabel: resolvedOriginLabel ?? undefined,
+    subject: placementEntry.subject as SubjectLabel,
+    lessonType: 'makeup',
+    teacherType: 'normal',
+  }, targetCell.dateKey)
+
+  if (!targetDesk.lesson) {
+    targetDesk.lesson = {
+      id: `${cellId}_desk_${deskIndex + 1}_${nextStudent.lessonType}`,
+      note: nextStudent.lessonType === 'makeup' && resolvedOriginLabel
+        ? `元の通常授業: ${resolvedOriginLabel}${resolvedOriginReasonLabel ? `（${resolvedOriginReasonLabel}）` : ''}`
+        : undefined,
+      studentSlots: [null, null],
+    }
+  }
+
+  targetDesk.lesson.studentSlots[studentIndex] = nextStudent
+  return { status: 'placed', nextWeeks, targetCell, targetDesk, nextStudent, resolvedOriginDate }
+}
+
+/**
+ * 確認リストの「準備する」第 4 段（checklistPrepSequence.ts）が盤面の操作に使う、室長の操作と同じ純関数（メニューの移動・長押し D&D〔computeStudentMove〕・
+ * 「休み」〔computeStudentAbsentMark〕・未消化振替の配置〔computeMakeupStockPlacement〕）。準備の受け入れテストも同じものを使う（別実装を持たない）。
+ */
+export const CHECKLIST_PREP_BOARD_OPERATIONS: ChecklistPrepBoardOperations = {
+  computeStudentMove,
+  computeStudentAbsentMark,
+  computeMakeupStockPlacement,
+  applyClassroomAvailability,
+}
+
 // 机の「講師ブロック」(講師名＋割当メタ)を1まとまりとして扱うための型。DeskCell からこの6フィールド
 // だけを抜き出して2机間で入れ替えることで、生徒(lesson)は動かさず講師だけを移動/入れ替えする。
 type DeskTeacherBlock = {
@@ -8743,6 +8996,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const checklistPrepJumpRef = useRef<{ requestId: number; count: number } | null>(null)
   // 第 2 段（§E-2-4-2）: 盤面の準備・後片づけを当てたあと、次のレンダー（盤面の変化が入った weeks）で行うテンプレ保存の段。finish で捨てる。
   const checklistPrepTemplatePhaseRef = useRef<ChecklistPrepTemplatePhase | null>(null)
+  // 第 4 段（§6）: 段を続ける準備の、次の段（盤面かテンプレが変わった次のレンダーで行う）。finish で捨てる。
+  const checklistPrepSequenceRef = useRef<{ requestId: number; classroomId: string | null; state: ChecklistPrepSequenceState; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null } | null>(null)
   const parentAbsencePlacementActiveRef = useRef(false)
   const parentAbsencePlacementSelectedSeenRef = useRef(false)
   // null = 基準未取り込み(初回/再マウント直後)。初回は除去せず基準記録のみ行う(resolveNewlyUnsubmittedSessionStudents)。
@@ -13111,10 +13366,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const nextWeeks = cloneWeeks(weeks)
-    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === cellId)
-    const targetDesk = targetCell?.desks[deskIndex]
-    if (!targetCell || !targetDesk) return
+    // 席（セル・机）が無ければ何も言わずに戻る（元の挙動・休日の判定より先）。
+    const existingTargetDesk = weeks[weekIndex]?.find((cell) => cell.id === cellId)?.desks[deskIndex]
+    if (!existingTargetDesk) return
 
     // INV-02 / INV-06（オーナー指示 2026-10-27・tp-63）: 休日（休校）のコマには置かない。判定は開校ルール適用後の cells。
     const closedDayPlacementBlock = resolveClosedDayStudentPlacementBlock(cells.find((cell) => cell.id === cellId))
@@ -13123,21 +13377,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    if (targetDesk.lesson?.studentSlots[studentIndex]) {
-      setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
+    // 席の検査（埋まっている・メモ・同じコマに同じ生徒）と振替の生徒・授業の組み立ては純関数 computeMakeupStockPlacement
+    // （2026-11-07 に挙動不変で抽出・確認リストの「準備する」と共有）。ユーザーが一覧で選んだ振替元日付を割り当てる(最古へ巻き戻さない)。
+    const placement = computeMakeupStockPlacement({
+      weeks,
+      weekIndex,
+      cellId,
+      deskIndex,
+      studentIndex,
+      stockStudentKey: selectedMakeupStockEntry.studentId,
+      stockDisplayName: selectedMakeupStockEntry.displayName,
+      placementEntry,
+      selectedOriginToken: selectedMakeupStockOriginDate,
+      students,
+      createStudentId,
+      managedStudentByAnyName,
+      resolveDisplayName: resolveBoardStudentDisplayName,
+    })
+    if (placement.status === 'missing') return
+    if (placement.status === 'blocked') {
+      setStatusMessage(placement.message)
       return
     }
-    if (hasMemoInStudentSlot(targetDesk, studentIndex)) {
-      setStatusMessage('クリックした移動先にはメモがあります。メモを削除してから配置してください。')
-      return
-    }
-
-    const comparableStudentKey = selectedMakeupStockEntry.studentId ?? `name:${selectedMakeupStockEntry.displayName}`
-    const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
-    if (duplicateStudent) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため振替できません。`)
-      return
-    }
+    const { targetCell, targetDesk, nextStudent, resolvedOriginDate } = placement
 
     // 「後から出席可能に変更」(2026-07-18): 出席不可提出コマへの振替配置は確認ダイアログ承認で黄色化する。
     const reopenTargets = confirmReopenForPlacements([{
@@ -13151,37 +13413,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    // ユーザーが未消化振替一覧で選んだ振替元日付を割り当てる(最古へ巻き戻さない)。
-    const { originDate: resolvedOriginDate, originLabel: resolvedOriginLabel, originReasonLabel: resolvedOriginReasonLabel } =
-      resolveSelectedMakeupOrigin(placementEntry, selectedMakeupStockOriginDate)
-
-    const managedStudent = placementEntry.studentId ? students.find((student) => student.id === placementEntry.studentId) : null
-    const studentName = managedStudent ? getStudentDisplayName(managedStudent) : selectedMakeupStockEntry.displayName
-    const studentGrade = managedStudent?.birthDate ? resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey)) : '中1'
-    const nextStudent: StudentEntry = normalizeLessonPlacement({
-      id: createStudentId(cellId, deskIndex, studentIndex),
-      name: studentName,
-      managedStudentId: managedStudent?.id,
-      grade: studentGrade,
-      birthDate: managedStudent?.birthDate,
-      makeupSourceDate: resolvedOriginDate ?? undefined,
-      makeupSourceLabel: resolvedOriginLabel ?? undefined,
-      subject: placementEntry.subject as SubjectLabel,
-      lessonType: 'makeup',
-      teacherType: 'normal',
-    }, targetCell.dateKey)
-
-    if (!targetDesk.lesson) {
-      targetDesk.lesson = {
-        id: `${cellId}_desk_${deskIndex + 1}_${nextStudent.lessonType}`,
-        note: nextStudent.lessonType === 'makeup' && resolvedOriginLabel
-          ? `元の通常授業: ${resolvedOriginLabel}${resolvedOriginReasonLabel ? `（${resolvedOriginReasonLabel}）` : ''}`
-          : undefined,
-        studentSlots: [null, null],
-      }
-    }
-
-    targetDesk.lesson.studentSlots[studentIndex] = nextStudent
     console.log('[振替ストック配置]', {
       placedStudent: { name: nextStudent.name, managedStudentId: nextStudent.managedStudentId, subject: nextStudent.subject, lessonType: nextStudent.lessonType, makeupSourceDate: nextStudent.makeupSourceDate },
       stockEntry: { key: selectedMakeupStockEntry.key, balance: selectedMakeupStockEntry.balance, studentId: selectedMakeupStockEntry.studentId },
@@ -13190,7 +13421,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       resolvedOriginDate,
       targetDate: targetCell.dateKey,
     })
-    commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
+    commitWeeks(placement.nextWeeks, weekIndex, cellId, deskIndex)
     if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     // 配置完了後: 残数にかかわらず生徒選択モーダルは閉じる。
     setStockPanelsRestoreState(null)
@@ -15417,139 +15648,65 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 自動処理(parentAbsenceRequest)が**同じ 1 本**を通る(会計 INV-06 の経路を分散させない)。表示中の週(weekIndex)が対象。
   // 戻り値: 席が見つからなければ null。makeupStock は未消化振替へ戻したときの在庫キーと振替元日付(講習コマは null)。
   const markStudentAbsentAt = (seat: ParentAbsenceTarget): { makeupStock: { stockKey: string; originDate: string; originSlotNumber: number | null } | null } | null => {
-    const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
-    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === seat.cellId)
-    const targetDesk = targetCell?.desks[seat.deskIndex]
-    const targetLesson = targetDesk?.lesson
-    const targetStudent = targetLesson?.studentSlots[seat.studentIndex]
-    if (!targetCell || !targetDesk || !targetStudent) return null
+    // 本体（席の記録化・台帳の積み方・抑止の解除）は純関数 computeStudentAbsentMark（2026-11-07 に挙動不変で抽出・確認リストの「準備する」と共有）。
+    const result = computeStudentAbsentMark({
+      weeks,
+      weekIndex,
+      seat,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      suppressedRegularLessonOccurrences,
+      ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+      managedStudentByAnyName,
+      resolveDisplayName: resolveBoardStudentDisplayName,
+      resolveStockId: resolveBoardStudentStockId,
+    })
+    if (!result) return null
+    const { targetCell, targetStudent, displacedStatusEntry, ledgers } = result
 
-    const absentStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent')
-    // Issue #57(INV-06): このスロットに保持されている前の生徒の出欠記録(移動時に保持されたもの)を
-    // 上書きで消す前に、振替コマの記録なら台帳へ確定する(「破棄する側で確定」)。
-    const displacedStatusEntry = targetDesk.statusSlots?.[seat.studentIndex] ?? null
-    const displacedLedgers = displacedStatusEntry
-      ? materializeDisplacedStatusEntryIntoLedgers({
-          statusEntry: displacedStatusEntry,
-          manualMakeupAdjustments,
-          fallbackMakeupStudents,
-          ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
-          managedStudentByAnyName,
-          resolveDisplayName: resolveBoardStudentDisplayName,
-          resolveStockId: resolveBoardStudentStockId,
-        })
-      : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
-    removeStudentFromDeskLesson(targetDesk, seat.studentIndex)
-    setDeskStudentStatus(targetDesk, seat.studentIndex, absentStatusEntry)
-
-    if (targetStudent.lessonType === 'special') {
-      if (!shouldReturnLectureStockOnAbsence(targetStudent)) {
-        commitWeeks(
-          nextWeeks,
-          weekIndex,
-          seat.cellId,
-          seat.deskIndex,
-          classroomSettings.holidayDates,
-          classroomSettings.forceOpenDates,
-          displacedLedgers.manualMakeupAdjustments,
-          suppressedMakeupOrigins,
-          displacedLedgers.fallbackMakeupStudents,
-          manualLectureStockCounts,
-          manualLectureStockOrigins,
-          fallbackLectureStockStudents,
-        )
-        recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: false })
-        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
-        return { makeupStock: null }
-      }
-
-      const lectureStudentKey = resolveLectureStockStudentKey(targetStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
-      const lectureStockKey = buildLectureStockKey(lectureStudentKey, targetStudent.subject, targetStudent.specialSessionId)
-      const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
-      const nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
-        displayName: resolveBoardStudentDisplayName(targetStudent.name),
-        sessionId: targetStudent.specialSessionId,
-        originDateKey: targetCell.dateKey,
-        originSlotNumber: targetCell.slotNumber,
-      })
-      const nextFallbackLectureStockStudents = managedStudentByAnyName.get(targetStudent.name)
-        ? fallbackLectureStockStudents
-        : {
-            ...fallbackLectureStockStudents,
-            [lectureStockKey]: {
-              displayName: resolveBoardStudentDisplayName(targetStudent.name),
-              subject: targetStudent.subject,
-            },
-          }
-
+    if (result.kind === 'lecture-kept' || result.kind === 'lecture-returned') {
       commitWeeks(
-        nextWeeks,
+        result.nextWeeks,
         weekIndex,
         seat.cellId,
         seat.deskIndex,
         classroomSettings.holidayDates,
         classroomSettings.forceOpenDates,
-        displacedLedgers.manualMakeupAdjustments,
+        ledgers.manualMakeupAdjustments,
         suppressedMakeupOrigins,
-        displacedLedgers.fallbackMakeupStudents,
-        nextManualLectureStockCounts,
-        nextManualLectureStockOrigins,
-        nextFallbackLectureStockStudents,
+        ledgers.fallbackMakeupStudents,
+        ledgers.manualLectureStockCounts,
+        ledgers.manualLectureStockOrigins,
+        ledgers.fallbackLectureStockStudents,
       )
+      if (result.kind === 'lecture-kept') {
+        recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: false })
+        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
+        return { makeupStock: null }
+      }
       recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: true })
       setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化講習へ戻しました。`)
       return { makeupStock: null }
     }
 
-    const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(targetStudent), targetStudent.subject)
-    const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
-    const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
-      ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
-      : suppressedRegularLessonOccurrences
-    // INV-06（回帰防止・2026-07-31）: 振替コマ（makeupSourceDate あり）を休みにしたときは、ここで
-    // origin を積んではいけない。台帳に origin がある在庫由来の振替は「積む＋再浮上」で二重計上になり、
-    // 台帳に origin が無い（＝別日へ移動しただけの）振替は makeupStock.ts の collectAbsentMakeupOrigins が
-    // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
-    // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
-    const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
-      ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
-      : displacedLedgers.manualMakeupAdjustments
-    // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
-    // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
-    // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
-    // 台帳 origin を取り下げるだけ）。
-    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
-      suppressedMakeupOrigins,
-      stockKey,
-      resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-      resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
-    )
-    const managedStudent = managedStudentByAnyName.get(targetStudent.name)
-    const nextFallbackMakeupStudents = managedStudent
-      ? displacedLedgers.fallbackMakeupStudents
-      : {
-          ...displacedLedgers.fallbackMakeupStudents,
-          [stockKey]: {
-            studentName: targetStudent.name,
-            displayName: resolveBoardStudentDisplayName(targetStudent.name),
-            subject: targetStudent.subject,
-          },
-        }
-
     commitWeeks(
-      nextWeeks,
+      result.nextWeeks,
       weekIndex,
       seat.cellId,
       seat.deskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
-      nextManualMakeupAdjustments,
-      nextSuppressedMakeupOrigins,
-      nextFallbackMakeupStudents,
+      ledgers.manualMakeupAdjustments,
+      ledgers.suppressedMakeupOrigins,
+      ledgers.fallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
-      nextSuppressedRegularLessonOccurrences,
+      ledgers.suppressedRegularLessonOccurrences,
     )
     recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
@@ -15558,7 +15715,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 選択トークンへの変換は、在庫行自身の値で作る resolveRemainingOriginToken に任せる(ここで buildOriginToken しない)。
     return {
       makeupStock: {
-        stockKey,
+        stockKey: result.makeupStock!.stockKey,
         originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
         originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
       },
@@ -15714,6 +15871,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const request = checklistPrepRequest!
     const finish = (ok: boolean, message: string) => {
       checklistPrepTemplatePhaseRef.current = null
+      checklistPrepSequenceRef.current = null
       processedChecklistPrepRequestIdRef.current = request.requestId
       onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })
     }
@@ -15744,10 +15902,113 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       if (phase.kind === 'cleanup') {
-        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateTeachersRemoved: phase.templateTeachersRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
+        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, prepStudentsRemoved: phase.prepStudentsRemoved, templateRemoved: phase.templateRemoved, templateTeachersRemoved: phase.templateTeachersRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
         return
       }
       finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, assignedTeachers: phase.assignedTeachers, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
+    }
+    // 第 4 段(§6・tp-71 / tp-72 / tp-75 / v2-3 / v2-6): テンプレ保存と盤面の操作を 1 レンダーに 1 段ずつ続ける。段の中身は純関数 planChecklistPrepSequenceStep、
+    // 盤面の操作は室長の操作と同じ純関数(CHECKLIST_PREP_BOARD_OPERATIONS)、保存は手で保存するときと同じ handleSaveRegularLessonTemplateByDiff(確認画面は出さない)。
+    // 段ごとに見直し(教室・テンプレ編集中・INV-08)→ 当てる → 次の段を積む(盤面が変わった次のレンダーで続ける・I-1 と同じ守り)。止まったら行ったことを書いて返す。
+    const runChecklistPrepSequence = (state: ChecklistPrepSequenceState | null) => {
+      if (state) {
+        const blocked = resolveChecklistPrepTemplatePhaseBlock({ phaseClassroomId: request.classroomId, classroomId: classroomStorageKey ?? null, isTemplateMode })
+        if (blocked) {
+          finish(false, buildChecklistPrepSequenceFailedMessage(state, blocked))
+          return
+        }
+      }
+      const sequenceTemplate = resolveTemplateDiffBaseline({ template: classroomSettings.regularLessonTemplate, deskCount: classroomSettings.deskCount, teachers, students, todayKey })
+      const sequenceProfile = pickChecklistPrepProfileStudent(students, todayKey)
+      const action = planChecklistPrepSequenceStep(request.itemId, state, {
+        weeks,
+        normalizedWeeks,
+        todayKey,
+        effectiveStartDate,
+        templatePendingDesks,
+        teachers,
+        teacherAliases: buildTeacherAliasResolver(teachers),
+        template: sequenceTemplate,
+        students,
+        regularLessons,
+        classroomSettings,
+        ledgers: { manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, suppressedRegularLessonOccurrences },
+        ledgerMakeupOriginDatesByKey,
+        managedStudentByAnyName,
+        resolveDisplayName: resolveBoardStudentDisplayName,
+        resolveStockId: resolveBoardStudentStockId,
+        createStudentId,
+        trialProfile: sequenceProfile ? { grade: resolveSchoolGradeLabelForDateKey(sequenceProfile.birthDate, todayKey), subject: '英' } : undefined,
+        operations: CHECKLIST_PREP_BOARD_OPERATIONS,
+      })
+      if (action.kind === 'fail') {
+        finish(false, buildChecklistPrepSequenceFailedMessage(state, action.reason))
+        return
+      }
+      if (action.kind === 'jump') {
+        const sequenceJumpCount = checklistPrepJumpRef.current?.requestId === request.requestId ? checklistPrepJumpRef.current.count : 0
+        if (sequenceJumpCount >= CHECKLIST_PREP_MAX_JUMPS) {
+          finish(false, CHECKLIST_PREP_JUMP_FAILED_MESSAGE)
+          return
+        }
+        checklistPrepJumpRef.current = { requestId: request.requestId, count: sequenceJumpCount + 1 }
+        // 移れたら、週が変わった次のレンダーで最初の段から決め直す。移れなければ失敗で返す。
+        if (!jumpToWeekByDate(action.dateKey)) finish(false, CHECKLIST_PREP_JUMP_FAILED_MESSAGE)
+        return
+      }
+      if (action.kind === 'done') {
+        finish(true, buildChecklistPrepSequenceMessage(action.state))
+        return
+      }
+      let nextSequenceState: ChecklistPrepSequenceState
+      if (action.kind === 'template') {
+        const prepared = prepareChecklistPrepTemplateSave({ registrations: action.registrations, teacherRegistrations: action.teacherRegistrations, baseTemplate: sequenceTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
+        if (!prepared.ok) {
+          finish(false, buildChecklistPrepSequenceFailedMessage(action.state, prepared.reason))
+          return
+        }
+        // INV-12: 手で保存するときと同じ重複ガード(runChecklistPrepTemplatePhase と同じ)。
+        const sequenceDuplicates = findTemplateDuplicateStudents(buildTemplateBoardCells({ template: prepared.template, teachers, students, deskCount: classroomSettings.deskCount }), (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+        if (sequenceDuplicates.length > 0) {
+          finish(false, buildChecklistPrepSequenceFailedMessage(action.state, buildTemplateDuplicateStudentsMessage(sequenceDuplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`)))
+          return
+        }
+        let sequenceSaved: ChecklistPrepTemplateSaveResult
+        try {
+          sequenceSaved = handleSaveRegularLessonTemplateByDiff(prepared.template)
+        } catch (error) {
+          finish(false, buildChecklistPrepSequenceFailedMessage(action.state, error instanceof Error ? error.message : String(error)))
+          return
+        }
+        nextSequenceState = recordChecklistPrepSequenceTemplateSaved(action.state, { assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers, effectiveStartDate: prepared.template.effectiveStartDate, todayKey, ...sequenceSaved })
+      } else {
+        // 室長の操作と同じ確定(出自の印・保留の片づけ・Undo)。台帳は操作の純関数が返したもの(休みで +1・配置は算出で −1)。
+        commitWeeks(
+          action.weeks, action.weekIndex, action.cellId, action.deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates,
+          action.ledgers.manualMakeupAdjustments, action.ledgers.suppressedMakeupOrigins, action.ledgers.fallbackMakeupStudents,
+          action.ledgers.manualLectureStockCounts, action.ledgers.manualLectureStockOrigins, action.ledgers.fallbackLectureStockStudents, action.ledgers.suppressedRegularLessonOccurrences,
+        )
+        nextSequenceState = action.state
+      }
+      if (isChecklistPrepSequenceComplete(nextSequenceState)) {
+        setStatusMessage('確認リストの準備をしました。保存を押してください。')
+        finish(true, buildChecklistPrepSequenceMessage(nextSequenceState))
+        return
+      }
+      setStatusMessage('確認リストの準備を続けています。')
+      checklistPrepSequenceRef.current = { requestId: request.requestId, classroomId: request.classroomId, state: nextSequenceState, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep', summary: summarizeChecklistPrepSequenceProgress(nextSequenceState) })
+      return
+    }
+    // 第 4 段: 前のレンダーで段を当てたリクエストなら続きを行う(盤面かテンプレが変わったレンダーだけ・同じレンダーのクロージャでは待つ)。
+    const sequenceTiming = resolveChecklistPrepTemplatePhaseTiming({ phase: checklistPrepSequenceRef.current, requestId: request.requestId, weeks, pendingDesks: templatePendingDesks })
+    if (sequenceTiming === 'stale') checklistPrepSequenceRef.current = null
+    if (sequenceTiming === 'wait') {
+      return
+    }
+    if (sequenceTiming === 'run') {
+      runChecklistPrepSequence(checklistPrepSequenceRef.current!.state)
+      return
     }
     // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
     // ★盤面を当てたのと同じレンダーのクロージャ(準備前の weeks)では保存しない(StrictMode の effect の 2 回目など。保存すると準備前の weeks から
@@ -15771,26 +16032,28 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         finish(false, cleanupBlock)
         return
       }
-      const cleanupPlan = planChecklistPrepCleanup({ weeks, pendingDesks: templatePendingDesks, savedTemplate: templateDiffApplyEnabled ? classroomSettings.regularLessonTemplate : null, students, toSaveTemplate })
+      // 第 4 段(§6): 確認用の生徒の手入力の授業・出欠記録・台帳の分も消す(鍵は管理生徒 ID・ほかの生徒の分は触らない・INV-02 / INV-06)。
+      const cleanupPlan = planChecklistPrepCleanup({ weeks, pendingDesks: templatePendingDesks, savedTemplate: templateDiffApplyEnabled ? classroomSettings.regularLessonTemplate : null, students, toSaveTemplate, ledgers: { manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, suppressedRegularLessonOccurrences } })
       if (cleanupPlan.nothing) {
         finish(true, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE)
         return
       }
       if (cleanupPlan.boardChanged) {
+        const led = cleanupPlan.ledgers ?? { manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, suppressedRegularLessonOccurrences }
         commitWeeks(
           cleanupPlan.weeks, weekIndex, selectedCellId, selectedDeskIndex, undefined, undefined,
-          undefined, undefined, undefined, undefined, undefined, undefined,
-          undefined, undefined, undefined, cleanupPlan.pendingDesks ?? templatePendingDesks,
+          led.manualMakeupAdjustments, led.suppressedMakeupOrigins, led.fallbackMakeupStudents, undefined, undefined, undefined,
+          led.suppressedRegularLessonOccurrences, undefined, undefined, cleanupPlan.pendingDesks ?? templatePendingDesks,
         )
         setStatusMessage('確認リストの後片づけをしました。保存を押してください。')
       }
-      const boardMessage = cleanupPlan.boardChanged ? buildChecklistPrepCleanupMessage({ removed: cleanupPlan.removed, templateRemoved: 0 }) : ''
+      const boardMessage = cleanupPlan.boardChanged ? buildChecklistPrepCleanupMessage({ removed: cleanupPlan.removed, prepStudentsRemoved: cleanupPlan.prepStudentsRemoved, templateRemoved: 0 }) : ''
       if (!cleanupPlan.template) {
         finish(true, boardMessage)
         return
       }
       // queuedFromWeeks / queuedFromPendingDesks は盤面を当てる前の参照(両方そのままのレンダーでは保存しない・I-1。下の行だけ消すと weeks は同じ参照のまま・修正ラウンド 2)。
-      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, templateTeachersRemoved: cleanupPlan.templateTeachersRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, prepStudentsRemoved: cleanupPlan.prepStudentsRemoved, templateRemoved: cleanupPlan.templateRemoved, templateTeachersRemoved: cleanupPlan.templateTeachersRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       if (cleanupPlan.boardChanged) {
         checklistPrepTemplatePhaseRef.current = cleanupPhase
         onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })
@@ -15798,6 +16061,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       }
       // 盤面を変えていなければ weeks は今のままなので、その場で保存する。
       runChecklistPrepTemplatePhase(cleanupPhase)
+      return
+    }
+    // 第 4 段(§6): 段を続ける項目(tp-71 / tp-72 / tp-75 / v2-3 / v2-6)。断る判断は純関数(検証用教室・テンプレ編集中・差分反映の教室・確認用の生徒の数)。
+    if (isChecklistPrepSequenceItemId(request.itemId)) {
+      const sequenceBlock = resolveChecklistPrepSequenceStartBlock({ itemId: request.itemId, isVerificationClassroom: isDevelopmentClassroom({ id: classroomStorageKey ?? null }), isTemplateMode, templateDiffApplyEnabled, students })
+      if (sequenceBlock) {
+        finish(false, sequenceBlock)
+        return
+      }
+      runChecklistPrepSequence(null)
       return
     }
     const jumpCount = checklistPrepJumpRef.current?.requestId === request.requestId ? checklistPrepJumpRef.current.count : 0
@@ -15866,7 +16139,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // jumpToWeekByDate / commitWeeks / handleSaveRegularLessonTemplateByDiff は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と
     // App 側の消費で防ぐ(parentAbsenceRequest と同じ作法)。値の deps は漏らさない。テンプレ保存の段は commitWeeks が変えた weeks で次のレンダーに走る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, classroomStorageKey, isEditingStateLoadedForActingClassroom, isTemplateMode, normalizedWeeks, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, students, teachers, templateDiffApplyEnabled, templatePendingDesks, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, checklistPrepRequest, classroomSettings, classroomStorageKey, fallbackLectureStockStudents, fallbackMakeupStudents, isEditingStateLoadedForActingClassroom, isTemplateMode, ledgerMakeupOriginDatesByKey, managedStudentByAnyName, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, onChecklistPrepRequestProcessed, onChecklistPrepRequestProgress, regularLessons, resolveBoardStudentDisplayName, students, suppressedMakeupOrigins, suppressedRegularLessonOccurrences, teachers, templateDiffApplyEnabled, templatePendingDesks, weekIndex, weeks])
 
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を

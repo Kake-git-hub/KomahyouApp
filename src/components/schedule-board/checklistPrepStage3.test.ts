@@ -225,7 +225,7 @@ describe('tp-70: 講師だけのテンプレ机と同じ番号に手置き講師
     expect(lower?.teacher).toMatchObject({ teacher: '高木', manualTeacher: true, checklistPrepTeacher: true })
     expect(lower?.lesson).toBeUndefined()
     expect(message).toContain('木曜 5限 机 4 に講師「伊藤」')
-    expect(message).toContain('テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります。')
+    expect(message).toContain('テンプレのこの机は講師だけなので、手で置いた 確認用 体験1 は席に残ります。')
   })
 })
 
@@ -477,7 +477,7 @@ describe('テンプレへの講師の登録と準備の印（checklistPrepTeache
     }
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 0)).toBe(0)
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 1)).toBe(2)
-    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1 })
+    expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1, 'tp-71': 2, 'tp-72': 2, 'tp-75': 2, 'v2-3': 3, 'v2-6': 2 })
   })
 })
 
