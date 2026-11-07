@@ -51,6 +51,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(button(id), id).not.toBeNull()
     expect(button(plainItem.id)).toBeNull()
+    // 文に「準備する」を含むが autoPrep ではない項目(tp-69 の準備を使う ap-3・ta-1)にはボタンを出さない。
+    for (const id of ['ap-3', 'ta-1']) expect(button(id), id).toBeNull()
     expect(container.querySelectorAll('[data-testid^="verification-checklist-prep-"]:not([data-testid="verification-checklist-prep-result"])').length).toBe(autoPrepIds.length)
   })
 
@@ -110,6 +112,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     const result = container.querySelector<HTMLElement>('[data-testid="verification-checklist-prep-result"]')
     expect(result?.textContent).toContain('11/12(木) 1限 机 3 の生徒 1 に体験「確認用 体験1」を置きました。')
     expect(result?.getAttribute('data-item-id')).toBe(PREP_ITEM)
+    // 第120版(2026-11-07): 結果文は準備の手順の行(li)の中に出す。
+    expect(button(PREP_ITEM)!.closest('li')!.contains(result!)).toBe(true)
     expect(result?.className).toContain('is-ok')
     // 結果文は画面だけ(下書きに保存しない)。
     for (let index = 0; index < window.localStorage.length; index += 1) {
