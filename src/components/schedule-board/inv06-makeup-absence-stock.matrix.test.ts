@@ -1970,16 +1970,29 @@ describe('INV-06 兄弟: 格納・単発削除も同じ時限で台帳と抑制�
     return BOARD_TSX.slice(start, end > start ? end : undefined)
   }
 
+  // 2026-11-07: 格納・単発削除の会計はハンドラから純関数 computeStoredLessonMakeupLedgers・computeDeletedLessonMakeupSuppressions へ挙動不変で切り出した
+  //   （科目だけ編集したテンプレの授業のテンプレの科目の抑止をテストで通すため）。ハンドラがその関数を通すことと、関数の中身の字面を同じ強さで固定する。
+  const sliceFunction = (name: string) => {
+    const start = BOARD_TSX.indexOf(`export function ${name}(`)
+    expect(start, name).toBeGreaterThan(0)
+    const end = BOARD_TSX.indexOf('\nexport function ', start + 10)
+    return BOARD_TSX.slice(start, end > start ? end : undefined)
+  }
+
   it('格納: 台帳へ積む origin に時限を付ける（resolveLessonMakeupOriginSlotNumber）', () => {
-    expect(sliceHandler('handleStoreStudent')).toMatch(/appendMakeupOrigin\(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber\(/)
+    expect(sliceHandler('handleStoreStudent')).toMatch(/computeStoredLessonMakeupLedgers\(\{/)
+    expect(sliceFunction('computeStoredLessonMakeupLedgers')).toMatch(/appendMakeupOrigin\(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber\(/)
   })
 
   it('単発削除: 通常授業・振替の抑制は resolveDeletedLessonSuppressionOrigin で決める（同じ日の別のコマを巻き込まない・旧データは時限なし）', () => {
     const handler = sliceHandler('handleDeleteStudent')
-    expect(handler.match(/resolveDeletedLessonSuppressionOrigin\(\{/g)?.length).toBe(2)
-    expect(handler).toMatch(/requireExactOrigin: false/)
-    expect(handler).toMatch(/requireExactOrigin: true/)
-    expect(handler).not.toMatch(/appendMakeupOrigin\(nextSuppressedMakeupOrigins, stockKey, menuStudent\.student\.makeupSourceDate, resolveLessonMakeupOriginSlotNumber\(/)
+    expect(handler).toMatch(/computeDeletedLessonMakeupSuppressions\(\{/)
+    expect(handler).not.toMatch(/appendMakeupOrigin\(nextSuppressedMakeupOrigins/)
+    const body = sliceFunction('computeDeletedLessonMakeupSuppressions')
+    expect(body.match(/resolveDeletedLessonSuppressionOrigin\(\{/g)?.length).toBe(2)
+    expect(body).toMatch(/requireExactOrigin: false/)
+    expect(body).toMatch(/requireExactOrigin: true/)
+    expect(body).not.toMatch(/appendMakeupOrigin\(nextSuppressedMakeupOrigins, stockKey, student\.makeupSourceDate, resolveLessonMakeupOriginSlotNumber\(/)
   })
 
   it('時限の決め方: 振替は振替元ラベルの時限／同じ日の中で動かした授業はテンプレ上の元の時限／それ以外はそのコマの時限', () => {
