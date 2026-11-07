@@ -649,6 +649,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       steps: ['ある日を丸ごと振替で同じ曜日の日へ移す', '移した先の日付 →「生徒を空にする」→「保存」', '再読み込みし、テンプレを何も変えずに保存する'],
       check: [
         '移した先の日に生徒が戻らない',
+        '元の日の「休)」も消え、その分の未消化振替が増える',
         '元の日を「生徒を空にする」と、移した先の生徒は消えない',
       ],
       introducedIn: 'v1.5.707',
