@@ -213,10 +213,11 @@ export type DeskCell = {
   /**
    * 講師欄の緑 2 行で「下段(手入力)の講師を採用する」を選んだとき、この机で取り下げたテンプレの講師（名前と ID）
    * （docs/spec-template-conflict-v2.md §4-1 の講師欄版・2026-11-07 開発用教室の操作ログ・確認リスト tp-64 / tp-69 / tp-70）。
-   * 机に手置き講師が居る間、テンプレ保存（差分反映）はこの講師をこの机に置かない＝採用した手置き講師の 1 行のまま（INV-02 / INV-03。再マージは手置き講師をもともと替えない）。
-   * 判定は templateDiffApply.ts の isTemplateTeacherDeclinedAtDesk 1 か所。テンプレがこの机に別の講師を置いた・講師を外した反映で使い切り（消える）。
+   * adopted は採用した手置き講師（名前と ID）。机の講師が採用した講師本人の間だけ、テンプレ保存（差分反映）と再マージ（講師だけのテンプレ机を空き机へ置く所）は
+   * 取り下げた講師をこの机・空き机に置かない＝採用した手置き講師の 1 行のまま（INV-02 / INV-03）。講師を手で替えた・入替で別の講師が来た机では効かない。
+   * 判定は templateDiffApply.ts の isTemplateTeacherDeclinedAtDesk 1 か所。テンプレがこの机に別の講師を置いた・講師を外した・記録が効かなくなった反映で消える。
    */
-  templateTeacherDeclined?: { teacher: string; teacherId?: string }
+  templateTeacherDeclined?: { teacher: string; teacherId?: string; adopted?: { teacher: string; teacherId?: string } }
   /**
    * 確認リストの「準備する」（docs/spec-developer-report.md §E-2-4-2・開発用教室とテスト教室だけ）が置いた講師の印。
    * 「後片づけ」（checklistPrepTemplate.ts の cleanupChecklistPrepBoard）が消す講師の見分けにだけ使う（画面・日程表・PDF には出さない）。

@@ -572,37 +572,73 @@ export function applyTemplatePendingLowerTeacherToDesk(desk: DeskCell, teacher: 
 }
 
 /**
- * 「下段(手入力)の講師を採用する」で取り下げるテンプレの講師の記録（DeskCell.templateTeacherDeclined）。採用する前の机の講師（上の行＝テンプレの講師）から作る。
- * 上の行が講師なしなら取り下げるものが無いので undefined。
+ * 講師の記録（名前＋任意の講師 ID）がこの講師（表示名＋講師 ID）と同じ講師か。呼び名の対応表（講師 ID・登録名・表示名）で重なりを見る（講師の一意判定と同じ鍵）。
+ * 講師の休み（teacherRest.ts の doesTeacherRestMatch）と講師欄の採用の記録（isTemplateTeacherDeclinedAtDesk）が同じこの 1 本で照合する。
  */
-export function buildTemplateTeacherDeclined(templateTeacherDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>): DeskCell['templateTeacherDeclined'] {
-  const teacher = templateTeacherDesk.teacher.trim()
+export function isSameTeacherRecord(
+  record: { teacher: string; teacherId?: string },
+  teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): boolean {
+  const recordKeys = [record.teacherId ?? '', record.teacher].map((key) => key.trim()).filter(Boolean)
+  const targetKeys = [teacher.teacher, teacher.teacherAssignmentTeacherId ?? ''].map((key) => key.trim()).filter(Boolean)
+  return recordKeys.some((recordKey) => targetKeys.some((targetKey) => isSameTeacherByAliases(recordKey, targetKey, resolveAliases)))
+}
+
+/**
+ * 講師名から講師 ID を引く（呼び名の対応表 buildTeacherAliasResolver は名簿に居る講師の呼び名を「講師 ID・登録名・表示名」の順で返す＝先頭が ID）。
+ * 名簿に居ない（対応表が自分だけを返す）ときは undefined。
+ */
+export function resolveTeacherIdByAliases(teacherName: string, resolveAliases: TeacherAliasResolver = defaultTeacherAliases): string | undefined {
+  const name = teacherName.trim()
+  if (!name) return undefined
+  const keys = resolveAliases(name)
+  if (keys.length <= 1) return undefined
+  return keys[0]?.trim() || undefined
+}
+
+function teacherRecordOf(desk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>, resolveAliases: TeacherAliasResolver): { teacher: string; teacherId?: string } | undefined {
+  const teacher = desk.teacher.trim()
   if (!teacher) return undefined
-  const teacherId = templateTeacherDesk.teacherAssignmentTeacherId?.trim()
+  const teacherId = desk.teacherAssignmentTeacherId?.trim() || resolveTeacherIdByAliases(teacher, resolveAliases)
   return teacherId ? { teacher, teacherId } : { teacher }
 }
 
 /**
+ * 「下段(手入力)の講師を採用する」で取り下げるテンプレの講師の記録（DeskCell.templateTeacherDeclined）。採用する前の机の講師（上の行＝テンプレの講師）と、
+ * 採用した手置き講師（adopted）の両方を残す（regression-reviewer S-1: 記録は採用した講師に結び付ける＝あとで別の講師へ替えた机では効かない）。
+ * 講師 ID が無い（生徒を先に採用して管理授業でなくなった机は上の行の講師 ID が外れる）ときは呼び名の対応表から補う（S-3: 表示名を変えても効く）。
+ * 上の行が講師なし・採用する講師が居ないなら取り下げるものが無いので undefined。
+ */
+export function buildTemplateTeacherDeclined(
+  templateTeacherDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>,
+  adoptedTeacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>,
+  resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
+): DeskCell['templateTeacherDeclined'] {
+  const declined = teacherRecordOf(templateTeacherDesk, resolveAliases)
+  const adopted = teacherRecordOf(adoptedTeacher, resolveAliases)
+  if (!declined || !adopted) return undefined
+  return { ...declined, adopted }
+}
+
+/**
  * テンプレのこの机の講師（templateTeacher）が、この机で「下段(手入力)の講師を採用する」により取り下げた講師か（spec-template-conflict-v2 §4-1 の講師欄版・2026-11-07）。
- * 机に手置き講師（QR を含む手入力の講師）が居る間だけ効く。真なら反映はその講師をこの机に置かず、手置き講師の 1 行のまま（§2-3 の「テンプレに講師なし → Y のまま」と同じ形）。
- * ★使うのは差分反映（templateConflictRules の applyRulesToDesk）だけ。再マージ（mergeManagedWeek）は机の手置き講師をもともと替えない（INV-02）ので、
- *   採用後の机は記録が無くても再マージで変わらない。記録が要るのは「毎回全コマを当て直す」差分反映が §2-3 で講師欄を 2 行に戻さないため
- *   （保存直後の再マージ・読み込みの不動点は inv02-manual-teacher-pending.matrix.test.ts の「講師欄の採用は次の反映でも残る」で固定）。
+ * 机に手入力の講師（QR を含む）が居て、それが**採用した講師本人**のときだけ効く（S-1）。真なら反映はその講師をこの机に置かず、手置き講師の 1 行のまま
+ * （§2-3 の「テンプレに講師なし → Y のまま」と同じ形）。
+ * ★差分反映（templateConflictRules の applyRulesToDesk）と再マージ（mergeManagedWeek の placeManagedTeacherOnlyDesk＝講師だけのテンプレ机を空き机へ置く所）が
+ *   同じこの関数で判定する（再マージは机の手置き講師を替えないが、講師だけのテンプレ机の講師を空き机へ置き直すので、ここで止めないと
+ *   取り下げた講師が別の机に湧く＝保存直後の再マージで形が変わる・regression-reviewer M-1・INV-03）。
  */
 export function isTemplateTeacherDeclinedAtDesk(
-  desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'templateTeacherDeclined'>,
+  desk: Pick<DeskCell, 'teacher' | 'manualTeacher' | 'teacherAssignmentSource' | 'teacherAssignmentTeacherId' | 'templateTeacherDeclined'>,
   templateTeacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | null | undefined,
   resolveAliases: TeacherAliasResolver = defaultTeacherAliases,
 ): boolean {
   const declined = desk.templateTeacherDeclined
-  if (!declined || !isManualOriginDeskTeacher(desk)) return false
-  const target = templateTeacher?.teacher?.trim() ?? ''
-  if (!target) return false
-  if (isSameTeacherByAliases(declined.teacher, target, resolveAliases)) return true
-  const declinedId = declined.teacherId?.trim() ?? ''
-  if (!declinedId) return false
-  const targetId = templateTeacher?.teacherAssignmentTeacherId?.trim() ?? ''
-  return declinedId === targetId || isSameTeacherByAliases(declinedId, target, resolveAliases)
+  if (!declined?.adopted || !isManualOriginDeskTeacher(desk)) return false
+  if (!templateTeacher?.teacher?.trim()) return false
+  if (!isSameTeacherRecord(declined.adopted, desk, resolveAliases)) return false
+  return isSameTeacherRecord(declined, templateTeacher, resolveAliases)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

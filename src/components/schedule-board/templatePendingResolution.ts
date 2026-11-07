@@ -514,7 +514,7 @@ export function computePendingTeacherChoice(params: {
     // 2026-11-07（開発用教室の操作ログ・tp-64 / tp-69 / tp-70・spec-template-conflict-v2 §4-1 の講師欄版）: 取り下げた上の行のテンプレの講師を机に記録する。
     // 記録が無いと、次のテンプレ保存（毎回全コマを当て直す・§6 Q39）が「手置き講師 × テンプレの別の講師」として講師欄を緑 2 行に戻し、
     // 机にテンプレの講師を戻していた（採用が保存のたびに取り消される＝INV-02 / INV-03）。反映は isTemplateTeacherDeclinedAtDesk でこの講師をこの机に置かない。
-    const declined = buildTemplateTeacherDeclined(location.desk)
+    const declined = buildTemplateTeacherDeclined(location.desk, teacher, params.teacherAliases)
     if (declined) adopted.templateTeacherDeclined = declined
     else delete adopted.templateTeacherDeclined
     // §9-19: 休んだ講師本人を「下段(手入力)の講師を採用する」で置き直したら休みを解除する（別の講師なら残す）。
