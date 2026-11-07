@@ -6199,7 +6199,7 @@ body.verification-checklist-window {
   line-height: 1.7;
 }
 
-/* 前提／操作／見るところ の3段(2026-09-17 オーナー指示「手順が多すぎて大変」→ 操作は1〜2個に絞り、見るところを分けた) */
+/* 操作／確認 の2段(2026-09-17 オーナー指示「手順が多すぎて大変」で分けた・第120版 2026-11-07 で準備は操作の手順へ入れた) */
 .verification-checklist-label {
   margin-top: 6px;
   font-size: 24px;
@@ -6212,32 +6212,20 @@ body.verification-checklist-window {
 .verification-checklist-free-memo {
   margin-bottom: 10px;
 }
-.verification-checklist-prep {
-  margin: 6px 0 0;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: #f1f5f9;
-  color: #475569;
-  font-size: 28px;
-  line-height: 1.6;
-}
-
-.verification-checklist-prep .verification-checklist-label {
-  display: inline-block;
-  margin: 0 8px 0 0;
-}
-
-/* 確認リスト: 「準備する」(2026-11-06・案 C 第 1 段)。準備の行の左にボタン(ap-1)、結果文は項目の下に出す(改行を残す)。 */
+/* 確認リスト: 「準備する」(2026-11-06・案 C 第 1 段)。第120版(2026-11-07)から準備は操作の手順の 1 つ: その手順の行の左にボタン(ap-1)、
+   結果文はその手順の下に出す(改行を残す)。 */
 .verification-checklist-prep-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
-.verification-checklist-prep-row .verification-checklist-prep {
-  flex: 1;
+.verification-checklist-step-text {
+  flex: 1 1 10em;
+  min-width: 0;
 }
 .verification-checklist-prep-button {
-  margin-top: 6px;
+  margin-top: 0;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -6280,10 +6268,10 @@ body.verification-checklist-window {
 }
 /* 項目の準備の行の「後片づけ」(2026-11-07・ap-3)と、その横の一言(準備で作ったもの全部を消す・regression-reviewer S-1)。 */
 .verification-checklist-prep-row .verification-checklist-cleanup-button {
-  margin-top: 6px;
+  margin-top: 0;
 }
 .verification-checklist-cleanup-note {
-  margin-top: 12px;
+  margin-top: 0;
   flex-shrink: 0;
   color: #475569;
   font-size: 18px;
