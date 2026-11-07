@@ -207,7 +207,7 @@ export type VerificationChecklistAudience = 'development' | 'sandbox'
  *   ta-1 の要改善「保存し直したら重複判定して緑に」はオーナー選択「今のまま」(採用した講師は次の保存でも 1 行のまま・spec-template-conflict-v2 §4-1)で、
  *   確認の中身は満たしていたので外した。
  */
-export const VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS: readonly string[] = ['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6']
+export const VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS: readonly string[] = ['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6', 'se-7', 'se-8']
 
 /** 見る相手に応じた項目の並び（順序は正本どおり）。 */
 export function selectVerificationChecklistItems(
@@ -629,6 +629,29 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '元の日のその生徒は「休)」で、移した先の日に授業がある',
       ],
       introducedIn: 'v1.5.706',
+    },
+    // 第125版(2026-11-07・v1.5.707 で入る・版は v1.5.697 据え置き＝項目を足しただけ): 丸ごと振替の移した先で休み・生徒を空にする(INV-03・INV-06・INV-12)。
+    {
+      id: 'se-7',
+      area: 'テンプレ作成',
+      title: '丸ごと振替で移した授業を、移した先で休みにすると未消化振替は 1 件',
+      steps: ['テンプレの授業 1 コマを「編集」で科目だけ変えて「保存」', 'その日を丸ごと振替で同じ曜日の日へ移す', '移した先でその生徒を「休み」にして「保存」'],
+      check: [
+        'その生徒の未消化振替は、変えた後の科目の 1 件だけ',
+        '元の日のその生徒は「休)」のまま',
+      ],
+      introducedIn: 'v1.5.707',
+    },
+    {
+      id: 'se-8',
+      area: 'テンプレ作成',
+      title: '丸ごと振替で移した先の日を「生徒を空にする」と、生徒が戻らない',
+      steps: ['ある日を丸ごと振替で同じ曜日の日へ移す', '移した先の日付 →「生徒を空にする」→「保存」', '再読み込みし、テンプレを何も変えずに保存する'],
+      check: [
+        '移した先の日に生徒が戻らない',
+        '元の日を「生徒を空にする」と、移した先の生徒は消えない',
+      ],
+      introducedIn: 'v1.5.707',
     },
     // 第122版(2026-11-07・v1.5.704 で入る・版は v1.5.697 据え置き): mg-1 要改善(受付 20261107-124618934-90c68aef「いる。なぜ 2 人いるかを調べて」)の調査結果。
     // 11/2 夜に「編集」で科目だけ 数→国 に変えてから同じコマの別の机へ動かしたため、抑止キーが国で積まれ、テンプレの数の授業が元の机へ戻った(テンプレの規則が

@@ -22,7 +22,7 @@
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { isManualOriginStudent } from './placementOrigin'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { resolveMovedTemplateLessonSubjectFromId } from './templateDiffApply'
+import { resolveMovedTemplateLessonSubjectFromId } from './templateLessonIdSubject'
 
 const WHOLE_DAY_PAIR_PREFIX = 'WHOLE_DAY_PAIR__'
 
