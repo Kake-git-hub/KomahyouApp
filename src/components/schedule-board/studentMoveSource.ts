@@ -11,21 +11,8 @@ export type StudentMoveSourceSeat = { cellId: string; deskIndex: number; student
 
 export type StudentMoveSourceHit = { cell: SlotCell; desk: DeskCell; deskIndex: number; studentIndex: number; student: StudentEntry }
 
-/**
- * 移動元の授業を決める**唯一の権威関数**（computeStudentMove・着地の確認・保留の机の判定・移動中の表示が通す）。
- * - 選んだ席が渡り、その席の生徒の id が movingStudentId と同じなら、その席を返す。
- * - それ以外（席が渡らない・席が古くて別の生徒・席が見つからない）は従来どおり、セルの並び順で最初に id が一致した授業を返す。
- * 返す cell / desk / student は渡したセルの参照そのもの（computeStudentMove は複製した weeks を渡して、その場で書き換える）。
- */
-export function findStudentMoveSource(cells: readonly SlotCell[], movingStudentId: string, sourceSeat?: StudentMoveSourceSeat | null): StudentMoveSourceHit | null {
-  if (sourceSeat) {
-    const cell = cells.find((candidate) => candidate.id === sourceSeat.cellId)
-    const desk = cell?.desks[sourceSeat.deskIndex]
-    const student = desk?.lesson?.studentSlots[sourceSeat.studentIndex] ?? null
-    if (cell && desk && student && student.id === movingStudentId) {
-      return { cell, desk, deskIndex: sourceSeat.deskIndex, studentIndex: sourceSeat.studentIndex, student }
-    }
-  }
+/** セルの並び（机→席）で最初に id が一致した授業。 */
+function findFirstByIdInCells(cells: readonly SlotCell[], movingStudentId: string): StudentMoveSourceHit | null {
   for (const cell of cells) {
     for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex++) {
       const desk = cell.desks[deskIndex]
@@ -38,6 +25,28 @@ export function findStudentMoveSource(cells: readonly SlotCell[], movingStudentI
     }
   }
   return null
+}
+
+/**
+ * 移動元の授業を決める**唯一の権威関数**（computeStudentMove・着地の確認・保留の机の判定・休日の入れ替え検査・移動中の表示が通す）。
+ * 1. 選んだ席が渡り、その席の生徒の id が movingStudentId と同じなら、その席。
+ * 2. 席が古い（机の並べ替え・再マージ・QR 反映で席の中身が変わった）ときは、**選んだコマ（cellId＝日付×時限で一意）の中**で id が一致した授業
+ *    （全体の先頭へ落とすと、2 限を選んだのに同じ id の 1 限を動かす・regression-reviewer S-1）。
+ * 3. 席が渡らない・選んだコマにその id が無いときは従来どおり、セルの並び順で最初に id が一致した授業。
+ * 返す cell / desk / student は渡したセルの参照そのもの（computeStudentMove は複製した weeks を渡して、その場で書き換える）。
+ */
+export function findStudentMoveSource(cells: readonly SlotCell[], movingStudentId: string, sourceSeat?: StudentMoveSourceSeat | null): StudentMoveSourceHit | null {
+  if (sourceSeat) {
+    const cell = cells.find((candidate) => candidate.id === sourceSeat.cellId)
+    const desk = cell?.desks[sourceSeat.deskIndex]
+    const student = desk?.lesson?.studentSlots[sourceSeat.studentIndex] ?? null
+    if (cell && desk && student && student.id === movingStudentId) {
+      return { cell, desk, deskIndex: sourceSeat.deskIndex, studentIndex: sourceSeat.studentIndex, student }
+    }
+    const inSelectedCell = cell ? findFirstByIdInCells([cell], movingStudentId) : null
+    if (inSelectedCell) return inSelectedCell
+  }
+  return findFirstByIdInCells(cells, movingStudentId)
 }
 
 /**

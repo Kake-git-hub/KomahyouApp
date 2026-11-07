@@ -104,6 +104,30 @@ describe('同じ日・同じ科目の 2 コマ（同じ id）の移動は選ん�
     expect(findStudentMoveSource(weeks.flat(), 'missing', null)).toBeNull()
   })
 
+  it('古い席（机の並べ替え・再マージ・QR 反映で席の中身が変わった）: まず同じコマの中で同じ id を探し、無ければ全体（2 限を選んだのに 1 限を動かさない）', () => {
+    const weeks = boardWeeks()
+    const second = seatOfSlot(weeks, `${DATE}_2`)!
+    // 2 限の生徒A を同じコマの別の机へ並べ替えた形（選んだ席は空き、または別の生徒）。
+    const cell2 = weeks[0].find((cell) => cell.id === `${DATE}_2`)!
+    const otherDeskIndex = cell2.desks.findIndex((desk, index) => index !== second.deskIndex && !desk.lesson)
+    cell2.desks[otherDeskIndex] = { ...cell2.desks[otherDeskIndex], lesson: cell2.desks[second.deskIndex].lesson }
+    cell2.desks[second.deskIndex] = { ...cell2.desks[second.deskIndex], lesson: undefined }
+    const staleSeat = { cellId: second.cellId, deskIndex: second.deskIndex, studentIndex: second.studentIndex }
+    const hit = findStudentMoveSource(weeks.flat(), SAME_ID, staleSeat)
+    expect(hit?.cell.id).toBe(`${DATE}_2`)
+    expect(hit?.deskIndex).toBe(otherDeskIndex)
+    // 移動の本体も 2 限を動かす（1 限は残る）。
+    const result = computeStudentMove({
+      weeks, weekIndex: 0, cells: weeks[0], movingStudentId: SAME_ID,
+      cellId: `${OTHER_DATE}_1`, deskIndex: 0, studentIndex: 0, sourceSeat: staleSeat, ...moveDefaults,
+    })
+    if (result.status !== 'moved') throw new Error(`expected moved, got ${result.status}`)
+    expect(seatOfSlot(result.nextWeeks, `${DATE}_1`)?.student.lessonType).toBe('regular')
+    expect(seatOfSlot(result.nextWeeks, `${DATE}_2`)).toBeUndefined()
+    // 選んだコマにその id が無いときだけ全体の先頭（従来どおり）。
+    expect(findStudentMoveSource(weeks.flat(), SAME_ID, { cellId: `${DATE}_3`, deskIndex: 0, studentIndex: 0 })?.cell.id).toBe(`${DATE}_1`)
+  })
+
   it('別の日へ移動: 2 限を選んで動かすと 2 限が動き、1 限の授業はそのまま（再マージ後も）', () => {
     const weeks = boardWeeks()
     const second = seatOfSlot(weeks, `${DATE}_2`)!
