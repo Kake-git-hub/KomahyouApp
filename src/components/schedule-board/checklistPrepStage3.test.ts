@@ -225,7 +225,7 @@ describe('tp-70: 講師だけのテンプレ机と同じ番号に手置き講師
     expect(lower?.teacher).toMatchObject({ teacher: '高木', manualTeacher: true, checklistPrepTeacher: true })
     expect(lower?.lesson).toBeUndefined()
     expect(message).toContain('木曜 5限 机 4 に講師「伊藤」')
-    expect(message).toContain('テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります。')
+    expect(message).toContain('テンプレのこの机は講師だけなので、手で置いた 確認用 体験1 は席に残ります。')
   })
 })
 

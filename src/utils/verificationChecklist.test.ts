@@ -1118,10 +1118,10 @@ describe('第116版(2026-11-07・v1.5.696): 11/7 未明の送信(版 v1.5.695)�
     expect(byId.get('tp-69')!.check!.join('\n')).toContain('「講師欄を 2 行（上＝テンプレ／下＝手入力）にします」')
     expect(byId.get('tp-69')!.check!.join('\n')).toContain('「重ねて保留（緑）にする机: 1机」')
     expect(byId.get('tp-69')!.check!.join('\n')).not.toContain('講師だけ下の行に残して保留')
-    expect(byId.get('tp-70')!.check!.join('\n')).toContain('「テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります」')
+    expect(byId.get('tp-70')!.check!.join('\n')).toContain('「テンプレのこの机は講師だけなので、手で置いた（体験の名前）は席に残ります」')
     expect(byId.get('tp-59')!.check!.join('\n')).toContain('同じコマの机 A に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません')
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/schedule-board/templateDiffApply.ts'), 'utf8')
-    for (const phrase of ['講師欄を 2 行（上＝テンプレ／下＝手入力）にします', '重ねて保留（緑）にする机: ', 'テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります', 'に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません']) {
+    for (const phrase of ['講師欄を 2 行（上＝テンプレ／下＝手入力）にします', '重ねて保留（緑）にする机: ', 'テンプレのこの机は講師だけなので、手で置いた', 'に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません']) {
       expect(source, phrase).toContain(phrase)
     }
   })

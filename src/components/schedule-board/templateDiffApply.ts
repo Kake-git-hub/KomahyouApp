@@ -2623,7 +2623,9 @@ function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
   switch (note.kind) {
     case 'teacher-pending': {
       // 第 2 版 §2-3: 手置き講師の机にテンプレの別の講師が入る → 講師欄だけ 2 行（上＝テンプレ／下＝手入力）。席は §2-1 で別に決まる。
-      const seat = note.templateTeacherOnly ? 'テンプレのこの机は講師だけなので、手で置いた生徒は席に残ります。' : ''
+      // 2026-11-07 オーナー指示(tp-70「生徒の名前を出して」): 席に残る手で置いた生徒の名前を出す。名前が無い(手で置いた生徒が居ない)ときは従来の文。
+      const keptNames = note.keptStudentNames && note.keptStudentNames.length > 0 ? note.keptStudentNames.join('・') : null
+      const seat = note.templateTeacherOnly ? `テンプレのこの机は講師だけなので、手で置いた ${keptNames ?? '生徒'} は席に残ります。` : ''
       return `${where} ${who}: 手で置いた講師の机にテンプレの講師${note.detail ? `（${note.detail}）` : ''}が入るため、講師欄を 2 行（上＝テンプレ／下＝手入力）にします。${seat}緑の講師欄で「上段(テンプレ)の講師を採用する」か「下段(手入力)の講師を採用する」を選んでください。`
     }
     case 'teacher-replaced': {
