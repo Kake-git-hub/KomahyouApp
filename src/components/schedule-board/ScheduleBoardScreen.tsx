@@ -1649,8 +1649,8 @@ export function applyStudentEdit(params: {
       slotNumber: parseOriginSlotNumberFromLabel(previous.sameDayMoveSourceLabel) ?? cellSlotNumber,
     }
     // キーは権威関数 resolveSuppressedRegularLessonOccurrenceKeys（1 本目＝今の科目・buildManagedOccurrenceKey(previous, …) と同じ）。
-    // INV-12（2026-11-07・フラグ OFF）: 先に「編集」で科目だけ変えていた（数→国）テンプレの授業は、2 本目＝テンプレの科目（数）のキーも積む。
-    //   今の科目のキーだけだと、振替にしたコマが席を空けた後の再マージで元の机にテンプレの生徒（数）が戻る。ON（stampOrigin）は従来どおり 1 本。
+    // INV-12（2026-11-07）: 先に「編集」で科目だけ変えていた（数→国）テンプレの授業は、2 本目＝テンプレの科目（数）のキーも積む。
+    //   今の科目のキーだけだと、振替にしたコマが席を空けた後の再マージで元の机にテンプレの生徒（数）が戻る。フラグ ON（stampOrigin）も同じ 2 本（2026-11-07 オーナー決定・§4-1-2）。
     const [occurrenceKey, templateOccurrenceKey] = resolveSuppressedRegularLessonOccurrenceKeys(previous, original.dateKey, original.slotNumber, { templateOriginRules: Boolean(params.stampOrigin) })
     if (occurrenceKey && !suppressedRegularLessonOccurrences.includes(occurrenceKey)) {
       suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, occurrenceKey)
@@ -1692,6 +1692,28 @@ export function applyStudentEdit(params: {
     }
     const { editedToMakeup: _editedToMakeup, editedFromRegular: _editedFromRegular, ...rest } = next
     return { student: rest, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
+  }
+
+  // INV-06（2026-11-07・オーナー確定「その時コマ表に入っていた科目で数える」・spec-template-conflict-v2 §4-1-2）: テンプレの通常授業の科目だけを
+  //   編集した（通常 → 通常・数→国）ときも、上の「→ 振替」と同じく**テンプレの科目の振替**（その日・その時限）を抑止する。抑止しないと、後でその日を
+  //   休日にしたとき、席の授業（国）の返却とテンプレ行（数）の休日の自動発生が重なり 1 コマが 2 件になる（休みにしてから休日にしたときも 国 と 数）。
+  //   テンプレの科目は授業 ID から読む（resolveTemplateLessonSubjectFromId・抑止キーの権威関数と同じ）。時限は同じ日の中で動かした授業なら元の時限
+  //   （上の「→ 振替」・collectClearedDayMakeupSuppressions と同じ）。規則は「編集の後の科目がテンプレの科目と違えば、その抑止が 1 件ある」:
+  //   違う科目へ変えたとき無ければ積み（同じ抑止を 2 件にしない・この修正より前に編集した授業も次の編集で揃う）、テンプレの科目へ戻したら 1 件外す（数→国→数）。
+  //   フラグ ON／OFF とも同じ。編集しないままの既存の保存データは書き換えない。
+  if (previous.lessonType === 'regular' && next.lessonType === 'regular' && !previous.manualAdded && next.subject !== previous.subject) {
+    const templateSubject = resolveTemplateLessonSubjectFromId(previous, cellDateKey)
+    if (templateSubject) {
+      const stockKey = buildMakeupStockKey(resolveStockId(previous), templateSubject)
+      const originDateKey = previous.sameDayMoveSourceDate ?? cellDateKey
+      const originSlotNumber = parseOriginSlotNumberFromLabel(previous.sameDayMoveSourceLabel) ?? cellSlotNumber
+      const alreadySuppressed = (suppressedMakeupOrigins[stockKey] ?? []).some((origin) => origin.dateKey === originDateKey && origin.slotNumber === originSlotNumber)
+      if (next.subject !== templateSubject && !alreadySuppressed) {
+        suppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, stockKey, originDateKey, originSlotNumber)
+      } else if (next.subject === templateSubject && alreadySuppressed) {
+        suppressedMakeupOrigins = removeMakeupOrigin(suppressedMakeupOrigins, stockKey, originDateKey, originSlotNumber)
+      }
+    }
   }
 
   return { student: next, suppressedRegularLessonOccurrences, suppressedMakeupOrigins }
@@ -3449,20 +3471,23 @@ export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dat
 /**
  * 盤面から授業を外す・動かす・記録にする（と、その逆で席へ戻す）ときに積む／外す通常授業の抑止キーを決める**唯一の権威関数**（INV-12・2026-11-07）。
  * 移動（メニュー・長押し D&D・日程表 D&D・入れ替え）・単発削除・格納・休み・振無休・出席・記録の解除・休日解除・丸ごと振替・全コマの処分がここを通す。
- * ★フラグ OFF（templateDiffApply の無い教室）: 「編集」で科目だけ変えたテンプレの授業は、今の科目のキーに加えて**テンプレの科目**のキーも返す。
+ * ★フラグ OFF・ON とも: 「編集」で科目だけ変えたテンプレの授業は、今の科目のキーに加えて**テンプレの科目**のキーも返す。
  *   再マージの抑止（suppressManagedStudentsInCell）はテンプレ側の生徒（テンプレの科目）のキーで照合するので、今の科目のキーだけでは
  *   元の机にテンプレの生徒が戻り、同じコマに 2 か所になっていた（緑が丘・水 5限 数→国 の後に同じコマの別の机へ移動・4 日分）。
  *   今の科目のキーも従来どおり返す（既に保存された記録の解除で外れるよう・保護者ページの写しも同じ形）。積む側と外す側で必ず同じ関数を使う
  *   （片方だけテンプレの科目を足すと、休み解除で戻した生徒がテンプレの席ごと抑止されて再マージで消える）。
- * ★フラグ ON（第 2 版）は従来どおり今の科目の 1 本だけ（§2-2 の規則で同じコマに置かない）。OFF で積んだ 2 本は、昇格後に写しを外すとき
- *   collectSameDayMovedTemplateOccurrenceKeys が同じ科目の並び（resolveTemplateLessonSubjectVariants）で両方外す（実際に外すのはこの関数。
- *   templateDiffApply.ts の resolveSameDayMoveCopyKeysToRemove も同じ並びを使うが、今はテストからだけ呼ばれる）。
+ * ★フラグ ON（第 2 版）も同じ 2 本（2026-11-07 オーナー決定「本番の教室での、削除したあと戻らなくなる方に揃えて」・spec-template-conflict-v2 §4-1-2）。
+ *   以前は ON だけ今の科目の 1 本で、科目を編集した授業（手入力の印つき）を単発削除・別の時限や別の日へ移動すると、§2-2 の根拠（同じコマの手入力の A）が
+ *   消えて、再マージ・テンプレ保存で元の机にテンプレの A（元の科目）が戻った（別の日への移動・入れ替えでは再マージ〔§2-4 の記録〕と保存で答えが割れていた＝INV-03）。
+ *   ON で科目を変えた授業は手入力の印が付き同じ日の移動の写しにならない（isSameDayTemplateMove・resolveSameDayMoveSourceSlot は テンプレ の印だけ）ので、
+ *   積んだ 2 本を写しとして外す経路は無い（OFF の間に積んだ写しの 2 本は collectSameDayMovedTemplateOccurrenceKeys が同じ科目の並び
+ *   〔resolveTemplateLessonSubjectVariants〕で両方外す）。options.templateOriginRules は呼び出し側の配線（字面のテスト）のために残す（今は答えを変えない）。
  * キーの形（buildManagedOccurrenceKey）は変えない。戻り値の順は [今の科目のキー, テンプレの科目のキー（あれば）]（applyStudentEdit が 1 本目・2 本目を分けて控える）。
  */
-export function resolveSuppressedRegularLessonOccurrenceKeys(student: StudentEntry, dateKey: string, slotNumber: number, options: { templateOriginRules: boolean }): string[] {
+export function resolveSuppressedRegularLessonOccurrenceKeys(student: StudentEntry, dateKey: string, slotNumber: number, _options: { templateOriginRules: boolean }): string[] {
   const primary = resolveSuppressedRegularLessonOccurrenceKey(student, dateKey, slotNumber)
   if (!primary) return []
-  if (options.templateOriginRules || isWholeDayPairExpandedStudent(student)) return [primary]
+  if (isWholeDayPairExpandedStudent(student)) return [primary]
   // テンプレの科目は授業 ID から読む（resolveTemplateLessonSubjectFromId・templateDiffApply.ts で写しのキー外しと共有）。
   const templateSubject = resolveTemplateLessonSubjectFromId(student, dateKey)
   if (!templateSubject || templateSubject === student.subject) return [primary]
@@ -7526,6 +7551,15 @@ export function disposeTemplatePendingLowerStudents(params: {
   }
 }
 
+// planTemplatePendingAdoptExisting の surfacedSeats＝下段の生徒を机へ戻した席（生徒 1＝0・生徒 2＝1）。合流は下段の生徒を元の席へ戻す（computePendingDeskCollapse・席をずらさない）ので、
+//    下段で生きている席のうち、合流後の机のその席に生徒が居るもの。合流できなければ空。呼び出し側の重複検査が授業 ID でなく**席**で除外するのに使う
+//    （同じ授業 ID の同じ生徒が別の机・同じ机の上段に居ても素通りさせない・INV-12 2026-11-07・computeStudentMove の席での除外と同じ考え方）。
+function resolveSurfacedLowerSeats(lower: TemplatePendingLower, collapse: ReturnType<typeof computePendingDeskCollapse>): number[] {
+  if (!collapse.ok) return []
+  const surfaced = collapse.nextDesk.lesson?.studentSlots ?? []
+  return (lower.lesson?.studentSlots ?? []).flatMap((student, seat) => (student && surfaced[seat] ? [seat] : []))
+}
+
 /**
  * 「既存を採用」で取り下げる上段の生徒と、取り下げた後の合流結果（席ごと・2026-09-30・spec-template-behavior Q34-8）。純関数。
  * 解決本体（computePendingDeskResolution）と確認文（取り下げる生徒の名前）が同じ関数を使う（Q32-1：表示と結果を食い違わせない・regression-reviewer M-2）。
@@ -7540,6 +7574,7 @@ export function disposeTemplatePendingLowerStudents(params: {
  *  5. **講師には触れない（オーナー確定 2026-10-27・確認リスト tp-64「講師と生徒をリンクさせないでそれぞれ採用」）**: 下段の手置き講師（Q41）は
  *     机へ戻さない（机の講師は上段＝テンプレ側のまま）。講師は保留に残り、講師欄の「テンプレの講師を採用／手入力の講師を採用」で決める
  *     （computePendingTeacherChoice）。以前は採用で講師も戻そうとし、手置き講師が同じコマの別の机に居ると確認の後に何も起きなかった。
+ *  6. surfacedSeats（下段の生徒を戻した席・resolveSurfacedLowerSeats）を返す。呼び出し側の重複検査が授業 ID でなく席で除外するのに使う（INV-12 2026-11-07）。
  */
 export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk: DeskCell; entry: TemplatePendingDesk; seatIndex?: number }) {
   const { cell, desk } = params
@@ -7554,7 +7589,8 @@ export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk:
     if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = detachTemplateLessonWithoutTemplateStudents({ ...desk.lesson, studentSlots: remaining }, desk.id)
     else delete nextUpper.lesson
     // 5.（tp-64）: 'adopt' は両方の行に生徒が居ても合流を試す指定。講師は computePendingDeskCollapse が変えない（机の講師のまま）。
-    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' }), seatLower: entry.lower, restLower }
+    const collapse = computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey, lowerTeacher: 'adopt' })
+    return { withdrawnStudents, collapse, seatLower: entry.lower, restLower, surfacedSeats: resolveSurfacedLowerSeats(entry.lower, collapse) }
   }
   // 2026-11-01: Q40-2 の満席の押し出し（上段＝テンプレの振替）では、下段の席の上段の振替をテンプレ側として取り下げる。
   const withdrawOptions = { templateMakeupAtLowerSeat: isTemplateFollowDisplacedOrigin(params.entry.origin) }
@@ -7730,8 +7766,12 @@ export function computePendingDeskResolution(params: {
     // Q26-4・INV-12: 下段を机へ戻した結果、同じコマに同じ生徒が 2 か所で生きるなら止める（既存の findDuplicateStudentInCellByKey と同じ検査）。
     const surfacedCell: SlotCell = { ...cellForAdopt, desks: cellForAdopt.desks.map((current) => (current.id === desk.id ? collapse.nextDesk : current)) }
     const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, params.managedStudentByAnyName, params.resolveDisplayName)
+    // INV-12（2026-11-07）: 除外は授業 ID でなく、下段の生徒を戻した**席**だけ（planTemplatePendingAdoptExisting の surfacedSeats）。以前は [student.id] で除外していたので、
+    //   同じ授業 ID の同じ生徒（呼び名だけ違い管理 ID の無い旧い写しなど＝合流の判定 isSameTemplateStudent では別人に見える）が別の机・同じ机の上段に居ても素通りした。
+    const surfacedDeskIndex = surfacedCell.desks.findIndex((current) => current.id === desk.id)
+    const surfacedSeatExclusion = attempt.surfacedSeats.map((studentIndex) => ({ deskIndex: surfacedDeskIndex, studentIndex }))
     for (const student of lowerStudents) {
-      const duplicate = findDuplicateStudentInCellByKey(surfacedCell, resolveComparableKey(student), resolveComparableKey, [student.id])
+      const duplicate = findDuplicateStudentInCellByKey(surfacedCell, resolveComparableKey(student), resolveComparableKey, [], surfacedSeatExclusion)
       if (duplicate) {
         return { status: 'blocked', message: `既存を採用できません。同じコマに ${params.resolveDisplayName(student.name)} が 2 か所で生きることになります。先に上段側を片づけてください。` }
       }
@@ -7760,7 +7800,7 @@ export function computePendingDeskResolution(params: {
     let suppressedMakeupOrigins = params.ledgers.suppressedMakeupOrigins
     // 決定記録 57: 別の机 T から外したテンプレの通常授業は抑止キー（再マージで湧かせない）。決定記録 62（2026-11-02）で単発削除と揃え、
     // 希望回数 −1 は下の countTargets で積む（上段から取り下げた通常授業と同じ扱い）。
-    // 保留（2 行）の机は第 2 版（機能フラグ templateDiffApply の教室）だけにある＝権威関数はフラグ ON の決め方（今の科目の 1 本）。
+    // 保留（2 行）の机は第 2 版（機能フラグ templateDiffApply の教室）だけにある＝権威関数はフラグ ON の決め方（2026-11-07 から OFF と同じ・科目を編集した授業はテンプレの科目のキーも）。
     for (const item of duplicateRemoval.removed) {
       suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrences(suppressedRegularLessonOccurrences, resolveSuppressedRegularLessonOccurrenceKeys(item.student, cell.dateKey, cell.slotNumber, { templateOriginRules: true }))
     }

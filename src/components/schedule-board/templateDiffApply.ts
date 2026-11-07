@@ -804,7 +804,23 @@ export function resolveSameDayMoveCopyKeysToRemove(revert: Pick<SameDayMoveCopyR
  * 抑止キーの権威関数 resolveSuppressedRegularLessonOccurrenceKeys（ScheduleBoardScreen）と写しのキー外し（このファイル）が共有する（2026-11-07・INV-12）。
  */
 export function resolveTemplateLessonSubjectFromId(student: Pick<StudentEntry, 'id' | 'managedStudentId' | 'lessonType' | 'manualAdded'>, dateKey: string): string | null {
-  if (student.lessonType !== 'regular' || student.manualAdded || !student.managedStudentId || !student.id) return null
+  if (student.lessonType !== 'regular') return null
+  return readTemplateLessonSubjectFromLessonId(student, dateKey)
+}
+
+/**
+ * 別の日へ動かしたテンプレの授業（振替・振替元つき）の、振替元の日のテンプレの科目を授業 ID から読む（移動は授業 ID を変えない）。
+ * 「編集」で科目を変えた（数→国）テンプレの授業を別の日へ動かした振替は、科目（国）では振替元の日のテンプレ（数）と突き合わせられない。
+ * テンプレ保存の「根拠を失った振替」（templateTransferFollow.ts の collectOrphanedMakeups）が、根拠をこの科目でも引くために使う（2026-11-07・INV-12 / INV-02 / INV-03）。
+ * 振替でない・振替元の日が無い・手動追加・ID がテンプレの形でないときは null。
+ */
+export function resolveMovedTemplateLessonSubjectFromId(student: Pick<StudentEntry, 'id' | 'managedStudentId' | 'lessonType' | 'manualAdded' | 'makeupSourceDate'>): string | null {
+  if (student.lessonType !== 'makeup' || !student.makeupSourceDate) return null
+  return readTemplateLessonSubjectFromLessonId(student, student.makeupSourceDate)
+}
+
+function readTemplateLessonSubjectFromLessonId(student: Pick<StudentEntry, 'id' | 'managedStudentId' | 'manualAdded'>, dateKey: string): string | null {
+  if (student.manualAdded || !student.managedStudentId || !student.id) return null
   const prefix = `${student.managedStudentId}_${dateKey}_`
   if (!student.id.startsWith(prefix)) return null
   const subject = student.id.slice(prefix.length)
@@ -823,7 +839,7 @@ export function collectEditedFromRegularOccurrenceKeys(weeks: SlotCell[][], pend
   const consider = (entry: { editedFromRegular?: { addedOccurrenceKey?: string; addedTemplateOccurrenceKey?: string } } | null | undefined) => {
     const key = entry?.editedFromRegular?.addedOccurrenceKey
     if (key) keys.add(key)
-    // フラグ OFF で科目を変えてから振替にした授業が積んだテンプレの科目のキー（2026-11-07）も同じく編集の記録＝外さない（ON では付かない）。
+    // 科目を変えてから振替にした授業が積んだテンプレの科目のキー（2026-11-07・フラグ ON／OFF とも）も同じく編集の記録＝外さない。
     const templateKey = entry?.editedFromRegular?.addedTemplateOccurrenceKey
     if (templateKey) keys.add(templateKey)
   }
