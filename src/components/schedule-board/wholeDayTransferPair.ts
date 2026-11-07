@@ -256,9 +256,14 @@ export function cellsHaveNonDerivedStatusEntries(cells: readonly SlotCell[]) {
  */
 export type WholeDayPairTargetBlockResolver = (targetCell: SlotCell, entry: StudentStatusEntry, pair: WholeDayTransferPair) => boolean
 
-/** 根拠から外す: 付け替えの授業そのもの（印 wholeDayPairSourceDate）と、その記録（記録の印が組の D）。手入力と手入力の記録だけを残したセル（と保留）。 */
+/**
+ * 根拠から外す: 付け替えの授業そのもの（印 wholeDayPairSourceDate）と、その記録（記録の印が組の D）。手入力と手入力の記録だけを残したセル（と保留）。
+ * ★作成で D から移した手入力（印 wholeDayPairMovedFrom が組の D）も外す（2026-11-07・spec-template-conflict-v2 §4-1-2）。これは §9-21 の「D' に**先に**あった
+ *   同じ生徒の手入力」ではない（作成前は D で §2-2 により D のテンプレの同じ生徒を置かず、数えていない）。数えると作成しただけで D の記録が「休み」になり
+ *   未消化振替が +1 になっていた（§3 の在庫中立に反する）。D' の席の §2-2（移した手入力が D のテンプレの同じ生徒を置かない）は差分反映・再マージ側のままで変わらない。
+ */
 export function stripWholeDayPairOwnEntries(cell: SlotCell, pendingDesks: TemplatePendingDeskMap | null | undefined, sourceDateKey: string): { cell: SlotCell; pendingDesks: TemplatePendingDeskMap } {
-  const keepStudent = (student: StudentEntry | null) => (student && student.wholeDayPairSourceDate === sourceDateKey ? null : student)
+  const keepStudent = (student: StudentEntry | null) => (student && (student.wholeDayPairSourceDate === sourceDateKey || student.wholeDayPairMovedFrom?.dateKey === sourceDateKey) ? null : student)
   const keepRecord = (entry: StudentStatusEntry | null) => (entry && entry.wholeDayPairSourceDate === sourceDateKey ? null : entry)
   const nextPending: TemplatePendingDeskMap = { ...(pendingDesks ?? {}) }
   const desks = cell.desks.map((desk) => {

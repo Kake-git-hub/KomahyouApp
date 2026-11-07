@@ -257,8 +257,8 @@ describe('確認リストの項目定義', () => {
     // 第122版(2026-11-07・v1.5.697 据え置き): 11/7 の送信で OK の 11 件を外し、ta-1 はオーナー選択「今のまま」(確認の中身は満たしていた)で外した。
     // 同じ第122版: mg-1(見るだけ)は調査を終え、余分な 1 人を消して戻らないことを見る mg-2(開発用教室だけ)に置き換えた。
     // 第123版(2026-11-07・版据え置き): 科目だけ変えた授業の確認 se-1〜se-3 を mg-2 の前に足した(テスト教室にも出す)。
-    expect(ids).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'mg-2'])
-    for (const id of ['se-1', 'se-2', 'se-3']) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
+    expect(ids).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6', 'mg-2'])
+    for (const id of ['se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6']) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     expect(ids).not.toContain('mg-1')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('mg-2')
     for (const okId of ['ap-3', 'c-8', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-69', 'mn-1', 'v2-5', 'sd-1', 'sd-2', 'pl-1']) {
@@ -676,7 +676,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {

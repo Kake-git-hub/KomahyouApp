@@ -519,6 +519,10 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
 - **分類注記**：INV-03 ＝ **同一操作の複数回適用（再実行）**、INV-02 ＝ **別処理による状態上書き**。
   症状でなく真因構造で分類する。
 - **違反履歴**（transcribe）：
+  - whole-day-pair-moved-edited-subject（2026-11-07・v1.5.706・フラグ ON）：丸ごと振替の付け替えの移した先の日から、科目を変えたテンプレの授業を同じ週の別の日へ
+    動かすと、盤面から導く暗黙の抑止キーが今の科目で作られ、テンプレ保存だけが元の日のテンプレの生徒を置き、保存と再マージで答えが割れた。対処：
+    `buildAppliedManagedPostFreezeCells` の付け替えの日のキーに授業 ID のテンプレの科目のキーも足す（`collectMovedTemplateSubjectOccurrenceKeys`・付け替えでない日には当てない）。
+    同じ日に移したその生徒自身の授業を削除・格納したら、テンプレ保存・再マージとも戻さない（オーナー選択「戻さない」・spec-template-conflict-v2 §4-1-2）。
   - **Issue #46** / `bd0865d` / **v1.5.406** / 2026-07-07 … `studentScheduleRequest(mode:unassign)` が処理後も
     App 永続 state に残り、重複ガードがローカル `useRef` のため盤面 key 再マウントで消え、古いコマンドが
     再処理（組み直した講習が未消化へ戻る）。
@@ -866,8 +870,10 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
 - **違反履歴**（transcribe）：
   - edited-subject-holiday-double-stock（2026-11-07・v1.5.705）：テンプレの授業を「編集」で科目だけ変えた日を休日設定すると、盤面からの返却（変えた後の科目）と
     テンプレからの自動発生（元の科目）が重なり未消化振替が 2 件になっていた。対処：通常→通常の科目編集にもテンプレの科目×その日×その時限の振替の抑止を
-    1 件入れ、テンプレの科目へ戻したら外す（`applyStudentEdit`）。会計は「その時コマ表に入っていた科目で数える」の 1 件。既に科目を変えた授業は次に編集するまで直らない
-    （`inv06-holiday-record-retention.matrix.test.ts` の it.todo）。
+    1 件入れ、テンプレの科目へ戻したら外す（`applyStudentEdit`）。会計は「その時コマ表に入っていた科目で数える」の 1 件。
+    v1.5.706：修正前に科目を変えた授業（抑止の無い既存データ）も、外す操作（削除・格納・休み・全コマ削除）と休日設定の側
+    （`collectHolidayTemplateSubjectSuppressions`）で同じ抑止を立てる（権威関数 `resolveTemplateSubjectMakeupOrigin`／`ensureTemplateSubjectMakeupSuppression`・既にあれば重ねない）。
+    付け替えの作成で D から移した手入力（`wholeDayPairMovedFrom`）は §9-21 の根拠に数えない（作成だけで未消化 +1 にしない・在庫中立）。
   - makeup-stock-miscount 群（残数が実態と食い違う）：
     - `a12ee32` / v1.5.65 … stale closure 二重減算。
     - `6829dd1` / v1.5.78 … `consumeOriginDates` 不一致フォールバック（`remaining.shift()` が無関係 origin を誤消費）。

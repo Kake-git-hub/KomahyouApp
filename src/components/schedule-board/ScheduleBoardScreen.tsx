@@ -40,7 +40,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveMovedTemplateLessonSubjectFromId, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -1702,11 +1702,10 @@ export function applyStudentEdit(params: {
   //   違う科目へ変えたとき無ければ積み（同じ抑止を 2 件にしない・この修正より前に編集した授業も次の編集で揃う）、テンプレの科目へ戻したら 1 件外す（数→国→数）。
   //   フラグ ON／OFF とも同じ。編集しないままの既存の保存データは書き換えない。
   if (previous.lessonType === 'regular' && next.lessonType === 'regular' && !previous.manualAdded && next.subject !== previous.subject) {
-    const templateSubject = resolveTemplateLessonSubjectFromId(previous, cellDateKey)
-    if (templateSubject) {
-      const stockKey = buildMakeupStockKey(resolveStockId(previous), templateSubject)
-      const originDateKey = previous.sameDayMoveSourceDate ?? cellDateKey
-      const originSlotNumber = parseOriginSlotNumberFromLabel(previous.sameDayMoveSourceLabel) ?? cellSlotNumber
+    // 在庫キー・日付・時限は外す操作の ensureTemplateSubjectMakeupSuppression と同じ権威関数 resolveTemplateSubjectMakeupOrigin（2026-11-07・積んだ抑止を同じ形で外す）。
+    const templateOrigin = resolveTemplateSubjectMakeupOrigin(previous, cellDateKey, cellSlotNumber, resolveStockId)
+    if (templateOrigin) {
+      const { templateSubject, stockKey, dateKey: originDateKey, slotNumber: originSlotNumber } = templateOrigin
       const alreadySuppressed = (suppressedMakeupOrigins[stockKey] ?? []).some((origin) => origin.dateKey === originDateKey && origin.slotNumber === originSlotNumber)
       if (next.subject !== templateSubject && !alreadySuppressed) {
         suppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, stockKey, originDateKey, originSlotNumber)
@@ -2798,6 +2797,11 @@ export function buildAppliedManagedPostFreezeCells(week: SlotCell[], params: {
     desks: cell.desks.map((desk) => (!desk.lesson ? desk : { ...desk, lesson: { ...desk.lesson, studentSlots: desk.lesson.studentSlots.map((student) => (student?.wholeDayPairSourceDate ? null : student)) as [StudentEntry | null, StudentEntry | null] } })),
   }))
   const explicitKeys = buildSuppressedManagedOccurrenceKeys([], [boardWithoutPairStudents], params.suppressedRegularLessonOccurrences)
+  // INV-03（2026-11-07）: 盤面の振替から導く暗黙のキーは振替の今の科目で作るので、「編集」で科目を変えた D のテンプレの授業（A 数→英）を付け替えの作成で D' へ移し、
+  //   D' から別の日へ動かすと、その振替（授業 ID は D のテンプレの授業のまま）から D のテンプレの A（数）を外すキーが導けなかった。再マージは動かした跡の机
+  //   （講師を手置きに固定した空き机）へ A を戻さず、テンプレの保存は A を D' に置いて答えが割れていた（机に別の生徒が残るときは両方とも A を D' に置き、A が 2 コマ）。
+  //   授業 ID のテンプレの科目のキーも導く（collectMovedTemplateSubjectOccurrenceKeys）。D' に居る移した手入力（印 wholeDayPairMovedFrom）は §2-2 で A を置かないので足さない（従来どおり）。
+  for (const key of collectMovedTemplateSubjectOccurrenceKeys([boardWithoutPairStudents])) explicitKeys.add(key)
   return {
     postFreezeBoard,
     managedCells: managedCells.map((entry) => {
@@ -3455,6 +3459,151 @@ export function resolveLessonMakeupOriginSlotNumber(
 }
 
 /**
+ * テンプレの通常授業の「テンプレの科目の振替」（休日の自動発生が立つ在庫キー・日付・時限）を決める**唯一の権威関数**（INV-06・2026-11-07）。
+ * 科目は授業 ID から読む（resolveTemplateLessonSubjectFromId・抑止キーの権威関数 resolveSuppressedRegularLessonOccurrenceKeys と同じ）。
+ * 日付・時限は同じ日の中で動かした授業なら元の時限（sameDayMoveSourceLabel・collectClearedDayMakeupSuppressions と同じ＝テンプレ行の時限）。
+ * 通常授業でない・手で足した授業・授業 ID がテンプレの形でないときは null。今の科目との比較はしない（呼び出し側が決める）。
+ * 「編集」（applyStudentEdit の通常 → 通常）と、外す操作の ensureTemplateSubjectMakeupSuppression が共有する（片方だけ日付・時限を変えると、積んだ抑止を外せない）。
+ */
+export function resolveTemplateSubjectMakeupOrigin(
+  student: StudentEntry,
+  cellDateKey: string,
+  cellSlotNumber: number,
+  resolveStockId: (student: StudentEntry) => string,
+): { templateSubject: string; stockKey: string; dateKey: string; slotNumber: number } | null {
+  if (student.lessonType !== 'regular' || student.manualAdded) return null
+  const dateKey = student.sameDayMoveSourceDate ?? cellDateKey
+  const templateSubject = resolveTemplateLessonSubjectFromId(student, dateKey)
+  if (!templateSubject) return null
+  return {
+    templateSubject,
+    stockKey: buildMakeupStockKey(resolveStockId(student), templateSubject),
+    dateKey,
+    slotNumber: parseOriginSlotNumberFromLabel(student.sameDayMoveSourceLabel) ?? cellSlotNumber,
+  }
+}
+
+/**
+ * 盤面から授業を外す操作（単発削除・格納・休み・その日の生徒を全コマ削除）で、「編集」で科目だけ変えたテンプレの通常授業（授業 ID のテンプレの科目 ≠ 今の科目）なら、
+ * **テンプレの科目**×その日×その時限の振替の抑止を 1 件立てる（INV-06・2026-11-07 オーナー指示「直して」・オーナー確定「その時コマ表に入っていた科目で数える」）。
+ * 「編集」の通常 → 通常（applyStudentEdit）は 2026-11-07 から同じ抑止を積むが、それより前に科目を変えた授業（抑止の無い保存データ）を編集し直さずに外してから
+ * その日を休日にすると、テンプレ行（数）から休日の自動発生が立ち、削除なら 0 のはずが 1、格納・休みなら 国 と 数 の 2 件になっていた（誤増）。
+ * ★既にある（編集で積んだ・時限なしの旧い抑止で日付ごと落としている）なら重ねない＝常に 1 件（編集でテンプレの科目へ戻したときに 1 件外せば 0 件に戻る）。
+ * ★科目を変えていない授業・手で足した授業・振替は何もしない（従来どおり）。今の科目の抑止・台帳は呼び出し側の従来の会計がそのまま扱う。
+ */
+export function ensureTemplateSubjectMakeupSuppression(
+  suppressedMakeupOrigins: MakeupOriginMap,
+  student: StudentEntry,
+  cellDateKey: string,
+  cellSlotNumber: number,
+  resolveStockId: (student: StudentEntry) => string,
+): MakeupOriginMap {
+  const origin = resolveTemplateSubjectMakeupOrigin(student, cellDateKey, cellSlotNumber, resolveStockId)
+  if (!origin || origin.templateSubject === student.subject) return suppressedMakeupOrigins
+  const covered = (suppressedMakeupOrigins[origin.stockKey] ?? []).some((entry) => entry.dateKey === origin.dateKey && (!entry.slotNumber || entry.slotNumber === origin.slotNumber))
+  if (covered) return suppressedMakeupOrigins
+  return appendMakeupOrigin(suppressedMakeupOrigins, origin.stockKey, origin.dateKey, origin.slotNumber)
+}
+
+/**
+ * 単発削除（盤面の × ・handleDeleteStudent）で積む振替の抑止（純関数・2026-11-07 にハンドラから挙動不変で切り出し）。
+ * - 通常授業・編集で振替にした振替元なしの振替 … 元の授業の日付＋時限（resolveDeletedLessonSuppressionOrigin・時限なしの旧データの日は時限なし）。
+ *   ＋「編集」で科目だけ変えたテンプレの授業はテンプレの科目の抑止（ensureTemplateSubjectMakeupSuppression・重ねない）。
+ * - 振替元のある振替 … 振替元ラベルの時限（requireExactOrigin）。
+ * 講習の希望数・回数表は呼び出し側（ハンドラ）が扱う。
+ */
+export function computeDeletedLessonMakeupSuppressions(params: {
+  student: StudentEntry
+  cellDateKey: string
+  cellSlotNumber: number
+  suppressedMakeupOrigins: MakeupOriginMap
+  /** 在庫キーごとの有効 origin（collectMakeupOriginDatesByKey・抑制適用後）。 */
+  makeupOriginDatesByKey: Record<string, string[]>
+  /** 手動台帳の生の行（normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students)・抑制前）。 */
+  ledgerOriginsByKey: MakeupOriginMap
+  resolveStockId: (student: StudentEntry) => string
+}): MakeupOriginMap {
+  const { student, cellDateKey, cellSlotNumber, makeupOriginDatesByKey, ledgerOriginsByKey, resolveStockId } = params
+  let nextSuppressedMakeupOrigins = cloneOriginMap(params.suppressedMakeupOrigins)
+
+  // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)は元が通常授業なので、通常授業と同じく抑止を積む
+  // (積まないと、削除した日を後から休日設定したときにテンプレの自動発生が +1 で湧く＝Issue #58 と同型の誤増)。
+  if (student.lessonType === 'regular' || isStockNeutralEditedMakeup(student)) {
+    const stockKey = buildMakeupStockKey(resolveStockId(student), student.subject)
+    // INV-06（2026-11-07）: 抑制は時限つき（テンプレ上の元の時限＝全コマ削除の抑制と同じ）。時限なしはその日付を丸ごと落とし、
+    //   同じ日の別のコマの休み（未消化振替）まで消す。ただし時限なしの旧データがある日は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
+    const suppression = resolveDeletedLessonSuppressionOrigin({
+      dateKey: resolveOriginalRegularDate(student, cellDateKey),
+      slotNumber: resolveLessonMakeupOriginSlotNumber(student, cellSlotNumber),
+      effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
+      ledgerOrigins: ledgerOriginsByKey[stockKey] ?? [],
+      requireExactOrigin: false,
+    })
+    nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
+    // INV-06（2026-11-07）: 修正前に科目だけ編集した授業（テンプレの科目の抑止なし）を消しても、後の休日設定でテンプレの科目が湧かない。
+    nextSuppressedMakeupOrigins = ensureTemplateSubjectMakeupSuppression(nextSuppressedMakeupOrigins, student, cellDateKey, cellSlotNumber, resolveStockId)
+  }
+
+  if (student.lessonType === 'makeup' && student.makeupSourceDate) {
+    const stockKey = buildMakeupStockKey(resolveStockId(student), student.subject)
+    // INV-06（2026-11-07）: 振替元ラベルの時限で抑制する（同じ日の別のコマの振替元を巻き込まない）。ラベルの無い振替・時限なしの旧データから置いた振替・
+    //   ラベルの時限の origin が無い振替は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
+    const suppression = resolveDeletedLessonSuppressionOrigin({
+      dateKey: student.makeupSourceDate,
+      slotNumber: resolveLessonMakeupOriginSlotNumber(student, cellSlotNumber),
+      effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
+      ledgerOrigins: ledgerOriginsByKey[stockKey] ?? [],
+      requireExactOrigin: true,
+    })
+    nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
+  }
+  return nextSuppressedMakeupOrigins
+}
+
+/**
+ * 格納（未消化振替へ戻す・handleStoreStudent の講習以外）の台帳と抑止（純関数・2026-11-07 にハンドラから挙動不変で切り出し）。
+ * 台帳 … 在庫由来の振替は台帳の origin が再浮上するので積まない／台帳に origin が無い「移動しただけの振替コマ」・通常授業は元の授業の日付＋時限で積む。
+ * 抑止 … 格納は「未消化振替へ戻す」意思表示なので、同じ日付＋時限の今の科目の抑制を解除する（順序方式）。
+ *   ＋「編集」で科目だけ変えたテンプレの授業はテンプレの科目の抑止を立てる（ensureTemplateSubjectMakeupSuppression・未消化は格納した科目の 1 件だけ）。
+ */
+export function computeStoredLessonMakeupLedgers(params: {
+  student: StudentEntry
+  cellDateKey: string
+  cellSlotNumber: number
+  manualMakeupAdjustments: MakeupOriginMap
+  suppressedMakeupOrigins: MakeupOriginMap
+  /** 在庫キーごとの有効 origin（collectMakeupOriginDatesByKey）。 */
+  makeupOriginDatesByKey: Record<string, string[]>
+  resolveStockId: (student: StudentEntry) => string
+}): { stockKey: string; storeOriginDate: string | null; nextManualMakeupAdjustments: MakeupOriginMap; nextSuppressedMakeupOrigins: MakeupOriginMap } {
+  const { student, cellDateKey, cellSlotNumber, manualMakeupAdjustments, suppressedMakeupOrigins, makeupOriginDatesByKey, resolveStockId } = params
+  const stockKey = buildMakeupStockKey(resolveStockId(student), student.subject)
+  // INV-06: 在庫由来の振替は台帳の origin が再浮上するので積まない／台帳に origin が無い
+  // 「移動しただけの振替コマ」は盤面が唯一の記録なので積む（外した瞬間の消滅を防ぐ）。
+  const storeOriginDate = resolveStoreMakeupOriginDate({
+    student,
+    cellDateKey,
+    ledgerOriginDates: makeupOriginDatesByKey[stockKey] ?? [],
+  })
+  // INV-06（2026-11-07）: 休みと同じ「元の授業の日付＋時限」で積む（時限なしだと同じ日に同じ科目の 2 コマを格納したとき 1 件に畳まれる）。
+  const nextManualMakeupAdjustments = storeOriginDate
+    ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber(student, cellSlotNumber))
+    : manualMakeupAdjustments
+  // INV-06（順序方式）: 格納は「未消化振替へ戻す」意思表示なので、過去の削除でこの元コマ日が抑制
+  // されていても解除する。在庫由来（storeOriginDate=null）でも台帳 origin の再浮上を抑制が止めるため、
+  // 積む/積まないに関わらず解除する。
+  const clearedSuppressedMakeupOrigins = clearMakeupOrigins(
+    suppressedMakeupOrigins,
+    stockKey,
+    resolveOriginalRegularDate(student, cellDateKey),
+    resolveLessonMakeupOriginSlotNumber(student, cellSlotNumber),
+  )
+  // INV-06（2026-11-07）: 修正前に科目だけ編集した授業（テンプレの科目の抑止なし）を格納しても、後の休日設定でテンプレの科目が重ならない。
+  const nextSuppressedMakeupOrigins = ensureTemplateSubjectMakeupSuppression(clearedSuppressedMakeupOrigins, student, cellDateKey, cellSlotNumber, resolveStockId)
+  return { stockKey, storeOriginDate, nextManualMakeupAdjustments, nextSuppressedMakeupOrigins }
+}
+
+/**
  * 授業を盤面から消す（単発削除・格納）ときに積む削除記録（抑止キー）。第 2 版（機能フラグ templateDiffApply の教室）では、同じ日の中で動かした
  * テンプレの授業（写し）を消したら**元の時限**に積む（同じ日の移動はキーを積まないので、今の時限に積むと元の時限にテンプレの授業が生き返る・
  * regression-reviewer 重大-1）。元の時限の決め方は権威関数 resolveSameDayMoveSourceSlot。OFF は従来どおり今の時限。
@@ -3463,8 +3612,31 @@ export function resolveRemovedLessonOccurrenceKeyFor(student: StudentEntry, date
   return resolveSuppressedRegularLessonOccurrenceKey(student, dateKey, templateOriginRules ? (resolveSameDayMoveSourceSlot(student, dateKey) ?? slotNumber) : slotNumber)
 }
 
+/**
+ * 丸ごと振替の付け替え（段 4）の作成で D から D' へ移した手入力（印 wholeDayPairMovedFrom）のうち、**その生徒自身の D の授業**（授業 ID が D のテンプレの授業のまま・
+ * 振替元が D＝resolveMovedTemplateLessonSubjectFromId）を D' で単発削除・格納したときの抑止キー（D の日付・その時限・今の科目とテンプレの科目）。
+ * 2026-11-07 オーナー選択「戻さない」（spec-template-conflict-v2 §4-1-2）: D' の付け替えの展開は D の日付の削除記録で外れる（applyWholeDayTransferPairsToManagedWeek）ので、
+ * テンプレ保存・再マージとも D' に D のテンプレのその生徒を戻さず、組を解除しても D に戻らない（ふだんの日の削除・科目を変えた授業の削除と同じ）。
+ * 移した授業は振替（makeup）になっていて resolveSuppressedRegularLessonOccurrenceKeys がキーを返さないため、以前は §2-2 の根拠が消えた D' に D のテンプレの A が戻り、
+ * 格納では未消化 +1 と D' の授業の二重になっていた。在庫からの振替・体験・手で足した授業・別の生徒（授業 ID が D のテンプレの授業でない）は対象外＝null。
+ * ★削除・格納だけに使う（休み・出席は記録が §2-4 で止め、記録の生徒は印を持たないので積む／外すが対称にならない）。
+ */
+function resolveWholeDayPairMovedOwnLessonKeys(student: StudentEntry): string[] | null {
+  const movedFrom = student.wholeDayPairMovedFrom
+  if (!movedFrom || student.makeupSourceDate !== movedFrom.dateKey) return null
+  const templateSubject = resolveMovedTemplateLessonSubjectFromId(student)
+  if (!templateSubject) return null
+  const slotNumber = parseOriginSlotNumber(student.makeupSourceLabel) ?? movedFrom.slotNumber
+  if (!slotNumber) return null
+  const keys = [buildManagedOccurrenceKey(student, movedFrom.dateKey, slotNumber)]
+  if (templateSubject !== student.subject) keys.push(buildManagedOccurrenceKey({ ...student, subject: templateSubject as SubjectLabel }, movedFrom.dateKey, slotNumber))
+  return keys
+}
+
 /** 単発削除・格納で積む抑止キー（resolveRemovedLessonOccurrenceKeyFor の時限の決め方＋権威関数 resolveSuppressedRegularLessonOccurrenceKeys）。 */
 export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dateKey: string, slotNumber: number, templateOriginRules: boolean): string[] {
+  const pairMovedOwnLessonKeys = resolveWholeDayPairMovedOwnLessonKeys(student)
+  if (pairMovedOwnLessonKeys) return pairMovedOwnLessonKeys
   return resolveSuppressedRegularLessonOccurrenceKeys(student, dateKey, templateOriginRules ? (resolveSameDayMoveSourceSlot(student, dateKey) ?? slotNumber) : slotNumber, { templateOriginRules })
 }
 
@@ -4411,6 +4583,27 @@ function buildSuppressedManagedOccurrenceKeys(scheduleCells: SlotCell[], boardWe
   void boardCellIds
 
   return suppressedKeys
+}
+
+/**
+ * 盤面の振替のうち、授業 ID がその振替元の日のテンプレの授業のまま（resolveMovedTemplateLessonSubjectFromId）で、科目だけ違う（「編集」で科目を変えた）ものから、
+ * 振替元の日の**テンプレの科目**の抑止キーを導く（buildSuppressedManagedOccurrenceKeys の暗黙のキーは今の科目で作るため当たらない・INV-03・2026-11-07）。
+ * 丸ごと振替の付け替えの D' のテンプレ（D のテンプレの展開）にだけ当てる（buildAppliedManagedPostFreezeCells）。付け替えでない日は、別の日へ動かしたときに
+ * 権威関数 resolveSuppressedRegularLessonOccurrenceKeys が両方の科目の明示のキーを積むので要らない（本番の教室の再マージの答えを変えない）。
+ * 付け替えの作成で D' へ移したまま（印 wholeDayPairMovedFrom）の手入力は D' で §2-2 により A を置かないので数えない（従来の答えと確認画面の理由を変えない）。
+ */
+function collectMovedTemplateSubjectOccurrenceKeys(boardWeeks: SlotCell[][]): Set<string> {
+  const keys = new Set<string>()
+  for (const week of boardWeeks) for (const cell of week) for (const desk of cell.desks) for (const student of desk.lesson?.studentSlots ?? []) {
+    if (!student || student.wholeDayPairMovedFrom || student.lessonType !== 'makeup' || !student.makeupSourceDate) continue
+    const originSlotNumber = parseOriginSlotNumber(student.makeupSourceLabel)
+    if (!originSlotNumber) continue
+    if (student.makeupSourceDate === cell.dateKey && originSlotNumber === cell.slotNumber) continue
+    const templateSubject = resolveMovedTemplateLessonSubjectFromId(student)
+    if (!templateSubject || templateSubject === student.subject) continue
+    keys.add(buildManagedOccurrenceKey({ ...student, subject: templateSubject as SubjectLabel }, student.makeupSourceDate, originSlotNumber))
+  }
+  return keys
 }
 
 function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Set<string>) {
@@ -6782,11 +6975,19 @@ export function computeStudentAbsentMark(params: {
   // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
   // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
   // 台帳 origin を取り下げるだけ）。
-  const nextSuppressedMakeupOrigins = clearMakeupOrigins(
-    params.suppressedMakeupOrigins,
-    stockKey,
-    resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-    absentOriginSlotNumber,
+  // INV-06（2026-11-07）: 修正前に科目だけ編集した授業（テンプレの科目の抑止なし）を休みにしても、後の休日設定でテンプレの科目の自動発生が
+  //   休みの 1 件に重ならない（ensureTemplateSubjectMakeupSuppression・今の科目の抑制の解除とは別の在庫キー＝休みの在庫は消さない）。
+  const nextSuppressedMakeupOrigins = ensureTemplateSubjectMakeupSuppression(
+    clearMakeupOrigins(
+      params.suppressedMakeupOrigins,
+      stockKey,
+      resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+      absentOriginSlotNumber,
+    ),
+    targetStudent,
+    targetCell.dateKey,
+    targetCell.slotNumber,
+    resolveStockId,
   )
   const managedStudent = managedStudentByAnyName.get(targetStudent.name)
   const nextFallbackMakeupStudents = managedStudent
@@ -7273,6 +7474,35 @@ export type DayDeskDisposalCounts = {
   returnedLectureCount: number
 }
 
+/**
+ * 休日設定で、そのコマに残っている「編集」で科目だけ変えたテンプレの通常授業（席・出欠記録〔休み・振無休・出席・別の日へ動かした移動元〕）のテンプレの科目の
+ * 振替の抑止を立てる（INV-06・2026-11-07 兄弟監査・ensureTemplateSubjectMakeupSuppression を通す）。休日設定は席の授業を今の科目（国）で未消化へ返し、
+ * 未消化の計算はテンプレ行（数）からその日の休日の自動発生を立てるので、修正前に科目を変えた授業（抑止なし）を外さずに休日にすると 1 コマが 国 と 数 の 2 件、
+ * 別の日へ動かしてから元の日を休日にすると 0 のはずが 数 の 1 件になっていた（オーナー確定「その時コマ表に入っていた科目で数える」）。
+ * ★今の科目の台帳・抑止には触れない（返却は reconcileHolidayDeskStockReturns の仕事）。表示専用の holiday 記録は見ない（前の休日設定で返し終えた）。
+ * ★休日解除（computeHolidayReleaseRestoration）では外さない: 席へ戻るのは 国 の授業なので、抑止が残るのが「科目がテンプレと違えば抑止 1 件」の規則どおり
+ *   （「編集」でテンプレの科目へ戻したとき applyStudentEdit が外す）。
+ * ★moved の記録にも積むが、今の科目とは別のキー（テンプレの科目）なので collectClearedDayMakeupSuppressions の moved のガード（INV 監査 2026-08-29）とぶつからない。
+ */
+export function collectHolidayTemplateSubjectSuppressions(params: {
+  cell: SlotCell
+  suppressedMakeupOrigins: MakeupOriginMap
+  resolveStockId: (student: StudentEntry) => string
+}): MakeupOriginMap {
+  const { cell, resolveStockId } = params
+  let next = params.suppressedMakeupOrigins
+  for (const desk of cell.desks) {
+    for (const student of desk.lesson?.studentSlots ?? []) {
+      if (student) next = ensureTemplateSubjectMakeupSuppression(next, student, cell.dateKey, cell.slotNumber, resolveStockId)
+    }
+    for (const statusEntry of desk.statusSlots ?? []) {
+      if (!statusEntry || statusEntry.status === 'holiday') continue
+      next = ensureTemplateSubjectMakeupSuppression(next, buildStudentEntryFromStatus(statusEntry), cell.dateKey, cell.slotNumber, resolveStockId)
+    }
+  }
+  return next
+}
+
 // INV-06(Issue #58): 「その日の生徒を全コマ削除」で処分する通常授業の振替抑制(suppressedMakeupOrigins)を集める。
 // 処分の裁定(v1.5.464)は「通常授業＝返さず希望回数−1(＝もうやらない)」なのに、その後この日を休日設定すると
 // 休日振替の自動計算(computeAutomaticShortageOrigins)が**盤面ではなくテンプレを根拠に**振替を積み直し、
@@ -7310,6 +7540,8 @@ export function collectClearedDayMakeupSuppressions(params: {
       resolveOriginalRegularDate(studentLike, cell.dateKey),
       templateSlotNumber,
     )
+    // INV-06（2026-11-07）: 修正前に科目だけ編集した授業（テンプレの科目の抑止なし）も、後の休日設定でテンプレの科目が湧かない（重ねない）。
+    next = ensureTemplateSubjectMakeupSuppression(next, studentLike, cell.dateKey, cell.slotNumber, resolveStockId)
   }
   for (const desk of cell.desks) {
     // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)も元は通常授業なので、通常授業と同じく積む。
@@ -13165,10 +13397,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
     }
     let movedStudentCount = 0
+    let nextSuppressedMakeupOrigins = suppressedMakeupOrigins
 
     for (const week of nextWeeks) {
       for (const cell of week) {
         if (cell.dateKey !== dateKey) continue
+        // INV-06（2026-11-07）: 科目だけ編集したテンプレの授業（席・記録）のテンプレの科目の自動発生を、返却と重ねない（机の中身を記録へ変える前に読む）。
+        nextSuppressedMakeupOrigins = collectHolidayTemplateSubjectSuppressions({ cell, suppressedMakeupOrigins: nextSuppressedMakeupOrigins, resolveStockId: resolveBoardStudentStockId })
 
         for (const desk of cell.desks) {
           // 1机分の在庫戻しは reconcileHolidayDeskStockReturns へ集約。studentSlots(未出欠の配置)は必ず戻し、
@@ -13211,7 +13446,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       [...classroomSettings.holidayDates, dateKey].sort(),
       classroomSettings.forceOpenDates.filter((value) => value !== dateKey),
       ledgers.manualMakeupAdjustments,
-      suppressedMakeupOrigins,
+      nextSuppressedMakeupOrigins,
       ledgers.fallbackMakeupStudents,
       ledgers.manualLectureStockCounts,
       ledgers.manualLectureStockOrigins,
@@ -15769,28 +16004,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
     const nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrences(suppressedRegularLessonOccurrences, resolveRemovedLessonOccurrenceKeys(menuStudent.student, targetCell.dateKey, targetCell.slotNumber))
-    // INV-06: 在庫由来の振替は台帳の origin が再浮上するので積まない／台帳に origin が無い
-    // 「移動しただけの振替コマ」は盤面が唯一の記録なので積む（外した瞬間の消滅を防ぐ）。
-    const storeOriginDate = resolveStoreMakeupOriginDate({
+    // 台帳と振替の抑止は純関数 computeStoredLessonMakeupLedgers（2026-11-07 に挙動不変で切り出し・INV-06。科目だけ編集したテンプレの授業はテンプレの科目の抑止も）。
+    const { stockKey, storeOriginDate, nextManualMakeupAdjustments, nextSuppressedMakeupOrigins } = computeStoredLessonMakeupLedgers({
       student: menuStudent.student,
       cellDateKey: targetCell.dateKey,
-      ledgerOriginDates: makeupOriginDatesByKey[stockKey] ?? [],
-    })
-    // INV-06（2026-11-07）: 休みと同じ「元の授業の日付＋時限」で積む（時限なしだと同じ日に同じ科目の 2 コマを格納したとき 1 件に畳まれる）。
-    const nextManualMakeupAdjustments = storeOriginDate
-      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
-      : manualMakeupAdjustments
-    // INV-06（順序方式）: 格納は「未消化振替へ戻す」意思表示なので、過去の削除でこの元コマ日が抑制
-    // されていても解除する。在庫由来（storeOriginDate=null）でも台帳 origin の再浮上を抑制が止めるため、
-    // 積む/積まないに関わらず解除する。
-    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+      cellSlotNumber: targetCell.slotNumber,
+      manualMakeupAdjustments,
       suppressedMakeupOrigins,
-      stockKey,
-      resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
-      resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
-    )
+      makeupOriginDatesByKey,
+      resolveStockId: resolveBoardStudentStockId,
+    })
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
       ? fallbackMakeupStudents
@@ -16651,41 +16875,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     //   下の講習分岐も countAccounting.decrementSubjectSlots を見る（片方を別経路で取り直さない＝二重減算防止）。
     const countAccounting = resolveDeletedStudentCountAccounting(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
     const nextScheduleCountAdjustments = countAccounting.nextAdjustments
-    let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
+    // 振替の抑止（通常授業・振替・科目だけ編集したテンプレの授業のテンプレの科目）は純関数 computeDeletedLessonMakeupSuppressions（2026-11-07 に挙動不変で切り出し・INV-06）。
+    const nextSuppressedMakeupOrigins = computeDeletedLessonMakeupSuppressions({
+      student: menuStudent.student,
+      cellDateKey: targetCell.dateKey,
+      cellSlotNumber: targetCell.slotNumber,
+      suppressedMakeupOrigins,
+      makeupOriginDatesByKey,
+      ledgerOriginsByKey: normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students),
+      resolveStockId: resolveBoardStudentStockId,
+    })
     let nextManualLectureStockCounts = manualLectureStockCounts
     let deleteSubjectDelta: SpecialSessionSubjectDelta | undefined
     let statusSuffix = '振替対象にはしません。'
-
-    // INV-06（2026-10-27）: 編集で振替にした振替元なしの振替(isStockNeutralEditedMakeup)は元が通常授業なので、通常授業と同じく抑止を積む
-    // (積まないと、削除した日を後から休日設定したときにテンプレの自動発生が +1 で湧く＝Issue #58 と同型の誤増)。
-    if (menuStudent.student.lessonType === 'regular' || isStockNeutralEditedMakeup(menuStudent.student)) {
-      const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
-      // INV-06（2026-11-07）: 抑制は時限つき（テンプレ上の元の時限＝全コマ削除の抑制と同じ）。時限なしはその日付を丸ごと落とし、
-      //   同じ日の別のコマの休み（未消化振替）まで消す。ただし時限なしの旧データがある日は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
-      const suppression = resolveDeletedLessonSuppressionOrigin({
-        dateKey: resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
-        slotNumber: resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
-        effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
-        ledgerOrigins: normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students)[stockKey] ?? [],
-        requireExactOrigin: false,
-      })
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
-      statusSuffix = '振替対象にはしません。'
-    }
-
-    if (menuStudent.student.lessonType === 'makeup' && menuStudent.student.makeupSourceDate) {
-      const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
-      // INV-06（2026-11-07）: 振替元ラベルの時限で抑制する（同じ日の別のコマの振替元を巻き込まない）。ラベルの無い振替・時限なしの旧データから置いた振替・
-      //   ラベルの時限の origin が無い振替は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
-      const suppression = resolveDeletedLessonSuppressionOrigin({
-        dateKey: menuStudent.student.makeupSourceDate,
-        slotNumber: resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
-        effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
-        ledgerOrigins: normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students)[stockKey] ?? [],
-        requireExactOrigin: true,
-      })
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
-    }
 
     if (menuStudent.student.lessonType === 'special') {
       if (countAccounting.decrementSubjectSlots) {
