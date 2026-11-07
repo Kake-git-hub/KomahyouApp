@@ -117,11 +117,16 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(references.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('項目の中の見出しは「準備」「やること」「OKの目安」(第62版・オーナー指示「確認リストの日本語が難しい」)', () => {
+  it('項目の中の見出しは「準備」「操作」「結果」(第118版・オーナー指示 2026-11-07「準備する→操作→結果を確認する くらいシンプルに」)', () => {
     expect(PANEL_TSX).toContain('<span className="verification-checklist-label">準備</span>')
-    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">やること</div>')
-    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">OKの目安</div>')
-    for (const old of ['>前提<', '>操作<', '>見るところ<']) expect(PANEL_TSX).not.toContain(old)
+    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">操作</div>')
+    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">結果</div>')
+    for (const old of ['>前提<', '>やること<', '>OKの目安<', '>見るところ<']) expect(PANEL_TSX).not.toContain(old)
+  })
+
+  it('「オーナーの決定」の説明は出さない(第118版・オーナー選択「消す」)', () => {
+    expect(PANEL_TSX).not.toContain('オーナーの決定')
+    expect(PANEL_TSX).not.toContain('ownerDecision')
   })
 
   it('両教室の送信済み結果は読み取り専用の Cloud Function 経由で、今の版だけを読む(2026-11-03)', () => {
