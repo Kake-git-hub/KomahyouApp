@@ -254,7 +254,12 @@ describe('確認リストの項目定義', () => {
     // 第115版(2026-11-06・v1.5.694 据え置き): 退塾取消の確認 wc-1・wc-2 を ap-3 の後に足した(開発用教室だけ)。
     // 第116版(2026-11-07・v1.5.696): OK の ap-2・tp-64・wc-1・wc-2 を外した。
     // 第120版(2026-11-07・v1.5.697 据え置き): 確認リストの書き方の確認 c-8 を ap-3 の後に足した(開発用教室だけ)。第119版: ap-4 を c-8 の後に足した。
-    expect(ids).toEqual(['ap-3', 'c-8', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6', 'sd-1', 'sd-2', 'pl-1', 'mg-1'])
+    // 第122版(2026-11-07・v1.5.697 据え置き): 11/7 の送信で OK の 11 件を外し、ta-1 はオーナー選択「今のまま」(確認の中身は満たしていた)で外した。
+    expect(ids).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'mg-1'])
+    for (const okId of ['ap-3', 'c-8', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-69', 'mn-1', 'v2-5', 'sd-1', 'sd-2', 'pl-1']) {
+      expect(ids, okId).not.toContain(okId)
+      expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, okId).not.toContain(okId)
+    }
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -306,10 +311,9 @@ describe('確認リストの項目定義', () => {
     // 第98版(2026-11-01・決定記録 52): 手置き講師の衝突は常に緑 2 段(tp-59・tp-69・tp-70)。
     // 第109版(2026-11-05・オーナー決定): tp-70 は生徒を席に残して講師だけ緑、tp-59 は別の机に同じ講師が入る形(講師の保留)へ書き換え。
     // 第116版(2026-11-07): tp-59・tp-69・tp-70 は「準備する」を付けて文を書き換えたので introducedIn を v1.5.696 へ。
-    expect(byId.get('tp-69')!.introducedIn).toBe('v1.5.696')
+    // 第122版(2026-11-07): tp-69 は OK で外した。
     expect(byId.get('tp-70')!.introducedIn).toBe('v1.5.696')
-    for (const id of ['tp-69', 'tp-70']) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
-    expect(byId.get('tp-69')!.check!.join(' / ')).toContain('手入力を採用 → {{prep:X}}＋{{prep:A}} の 1 行')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-70')
     expect(byId.get('tp-59')!.introducedIn).toBe('v1.5.696')
     expect(byId.get('tp-59')!.title).toContain('X は 1 つの机だけに出る')
     // 第 2 版(2026-11-05 午後・§9-1): 手入力が勝つ＝テンプレの机 B に X を置かない(午前の「講師の保留」は取り消し)。
