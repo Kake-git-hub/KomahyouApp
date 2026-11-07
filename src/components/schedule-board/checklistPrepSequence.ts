@@ -139,7 +139,7 @@ export type ChecklistPrepSequenceAction =
   | { kind: 'board'; weeks: SlotCell[][]; ledgers: StudentAbsentMarkLedgers; weekIndex: number; cellId: string; deskIndex: number; state: ChecklistPrepSequenceState }
   | { kind: 'done'; state: ChecklistPrepSequenceState }
 
-export const CHECKLIST_PREP_SEQUENCE_FAILED_REMINDER = '盤面とテンプレはまだサーバーに保存していません。ここまでに行ったものは盤面とテンプレに残っています。「後片づけ」で準備を消せます。項目の「操作」はまだ行えません。'
+export const CHECKLIST_PREP_SEQUENCE_FAILED_REMINDER = '盤面とテンプレはまだサーバーに保存していません。ここまでに行ったものは盤面とテンプレに残っています。「後片づけ」で準備を消せます。次の操作はまだ行えません。'
 /** テンプレの差分反映が無い教室・テンプレがまだ無い教室（第 3 段の項目と同じ文）。 */
 export const CHECKLIST_PREP_SEQUENCE_TEMPLATE_REQUIRED_MESSAGE = CHECKLIST_PREP_TEMPLATE_REQUIRED_MESSAGE
 const DEFAULT_TRIAL_PROFILE: { grade: GradeLabel; subject: SubjectLabel } = { grade: '中1', subject: '英' }

@@ -136,7 +136,7 @@ export function resolveChecklistPrepAbortMessage(reason: 'timeout' | 'cancelled'
 }
 
 /**
- * パネルへ返す結果（結果文はそのまま項目の下に出す）。facts（第119版・2026-11-07）は項目の操作・結果の文の `{{prep:<キー>}}` に差し込む準備の事実
+ * パネルへ返す結果（結果文はそのまま項目の下に出す）。facts（第119版・2026-11-07）は項目の操作・確認の文の `{{prep:<キー>}}` に差し込む準備の事実
  * （いつ・どの机・誰。verificationChecklist.ts の resolveChecklistPrepFactTokens）。成功したときだけ載せる。画面だけ（下書き・送信本文には載せない）。
  */
 export type ChecklistPrepResult = { ok: boolean; message: string; facts?: ChecklistPrepFacts }

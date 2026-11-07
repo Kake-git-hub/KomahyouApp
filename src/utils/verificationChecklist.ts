@@ -28,14 +28,13 @@ export type VerificationChecklistItem = {
   area: string
   title: string
   /**
-   * 準備(1行・短く)。どの状態で始めるか。「準備する」の付いた項目は「「準備する」を押して「保存」」の一文だけにする
-   * (何を置いたかは押したあとの結果の文に出る)。第118版(2026-11-07 オーナー指示「準備する→操作→結果を確認する くらいシンプルに」)。
+   * 操作。3手順まで・短い言い切り(オーナー指示 2026-09-17「手順が多すぎて大変」・2026-11-07「文章が多すぎる」・テストで上限を固定)。
+   * 準備も操作の手順の 1 つとして正しい順に入れる(第120版・2026-11-07 オーナー指示「準備する→操作 にこだわらず、操作の手順の一つとして、
+   * 正しい手順で準備するを交えて。項目は 操作 → 確認 だけ」)。準備だけの欄は持たない。
    */
-  prep?: string
-  /** 操作。1〜2手順・短い言い切り(オーナー指示 2026-09-17「手順が多すぎて大変」・2026-11-07「文章が多すぎる」・テストで上限を固定)。 */
   steps: string[]
   /**
-   * 結果。操作のあと画面がどうなっていれば OK か(最大3つ・各行は「」の外で 40 字まで)。経緯や「詳細」の文は書かない
+   * 確認(画面の見出しは「確認」)。操作のあと画面がどうなっていれば OK か(最大3つ・各行は「」の外で 40 字まで)。経緯や「詳細」の文は書かない
    * (オーナー指示 2026-11-07「詳細や結果は文章にする必要はない。盤面でどうなっていればよいかを簡潔に」)。
    */
   check?: string[]
@@ -51,9 +50,18 @@ export type VerificationChecklistItem = {
   /**
    * 「準備する」ボタンを出す(2026-11-06 オーナー選択「案 C(段階導入)」・spec-developer-report §E-2-4)。開発用教室・テスト教室で、
    * 開いているコマ表に準備を自動で置く(置き方は src/components/schedule-board/checklistPrep.ts・id の一致はテストで固定)。
-   * prep の文は「「準備する」を押す(…を自動で置く)」で始める。
+   * ボタンは「準備する」を押す手順の行に出す(findVerificationChecklistPrepStepIndex)。その手順は最初に置き「「準備する」を押して「保存」」と書く。
    */
   autoPrep?: true
+}
+
+/**
+ * 「準備する」ボタンを出す手順の位置(純関数・第120版 2026-11-07)。autoPrep の項目で、最初に「「準備する」を押」で始まる手順。
+ * 無ければ -1(ボタンを出さない)。「もう一度「準備する」→ …」のような 2 回目の手順にはボタンを出さない(最初の 1 つだけ)。
+ */
+export function findVerificationChecklistPrepStepIndex(item: Pick<VerificationChecklistItem, 'autoPrep' | 'steps'>): number {
+  if (!item.autoPrep) return -1
+  return item.steps.findIndex((step) => step.startsWith('「準備する」を押'))
 }
 
 /**
@@ -67,11 +75,11 @@ export const VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER = /\{\{student:([A-Za-z0
 /**
  * 「準備する」の結果の事実(第119版・2026-11-07 オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して。わかりにくいので。」)。
  * キー → 表示する文字列(例 slot=「2/2(火) 2限」・deskA=「机 2」・X=手で置いた講師の名前・A=確認用の生徒の名前)。準備(checklistPrep.ts / checklistPrepSequence.ts)が
- * 結果に載せ、パネル(VerificationChecklistPanel)がその項目の最後の準備結果の facts で項目の操作・結果の文の `{{prep:<キー>}}` を置き換える。画面だけ(下書き・送信本文には載せない)。
+ * 結果に載せ、パネル(VerificationChecklistPanel)がその項目の最後の準備結果の facts で項目の操作・確認の文の `{{prep:<キー>}}` を置き換える。画面だけ(下書き・送信本文には載せない)。
  */
 export type ChecklistPrepFacts = Readonly<Record<string, string>>
 
-/** 項目の文の中の準備の事実の指し方 `{{prep:<キー>}}`(操作・結果の文だけに書く・テストで固定)。 */
+/** 項目の文の中の準備の事実の指し方 `{{prep:<キー>}}`(操作・確認の文だけに書く・テストで固定)。 */
 export const CHECKLIST_PREP_FACT_TOKEN = /\{\{prep:([A-Za-z0-9_-]+)\}\}/gu
 
 /**
@@ -109,10 +117,10 @@ export function resolveChecklistPrepFactTokens(text: string, facts?: ChecklistPr
   })
 }
 
-/** 項目の文(題名・準備・操作・結果)に使っている `{{prep:<キー>}}` のキー(出てきた順・重複なし)。 */
-export function listChecklistPrepFactTokenKeys(item: Pick<VerificationChecklistItem, 'title' | 'prep' | 'steps' | 'check'>): string[] {
+/** 項目の文(題名・操作・確認)に使っている `{{prep:<キー>}}` のキー(出てきた順・重複なし)。 */
+export function listChecklistPrepFactTokenKeys(item: Pick<VerificationChecklistItem, 'title' | 'steps' | 'check'>): string[] {
   const keys: string[] = []
-  for (const line of [item.title, item.prep ?? '', ...item.steps, ...(item.check ?? [])]) {
+  for (const line of [item.title, ...item.steps, ...(item.check ?? [])]) {
     for (const match of line.matchAll(CHECKLIST_PREP_FACT_TOKEN)) if (!keys.includes(match[1])) keys.push(match[1])
   }
   return keys
@@ -455,19 +463,18 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
     // tp-64 要改善(受付 20261105-234609713-fbc2862e)の 2 件を直した: (1) 講師欄の下の行(手置き講師)が次の机の講師欄の下に隠れていた(講師名の枠がセルの高さ一杯に
     // 伸びて下の行を押し出していた・データは正しかった。テスト教室の tp-59/tp-64/tp-66「手置き講師が抹消される」も同じ原因)。(2) ハイライトは押した行だけ(mn-1 を書き換え)。
     // 第118版(2026-11-07・v1.5.697 据え置き): オーナー指示「確認リストの文章が多すぎる。詳細や結果は文章にする必要はない。確認すべき項目を盤面でどうなっていればよいかを
-    // 簡潔に書いて。準備する→操作→結果を確認する くらいシンプルに」。全項目を「準備・操作・結果」の短い言い切りに書き直し、「オーナーの決定」の説明を消した(オーナー選択)。
+    // 簡潔に書いて。準備する→操作→結果を確認する くらいシンプルに」。全項目を「準備・操作・確認」の短い言い切りに書き直し、「オーナーの決定」の説明を消した(オーナー選択)。
     // 確認する中身(何を見れば OK か)は変えていないので版は据え置く(下書きを消さない)。結果の見本画像はオーナー選択「まず文章だけ」で付けない。
     // それまでの長い文面は git 履歴(第117版 = v1.5.697 の定義)に残る。
     // 第119版(2026-11-07・v1.5.697 据え置き=確認中の版へ項目を足すだけ): オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して。
     // わかりにくいので。」。「準備する」の結果の文は「準備しました（日付 時限）。」＋保存の一言の 2 行にし、「講師 X」「机 A」のような記号の代わりに、
-    // 準備の結果の facts を項目の操作・結果の文へ {{prep:<キー>}} で差し込む(押す前は CHECKLIST_PREP_FACT_DEFAULTS の言葉)。確かめる中身は変えていない。
+    // 準備の結果の facts を項目の操作・確認の文へ {{prep:<キー>}} で差し込む(押す前は CHECKLIST_PREP_FACT_DEFAULTS の言葉)。確かめる中身は変えていない。
     // その確認 ap-4 を ap-3 の後に足した(テスト教室にも出す)。
     {
       id: 'ap-3',
       area: '確認リスト',
       title: '「後片づけ」で、準備で作ったものが消える',
-      prep: 'tp-69 の「準備する」を押す',
-      steps: ['tp-69 の「準備する」の右にある「後片づけ」を押す'],
+      steps: ['tp-69 の「準備する」を押す', 'tp-69 の「準備する」の右にある「後片づけ」を押す'],
       check: [
         '準備で置いた体験・メモ・講師がコマ表から消える',
         'テンプレの確認用の登録が消え、確認用の生徒は名簿に残る',
@@ -475,25 +482,38 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       ],
       introducedIn: 'v1.5.696',
     },
+    // 第120版(2026-11-07・v1.5.701 で入る・版は v1.5.697 据え置き＝確かめる中身は変えていないので下書きを消さない): オーナー指示「確認リストがわかりずらいので、
+    // 準備する→操作 にこだわらず、操作の手順の一つとして、正しい手順で準備するを交えて。なので項目は 操作 → 確認 だけ」。準備の欄(prep)を無くし、
+    // 準備は操作の手順の先頭に入れた。見出しは「操作」「確認」。「準備する」「後片づけ」ボタンは準備の手順の行に出す。
+    {
+      id: 'c-8',
+      area: '確認リスト',
+      title: '項目が「操作」と「確認」だけになり、準備は操作の 1 番目に入る',
+      steps: ['確認リストを開き、tp-69 と v2-5 を見る'],
+      check: [
+        '見出しは「操作」と「確認」の 2 つだけ(「準備」「結果」は無い)',
+        'tp-69 の操作の 1 番目の行に「準備する」「後片づけ」がある',
+        'v2-5 の操作の 1 番目は「メモする」の手順',
+      ],
+      introducedIn: 'v1.5.701',
+    },
     {
       id: 'ap-4',
       area: '確認リスト',
       title: '「準備する」の結果の文は短く、項目の文に日付と名前が入る',
-      prep: 'tp-69 の「準備する」を押す',
-      steps: ['tp-69 の結果の文と、操作・結果の文を読む'],
+      steps: ['tp-69 の「準備する」を押す', 'tp-69 の結果の文と、操作・確認の文を読む'],
       check: [
         '結果の文は 1〜2 行だけ(置いた物の説明は出ない)',
-        'tp-69 の操作・結果に日付・机・講師と生徒の名前が入る',
+        'tp-69 の操作・確認に日付・机・講師と生徒の名前が入る',
         '押す前は「講師 X」「生徒 A」のような仮の言葉',
       ],
-      introducedIn: 'v1.5.701',
+      introducedIn: 'v1.5.702',
     },
     {
       id: 'ta-1',
       area: 'テンプレ作成',
       title: '手入力の講師を採用した机は、テンプレを保存し直しても緑に戻らない',
-      prep: 'tp-69 の「準備する」を押して「保存」',
-      steps: ['緑の下の行の講師名 →「下段(手入力)の講師を採用する」', 'テンプレを何も変えずに 2 回保存する'],
+      steps: ['tp-69 の「準備する」を押して「保存」', '緑の下の行の講師名 →「下段(手入力)の講師を採用する」', 'テンプレを何も変えずに 2 回保存する'],
       check: [
         '机は手で置いた講師(青字)の 1 行のまま',
         'テンプレの講師はほかの空き机にも入らない',
@@ -504,9 +524,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-66',
       area: 'テンプレ作成',
       title: '手置き講師の保留(緑)で、講師欄の下の行に手置き講師が見える',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['{{prep:slot}} {{prep:desk1}}の講師欄を見る'],
+      steps: ['「準備する」を押して「保存」', '{{prep:slot}} {{prep:desk1}}の講師欄を見る'],
       check: [
         '講師欄は上={{prep:Y}}、下={{prep:X}}(緑)',
         '生徒の席も緑の 2 行(上={{prep:A}}・下={{prep:trial}})',
@@ -518,9 +537,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-71',
       area: 'テンプレ作成',
       title: '同じ日に手で動かした通常授業は、テンプレを保存すると元の位置に戻る',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['テンプレを何も変えずに保存し、{{prep:slot}} を見る', 'もう一度「準備する」→ {{prep:A}}をテンプレから外して保存する'],
+      steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずに保存し、{{prep:slot}} を見る', 'もう一度「準備する」→ {{prep:A}}をテンプレから外して保存する'],
       check: [
         '{{prep:A}}・{{prep:B}}はテンプレの机({{prep:deskT}})に 1 行で戻る(緑にならない)',
         'テンプレから外した{{prep:A}}の授業はどこにも残らない',
@@ -532,9 +550,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-72',
       area: 'テンプレ作成',
       title: '動かした授業の席をテンプレの別の生徒が使うと、動かした授業は元の机に戻る',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
+      steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
       check: [
         '{{prep:deskC}} は{{prep:C}}の 1 行(緑にならない)',
         '{{prep:A}}はテンプレの元の机({{prep:deskA}})に戻る',
@@ -546,9 +563,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-75',
       area: 'テンプレ作成',
       title: '同じコマに手で置いた振替がある生徒は、テンプレの机に入らない',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
+      steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
       check: [
         '振替の机({{prep:deskM}})は{{prep:A}}の 1 行のまま(青字・緑にならない)',
         'テンプレの机({{prep:deskT}})に{{prep:A}}は入らない',
@@ -560,9 +576,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-59',
       area: 'テンプレ作成',
       title: '手置き講師 X がテンプレの別の机にも居ても、X は 1 つの机だけに出る',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
+      steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
       check: [
         '{{prep:deskA}} は{{prep:X}}＋{{prep:trial}}の 1 行(青字・緑にならない)',
         '{{prep:deskB}} は{{prep:A}}だけで、講師欄は空',
@@ -574,9 +589,9 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-69',
       area: 'テンプレ作成',
       title: '手置き講師だけの机にテンプレの別の講師を登録すると、講師欄が緑の 2 行になる',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
       steps: [
+        '「準備する」を押して「保存」',
         '{{prep:slot}} {{prep:deskA}} の下の行の講師名({{prep:X}}) →「下段(手入力)の講師を採用する」',
         'もう一度「準備する」→ 新しく出た {{prep:slot}} {{prep:deskA}} で「上段(テンプレ)の講師を採用する」',
       ],
@@ -591,9 +606,9 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'tp-70',
       area: 'テンプレ作成',
       title: '講師だけのテンプレ机と重なると、手で置いた生徒は席に残り、講師欄だけ緑になる',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
       steps: [
+        '「準備する」を押して「保存」',
         '{{prep:slot}} {{prep:deskA}} の下の行の講師名({{prep:X}}) →「下段(手入力)の講師を採用する」',
         'もう一度「準備する」→ 新しく出た {{prep:slot}} {{prep:deskA}} で「上段(テンプレ)の講師を採用する」',
       ],
@@ -608,9 +623,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'mn-1',
       area: 'テンプレ作成',
       title: '緑の机で、押した行だけがハイライトされる',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['{{prep:slot}} {{prep:desk1}}で、上の行({{prep:A}})・下の行({{prep:trial}})を順に押す', '同じ机の講師欄の下の行({{prep:X}})を押す'],
+      steps: ['「準備する」を押して「保存」', '{{prep:slot}} {{prep:desk1}}で、上の行({{prep:A}})・下の行({{prep:trial}})を順に押す', '同じ机の講師欄の下の行({{prep:X}})を押す'],
       check: [
         '押した行だけに枠が付く',
         '生徒の下の行のメニュー:「上段(テンプレ)を採用する」「下段(手入力)を採用する」「下段(手入力)を移動する」「下段(手入力)を削除する」',
@@ -622,9 +636,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'v2-3',
       area: 'テンプレ作成',
       title: '緑の下の行だけの生徒はテンプレの席へ上がり、手置き講師の机はそのまま',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
+      steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
       check: [
         '{{prep:A}}はテンプレの机({{prep:deskA}})に 1 行(青字)、{{prep:deskP}} の緑は消える',
         '{{prep:deskK}} は{{prep:X}}の 1 行。ほかの机に{{prep:X}}も{{prep:W}}も入らない',
@@ -636,8 +649,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'v2-5',
       area: 'テンプレ作成',
       title: '今までの保留(緑)は、テンプレを何も変えずに保存しても授業が消えない',
-      prep: '未消化の数と「保留 n」の数をメモする',
-      steps: ['テンプレを何も変えずに 2 回保存する'],
+      steps: ['未消化の数と「保留 n」の数をメモする', 'テンプレを何も変えずに 2 回保存する'],
       check: [
         '未消化振替・未消化講習の数が変わらない',
         '青字(手入力)の授業と、済ませた丸ごと振替の振替は消えない',
@@ -649,9 +661,8 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'v2-6',
       area: 'テンプレ作成',
       title: '丸ごと振替を解除すると、移した手入力が元の席に戻る',
-      prep: '「準備する」を押して「保存」',
       autoPrep: true,
-      steps: ['{{prep:dayA}} の日付 →「丸ごと振替」→ {{prep:dayB}} を選んで実行', '{{prep:dayB}} の日付 →「丸ごと振替を解除」'],
+      steps: ['「準備する」を押して「保存」', '{{prep:dayA}} の日付 →「丸ごと振替」→ {{prep:dayB}} を選んで実行', '{{prep:dayB}} の日付 →「丸ごと振替を解除」'],
       check: [
         '実行後: {{prep:trial}}は {{prep:dayB}} の同じ席へ。{{prep:dayA}} の{{prep:C}}は「休」(未消化振替 +1)',
         '解除後: {{prep:trial}}は {{prep:dayA}} の元の席へ。{{prep:dayA}} の{{prep:C}}はテンプレの授業に戻る',
@@ -663,8 +674,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'sd-1',
       area: 'コマ表',
       title: '同じ日・同じ科目の 2 コマを両方休みにすると、未消化振替が 2 増える',
-      prep: '生徒 1 人を同じ日の 4限・5限に同じ科目で置いて「保存」',
-      steps: ['4限と 5限を「休み」にする', '5限の分を別の日に置いて × で消し、5限の「休み」を解除する'],
+      steps: ['生徒 1 人を同じ日の 4限・5限に同じ科目で置いて「保存」', '4限と 5限を「休み」にする', '5限の分を別の日に置いて × で消し、5限の「休み」を解除する'],
       check: [
         '休みの後: 未消化振替が 2 件(4限・5限の別の行)',
         '× で消しても、休みを解除しても、4限の 1 件は残る',
@@ -675,8 +685,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'sd-2',
       area: 'コマ表',
       title: '同じ日・同じ科目の 2 コマの後ろの時限を動かすと、その時限だけ動く',
-      prep: 'テンプレで生徒 1 人を同じ曜日の 1限・2限に同じ科目で登録',
-      steps: ['2限の生徒を「移動」で別の日の空き席へ(次の週は長押しで)', '「保存」して再読み込みする'],
+      steps: ['テンプレで生徒 1 人を同じ曜日の 1限・2限に同じ科目で登録', '2限の生徒を「移動」で別の日の空き席へ(次の週は長押しで)', '「保存」して再読み込みする'],
       check: [
         '動くのは 2限だけ。1限は元の席に残る',
         '再読み込みしても同じ',
@@ -688,8 +697,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'pl-1',
       area: 'コマ表',
       title: '講師の居ない机から生徒を動かしても、詳細に余計な講師の行が出ない',
-      prep: '講師欄が空欄で生徒が居る机があるコマを開く',
-      steps: ['その生徒を別の日へ動かし、テンプレを何も変えずに保存する', '空欄の講師欄を押す'],
+      steps: ['講師欄が空欄で生徒が居る机があるコマを開く', 'その生徒を別の日へ動かし、テンプレを何も変えずに保存する', '空欄の講師欄を押す'],
       check: [
         '保存の詳細に「講師未割当」の行が出ない',
         '講師欄のメニューに「講師削除」「休み」が出ない',
@@ -704,8 +712,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       id: 'mg-1',
       area: 'コマ表',
       title: '緑が丘の s072 が 11/18・11/25 の 5限で 2 机に居ないか',
-      prep: '緑が丘を開く(見るだけ・「保存」しない)',
-      steps: ['11/18 と 11/25 の 5限で s072 が居る机を数える'],
+      steps: ['緑が丘を開く(見るだけ・「保存」しない)', '11/18 と 11/25 の 5限で s072 が居る机を数える'],
       check: [
         '1 か所だけなら OK',
         '2 か所なら「要改善」で、机とどう直したいかをメモ(スクショも)',

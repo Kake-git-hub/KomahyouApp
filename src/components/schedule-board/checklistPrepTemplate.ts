@@ -26,12 +26,12 @@ export const CHECKLIST_PREP_STUDENT_NAME_PREFIX = '確認用 生徒'
  * 盤面だけを準備したときの結果の文の最後の一言（checklistPrep.ts が再公開する）。第119版（2026-11-07・オーナー指示「など細かい事象説明は不要。
  * 今のシンプルにした文に、いつの誰を追記して」）で短くし、見出しの「やること」→「操作」に合わせた。盤面だけの準備は「元に戻す」も使える。
  */
-export const CHECKLIST_PREP_SAVE_REMINDER = '「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」。'
+export const CHECKLIST_PREP_SAVE_REMINDER = '「保存」を押してから、次の操作を行ってください。戻すときは「後片づけ」。'
 /**
  * 第 2 段: 盤面の準備に続けてテンプレも保存したときの最後の一言（盤面だけの一言の代わりに 1 つだけ付ける）。
  * テンプレ保存は「元に戻す」の履歴を空にする（handleSaveRegularLessonTemplateByDiff）ので、戻し方を書く（M-9・第119版で旧 CHECKLIST_PREP_TEMPLATE_UNDO_NOTE をここへまとめた）。
  */
-export const CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER = '「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。'
+export const CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER = '「保存」を押してから、次の操作を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。'
 /** 第 2 段: 盤面には置いたが、テンプレの保存の段で断った・失敗した（途中まで進んだものは黙って消さない・§E-2-4-2 安全）。 */
 export const CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX = '盤面には置きましたが、テンプレは保存していません: '
 /** 名簿の確認用の生徒が足りない（App の足し忘れ）。何も置かない。 */
@@ -48,7 +48,7 @@ export const CHECKLIST_PREP_CLEANUP_SAVE_REMINDER = '盤面とテンプレはま
 /** 後片づけで盤面だけ消したとき（テンプレは保存していない）の最後の一言（M-1）。 */
 export const CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER = '盤面はまだサーバーに保存していません。「保存」を押してください。'
 /** 準備でテンプレの保存の段を断った・失敗したときの最後の一言（テンプレが無いので「操作」はまだできない・M-1）。 */
-export const CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER = '盤面はまだサーバーに保存していません。テンプレは保存していないので、項目の「操作」はまだ行えません。「後片づけ」で盤面の準備を消せます。'
+export const CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER = '盤面はまだサーバーに保存していません。テンプレは保存していないので、次の操作はまだ行えません。「後片づけ」で盤面の準備を消せます。'
 
 /**
  * 確認用の生徒の生年月日: todayKey の属する年度（4/1 始まり）に小 4 になる 4/2 生まれ（＝年度の開始年の 10 年前の 4/2）。

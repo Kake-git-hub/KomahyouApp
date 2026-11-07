@@ -120,11 +120,12 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     expect(references.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('項目の中の見出しは「準備」「操作」「結果」(第118版・オーナー指示 2026-11-07「準備する→操作→結果を確認する くらいシンプルに」)', () => {
-    expect(PANEL_TSX).toContain('<span className="verification-checklist-label">準備</span>')
+  // 第120版(2026-11-07・オーナー指示「準備する→操作 にこだわらず、操作の手順の一つとして、正しい手順で準備するを交えて。項目は 操作 → 確認 だけ」)。
+  it('項目の中の見出しは「操作」「確認」だけ(第120版)。準備の欄と「結果」の見出しは無い', () => {
     expect(PANEL_TSX).toContain('<div className="verification-checklist-label">操作</div>')
-    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">結果</div>')
-    for (const old of ['>前提<', '>やること<', '>OKの目安<', '>見るところ<']) expect(PANEL_TSX).not.toContain(old)
+    expect(PANEL_TSX).toContain('<div className="verification-checklist-label">確認</div>')
+    for (const old of ['>準備</span>', '>結果</div>', '>前提<', '>やること<', '>OKの目安<', '>見るところ<', 'item.prep']) expect(PANEL_TSX).not.toContain(old)
+    expect(PANEL_TSX).toContain('const prepStepIndex = findVerificationChecklistPrepStepIndex(item)')
   })
 
   it('「オーナーの決定」の説明は出さない(第118版・オーナー選択「消す」)', () => {
@@ -160,8 +161,8 @@ describe('確認リストパネル本体', () => {
     expect(APP_TSX).toContain('const student = students.find((row) => row.id === studentId)')
     expect(PANEL_TSX).toContain('resolveVerificationChecklistText')
     expect(PANEL_TSX).toContain('resolveStudentName')
-    for (const field of ['item.title', 'item.prep']) expect(PANEL_TSX).toContain(`{text(${field})}`)
-    // 第119版(2026-11-07): 操作・結果の {{prep:キー}} は、その項目の最後の準備結果の facts で置き換える(同じ text を通す)。
+    expect(PANEL_TSX).toContain('{text(item.title)}')
+    // 第119版(2026-11-07): 操作・確認の {{prep:キー}} は、その項目の最後の準備結果の facts で置き換える(同じ text を通す)。
     for (const field of ['step', 'line']) expect(PANEL_TSX).toContain(`{text(${field}, prepFacts)}`)
     expect(PANEL_TSX).toContain('const prepFacts = prepResults[item.id]?.facts')
     expect(PANEL_TSX).toContain('const text = (line: string, prepFacts?: ChecklistPrepFacts) => resolveVerificationChecklistText(line, resolveStudentName, prepFacts)')

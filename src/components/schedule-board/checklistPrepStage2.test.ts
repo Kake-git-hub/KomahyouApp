@@ -106,7 +106,7 @@ describe('buildChecklistPrepDoneMessage（準備が済んだときの結果の�
   it('テンプレも保存したとき: 「準備しました（日付 時限）。」とテンプレ保存の後の一言の 2 行だけ（置いた物・登録した席・「詳細」は書かない）', () => {
     const message = buildChecklistPrepDoneMessage({ slot: '11/19(木) 3限', templateSaved: true })
     expect(message.split('\n')).toEqual(['準備しました（11/19(木) 3限）。', CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER])
-    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toBe('「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。')
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toBe('「保存」を押してから、次の操作を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。')
     expect(message).not.toContain('詳細')
     expect(message).not.toContain('やること')
   })

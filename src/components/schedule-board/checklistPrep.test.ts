@@ -152,7 +152,7 @@ describe('planChecklistPrep: v2-1（青字・案 A の並び替え → テンプ
     expect(plan.doneMessage).toBe(`準備しました（11/12(木) 1限）。\n${CHECKLIST_PREP_SAVE_REMINDER}`)
     expect(plan.doneMessage).not.toContain('体験「')
     expect(plan.facts).toMatchObject({ slot: '11/12(木) 1限', trial: '確認用 体験1' })
-    expect(CHECKLIST_PREP_SAVE_REMINDER).toBe('「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」。')
+    expect(CHECKLIST_PREP_SAVE_REMINDER).toBe('「保存」を押してから、次の操作を行ってください。戻すときは「後片づけ」。')
   })
 
   it('当てた形: 体験 2 人の机は講師なし・メモの机は授業なし・手で置いた講師の机は授業なし（manual）', () => {
@@ -410,7 +410,7 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
     // テンプレも保存する項目の成功の文は、保存の一言がテンプレ保存の後のもの(「元に戻す」が使えない・M-9)。
     expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「後片づけ」')
     expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「元に戻す」は使えません')
-    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「操作」')
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('次の操作')
   })
 
   it('科目は体験と同じ（見本の生徒の科目）', () => {
