@@ -729,6 +729,8 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
  *   3. 振替の削除（requireExactOrigin）で `D#限` の有効 origin が無い（同じ日のフォールバックで別の時限を消化していた）→ 時限なし（従来どおり）。
  *   4. それ以外 → 時限つき（同じ日の別のコマの休みを巻き込まない）。
  * ★既知の限界: 2 の規則のため、時限なしの旧データが残る日は従来どおりその日を丸ごと落とす（別のコマの休みも消える＝修正前と同じ。新しく積む休みは時限つき）。
+ * ★既知の限界（2026-11-07 再レビュー）: 3 の規則のため、移動しただけで台帳に自分の origin が無い振替を × で消すと時限なしでその日を丸ごと落とし、
+ *   同じ日の別の時限の新しい休み（`D#4`）も一緒に消える（修正前は常に時限なしだったので同じ結果＝回帰ではない）。
  */
 export function resolveDeletedLessonSuppressionOrigin(params: {
   dateKey: string
