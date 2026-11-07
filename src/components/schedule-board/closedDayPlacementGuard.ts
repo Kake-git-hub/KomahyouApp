@@ -1,4 +1,5 @@
 import type { SlotCell } from './types'
+import { findStudentMoveSource, type StudentMoveSourceSeat } from './studentMoveSource'
 
 // INV-02（主）/ INV-06（従）・オーナー指示 2026-10-27（確認リスト tp-63 のメモ）:
 // 「そもそも休日に生徒はおけない。おけなくて良い。」——休日（休校のコマ＝`isOpenDay === false`。
@@ -29,7 +30,7 @@ export function resolveClosedDayStudentPlacementBlock(cell: AvailabilityCell | n
 }
 
 // 生徒の移動（メニューの「移動」・長押しD&D）の休日検査。computeStudentMove と同じ見つけ方
-// （全週を先頭から走査して最初に見つかった生徒）で移動元を決める。
+// （findStudentMoveSource＝選んだ席があればその席、無ければ全週を先頭から走査して最初に見つかった生徒）で移動元を決める。
 //   - 移動先が休日 → 置けない（入れ替えでも同じ）。
 //   - 移動先に相手が居る入れ替えで、移動元が休日 → 相手が休日のコマへ入るので止める。
 //   - 休日のコマから**出す**だけの移動（入れ替えなし）は通す（過去に置けてしまった生徒を片づける道を塞がない）。
@@ -40,6 +41,8 @@ export function resolveStudentMoveClosedDayBlock(params: {
   cellId: string
   deskIndex: number
   studentIndex: number
+  /** 移動元として選んだ席（同じ id の授業が 2 つあっても選んだ方の移動元で決める・findStudentMoveSource）。省略は従来どおり id で最初の授業。 */
+  sourceSeat?: StudentMoveSourceSeat | null
 }): string | null {
   const { cells, movingStudentId, cellId, deskIndex, studentIndex } = params
   const targetCell = cells.find((cell) => cell.id === cellId)
@@ -47,7 +50,7 @@ export function resolveStudentMoveClosedDayBlock(params: {
   if (!targetCell.isOpenDay) return CLOSED_DAY_STUDENT_PLACEMENT_MESSAGE
   const swapStudent = targetCell.desks[deskIndex]?.lesson?.studentSlots[studentIndex] ?? null
   if (!swapStudent || swapStudent.id === movingStudentId) return null
-  const sourceCell = cells.find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student?.id === movingStudentId)))
+  const sourceCell = findStudentMoveSource(cells, movingStudentId, params.sourceSeat)?.cell
   if (sourceCell && !sourceCell.isOpenDay) return CLOSED_DAY_STUDENT_SWAP_MESSAGE
   return null
 }
