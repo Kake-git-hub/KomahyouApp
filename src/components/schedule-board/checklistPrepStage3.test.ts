@@ -344,6 +344,20 @@ describe('2 回押すと別の机・別の確認用の生徒を使い、同じ�
   }
 })
 
+describe('2 回準備した後の後片づけ: 1 回目の印は 2 回目の準備の土台（在籍の絞り込み）を通っても残り、両方の講師を外す', () => {
+  for (const itemId of ['tp-69', 'tp-70', 'tp-59']) {
+    it(`${itemId}: テンプレの準備の講師 2 人と確認用の生徒の登録だけを外し、テンプレは準備の前の机に戻る`, () => {
+      const first = prepareAndSave(itemId, initialStage())
+      const second = prepareAndSave(itemId, first.next, { cellIds: [CELL_ID, `2026-10-09_${SLOT}`] })
+      const cleanup = planChecklistPrepCleanup({ weeks: [second.next.week], pendingDesks: second.next.pendingDesks, savedTemplate: second.next.template, students: roster, toSaveTemplate: (template) => template })
+      if (cleanup.nothing) throw new Error('nothing to clean')
+      expect(cleanup.templateTeachersRemoved).toBe(2)
+      const contentDesks = cleanup.template!.cells.flatMap((cell) => cell.desks.filter((desk) => desk.teacherId || desk.students.some(Boolean)).map((desk) => `${cell.dayOfWeek}_${cell.slotNumber}_${desk.deskIndex}_${desk.teacherId}`))
+      expect(contentDesks).toEqual(['4_5_1_t1', '4_5_2_t2', '4_5_3_t3'])
+    })
+  }
+})
+
 describe('テンプレの机と盤面の机の対応（盤面は詰めて置く・机番号 + 1 で決めない）', () => {
   it('テンプレに中身の無い机が途中にあっても、新しい机は中身のある机の後ろの空き机に登録し、盤面ではテンプレの机の次の机に入る', () => {
     const gap: RegularLessonTemplate = {
