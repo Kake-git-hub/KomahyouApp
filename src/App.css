@@ -6220,6 +6220,13 @@ body.verification-checklist-window {
   flex-wrap: wrap;
   gap: 8px;
 }
+.verification-checklist-cleanup-item-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
 .verification-checklist-step-text {
   flex: 1 1 10em;
   min-width: 0;
