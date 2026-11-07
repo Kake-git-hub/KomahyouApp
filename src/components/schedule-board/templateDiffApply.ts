@@ -787,17 +787,45 @@ export function expandTemplateDiffSlotFilterForSameDayMoves(params: {
 // ★`protectedKeys`＝「編集」で振替・増コマにしたテンプレの通常授業が積んだ抑止キー（`editedFromRegular.addedOccurrenceKey`・2026-10-27 INV-02）。
 //   これは写しの移動の履歴ではなく「元の授業は振替・増コマに置き換わった」という記録なので外さない（外すと、同じ日に同じ科目の写しが
 //   もう 1 コマある生徒で、テンプレの時限変更の保存のたびに元の授業が上段に湧き、編集したコマが下段へ押し出される・regression-reviewer 中-3）。
+// ★昇格互換（INV-12 / INV-02・2026-11-07）: フラグ OFF の教室で「編集」で科目だけ変えた（数→国）テンプレの授業を動かすと、抑止キーは
+//   今の科目（国）とテンプレの科目（数）の 2 本で積まれる（resolveSuppressedRegularLessonOccurrenceKeys）。その教室を ON へ上げた後に写しとして外すときは
+//   両方の科目のキーを外す（国だけ外すと、テンプレの授業〔数〕が 数 のキーで抑止されたまま＝その日 0 か所）。ON で作った写しは科目を変えると
+//   手入力の印が付いて写しにならないので、ON のデータでは今の科目の 1 本だけ（従来と同じ）。
 export function resolveSameDayMoveCopyKeysToRemove(revert: Pick<SameDayMoveCopyRevert, 'student' | 'dateKey'>, suppressed: readonly string[], protectedKeys?: ReadonlySet<string>): string[] {
-  const prefix = `${studentSubjectKey(revert.student)}__${revert.dateKey}__`
-  return suppressed.filter((key) => key.startsWith(prefix) && !protectedKeys?.has(key))
+  const prefixes = resolveTemplateLessonSubjectVariants(revert.student, revert.dateKey)
+    .map((subject) => `${studentSubjectKey({ ...revert.student, subject: subject as StudentEntry['subject'] })}__${revert.dateKey}__`)
+  return suppressed.filter((key) => prefixes.some((prefix) => key.startsWith(prefix)) && !protectedKeys?.has(key))
+}
+
+/**
+ * テンプレの通常授業の「テンプレ上の科目」を授業 ID から読む（ScheduleBoardScreen の createManagedStudentEntry が作る `生徒ID_日付_科目`）。
+ * 「編集」で科目だけ変えた通常授業（通常 → 通常）は subject が変わっても ID はテンプレのまま残るので、印の無い既存の保存データでも元の科目が読める。
+ * 手動追加・ID がテンプレの形でない・ID の日付が違う（その日のテンプレの授業でない）ときは null。
+ * 抑止キーの権威関数 resolveSuppressedRegularLessonOccurrenceKeys（ScheduleBoardScreen）と写しのキー外し（このファイル）が共有する（2026-11-07・INV-12）。
+ */
+export function resolveTemplateLessonSubjectFromId(student: Pick<StudentEntry, 'id' | 'managedStudentId' | 'lessonType' | 'manualAdded'>, dateKey: string): string | null {
+  if (student.lessonType !== 'regular' || student.manualAdded || !student.managedStudentId || !student.id) return null
+  const prefix = `${student.managedStudentId}_${dateKey}_`
+  if (!student.id.startsWith(prefix)) return null
+  const subject = student.id.slice(prefix.length)
+  return subject && !subject.includes('_') ? subject : null
+}
+
+/** 抑止キーに使う科目の並び: [今の科目, 授業 ID のテンプレの科目（違うときだけ）]。 */
+export function resolveTemplateLessonSubjectVariants(student: Pick<StudentEntry, 'id' | 'managedStudentId' | 'lessonType' | 'manualAdded' | 'subject'>, dateKey: string): string[] {
+  const templateSubject = resolveTemplateLessonSubjectFromId(student, dateKey)
+  return templateSubject && templateSubject !== student.subject ? [student.subject, templateSubject] : [student.subject]
 }
 
 /** 盤面（上段・保留の下段・出欠記録）にある「編集で積んだ抑止キー」を集める（`resolveSameDayMoveCopyKeysToRemove` の保護用）。 */
 export function collectEditedFromRegularOccurrenceKeys(weeks: SlotCell[][], pendingDesks?: TemplatePendingDeskMap | null): Set<string> {
   const keys = new Set<string>()
-  const consider = (entry: { editedFromRegular?: { addedOccurrenceKey?: string } } | null | undefined) => {
+  const consider = (entry: { editedFromRegular?: { addedOccurrenceKey?: string; addedTemplateOccurrenceKey?: string } } | null | undefined) => {
     const key = entry?.editedFromRegular?.addedOccurrenceKey
     if (key) keys.add(key)
+    // フラグ OFF で科目を変えてから振替にした授業が積んだテンプレの科目のキー（2026-11-07）も同じく編集の記録＝外さない（ON では付かない）。
+    const templateKey = entry?.editedFromRegular?.addedTemplateOccurrenceKey
+    if (templateKey) keys.add(templateKey)
   }
   for (const week of weeks) for (const cell of week) for (const desk of cell.desks) {
     for (const entry of desk.lesson?.studentSlots ?? []) consider(entry)

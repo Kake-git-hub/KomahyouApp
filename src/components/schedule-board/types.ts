@@ -33,6 +33,11 @@ export type EditedFromRegular = {
   slotNumber: number
   /** 編集で新たに積んだ通常授業の抑止キー(既にあったときは無し＝外さない)。 */
   addedOccurrenceKey?: string
+  /**
+   * 先に科目だけ編集していた(数→国)テンプレの授業を振替・増コマにしたとき、テンプレの科目(数)で新たに積んだ抑止キー
+   * (機能フラグ OFF の教室だけ・INV-12 2026-11-07)。通常へ戻したら addedOccurrenceKey と一緒に外す。
+   */
+  addedTemplateOccurrenceKey?: string
   /** 科目を変えたときに積んだ、元の科目の振替の抑止(在庫キー)。 */
   addedMakeupSuppressionKey?: string
 }

@@ -23,7 +23,6 @@ import {
   type ChecklistPrepOp,
 } from './checklistPrep'
 import { CHECKLIST_PREP_STUDENT_BIRTH_DATE, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER, assignChecklistPrepTemplateStudents, completeChecklistPrepFacts, type ChecklistPrepTemplateRegistration } from './checklistPrepTemplate'
-import { VERIFICATION_CHECKLIST, listChecklistPrepFactTokenKeys } from '../../utils/verificationChecklist'
 import { buildMakeupStockEntries } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildTeacherAliasResolver } from './templateDiffApply'
@@ -402,10 +401,14 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
     expect(plan.facts).toEqual({ slot: '11/12(木) 1限', desk1: '机 1', X: '講師D', Y: '講師A', trial: '確認用 体験1' })
     const facts = completeChecklistPrepFacts(plan.facts, assigned.assigned)
     expect(facts).toEqual({ ...plan.facts, A: '確認用 生徒A' })
-    // 同じ置き方の mn-1・tp-66 の文が使うキーは全部ある。
-    for (const itemId of ['mn-1', 'tp-66']) {
-      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
-      for (const key of listChecklistPrepFactTokenKeys(item)) expect(facts[key], `${itemId}: ${key}`).toBeTruthy()
+    // 同じ置き方の mn-1・tp-66 の文が使っていたキーは全部ある。
+    // 第122版(2026-11-07): mn-1・tp-66 は OK で確認リストから外れたので、外す前の文が使っていたキーをここに書く(準備の処理は残してある)。
+    const KEYS_USED_BY_RETIRED_ITEMS: Record<string, string[]> = {
+      'mn-1': ['A', 'X', 'desk1', 'slot', 'trial'],
+      'tp-66': ['A', 'X', 'Y', 'desk1', 'slot', 'trial'],
+    }
+    for (const [itemId, keys] of Object.entries(KEYS_USED_BY_RETIRED_ITEMS)) {
+      for (const key of keys) expect(facts[key], `${itemId}: ${key}`).toBeTruthy()
     }
     // テンプレも保存する項目の成功の文は、保存の一言がテンプレ保存の後のもの(「元に戻す」が使えない・M-9)。
     expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「後片づけ」')
