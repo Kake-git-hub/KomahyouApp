@@ -1291,6 +1291,12 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     - 対処：①相手の着地先にも同一生徒検査を追加してブロック ②相手を**検索から除外**する方式へ変更
       （免除をやめる・`findDuplicateStudentInCellByKey` を除外ID複数対応に拡張）。
       テンプレモード移動（`handleTemplateMoveStudent`）の同型穴にも同一検査を配線。
+  - edited-subject-template-return（科目だけ編集したテンプレの授業が再マージで元の机に戻る／2026-11-07・確認リスト mg-1 の調査で発見。
+    実例＝緑が丘の生徒 s072 が 11/11・11/18・11/25・12/02 の 5限で 2 か所・機能フラグ templateDiffApply OFF の教室）：
+    - 「編集」で通常→通常の科目だけ変えると抑止キーが編集後の科目で積まれ、テンプレ側は元の科目で照合するため抑止が効かず、再マージで
+      テンプレの生徒が元の机へ戻った。さらに移動の重複検査が授業 ID で除外していたため、同じ ID の 2 人の片方を空き机へ動かせた。
+    - 対処：権威関数 `resolveSuppressedRegularLessonOccurrenceKeys`（授業 ID の科目と今の科目が違えばテンプレの科目のキーも積む・外す・フラグ ON は 1 本のまま）へ
+      抑止キーを積む全経路を通し、`computeStudentMove` の重複検査は席で除外。マトリクス `inv12-placement-uniqueness.matrix.test.ts` に describe を追加。
 - **マトリクステストファイル**：`inv12-placement-uniqueness.matrix.test.ts`（2026-08-29 新設・#56 の回帰テスト
   4 件〔相手の着地先の重複ブロック／移動先 2 エントリの免除なしブロック／同コマ既在の移動先ブロック／
   正常スワップは成立〕を `ScheduleBoardScreen.test.ts` から移設・mutation で 2 件落ちることを確認済み）。

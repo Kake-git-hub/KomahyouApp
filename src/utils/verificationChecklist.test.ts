@@ -203,7 +203,7 @@ describe('確認リストの項目定義', () => {
     // 第111版(2026-11-05): 退塾取消の確認 wc-1・wc-2 は開発用教室だけ(テスト教室には出さない)。第116版(2026-11-07): wc-1・wc-2 は OK で外した。
     // 第118版(2026-11-07): 同じ日に同じ科目 2 コマの不具合の確認 sd-1・sd-2 は開発用教室だけ。
     // 第120版(2026-11-07): 確認リストの書き方(操作 → 確認)の確認 c-8 は開発用教室だけ。
-    const developmentOnly: string[] = ['sd-1', 'sd-2', 'pl-1', 'mg-1', 'c-8']
+    const developmentOnly: string[] = ['mg-2']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.697')
@@ -255,7 +255,10 @@ describe('確認リストの項目定義', () => {
     // 第116版(2026-11-07・v1.5.696): OK の ap-2・tp-64・wc-1・wc-2 を外した。
     // 第120版(2026-11-07・v1.5.697 据え置き): 確認リストの書き方の確認 c-8 を ap-3 の後に足した(開発用教室だけ)。第119版: ap-4 を c-8 の後に足した。
     // 第122版(2026-11-07・v1.5.697 据え置き): 11/7 の送信で OK の 11 件を外し、ta-1 はオーナー選択「今のまま」(確認の中身は満たしていた)で外した。
-    expect(ids).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'mg-1'])
+    // 同じ第122版: mg-1(見るだけ)は調査を終え、余分な 1 人を消して戻らないことを見る mg-2(開発用教室だけ)に置き換えた。
+    expect(ids).toEqual(['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'mg-2'])
+    expect(ids).not.toContain('mg-1')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('mg-2')
     for (const okId of ['ap-3', 'c-8', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-69', 'mn-1', 'v2-5', 'sd-1', 'sd-2', 'pl-1']) {
       expect(ids, okId).not.toContain(okId)
       expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, okId).not.toContain(okId)
@@ -1252,7 +1255,7 @@ describe('第120版(2026-11-07): 項目は「操作 → 確認」の 2 段(準�
   it('準備だった手順は操作の最初に正しい順で入っている(後ろの手順は元のまま)', () => {
     // 第122版(2026-11-07): ap-3・ta-1・v2-5・sd-1・sd-2・pl-1・tp-71 は OK で外した。
     for (const id of ['ap-3', 'ta-1', 'v2-5', 'sd-1', 'sd-2', 'pl-1', 'tp-71']) expect(byId.has(id), id).toBe(false)
-    expect(byId.get('mg-1')!.steps[0]).toBe('緑が丘を開く(見るだけ・「保存」しない)')
+    expect(byId.get('mg-2')!.steps[0]).toBe('室長に、s072 を残す机を聞く')
     // 第119版(2026-11-07): 準備の後の手順には {{prep:キー}} で日付と名前が入る。
     expect(byId.get('tp-72')!.steps).toEqual(['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'])
   })

@@ -110,7 +110,8 @@ describe('休日設定の配線(手動追加も未消化へ返す・Issue #73)',
     const fnIndex = BOARD_TSX.indexOf('export function computeHolidayReleaseRestoration(')
     expect(fnIndex).toBeGreaterThan(0)
     const body = BOARD_TSX.slice(fnIndex, BOARD_TSX.indexOf('const HOLIDAY_RELEASE_SKIP_LABELS', fnIndex))
-    expect(body).toContain('const occurrenceKey = restoredStudent.manualAdded')
+    // 2026-11-07（INV-12）: キーは権威関数 resolveSuppressedRegularLessonOccurrenceKeys の 0〜2 本（手動追加・下段へ戻した分は null のまま）。
+    expect(body).toContain('const occurrenceKeys = restoredStudent.manualAdded')
     expect(body).toContain('? null')
   })
 })
