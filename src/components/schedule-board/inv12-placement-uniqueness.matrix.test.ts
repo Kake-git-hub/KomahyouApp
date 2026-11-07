@@ -491,7 +491,23 @@ describe('INV-12 × テンプレ反映（第 2 版 §2-2）: 手入力の生徒�
     expect(saved.nextPendingDesks).toEqual({})
     expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
     expect(saved.studentNotes.filter((note) => note.kind === 'lower-promoted').map((note) => [note.studentName, note.detail])).toEqual([['青木', '1']])
+    // 2026-11-07 オーナー報告（v2-3）: 上げた A の席のテンプレの A は「手入力が先にある」の行・「別の机に居るため上段に置かなかった」の件数に入れない
+    // （A の行は「上げて 1 行」の 1 行だけ）。盤面・予定数（collectManualFirstBlockedLessons＝盤面から導く）は変えない。
+    expect(saved.studentNotes.filter((note) => note.studentName === '青木').map((note) => note.kind)).toEqual(['lower-promoted'])
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(collectManualFirstBlockedLessons({ weeks: saved.nextWeeks, pendingDesks: saved.nextPendingDesks, expected: [{ studentId: 'sA', subject: '数', dateKey: DATE, slotNumber: 5 }] })).toHaveLength(1)
     expectStable(saved)
+  })
+
+  // 兄弟（2026-11-07）: 上げなかった形の manual-first は消さない（上段の別の机に手入力の A が居る＝§2-2 そのもの・下の「上げる席が無い形」も同じ）。
+  it('§9-14 × §2-2: 上段の別の机に手入力の A が居れば上げない（manual-first の 1 行・件数 1・下段の A はそのまま）', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-upper'), null]) } : desk)))
+    const desk1Id = cellOf([week]).desks[1].id
+    const pending: TemplatePendingDeskMap = { [buildTemplatePendingDeskKey(CELL, desk1Id)]: { lower: { lesson: { id: 'lower_a', studentSlots: [makeupA('a-lower'), null] } }, effectiveStartDate: DATE, createdAt: 'x' } }
+    const saved = save(week, { pendingDesks: pending })
+    expect(saved.studentNotes.filter((note) => note.studentName === '青木').map((note) => note.kind)).toEqual(['manual-first'])
+    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(liveIdsAt(saved.nextWeeks, 0)).not.toContain('sA')
   })
 
   it('§9-14 の上げる席が無い形: テンプレが A を置く席に手入力の C が居る → 上げず、テンプレの A も置かない（下段の A は保留のまま・理由の行）', () => {

@@ -562,6 +562,9 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
     cell = promoted.cell
     const cellPending = promoted.pendingDesks
     for (const item of promoted.promotions) studentNotes.push({ kind: 'lower-promoted', studentName: item.student.name, subject: item.student.subject, dateKey: cell.dateKey, slotNumber: cell.slotNumber, detail: String(item.deskIndex + 1) })
+    // 2026-11-07 オーナー報告（確認リスト v2-3 の「詳細」で上げた生徒が 2 行）: 上げた席のテンプレの S は、上げた手入力の S が席に居るので下で置かない（盤面は今のまま）が、
+    // それは「上げて 1 行（テンプレの同じ授業は置きません）」の 1 行で言い終えている。「同じコマに手入力の同じ生徒が先にある」の行と
+    // 「別の机に居るため上段に置かなかった」の件数には入れない（予定数は盤面から導く collectManualFirstBlockedLessons のままで変わらない・INV-06）。
     const blockers = collectTemplateBlockersInCell(cell, cellPending)
     // 重大-1（regression-reviewer）: 同じ日の中で動かしたテンプレの授業に記録（休み・振無休・出席・移)）を付けた生徒は、記録が勝つ（§2-4）＝元の時限にも
     // テンプレの同じ授業を置かない（置くと休んだ授業が元の時限に生き返る）。生きている写しはテンプレの位置へ戻す（§1-1 #2）ので数えない。
@@ -586,7 +589,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams 
         const reason = resolveTemplateStudentBlock(student, blockers.students)
         if (!reason) return
         slots[seat] = null
-        if (reason === 'manual') {
+        if (reason === 'manual' && !promoted.promotions.some((item) => item.deskIndex === deskIndex && item.seat === seat && isSameTemplateStudent(item.student, student))) {
           summary.skippedDuplicateStudents += 1
           manualFirstSkipped.push({ student, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex })
         }

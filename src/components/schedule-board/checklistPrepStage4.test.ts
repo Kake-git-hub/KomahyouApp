@@ -481,6 +481,16 @@ describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席�
     expect(placesOf(run.stage.weeks, makeup.studentId, makeup.to.dateKey).filter((place) => place!.startsWith(`${cell.id}:`))).toEqual([`${cell.id}:${aDesk}:0`])
     expect(run.stage.pendingDesks).toEqual({})
     expect(run.message).toContain('緑の下の行にだけ居た手入力のこの生徒を、テンプレの席')
+    // 2026-11-07 オーナー報告（v2-3 の「詳細」で A が 2 行）: 上げた A は「上げて 1 行」の 1 行だけ。「手入力の同じ生徒が先にある」の行・
+    // 「別の机に居るため上段に置かなかった」の件数には入れない（テンプレの席に居るのは上げた A なので、どちらも起きたことと違う）。
+    const aName = roster.find((student) => student.id === makeup.studentId)!.name
+    const aLines = run.message.split('\n').filter((line) => line.includes(`${aName}（`))
+    expect(aLines).toHaveLength(1)
+    expect(aLines[0]).toContain('緑の下の行にだけ居た手入力のこの生徒を、テンプレの席')
+    expect(run.message).not.toContain(`${aName}（${cell.desks[aDesk].lesson!.studentSlots[0]!.subject}）: 同じコマに手入力の同じ生徒が先にあるため`)
+    const lastSave = run.saves[run.saves.length - 1]
+    expect(lastSave.summary.skippedDuplicateStudents).toBe(0)
+    expect(lastSave.studentNotes.filter((note) => note.studentName === aName).map((note) => note.kind)).toEqual(['lower-promoted'])
     // (2) X の机は X の 1 行（手置き）。テンプレの X の机にも、別の講師 W も入らない。このコマの X は 1 回だけ。
     const [registeredW, registeredX] = final.teacherRegistrations
     expect(cell.desks[teacherOp.to.deskIndex]).toMatchObject({ teacher: teacherOp.teacherName, manualTeacher: true })
