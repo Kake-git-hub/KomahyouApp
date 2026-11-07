@@ -59,6 +59,7 @@ import {
   verificationChecklistStorageKey,
   type VerificationChecklistDraft,
   type VerificationChecklistStatus,
+  findVerificationChecklistPrepStepIndex,
 } from '../../utils/verificationChecklist'
 import { createChecklistAttachmentId, pickChecklistImageFiles, shrinkChecklistImageToDataUrl } from './checklistImage'
 import {
@@ -624,6 +625,7 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
               const sentRecord = draft.sent[item.id]
               const sharedResults = shared.status === 'ready' || shared.status === 'error' ? shared.results[item.id] ?? [] : []
               const isSending = sendingKey === item.id
+              const prepStepIndex = findVerificationChecklistPrepStepIndex(item)
               return (
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>
                   <div className="verification-checklist-item-title">
@@ -647,64 +649,69 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                       ))}
                     </ul>
                   ) : null}
-                  {item.prep ? (
-                    <div className="verification-checklist-prep-row">
-                      {/* 「準備する」(2026-11-06・案 C 第 1 段・ボタンは文の左=ap-1): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
-                      {item.autoPrep && onPrepare ? (
-                        <button
-                          type="button"
-                          className="secondary-button verification-checklist-prep-button"
-                          onClick={() => { void handlePrepare(item.id) }}
-                          disabled={preparingItemId !== null || cleaningUp}
-                          data-testid={`verification-checklist-prep-${item.id}`}
-                        >
-                          {preparingItemId === item.id ? '準備中…' : '準備する'}
-                        </button>
-                      ) : null}
-                      {/* 「後片づけ」を準備の行にも出す(2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」・§E-2-4-3): 上の 1 つと同じ処理・同時に 1 つだけ。 */}
-                      {item.autoPrep && onPrepare && onCleanup ? (
-                        <button
-                          type="button"
-                          className="secondary-button verification-checklist-cleanup-button"
-                          onClick={() => { void handleCleanup(item.id) }}
-                          disabled={cleaningUp || preparingItemId !== null}
-                          data-testid={`verification-checklist-cleanup-${item.id}`}
-                          title={ITEM_CLEANUP_NOTE}
-                        >
-                          {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
-                        </button>
-                      ) : null}
-                      {/* この項目の分だけでなく、準備で作ったもの全部を消す(上の「後片づけ」と同じ処理・regression-reviewer S-1)。 */}
-                      {item.autoPrep && onPrepare && onCleanup ? <span className="verification-checklist-cleanup-note">{ITEM_CLEANUP_NOTE}</span> : null}
-                      <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
-                    </div>
-                  ) : null}
-                  {prepResults[item.id] ? (
-                    <p
-                      className={`verification-checklist-prep-result ${prepResults[item.id].ok ? 'is-ok' : 'is-error'}`}
-                      data-testid="verification-checklist-prep-result"
-                      data-item-id={item.id}
-                      role="status"
-                    >
-                      {prepResults[item.id].message}
-                    </p>
-                  ) : null}
-                  {cleanupResult && cleanupResult.source === item.id ? (
-                    <p
-                      className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
-                      data-testid={`verification-checklist-cleanup-result-${item.id}`}
-                      role="status"
-                    >
-                      {cleanupResult.message}
-                    </p>
-                  ) : null}
+                  {/* 第120版(2026-11-07 オーナー指示「準備する→操作 にこだわらず、操作の手順の一つとして、正しい手順で準備するを交えて。項目は 操作 → 確認 だけ」):
+                      準備の欄は無く、準備は操作の手順の 1 つ。「準備する」「後片づけ」はその手順の行に出し、結果文もその行の下に出す。 */}
                   <div className="verification-checklist-label">操作</div>
                   <ol className="verification-checklist-steps">
-                    {item.steps.map((step) => <li key={step}>{text(step)}</li>)}
+                    {item.steps.map((step, stepIndex) => (
+                      stepIndex === prepStepIndex ? (
+                        <li key={step}>
+                          <div className="verification-checklist-prep-row">
+                            {/* 「準備する」(2026-11-06・案 C 第 1 段・ボタンは文の左=ap-1): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
+                            {onPrepare ? (
+                              <button
+                                type="button"
+                                className="secondary-button verification-checklist-prep-button"
+                                onClick={() => { void handlePrepare(item.id) }}
+                                disabled={preparingItemId !== null || cleaningUp}
+                                data-testid={`verification-checklist-prep-${item.id}`}
+                              >
+                                {preparingItemId === item.id ? '準備中…' : '準備する'}
+                              </button>
+                            ) : null}
+                            {/* 「後片づけ」を準備の行にも出す(2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」・§E-2-4-3): 上の 1 つと同じ処理・同時に 1 つだけ。 */}
+                            {onPrepare && onCleanup ? (
+                              <button
+                                type="button"
+                                className="secondary-button verification-checklist-cleanup-button"
+                                onClick={() => { void handleCleanup(item.id) }}
+                                disabled={cleaningUp || preparingItemId !== null}
+                                data-testid={`verification-checklist-cleanup-${item.id}`}
+                                title={ITEM_CLEANUP_NOTE}
+                              >
+                                {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
+                              </button>
+                            ) : null}
+                            {/* この項目の分だけでなく、準備で作ったもの全部を消す(上の「後片づけ」と同じ処理・regression-reviewer S-1)。 */}
+                            {onPrepare && onCleanup ? <span className="verification-checklist-cleanup-note">{ITEM_CLEANUP_NOTE}</span> : null}
+                            <span className="verification-checklist-step-text">{text(step)}</span>
+                          </div>
+                          {prepResults[item.id] ? (
+                            <p
+                              className={`verification-checklist-prep-result ${prepResults[item.id].ok ? 'is-ok' : 'is-error'}`}
+                              data-testid="verification-checklist-prep-result"
+                              data-item-id={item.id}
+                              role="status"
+                            >
+                              {prepResults[item.id].message}
+                            </p>
+                          ) : null}
+                          {cleanupResult && cleanupResult.source === item.id ? (
+                            <p
+                              className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
+                              data-testid={`verification-checklist-cleanup-result-${item.id}`}
+                              role="status"
+                            >
+                              {cleanupResult.message}
+                            </p>
+                          ) : null}
+                        </li>
+                      ) : <li key={step}>{text(step)}</li>
+                    ))}
                   </ol>
                   {item.check && item.check.length > 0 ? (
                     <>
-                      <div className="verification-checklist-label">結果</div>
+                      <div className="verification-checklist-label">確認</div>
                       <ul className="verification-checklist-check">
                         {item.check.map((line) => <li key={line}>{text(line)}</li>)}
                       </ul>

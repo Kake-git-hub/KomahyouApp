@@ -15,7 +15,7 @@ import { VerificationChecklistPanel, type VerificationChecklistPanelProps } from
 
 const classroomId = 'v8OZ7zH8vONNHjjYVcR1'
 const autoPrepIds = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep).map((item) => item.id)
-const plainItem = VERIFICATION_CHECKLIST.items.find((item) => !item.autoPrep && item.prep)!
+const plainItem = VERIFICATION_CHECKLIST.items.find((item) => !item.autoPrep)!
 // 押して確かめる autoPrep の項目(確認リストに残っているもの)。
 const PREP_ITEM = 'tp-69'
 
@@ -63,9 +63,30 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) {
       const row = button(id)!.closest('.verification-checklist-prep-row')!
-      const text = row.querySelector('.verification-checklist-prep')!
+      const text = row.querySelector('.verification-checklist-step-text')!
       expect(row.firstElementChild, id).toBe(button(id))
       expect(button(id)!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+    }
+  })
+
+  // 第120版(2026-11-07・オーナー指示「準備する→操作 にこだわらず、操作の手順の一つとして、正しい手順で準備するを交えて。項目は 操作 → 確認 だけ」)。
+  it('項目の見出しは「操作」「確認」の 2 つだけ。「準備する」は操作の手順の行(その手順の位置)に出る', () => {
+    render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
+    const cards = [...container.querySelectorAll<HTMLElement>('[data-testid^="verification-checklist-item-"]')]
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      const labels = [...card.querySelectorAll('.verification-checklist-label')].map((node) => node.textContent)
+      expect(labels.filter((label) => label !== '確認'), card.dataset.testid).toEqual(['操作'])
+      expect(card.querySelector('.verification-checklist-prep:not(.verification-checklist-prep-button):not(.verification-checklist-prep-result):not(.verification-checklist-prep-row)'), card.dataset.testid).toBeNull()
+    }
+    for (const id of autoPrepIds) {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!
+      const stepItems = [...button(id)!.closest('.verification-checklist-steps')!.children]
+      const owner = button(id)!.closest('li')!
+      expect(stepItems.indexOf(owner), id).toBe(0)
+      expect(owner.querySelector('.verification-checklist-step-text')?.textContent, id).toBe(item.steps[0])
+      // 手順の数は定義どおり(準備の手順を二重に出さない)。
+      expect(stepItems.length, id).toBe(item.steps.length)
     }
   })
 
@@ -195,7 +216,7 @@ describe('VerificationChecklistPanel の「準備する」', () => {
       const row = button(id)!.closest('.verification-checklist-prep-row')!
       expect(cleanup.closest('.verification-checklist-prep-row'), id).toBe(row)
       expect(button(id)!.nextElementSibling, id).toBe(cleanup)
-      expect(cleanup.compareDocumentPosition(row.querySelector('.verification-checklist-prep')!) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+      expect(cleanup.compareDocumentPosition(row.querySelector('.verification-checklist-step-text')!) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
       // regression-reviewer S-1: 項目の「後片づけ」もその項目の分だけでなく準備で作ったもの全部を消すので、ボタンの横に短く書く(title にも)。
       expect(cleanup.getAttribute('title'), id).toBe(ITEM_CLEANUP_NOTE)
       const note = row.querySelector('.verification-checklist-cleanup-note')
