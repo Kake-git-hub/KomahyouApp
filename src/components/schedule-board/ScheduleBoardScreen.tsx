@@ -67,6 +67,7 @@ import {
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
 import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
+import { hasDeskSeatContent } from './teacherDragSource'
 import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from './templatePendingRowHighlight'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { formatDeskTeacherLabel, hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
@@ -5215,7 +5216,8 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       // (v1.5.349 のガードが生徒を動かして空いた机の埋め草まで固定していた・既に保存されたデータ)は、講師なしの机(足場)として読む。
       // 本物の講師は対象外(isPinnedPlaceholderTeacherDesk は埋め草の文字だけを見る)。授業のある机の固定は外さない(講師の D&D で
       // 本物の講師を動かした跡の印で、外すと再マージがテンプレの講師をその机へ戻し同じ講師が 2 机になる＝INV-01)。
-      const desk = !rawDesk.lesson && !hasRecordedStatusSlots(rawDesk) && isPinnedPlaceholderTeacherDesk(rawDesk)
+      // メモだけの机も外さない(外すと空き机としてテンプレの授業の置き場になる＝findManagedPlacementTargetDesk はメモを見ない・regression-reviewer 指摘 4)。
+      const desk = !rawDesk.lesson && !hasRecordedStatusSlots(rawDesk) && !hasDeskSeatContent(rawDesk) && isPinnedPlaceholderTeacherDesk(rawDesk)
         ? { ...rawDesk, manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentSessionId: undefined, teacherAssignmentTeacherId: undefined }
         : rawDesk
       const lesson = desk.lesson
@@ -6949,10 +6951,13 @@ export function computeTeacherMove(params: {
   const movedName = sourceIsReal ? sourceBlock.teacher.trim() : targetBlock.teacher.trim()
   const swappedName = sourceIsReal && targetIsReal ? targetBlock.teacher.trim() : ''
   const movedToDeskIndex = sourceIsReal ? targetDeskIndex : sourceDeskIndex
-  // 埋め草だけの机から講師の居ない机へ: 動かす講師がいない(見た目も空欄どうし)。
-  if (!sourceIsReal && !targetIsReal) {
+  // 埋め草の机(講師なし)から講師の居ない机へ: 講師だけ入替は動かすものが無い(見た目も空欄どうし)。生徒ごと席入替は、どちらかの机に
+  // 生徒・出欠記録・メモがあれば中身を動かす(埋め草の修正の前からできた操作・regression-reviewer 指摘 1)。中身も無ければ何もしない。
+  const seatContentOnly = !sourceIsReal && !targetIsReal
+  if (seatContentOnly && !(swapMode === 'seat' && (hasDeskSeatContent(sourceDesk) || hasDeskSeatContent(targetDesk)))) {
     return { status: 'blocked', message: '移動する講師がいません。' }
   }
+  const targetHadSeatContent = hasDeskSeatContent(targetDesk)
 
   applyDeskTeacherBlock(sourceDesk, targetBlock)
   applyDeskTeacherBlock(targetDesk, sourceBlock)
@@ -6987,7 +6992,11 @@ export function computeTeacherMove(params: {
   releaseTeacherRestIfSameTeacherPlaced(sourceDesk, restAliases)
   releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)
 
-  const message = swapMode === 'seat'
+  const message = seatContentOnly
+    ? (targetHadSeatContent
+        ? `${sourceDeskIndex + 1}机目と ${targetDeskIndex + 1}机目の席を生徒ごと入れ替えました。`
+        : `${sourceDeskIndex + 1}机目の席を生徒ごと ${targetDeskIndex + 1}机目へ移動しました。`)
+    : swapMode === 'seat'
     ? (swappedName
         ? `講師 ${movedName} と ${swappedName} を生徒ごと席入れ替えしました。`
         : `講師 ${movedName} を生徒ごと ${movedToDeskIndex + 1}机目へ移動しました。`)

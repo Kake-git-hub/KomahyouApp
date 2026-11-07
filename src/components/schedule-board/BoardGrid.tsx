@@ -10,6 +10,7 @@ import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { isManualOriginDeskTeacher, isManualOriginStudent, MANUAL_ORIGIN_CLASS } from './placementOrigin'
 import { hasDeskTeacherRest, TEACHER_REST_CELL_CLASS, TEACHER_REST_LABEL_CLASS } from './teacherRest'
+import { canStartTeacherDrag } from './teacherDragSource'
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
 import type { OpenedPendingRowHighlight } from './templatePendingRowHighlight'
@@ -896,7 +897,7 @@ function BoardGridComponent({
                           key={`${cell.id}_${deskIndex}_teacher`}
                           className={teacherClassName}
                           onClick={(event) => onTeacherClick(cell.id, deskIndex, event.clientX, event.clientY)}
-                          onMouseDown={onTeacherMouseDown ? (event) => onTeacherMouseDown(cell.id, deskIndex, Boolean(cell.isOpenDay && desk.teacher.trim()), event.button, event.clientX, event.clientY) : undefined}
+                          onMouseDown={onTeacherMouseDown ? (event) => onTeacherMouseDown(cell.id, deskIndex, Boolean(cell.isOpenDay && canStartTeacherDrag(desk)), event.button, event.clientX, event.clientY) : undefined}
                           data-cell-id={cell.id}
                           data-desk-index={deskIndex}
                           data-date-key={cell.dateKey}

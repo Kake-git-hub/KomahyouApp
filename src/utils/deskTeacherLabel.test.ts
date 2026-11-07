@@ -29,8 +29,8 @@ describe('deskTeacherLabel: 講師欄の埋め草を表示だけ空白にする'
     const grid = readFileSync(new URL('../components/schedule-board/BoardGrid.tsx', import.meta.url), 'utf8')
     expect(grid).toContain("import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'")
     expect(grid).toContain("{cell.isOpenDay ? formatDeskTeacherLabel(desk.teacher) : ''}")
-    // 「講師が居る机か」の判定(ドラッグ可否)は元の文字のまま(データの意味は変えない)。
-    expect(grid).toContain("Boolean(cell.isOpenDay && desk.teacher.trim())")
+    // 2026-11-07: ドラッグの起点は canStartTeacherDrag（埋め草だけの机は掴めない・埋め草の机に中身があれば席入替のため掴める・teacherDragSource.test.ts）。
+    expect(grid).toContain("Boolean(cell.isOpenDay && canStartTeacherDrag(desk))")
     const detail = readFileSync(new URL('../components/schedule-board/DetailPanel.tsx', import.meta.url), 'utf8')
     expect(detail).toContain('<span>{formatDeskTeacherLabel(desk.teacher)}</span>')
     const share = readFileSync(new URL('../components/board-share/BoardShareScreen.tsx', import.meta.url), 'utf8')

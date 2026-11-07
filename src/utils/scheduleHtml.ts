@@ -6,6 +6,7 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES, DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
 import { isFeatureEnabledForClassroom } from './featureRollout'
+import { isDeskTeacherPlaceholder } from './deskTeacherLabel'
 import { DESK_TEACHER_PLACEHOLDER_LABELS } from './deskTeacherLabel'
 import { appName, resolveCompanyReportHooks, roleLabel } from '@company/profile'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
@@ -534,7 +535,11 @@ function serializeCells(
             }
           : undefined
         if (!lesson && (!statuses || statuses.length === 0)) return null
-        const regularTeacherIds = Array.from(new Set(
+        // 講師の居ない机(埋め草「講師未割当」)は講師なしの机。基本データ行の担当講師へ帰属させない(2026-11-07・INV-01):
+        // 講師 D&D でテンプレの講師を講師の居ない行の机へ動かすと、元の机に埋め草と生徒が残る。ここで基本データ行の講師 ID を載せると、
+        // 動かした講師のページに元の机の生徒も出ていた(v1.5.436 の講師 ID 補完は本物の講師名だけで、埋め草には ID が無い)。
+        // 講師の居ない行そのものの生徒は基本データ行の講師も空なので、もともと何も載らない(挙動不変)。
+        const regularTeacherIds = isDeskTeacherPlaceholder(desk.teacher) ? [] : Array.from(new Set(
           (desk.lesson?.studentSlots ?? []).flatMap((student) => student ? resolveRegularTeacherIds?.(student, cell) ?? [] : []),
         ))
         return {

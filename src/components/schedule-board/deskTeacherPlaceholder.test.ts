@@ -14,6 +14,7 @@ import {
   buildManagedScheduleCellsForRange,
   computeStudentMove,
   computeTeacherMove,
+  computeTemplateDiffApplyForBoard,
   reconcileSubmittedTeacherPlacements,
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
@@ -21,6 +22,8 @@ import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { isManualOriginDeskTeacher, resolveDeskTeacherOrigin } from './placementOrigin'
 import { restDeskTeacher } from './teacherRest'
 import { collectOverwriteReportRows } from '../../utils/pdf'
+import { buildTeacherPayload } from '../../utils/scheduleHtml'
+import { buildTeacherSheetViewModel } from '../../utils/scheduleViewData'
 import { hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
 
 const PLACEHOLDER = '講師未割当'
@@ -179,5 +182,138 @@ describe('講習の講師の自動割当（QR 提出の自己修復）: 埋め�
     const desks = result.nextWeeks[0][0].desks
     expect(desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
     expect(desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+  })
+})
+
+// regression-reviewer 指摘 1（2026-11-07）: 埋め草の机に生徒がいるときの「生徒ごと席入替」は埋め草の修正の前からできた操作。止めない。
+// 動かす中身の無い形（埋め草だけの机・講師だけ入替）だけ何もしない。
+describe('講師の D&D（computeTeacherMove）: 埋め草の机でも生徒ごと席入替は中身を動かす', () => {
+  const st = (id: string, name: string) => ({ id: `e_${id}`, name, managedStudentId: id, grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' } as StudentEntry)
+  const weeksOf = (deskList: DeskCell[]): SlotCell[][] => [[{ id: CELL_ID, dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: SLOT, timeLabel: '', isOpenDay: true, desks: deskList }]]
+  const run = (deskList: DeskCell[], swapMode: 'teacher' | 'seat') => computeTeacherMove({ weeks: weeksOf(deskList), weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 0, targetDeskIndex: 1, teachers, swapMode })
+  const idsOf = (desk: DeskCell) => (desk.lesson?.studentSlots ?? []).map((student) => student?.managedStudentId ?? null)
+
+  it('埋め草＋山田の机 → 空き机へ席ごと: 山田（とメモ）が 2 机目へ移る。文に埋め草の名前を出さない', () => {
+    const result = run([
+      { id: 'd1', teacher: PLACEHOLDER, lesson: { id: 'l1', studentSlots: [st('sX', '山田'), null] }, memoSlots: ['持ち物', null] },
+      { id: 'd2', teacher: '' },
+    ], 'seat')
+    expect(result.status).toBe('moved')
+    if (result.status !== 'moved') return
+    const [d1, d2] = result.nextWeeks[0][0].desks
+    expect(idsOf(d1)).toEqual([])
+    expect(idsOf(d2)).toEqual(['sX', null])
+    expect(d2.memoSlots).toEqual(['持ち物', null])
+    expect(result.message).not.toContain(PLACEHOLDER)
+    expect(result.message).toBe('1机目の席を生徒ごと 2机目へ移動しました。')
+  })
+
+  it('埋め草＋山田 ↔ 埋め草＋千葉 を席ごと: 2 人が入れ替わる', () => {
+    const result = run([
+      { id: 'd1', teacher: PLACEHOLDER, lesson: { id: 'l1', studentSlots: [st('sX', '山田'), null] } },
+      { id: 'd2', teacher: PLACEHOLDER, lesson: { id: 'l2', studentSlots: [st('sC', '千葉'), null] } },
+    ], 'seat')
+    expect(result.status).toBe('moved')
+    if (result.status !== 'moved') return
+    const [d1, d2] = result.nextWeeks[0][0].desks
+    expect([idsOf(d1), idsOf(d2)]).toEqual([['sC', null], ['sX', null]])
+    expect(result.message).toBe('1机目と 2机目の席を生徒ごと入れ替えました。')
+  })
+
+  it('動かす中身が無い形は何もしない: 埋め草だけの机 → 空き机（席ごとでも）／埋め草どうしの講師だけ入替', () => {
+    expect(run([{ id: 'd1', teacher: PLACEHOLDER }, { id: 'd2', teacher: '' }], 'seat')).toEqual({ status: 'blocked', message: '移動する講師がいません。' })
+    expect(run([
+      { id: 'd1', teacher: PLACEHOLDER, lesson: { id: 'l1', studentSlots: [st('sX', '山田'), null] } },
+      { id: 'd2', teacher: '' },
+    ], 'teacher')).toEqual({ status: 'blocked', message: '移動する講師がいません。' })
+  })
+})
+
+// regression-reviewer 指摘 2・4（2026-11-07）: 再マージが外すのは「中身の何も無い机」の固定された埋め草だけ。
+//   - 授業のある机（講師 D&D の跡）: 外すとテンプレの講師が元の机へ戻り同じ講師が 2 机になる（INV-01）。
+//   - 出欠記録だけの机・メモだけの机: 外すと空き机としてテンプレの授業の置き場になりうる（findManagedPlacementTargetDesk はメモを見ない）。
+describe('再マージ: 固定された埋め草のうち外さない形（INV-01 / INV-02）', () => {
+  const remerge = (weeks: SlotCell[][], rows: RegularLessonRow[], templateOriginRules: boolean, suppressed: string[] = []) => remergeBoardWeeksWithManagedData(weeks, { classroomSettings: settings(), teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: TODAY_KEY, templateOriginRules: templateOriginRules ? { pendingDesks: {} } : null })
+  const sheet = (weeks: SlotCell[][], rows: RegularLessonRow[], teacherId: string) => {
+    const payload = buildTeacherPayload({ cells: weeks.flat(), defaultStartDate: WEEK_START, defaultEndDate: WEEK_END, titleLabel: 'ph', classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] }, teachers, students, regularLessons: rows })
+    const vm = buildTeacherSheetViewModel(payload, { startDate: WEEK_START, endDate: WEEK_END, teacherId, todayKey: TODAY_KEY })
+    const cell = vm?.rows.find((item) => item.slotNumber === SLOT)?.cells.find((item) => item.dateKey === DATE)
+    return (cell?.people ?? []).map((person) => person.name)
+  }
+
+  it('講師 D&D の跡: テンプレの倉島（千葉の机）を講師の居ない行の机（山田）へ動かす → 千葉の机に固定された埋め草が残り、再マージ 2 回でも倉島は 1 机だけ（フラグ ON/OFF とも）', () => {
+    const rows = [row('r0', 'tB', 'sC'), row('r1', '', 'sX')]
+    const week = buildWeek(rows)
+    expect(cellOf(week).desks.map((desk) => desk.teacher)).toEqual(['倉島', PLACEHOLDER])
+    const moved = computeTeacherMove({ weeks: [week], weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 0, targetDeskIndex: 1, teachers })
+    expect(moved.status).toBe('moved')
+    if (moved.status !== 'moved') return
+    expect([cellOf(moved.nextWeeks[0]).desks[0].teacher, cellOf(moved.nextWeeks[0]).desks[0].manualTeacher]).toEqual([PLACEHOLDER, true])
+    for (const templateOriginRules of [false, true]) {
+      const once = remerge(moved.nextWeeks, rows, templateOriginRules)
+      const twice = remerge(once, rows, templateOriginRules)
+      for (const weeks of [once, twice]) {
+        const desks = cellOf(weeks[0]).desks
+        expect([desks[0].teacher, desks[0].manualTeacher]).toEqual([PLACEHOLDER, true])
+        expect(desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+        expect(sheet(weeks, rows, 'tB')).toEqual(['山田'])
+      }
+    }
+  })
+
+  it('出欠記録だけの机・メモだけの机の固定された埋め草は再マージで外さない（空き机としてテンプレの授業の置き場にしない）', () => {
+    const base = buildWeek(ROWS)
+    const suppressed = [`sX__数__${DATE}__${SLOT}`]
+    const record = { ...cellOf(base).desks[1].lesson!.studentSlots[0]!, status: 'absent', dateKey: DATE, slotNumber: SLOT, recordedAt: '2026-10-07T10:00:00.000Z', teacherName: '', studentId: 'sX', sourceManagedLesson: true, sourceLessonId: 'x' }
+    for (const extra of [{ statusSlots: [record, null] }, { memoSlots: ['持ち物', null] }] as Array<Partial<DeskCell>>) {
+      const legacy = base.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: [cell.desks[0], { ...cell.desks[1], teacher: PLACEHOLDER, manualTeacher: true, lesson: undefined, ...extra } as DeskCell] }))
+      for (const templateOriginRules of [false, true]) {
+        const desk1 = cellOf(remerge([legacy], ROWS, templateOriginRules, suppressed)[0]).desks[1]
+        expect([desk1.teacher, desk1.manualTeacher]).toEqual([PLACEHOLDER, true])
+        expect(desk1.lesson).toBeUndefined()
+      }
+    }
+  })
+
+  // 既知の限界（オーナー判断待ち・2026-11-07 regression-reviewer 指摘 5）: 第 2 版のテンプレ保存は、講師 D&D の跡の固定された埋め草（生徒つき）を
+  // 「講師なし」と読む。手で動かした本物の講師が後でそのコマから居なくなると、次のテンプレ保存でテンプレの講師が黙ってその机へ戻る
+  // （埋め草の修正の前は、埋め草を手置きの講師と見て緑の 2 行で室長に選ばせていた）。今の挙動をここで固定する。変えるときはオーナーの決定とともにこの行を改める。
+  it('今の挙動（オーナー判断待ち）: D&D の跡の机（千葉）× 倉島がそのコマから居なくなった後のテンプレ保存 → 千葉の机に倉島が戻る（講師欄 2 行にしない）', () => {
+    const rows = [row('r0', 'tB', 'sC'), row('r1', '', 'sX')]
+    const week = buildWeek(rows)
+    const moved = computeTeacherMove({ weeks: [week], weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 0, targetDeskIndex: 1, teachers })
+    if (moved.status !== 'moved') throw new Error('move failed')
+    // 倉島を山田の机から外す（講師欄を空に・削除記録は作らない形＝別のコマへ動かした跡と同じ）
+    const left = moved.nextWeeks.map((weekCells) => weekCells.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: undefined } : desk)) })))
+    const saved = computeTemplateDiffApplyForBoard({ weeks: left, classroomSettings: settings({ templateFreezeBeforeDate: DATE }), teachers, students, regularLessons: rows, effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-07T00:00:00.000Z', manualMakeupAdjustments: {}, scheduleCountAdjustments: [] })
+    const desk0 = cellOf(saved.nextWeeks[0]).desks[0]
+    expect([desk0.teacher, Boolean(desk0.manualTeacher)]).toEqual(['倉島', false])
+    expect(saved.nextPendingDesks).toEqual({})
+  })
+  it.todo('オーナー判断待ち: D&D の跡の机に、本物の講師が居なくなった後でテンプレの講師が戻るとき、黙って戻すか緑の 2 行で選ばせるか')
+})
+
+// regression-reviewer 指摘 3（2026-11-07）: 置き場所の順番。埋め草だけの机は、本物の講師だけの机より先に使う（本物の講師を上書きしない）。
+describe('講習の講師の自動割当: 机が複数あるコマの置き場所の順番', () => {
+  it('机 0＝本物の講師だけ（講師Z）・机 1＝埋め草だけ・机 2＝千葉 → 倉島は埋め草の机へ。講師Z は残る', () => {
+    const session = {
+      id: 'sess1', label: '冬期講習', startDate: DATE, endDate: DATE,
+      teacherInputs: { tB: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } },
+      studentInputs: {}, createdAt: '', updatedAt: '',
+    } as unknown as SpecialSessionRow
+    const cell: SlotCell = {
+      id: CELL_ID, dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: SLOT, timeLabel: '', isOpenDay: true,
+      desks: [
+        { id: `${CELL_ID}_desk_1`, teacher: '講師Z' },
+        { id: `${CELL_ID}_desk_2`, teacher: PLACEHOLDER },
+        { id: `${CELL_ID}_desk_3`, teacher: PLACEHOLDER, lesson: { id: 'managed_r0', studentSlots: [{ id: 'e0', name: '千葉', managedStudentId: 'sC', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' } as StudentEntry, null] } },
+      ],
+    }
+    const result = reconcileSubmittedTeacherPlacements({ weeks: [[cell]], specialSessions: [session], teachers, students, regularLessons: [], classroomSettings: settings({ deskCount: 3 }) })
+    expect(result.placedCount).toBe(1)
+    const desks = result.nextWeeks[0][0].desks
+    expect(desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+    expect(desks.filter((desk) => desk.teacher === '講師Z')).toHaveLength(1)
+    expect(desks.find((desk) => desk.lesson)?.lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
   })
 })

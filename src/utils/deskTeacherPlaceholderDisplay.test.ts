@@ -32,7 +32,7 @@ function slotCell(desks: DeskCell[]): SlotCell {
 describe.each(PLACEHOLDERS)('埋め草「%s」を文面に出さない', (placeholder) => {
   it('日程表タブの移動先の机に空きが無い理由文', () => {
     const full = { id: 'd1', teacher: placeholder, lesson: { id: 'l', studentSlots: [student('a', '生徒A'), student('b', '生徒B')] as [StudentEntry, StudentEntry] } }
-    const result = resolveScheduleViewTargetSeat(slotCell([full]), { deskIndex: 0, studentIndex: 0, deskId: 'd1' })
+    const result = resolveScheduleViewTargetSeat(slotCell([full]), { targetDateKey: '2026-10-07', targetSlotNumber: 5, deskIndex: 0, studentIndex: 0, deskId: 'd1' })
     expect(result.ok).toBe(false)
     if (!result.ok) expectNoPlaceholder(result.reason)
   })
