@@ -20,7 +20,7 @@ import { isCellInTemplateDiffScope, isTemplateEffectiveStartDateInPast, resolveD
 import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import { buildLessonFactKey, collectCountAdjustmentsByKey, collectLessonExplanationFacts, countLessonExplanations, countOriginsOnDate } from './templateLessonAccounting'
 import type { DeskCell, DeskLesson, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
-import { isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
+import { formatDeskTeacherLabel, isShiftedTemplateTeacherDesk } from '../../utils/deskTeacherLabel'
 import { isManualOriginDeskTeacher } from './placementOrigin'
 import {
   buildTemplatePendingDeskKey,
@@ -2617,7 +2617,17 @@ export type TemplateDiffTeacherNote = {
 
 const TEMPLATE_DIFF_STUDENT_NOTE_LIMIT = 12
 
-function describeTemplateDiffStudentNote(note: TemplateDiffStudentNote) {
+function describeTemplateDiffStudentNote(rawNote: TemplateDiffStudentNote) {
+  // 講師の行（科目が空）の講師名・講師の机の番号でない detail に、机の埋め草「講師未割当」「講師未設定」を出さない（表示だけ・オーナー指示 2026-11-07）。
+  const isTeacherRow = !rawNote.subject
+  const teacherDetailKinds = ['teacher-pending', 'teacher-replaced', 'teacher-kept']
+  const note: TemplateDiffStudentNote = isTeacherRow
+    ? {
+        ...rawNote,
+        studentName: formatDeskTeacherLabel(rawNote.studentName),
+        ...(rawNote.detail !== undefined && teacherDetailKinds.includes(rawNote.kind) ? { detail: formatDeskTeacherLabel(rawNote.detail) } : {}),
+      }
+    : rawNote
   const where = `${formatMonthDay(note.dateKey)}${note.slotNumber != null ? ` ${note.slotNumber}限` : ''}`
   const who = note.subject ? `${note.studentName}（${note.subject}）` : `講師 ${note.studentName}`
   switch (note.kind) {

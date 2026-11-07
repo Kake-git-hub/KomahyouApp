@@ -37,7 +37,7 @@ describe('deskTeacherLabel: 講師欄の埋め草を表示だけ空白にする'
     expect(share).toContain('<div className="board-share-teacher">{formatDeskTeacherLabel(desk.teacher)}</div>')
     expect(share).not.toContain("desk.teacher !== '講師未設定'")
     const scheduleHtml = readFileSync(new URL('./scheduleHtml.ts', import.meta.url), 'utf8')
-    expect(scheduleHtml).toContain(`'<td class="dp-teacher">' + escapeHtml(desk.teacher === '講師未割当' || desk.teacher === '講師未設定' ? '' : (desk.teacher || '')) + '</td>'`)
+    expect(scheduleHtml).toContain(`'<td class="dp-teacher">' + escapeHtml(displayDeskTeacher(desk.teacher)) + '</td>'`)
     // 机の同一性の照合(data-desk-teacher)は元の文字のまま。
     expect(scheduleHtml).toContain(`' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"'`)
   })

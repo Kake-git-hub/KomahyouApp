@@ -467,7 +467,7 @@ function BoardGridComponent({
     const memoText = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(0, 2).join('\n') : ''
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const statusNotice = statusEntry
-      ? [getStudentStatusLabel(statusEntry.status, transferSourceRestDisplayEnabled), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
+      ? [getStudentStatusLabel(statusEntry.status, transferSourceRestDisplayEnabled), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), formatDeskTeacherLabel(statusEntry.teacherName)].filter(Boolean).join(' / ')
       : undefined
     const originalLessonLabel = effectiveMakeupSourceLabel && (
       resolvedLessonType === 'makeup'

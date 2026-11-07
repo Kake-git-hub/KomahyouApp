@@ -69,7 +69,7 @@ import {
 import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
 import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from './templatePendingRowHighlight'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
-import { hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
+import { formatDeskTeacherLabel, hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
@@ -3660,7 +3660,7 @@ export function findDuplicateStudentInCellByKey(
 }
 
 function resolveDeskLabel(desk: DeskCell, deskIndex: number) {
-  return desk.teacher.trim() || `${deskIndex + 1}机目`
+  return formatDeskTeacherLabel(desk.teacher).trim() || `${deskIndex + 1}机目`
 }
 
 export function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell, status: StudentStatusKind): StudentStatusEntry {
@@ -17300,7 +17300,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             >
               <div className="student-menu-head">
                 <strong>{templatePendingDeskMenu.target === 'teacher'
-                  ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${templatePendingDeskMenuContext.desk.teacher.trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
+                  ? `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目（講師: テンプレ ${formatDeskTeacherLabel(templatePendingDeskMenuContext.desk.teacher).trim() || 'なし'}／手入力 ${templatePendingDeskMenuContext.entry.lower.teacher?.teacher ?? ''}）`
                   : `保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目・席 ${templatePendingDeskMenu.lowerIndex + 1}（上段＝テンプレ／下段＝手入力）`}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setTemplatePendingDeskMenu(null)}>x</button>
               </div>

@@ -6,6 +6,7 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { DEVELOPER_REPORT_ATTACHMENT_MAX_BYTES, DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_MODAL_ATTACHMENT_LIMIT, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
 import { isFeatureEnabledForClassroom } from './featureRollout'
+import { DESK_TEACHER_PLACEHOLDER_LABELS } from './deskTeacherLabel'
 import { appName, resolveCompanyReportHooks, roleLabel } from '@company/profile'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -3653,6 +3654,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return status === 'moved' || status === 'holiday';
       }
 
+      // 講師の居ない机の埋め草(講師未割当/講師未設定)は表示しない(オーナー指示 2026-11-07)。一覧は deskTeacherLabel.ts の共有定数から埋め込む。
+      // 机の同一性(data-desk-teacher)や講師の割当(buildTeacherAssignments)は元の文字のまま。表示する所だけこの関数を通す。
+      const DESK_TEACHER_PLACEHOLDERS = ${JSON.stringify(DESK_TEACHER_PLACEHOLDER_LABELS)};
+      function displayDeskTeacher(value) {
+        const text = typeof value === 'string' ? value : '';
+        return DESK_TEACHER_PLACEHOLDERS.indexOf(text.trim()) >= 0 ? '' : text;
+      }
+
       function buildStudentAssignments(cells) {
         const map = new Map();
         cells.forEach((cell) => {
@@ -3664,7 +3673,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 const studentKey = student.linkedStudentId || getNameAssignmentKey(student.name);
                 if (!studentKey) return;
                 if (!map.has(studentKey)) map.set(studentKey, []);
-                map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: desk.teacher, timeLabel: cell.timeLabel, lesson: student });
+                map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: displayDeskTeacher(desk.teacher), timeLabel: cell.timeLabel, lesson: student });
               });
             }
             (Array.isArray(desk.statuses) ? desk.statuses : []).forEach((statusEntry) => {
@@ -3677,7 +3686,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               const studentKey = statusEntry.linkedStudentId || getNameAssignmentKey(statusEntry.name);
               if (!studentKey) return;
               if (!map.has(studentKey)) map.set(studentKey, []);
-              map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: statusEntry.teacherName || desk.teacher, timeLabel: cell.timeLabel, lesson: statusEntry });
+              map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: displayDeskTeacher(statusEntry.teacherName || desk.teacher), timeLabel: cell.timeLabel, lesson: statusEntry });
             });
           });
         });
@@ -4197,7 +4206,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var timeCell = rowIndex === 0 ? '<td class="dp-time" rowspan="' + deskCount + '">' + timeCellHtml + '</td>' : '';
           return '<tr>' + timeCell
             + '<td class="dp-seatno">' + (Number(desk.deskIndex) + 1) + '</td>'
-            + '<td class="dp-teacher">' + escapeHtml(desk.teacher === '講師未割当' || desk.teacher === '講師未設定' ? '' : (desk.teacher || '')) + '</td>'
+            + '<td class="dp-teacher">' + escapeHtml(displayDeskTeacher(desk.teacher)) + '</td>'
             + renderDeskPickerSeatCellHtml(desk, seats[0])
             + renderDeskPickerSeatCellHtml(desk, seats[1])
             + '</tr>';
@@ -5815,7 +5824,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               const isSameStudent = linkedStudentId === student.id
                 || (entryNameKey && (entryNameKey === studentNameKey || entryNameKey === studentFullNameKey));
               if (!isSameStudent) return;
-              notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, entry.teacherName || desk.teacher, entry.subject, entry.lessonType, entry.status, entry.linkedDestinationDateKey, entry.linkedDestinationSlotNumber));
+              notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, displayDeskTeacher(entry.teacherName || desk.teacher), entry.subject, entry.lessonType, entry.status, entry.linkedDestinationDateKey, entry.linkedDestinationSlotNumber));
             });
           });
         });

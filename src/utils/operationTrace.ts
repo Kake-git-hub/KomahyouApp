@@ -16,6 +16,7 @@
 //    (operationLog.ts と同じ方式)。
 
 import type { DeskCell, SlotCell } from '../components/schedule-board/types'
+import { formatDeskTeacherLabel } from './deskTeacherLabel'
 
 export type OperationTraceKind =
   /** 盤面の確定（commitWeeks）。summary に変わった机の差分を入れる */
@@ -101,7 +102,7 @@ export function buildOperationTraceEntry(kind: OperationTraceKind, summary: stri
 // ---------------------------------------------------------------------------
 
 function describeDesk(desk: DeskCell): string {
-  const teacher = desk.teacher?.trim() ? desk.teacher.trim() : '講師なし'
+  const teacher = formatDeskTeacherLabel(desk.teacher).trim() || '講師なし'
   const students = (desk.lesson?.studentSlots ?? [null, null]).map((student, index) => {
     if (!student) {
       const status = desk.statusSlots?.[index]

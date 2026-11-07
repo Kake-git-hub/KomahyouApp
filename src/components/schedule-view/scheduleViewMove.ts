@@ -3,6 +3,7 @@
 // 「source の頑健な特定」「target の物理的な空き検証」「机選択モーダルの表示データ」を担う。
 // 自動割振ルール・警告はここでは一切評価しない(2026-07-08 オーナー確定・物理的な空きのみ判定)。
 import type { SlotCell, StudentEntry } from '../schedule-board/types'
+import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 
 // 移動元カード。entryId(盤面 studentSlots のエントリid)＋生徒id＋日付＋時限で特定する。
 // 名前や科目だけで特定しない(同一生徒が同コマに2科目持つケースの取り違え防止・spec §D-2-2)。
@@ -250,9 +251,10 @@ export function resolveScheduleViewTargetSeat(cell: SlotCell, seat: ScheduleView
     if (student) return `${student.name}${student.subject ? ' ' + student.subject : ''}`
     return desk.memoSlots?.[index] ? 'メモ' : '空き'
   }
-  const teacherLabel = desk.teacher || '講師未設定'
+  // 講師の居ない机の埋め草(講師未割当/講師未設定)は文面に出さない(オーナー指示 2026-11-07・utils/deskTeacherLabel.ts)。
+  const teacherLabel = formatDeskTeacherLabel(desk.teacher)
   return {
     ok: false,
-    reason: `移動先の机(${teacherLabel})に空き席がありません。席1=${describe(0)} / 席2=${describe(1)}。表示が最新か「最新表示」で更新してください。`,
+    reason: `移動先の机${teacherLabel ? `(${teacherLabel})` : ''}に空き席がありません。席1=${describe(0)} / 席2=${describe(1)}。表示が最新か「最新表示」で更新してください。`,
   }
 }
