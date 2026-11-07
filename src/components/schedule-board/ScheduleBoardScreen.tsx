@@ -7551,6 +7551,15 @@ export function disposeTemplatePendingLowerStudents(params: {
   }
 }
 
+// planTemplatePendingAdoptExisting の surfacedSeats＝下段の生徒を机へ戻した席（生徒 1＝0・生徒 2＝1）。合流は下段の生徒を元の席へ戻す（computePendingDeskCollapse・席をずらさない）ので、
+//    下段で生きている席のうち、合流後の机のその席に生徒が居るもの。合流できなければ空。呼び出し側の重複検査が授業 ID でなく**席**で除外するのに使う
+//    （同じ授業 ID の同じ生徒が別の机・同じ机の上段に居ても素通りさせない・INV-12 2026-11-07・computeStudentMove の席での除外と同じ考え方）。
+function resolveSurfacedLowerSeats(lower: TemplatePendingLower, collapse: ReturnType<typeof computePendingDeskCollapse>): number[] {
+  if (!collapse.ok) return []
+  const surfaced = collapse.nextDesk.lesson?.studentSlots ?? []
+  return (lower.lesson?.studentSlots ?? []).flatMap((student, seat) => (student && surfaced[seat] ? [seat] : []))
+}
+
 /**
  * 「既存を採用」で取り下げる上段の生徒と、取り下げた後の合流結果（席ごと・2026-09-30・spec-template-behavior Q34-8）。純関数。
  * 解決本体（computePendingDeskResolution）と確認文（取り下げる生徒の名前）が同じ関数を使う（Q32-1：表示と結果を食い違わせない・regression-reviewer M-2）。
@@ -7565,16 +7574,8 @@ export function disposeTemplatePendingLowerStudents(params: {
  *  5. **講師には触れない（オーナー確定 2026-10-27・確認リスト tp-64「講師と生徒をリンクさせないでそれぞれ採用」）**: 下段の手置き講師（Q41）は
  *     机へ戻さない（机の講師は上段＝テンプレ側のまま）。講師は保留に残り、講師欄の「テンプレの講師を採用／手入力の講師を採用」で決める
  *     （computePendingTeacherChoice）。以前は採用で講師も戻そうとし、手置き講師が同じコマの別の机に居ると確認の後に何も起きなかった。
+ *  6. surfacedSeats（下段の生徒を戻した席・resolveSurfacedLowerSeats）を返す。呼び出し側の重複検査が授業 ID でなく席で除外するのに使う（INV-12 2026-11-07）。
  */
-// 6. surfacedSeats＝下段の生徒を机へ戻した席（生徒 1＝0・生徒 2＝1）。合流は下段の生徒を元の席へ戻す（computePendingDeskCollapse・席をずらさない）ので、
-//    下段で生きている席のうち、合流後の机のその席に生徒が居るもの。合流できなければ空。呼び出し側の重複検査が授業 ID でなく**席**で除外するのに使う
-//    （同じ授業 ID の同じ生徒が別の机・同じ机の上段に居ても素通りさせない・INV-12 2026-11-07・computeStudentMove の席での除外と同じ考え方）。
-function resolveSurfacedLowerSeats(lower: TemplatePendingLower, collapse: ReturnType<typeof computePendingDeskCollapse>): number[] {
-  if (!collapse.ok) return []
-  const surfaced = collapse.nextDesk.lesson?.studentSlots ?? []
-  return (lower.lesson?.studentSlots ?? []).flatMap((student, seat) => (student && surfaced[seat] ? [seat] : []))
-}
-
 export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk: DeskCell; entry: TemplatePendingDesk; seatIndex?: number }) {
   const { cell, desk } = params
   const split = params.seatIndex === undefined ? null : splitTemplatePendingLowerSeat(params.entry.lower, params.seatIndex)
