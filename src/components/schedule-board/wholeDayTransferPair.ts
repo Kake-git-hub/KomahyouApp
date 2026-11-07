@@ -22,6 +22,7 @@
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { isManualOriginStudent } from './placementOrigin'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { resolveMovedTemplateLessonSubjectFromId } from './templateLessonIdSubject'
 
 const WHOLE_DAY_PAIR_PREFIX = 'WHOLE_DAY_PAIR__'
 
@@ -257,14 +258,32 @@ export function cellsHaveNonDerivedStatusEntries(cells: readonly SlotCell[]) {
 export type WholeDayPairTargetBlockResolver = (targetCell: SlotCell, entry: StudentStatusEntry, pair: WholeDayTransferPair) => boolean
 
 /**
+ * D' の席・記録が「D のその生徒自身の授業」か（§9-21 の根拠から外す・stripWholeDayPairOwnEntries）。
+ * - 付け替えで展開した授業とその記録（印 wholeDayPairSourceDate が組の D）。
+ * - 作成で D から移した手入力（印 wholeDayPairMovedFrom が組の D）。
+ * - ★2026-11-07（オーナー指示「直して」・INV-06）: 移した手入力を D' で休み・振無休・出席にした記録と、休みを解除して席へ戻した授業・D' の中で動かした授業。
+ *   印 wholeDayPairMovedFrom は記録を通ると・動かすと落ちる（記録の型が持たない・prepareStudentForMove が外す）ので、授業 ID（記録は studentId）が
+ *   D のテンプレの授業のままで振替元が D の振替（resolveMovedTemplateLessonSubjectFromId）なら同じ扱いにする。数えると D の記録まで「休み」になり、
+ *   科目を変えた古いデータ（編集でテンプレの科目の振替の抑止を積んでいない）では休みで未消化が 2 件（英＋数）、振無休・出席・休みの解除で 1 件（数）になっていた。
+ * 在庫からの振替・体験・手で足した授業・別の生徒の授業（授業 ID が D のテンプレの授業でない）は今どおり根拠に数える。
+ */
+export function isWholeDayPairSourceOwnEntry(entry: StudentEntry | StudentStatusEntry, sourceDateKey: string): boolean {
+  if (entry.wholeDayPairSourceDate === sourceDateKey) return true
+  if ('wholeDayPairMovedFrom' in entry && entry.wholeDayPairMovedFrom?.dateKey === sourceDateKey) return true
+  if (entry.makeupSourceDate !== sourceDateKey) return false
+  const id = 'studentId' in entry ? entry.studentId : entry.id
+  return resolveMovedTemplateLessonSubjectFromId({ id, managedStudentId: entry.managedStudentId, lessonType: entry.lessonType, manualAdded: entry.manualAdded, makeupSourceDate: entry.makeupSourceDate }) !== null
+}
+
+/**
  * 根拠から外す: 付け替えの授業そのもの（印 wholeDayPairSourceDate）と、その記録（記録の印が組の D）。手入力と手入力の記録だけを残したセル（と保留）。
  * ★作成で D から移した手入力（印 wholeDayPairMovedFrom が組の D）も外す（2026-11-07・spec-template-conflict-v2 §4-1-2）。これは §9-21 の「D' に**先に**あった
  *   同じ生徒の手入力」ではない（作成前は D で §2-2 により D のテンプレの同じ生徒を置かず、数えていない）。数えると作成しただけで D の記録が「休み」になり
  *   未消化振替が +1 になっていた（§3 の在庫中立に反する）。D' の席の §2-2（移した手入力が D のテンプレの同じ生徒を置かない）は差分反映・再マージ側のままで変わらない。
  */
 export function stripWholeDayPairOwnEntries(cell: SlotCell, pendingDesks: TemplatePendingDeskMap | null | undefined, sourceDateKey: string): { cell: SlotCell; pendingDesks: TemplatePendingDeskMap } {
-  const keepStudent = (student: StudentEntry | null) => (student && (student.wholeDayPairSourceDate === sourceDateKey || student.wholeDayPairMovedFrom?.dateKey === sourceDateKey) ? null : student)
-  const keepRecord = (entry: StudentStatusEntry | null) => (entry && entry.wholeDayPairSourceDate === sourceDateKey ? null : entry)
+  const keepStudent = (student: StudentEntry | null) => (student && isWholeDayPairSourceOwnEntry(student, sourceDateKey) ? null : student)
+  const keepRecord = (entry: StudentStatusEntry | null) => (entry && isWholeDayPairSourceOwnEntry(entry, sourceDateKey) ? null : entry)
   const nextPending: TemplatePendingDeskMap = { ...(pendingDesks ?? {}) }
   const desks = cell.desks.map((desk) => {
     const key = buildTemplatePendingDeskKey(cell.id, desk.id)

@@ -523,6 +523,8 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     動かすと、盤面から導く暗黙の抑止キーが今の科目で作られ、テンプレ保存だけが元の日のテンプレの生徒を置き、保存と再マージで答えが割れた。対処：
     `buildAppliedManagedPostFreezeCells` の付け替えの日のキーに授業 ID のテンプレの科目のキーも足す（`collectMovedTemplateSubjectOccurrenceKeys`・付け替えでない日には当てない）。
     同じ日に移したその生徒自身の授業を削除・格納したら、テンプレ保存・再マージとも戻さない（オーナー選択「戻さない」・spec-template-conflict-v2 §4-1-2）。
+    v1.5.707：移した先で「生徒を空にする」と、抑止キーを移した先の日付だけで積んでいたため元の日のテンプレの生徒が戻っていた → 元の日の日付で積む
+    （`computeClearStudentsOnDate` へ切り出し・元の日を空にしても移した先は消さない）。移した印が落ちた授業も ID で「その生徒自身の授業」と判定（`isWholeDayPairSourceOwnEntry`）。
   - **Issue #46** / `bd0865d` / **v1.5.406** / 2026-07-07 … `studentScheduleRequest(mode:unassign)` が処理後も
     App 永続 state に残り、重複ガードがローカル `useRef` のため盤面 key 再マウントで消え、古いコマンドが
     再処理（組み直した講習が未消化へ戻る）。
