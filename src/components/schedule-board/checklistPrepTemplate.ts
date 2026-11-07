@@ -115,6 +115,13 @@ export type ChecklistPrepTemplateRegistration = { dayOfWeek: number; slotNumber:
 
 export type ChecklistPrepTemplateAssignment = ChecklistPrepTemplateRegistration & { studentId: string; studentName: string }
 
+/**
+ * テンプレへの講師の登録（第 3 段・§E-2-4-3・tp-59 / tp-69 / tp-70）。登録先はテンプレで講師も生徒も居ない机だけ（今ある登録を替えない・INV-02）。
+ * 登録した机には準備の印（RegularLessonTemplateDesk.checklistPrepTeacherId＝この講師の ID）を付け、「後片づけ」はその講師だけを外す。
+ * deskIndex は盤面の机番号（0 始まり・結果の文の盤面側）、templateDeskIndex はテンプレの机番号（1 始まり）。
+ */
+export type ChecklistPrepTemplateTeacherRegistration = { dayOfWeek: number; slotNumber: number; deskIndex: number; templateDeskIndex: number; teacherId: string; teacherName: string; label: string }
+
 function findTemplateCell(template: RegularLessonTemplate | null | undefined, dayOfWeek: number, slotNumber: number): RegularLessonTemplateCell | undefined {
   return template?.cells.find((cell) => cell.dayOfWeek === dayOfWeek && cell.slotNumber === slotNumber)
 }
@@ -179,6 +186,8 @@ function sortPrepStudents(students: StudentRow[]): StudentRow[] {
  * 1 つの曜日・時限に既に登録されている確認用の生徒の最大数を足す（2 回目の準備で同じ曜日・時限に当たっても足りる・INV-12）。
  */
 export function resolveChecklistPrepStudentCount(template: RegularLessonTemplate | null | undefined, students: readonly StudentRow[], base: number): number {
+  // 確認用の生徒を登録しない項目（講師だけを登録する tp-70）は足さない。
+  if (base <= 0) return 0
   const prepIds = new Set(students.filter(isUsableChecklistPrepStudent).map((student) => student.id))
   let maxInSlot = 0
   for (const cell of template?.cells ?? []) {
@@ -188,9 +197,26 @@ export function resolveChecklistPrepStudentCount(template: RegularLessonTemplate
   return base + maxInSlot
 }
 
-function templateSeatLabel(registration: Pick<ChecklistPrepTemplateRegistration, 'dayOfWeek' | 'slotNumber' | 'templateDeskIndex' | 'studentIndex'>) {
+function templateDeskLabel(registration: Pick<ChecklistPrepTemplateRegistration, 'dayOfWeek' | 'slotNumber' | 'templateDeskIndex'>) {
   const day = regularTemplateDayLabelByValue[registration.dayOfWeek] ?? ''
-  return `${day}曜 ${registration.slotNumber}限 机 ${registration.templateDeskIndex} の生徒 ${registration.studentIndex + 1}`
+  return `${day}曜 ${registration.slotNumber}限 机 ${registration.templateDeskIndex}`
+}
+
+function templateSeatLabel(registration: Pick<ChecklistPrepTemplateRegistration, 'dayOfWeek' | 'slotNumber' | 'templateDeskIndex' | 'studentIndex'>) {
+  return `${templateDeskLabel(registration)} の生徒 ${registration.studentIndex + 1}`
+}
+
+/**
+ * テンプレの机に講師か生徒が居るか（§E-2-4-3）。準備の置き場（checklistPrep.ts の resolvePackedTemplateSlot＝盤面に詰めて置かれる机の数え方）と、
+ * 講師を登録してよい机（講師も生徒も居ない机）の判定がこの 1 つを使う（regression-reviewer S-8・判定を二重に持たない）。
+ */
+export function hasChecklistPrepTemplateDeskContent(desk: Pick<RegularLessonTemplateDesk, 'teacherId' | 'students'>): boolean {
+  return Boolean(desk.teacherId.trim()) || desk.students.some((student) => Boolean(student?.studentId))
+}
+
+/** テンプレの机に講師も生徒も居ないか（講師を登録してよい机・§E-2-4-3）。 */
+function isEmptyTemplateDesk(desk: RegularLessonTemplateDesk | undefined): boolean {
+  return !desk || !hasChecklistPrepTemplateDeskContent(desk)
 }
 
 function cloneTemplateCell(cell: RegularLessonTemplateCell): RegularLessonTemplateCell {
@@ -244,6 +270,71 @@ export function assignChecklistPrepTemplateStudents(
     assigned.push({ ...registration, studentId: student.id, studentName: getStudentDisplayName(student) })
   }
   return { ok: true, template: { ...template, cells }, assigned }
+}
+
+/**
+ * テンプレの講師も生徒も居ない机に講師を登録し、準備の印（checklistPrepTeacherId）を付けた新しいテンプレを返す（入力は書き換えない・§E-2-4-3）。
+ * 講師か生徒の居る机なら失敗（今ある登録を替えない・INV-02）。机が無ければ作る。失敗したら何も登録しない（途中まで登録した形を返さない）。
+ * 確認用の生徒の登録（assignChecklistPrepTemplateStudents）より先に通す（同じ机に講師と確認用の生徒を登録する項目がある）。
+ */
+export function assignChecklistPrepTemplateTeachers(
+  template: RegularLessonTemplate,
+  registrations: readonly ChecklistPrepTemplateTeacherRegistration[],
+): { ok: true; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateTeacherRegistration[] } | { ok: false; reason: string } {
+  if (registrations.length === 0) return { ok: true, template, assigned: [] }
+  const cells = [...template.cells]
+  const clonedIndexes = new Set<number>()
+  for (const registration of registrations) {
+    let cellIndex = cells.findIndex((cell) => cell.dayOfWeek === registration.dayOfWeek && cell.slotNumber === registration.slotNumber)
+    if (cellIndex < 0) {
+      cells.push({ dayOfWeek: registration.dayOfWeek, slotNumber: registration.slotNumber, desks: [] })
+      cellIndex = cells.length - 1
+      clonedIndexes.add(cellIndex)
+    }
+    if (!clonedIndexes.has(cellIndex)) {
+      cells[cellIndex] = cloneTemplateCell(cells[cellIndex])
+      clonedIndexes.add(cellIndex)
+    }
+    const cell = cells[cellIndex]
+    const existing = cell.desks.find((entry) => entry.deskIndex === registration.templateDeskIndex)
+    if (!isEmptyTemplateDesk(existing)) {
+      return { ok: false, reason: `テンプレの ${templateDeskLabel(registration)} には登録があります。何も登録していません。` }
+    }
+    const desk: RegularLessonTemplateDesk = { deskIndex: registration.templateDeskIndex, teacherId: registration.teacherId, students: [null, null], checklistPrepTeacherId: registration.teacherId }
+    cell.desks = existing
+      ? cell.desks.map((entry) => (entry === existing ? desk : entry))
+      : [...cell.desks, desk].sort((left, right) => left.deskIndex - right.deskIndex)
+  }
+  return { ok: true, template: { ...template, cells }, assigned: [...registrations] }
+}
+
+/**
+ * テンプレの準備の印の付いた机の講師を外す（§E-2-4-3・後片づけ）。外すのは今の講師が印の講師と同じで、席が空か確認用の生徒（prepStudentIds）だけの机。
+ * 室長が確認用でない生徒を足した机は、その生徒の通常授業（全部の週）から講師を抜かないよう講師を残し、印だけ落とす（regression-reviewer M-1・INV-02）。
+ * 講師が替わった机の古い印も落とす（数には入れない）。印の無い机はそのまま。何も変わらなければ同じテンプレを返す。
+ */
+export function removeChecklistPrepTemplateTeachers(template: RegularLessonTemplate, prepStudentIds: ReadonlySet<string>): { template: RegularLessonTemplate; removed: number } {
+  let removed = 0
+  let changed = false
+  const cells = template.cells.map((cell) => {
+    if (!cell.desks.some((desk) => desk.checklistPrepTeacherId !== undefined)) return cell
+    changed = true
+    return {
+      ...cell,
+      desks: cell.desks.map((desk) => {
+        if (desk.checklistPrepTeacherId === undefined) return desk
+        const { checklistPrepTeacherId: mark, ...rest } = desk
+        const onlyPrepStudents = desk.students.every((student) => !student?.studentId || prepStudentIds.has(student.studentId))
+        if (mark && mark === desk.teacherId && onlyPrepStudents) {
+          removed += 1
+          return { ...rest, teacherId: '' }
+        }
+        return rest
+      }),
+    }
+  })
+  if (!changed) return { template, removed: 0 }
+  return { template: { ...template, cells }, removed }
 }
 
 /** テンプレの確認用の生徒の登録だけを空にする（ほかの生徒・講師はそのまま・INV-02）。何も無ければ同じテンプレを返す。 */
@@ -436,8 +527,8 @@ export function cleanupChecklistPrepBoard(
  * （保存の段で断った・失敗したときにも黙って消さずに出す。後片づけで盤面を変えていなければ空）。
  */
 export type ChecklistPrepTemplatePhase =
-  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
-  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
+  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; assignedTeachers?: ChecklistPrepTemplateTeacherRegistration[]; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
+  | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; templateRemoved: number; templateTeachersRemoved?: number; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
 
 /**
  * 積んだテンプレ保存の段をこのレンダーで走らせてよいか（修正ラウンド 1 I-1）。
@@ -492,13 +583,24 @@ function buildSavedDetailLines(params: { effectiveStartDate: string; todayKey: s
 export function buildChecklistPrepTemplateSavedMessage(params: {
   boardMessage: string
   assigned: readonly ChecklistPrepTemplateAssignment[]
+  /** テンプレへ登録した講師（第 3 段・§E-2-4-3）。生徒より先に書く。 */
+  assignedTeachers?: readonly ChecklistPrepTemplateTeacherRegistration[]
   effectiveStartDate: string
   summary: TemplateDiffApplySummary
   studentNotes?: readonly TemplateDiffStudentNote[]
   scopeNote?: TemplateDiffScopeNote
   todayKey: string
 }): string {
-  const seats = params.assigned.map((entry) => `${entry.label} ${templateSeatLabel(entry)} に「${entry.studentName}」`).join('、')
+  // 「(1)」「(2)」の印は前に続けて書く（tp-64 から不変）。「机 B」のような名前の印は「机 B（木曜 5限 机 4）」と括弧で書く（regression-reviewer S-5）。
+  const withLabel = (label: string, place: string, rest: string) => {
+    if (!label) return `${place} ${rest}`
+    if (label.startsWith('(')) return `${label} ${place} ${rest}`
+    return `${label}（${place}）${rest}`
+  }
+  const seats = [
+    ...(params.assignedTeachers ?? []).map((entry) => withLabel(entry.label, templateDeskLabel(entry), `に講師「${entry.teacherName}」`)),
+    ...params.assigned.map((entry) => withLabel(entry.label, templateSeatLabel(entry), `に「${entry.studentName}」`)),
+  ].join('、')
   return [
     ...stripBoardSaveReminder(params.boardMessage),
     `テンプレの ${seats}を登録して、テンプレを保存しました。`,
@@ -537,15 +639,21 @@ export function resolveChecklistPrepTemplatePhaseBlock(params: { phaseClassroomI
  */
 export function prepareChecklistPrepTemplateSave(params: {
   registrations: readonly ChecklistPrepTemplateRegistration[]
+  /** テンプレへ登録する講師（第 3 段・§E-2-4-3）。確認用の生徒より先に登録する（講師も生徒も居ない机だけ）。 */
+  teacherRegistrations?: readonly ChecklistPrepTemplateTeacherRegistration[]
   baseTemplate: RegularLessonTemplate | null | undefined
   effectiveStartDate: string
   students: readonly StudentRow[]
   savedAt: string
-}): { ok: true; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[] } | { ok: false; reason: string } {
+}): { ok: true; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; assignedTeachers: ChecklistPrepTemplateTeacherRegistration[] } | { ok: false; reason: string } {
   if (!params.baseTemplate) return { ok: false, reason: 'テンプレがまだ無いため、確認用の生徒を登録できません。何も変えていません。' }
   const prepStudents = params.students.filter(isUsableChecklistPrepStudent)
   if (prepStudents.length < params.registrations.length) return { ok: false, reason: CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE }
-  return assignChecklistPrepTemplateStudents({ ...params.baseTemplate, effectiveStartDate: params.effectiveStartDate, savedAt: params.savedAt }, params.registrations, prepStudents)
+  const teachers = assignChecklistPrepTemplateTeachers({ ...params.baseTemplate, effectiveStartDate: params.effectiveStartDate, savedAt: params.savedAt }, params.teacherRegistrations ?? [])
+  if (!teachers.ok) return teachers
+  const students = assignChecklistPrepTemplateStudents(teachers.template, params.registrations, prepStudents)
+  if (!students.ok) return students
+  return { ...students, assignedTeachers: teachers.assigned }
 }
 
 /** 後片づけを断る（検証用教室でない・テンプレ編集中）。断らなければ null。 */
@@ -564,9 +672,11 @@ export type ChecklistPrepCleanupPlan =
     weeks: SlotCell[][]
     pendingDesks: TemplatePendingDeskMap | null
     removed: ChecklistPrepRemovedCounts
-    /** 保存するテンプレ（確認用の生徒の登録を外して toSaveTemplate を通したもの）。外すものが無ければ null。 */
+    /** 保存するテンプレ（確認用の生徒の登録と準備の印の講師を外して toSaveTemplate を通したもの）。外すものが無ければ null。 */
     template: RegularLessonTemplate | null
     templateRemoved: number
+    /** テンプレから外した準備の印の講師の数（第 3 段・§E-2-4-3）。 */
+    templateTeachersRemoved: number
   }
 
 /**
@@ -587,15 +697,19 @@ export function planChecklistPrepCleanup(params: {
   const prepStudentIds = new Set(params.students.filter(isChecklistPrepStudent).map((student) => student.id))
   const removedTemplate = params.savedTemplate && prepStudentIds.size > 0 ? removeChecklistPrepTemplateStudents(params.savedTemplate, prepStudentIds) : null
   const templateRemoved = removedTemplate?.removed ?? 0
-  if (!boardChanged && templateRemoved === 0) return { nothing: true }
+  // 第 3 段（§E-2-4-3）: 準備の印の付いたテンプレの机の講師も外す（今の講師が印の講師と同じ机だけ）。
+  const removedTeachers = params.savedTemplate ? removeChecklistPrepTemplateTeachers(removedTemplate?.template ?? params.savedTemplate, prepStudentIds) : null
+  const templateTeachersRemoved = removedTeachers?.removed ?? 0
+  if (!boardChanged && templateRemoved === 0 && templateTeachersRemoved === 0) return { nothing: true }
   return {
     nothing: false,
     boardChanged,
     weeks: boardChanged ? board.weeks : params.weeks,
     pendingDesks: boardChanged ? board.pendingDesks : params.pendingDesks,
     removed: board.removed,
-    template: removedTemplate && templateRemoved > 0 ? params.toSaveTemplate(removedTemplate.template) : null,
+    template: removedTeachers && templateRemoved + templateTeachersRemoved > 0 ? params.toSaveTemplate(removedTeachers.template) : null,
     templateRemoved,
+    templateTeachersRemoved,
   }
 }
 
@@ -606,16 +720,24 @@ export function planChecklistPrepCleanup(params: {
 export function buildChecklistPrepCleanupMessage(params: {
   removed: ChecklistPrepRemovedCounts
   templateRemoved: number
+  /** テンプレから外した準備の印の講師の数（第 3 段・§E-2-4-3）。 */
+  templateTeachersRemoved?: number
   templateSaved?: { effectiveStartDate: string; todayKey: string } & ChecklistPrepTemplateSaveResult
 }): string {
   const { trials, memos, teachers } = params.removed
+  const templateTeachersRemoved = params.templateTeachersRemoved ?? 0
+  const templateSaved = params.templateRemoved + templateTeachersRemoved > 0 && params.templateSaved
   const lines: string[] = []
   if (trials + memos + teachers > 0) lines.push(`盤面から消しました: 確認用の体験 ${trials} 人・確認用のメモ ${memos} 件・準備で置いた講師 ${teachers} 人。`)
-  if (params.templateRemoved > 0 && params.templateSaved) {
-    lines.push(`テンプレから確認用の生徒の登録 ${params.templateRemoved} 件を外して、テンプレを保存しました。`)
-    lines.push(...buildSavedDetailLines(params.templateSaved))
+  if (templateSaved) {
+    const parts = [
+      ...(params.templateRemoved > 0 ? [`確認用の生徒の登録 ${params.templateRemoved} 件`] : []),
+      ...(templateTeachersRemoved > 0 ? [`準備で登録した講師 ${templateTeachersRemoved} 人`] : []),
+    ]
+    lines.push(`テンプレから${parts.join('・')}を外して、テンプレを保存しました。`)
+    lines.push(...buildSavedDetailLines(params.templateSaved!))
   }
   // テンプレも保存したときは「盤面とテンプレ」、盤面だけのときは「盤面」（M-1）。
-  lines.push(params.templateRemoved > 0 && params.templateSaved ? CHECKLIST_PREP_CLEANUP_SAVE_REMINDER : CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER)
+  lines.push(templateSaved ? CHECKLIST_PREP_CLEANUP_SAVE_REMINDER : CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER)
   return lines.join('\n')
 }

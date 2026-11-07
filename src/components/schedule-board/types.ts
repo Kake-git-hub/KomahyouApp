@@ -211,12 +211,25 @@ export type DeskCell = {
    */
   teacherRest?: { teacher: string; teacherId?: string; sessionId?: string }
   /**
+   * 講師欄の緑 2 行で「下段(手入力)の講師を採用する」を選んだとき、この机で取り下げたテンプレの講師（名前と ID）
+   * （docs/spec-template-conflict-v2.md §4-1 の講師欄版・2026-11-07 開発用教室の操作ログ・確認リスト tp-64 / tp-69 / tp-70）。
+   * adopted は採用した手置き講師（名前と ID）。机の講師が採用した講師本人の間だけ、テンプレ保存（差分反映）と再マージ（講師だけのテンプレ机を空き机へ置く所）は
+   * 取り下げた講師をこの机・空き机に置かない＝採用した手置き講師の 1 行のまま（INV-02 / INV-03）。講師を手で替えた・入替で別の講師が来た机では効かない。
+   * 判定は templateDiffApply.ts の isTemplateTeacherDeclinedAtDesk 1 か所。テンプレがこの机に別の講師を置いた・講師を外した・記録が効かなくなった反映で消える。
+   */
+  templateTeacherDeclined?: { teacher: string; teacherId?: string; adopted?: { teacher: string; teacherId?: string } }
+  /**
    * 確認リストの「準備する」（docs/spec-developer-report.md §E-2-4-2・開発用教室とテスト教室だけ）が置いた講師の印。
    * 「後片づけ」（checklistPrepTemplate.ts の cleanupChecklistPrepBoard）が消す講師の見分けにだけ使う（画面・日程表・PDF には出さない）。
    * 講師の項目と一緒に動く（保留の下の行の講師へ移る・「手入力の講師を採用」で戻る・テンプレの講師に替わると外れる）。
    * 室長が講師メニューで講師を置き直したら外れる（setManualTeacherAssignment・あとで手で替えた講師は後片づけで消さない＝INV-02）。
    */
   checklistPrepTeacher?: true
+  /**
+   * テンプレ作成の画面の机（buildTemplateBoardCells が作る・盤面の週には入らない）だけが持つ、確認リストの準備の印
+   * （RegularLessonTemplateDesk.checklistPrepTeacherId の写し・§E-2-4-3）。convertTemplateCellsToTemplate が、今の講師が同じときだけテンプレへ戻す。
+   */
+  checklistPrepTemplateTeacherId?: string
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   /** §9-20: 付け替えの作成で移動元 D から移したメモ（席ごとに D と移した本文）。解除は今のメモが同じ本文のときだけ D の同じ席へ戻す（再監査 要修正-2）。 */

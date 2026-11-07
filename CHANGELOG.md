@@ -14,6 +14,13 @@
 
 ## 未リリース
 
+## v1.5.696 (2026-11-07)
+
+- fix: 講師欄の緑 2 行で「下段(手入力)の講師を採用する」を選んだ机が、次のテンプレ保存(別の時限だけ変えた保存・確認リストの準備を含む)でテンプレの講師へ戻り、手置き講師が下段へ戻されていた(11/7 開発用教室の操作痕跡で発見)。採用時に取り下げたテンプレ講師と採用した講師を机に記録し(`DeskCell.templateTeacherDeclined`・使い切り・今の講師が採用した本人のときだけ効く)、差分反映(`applyRulesToDesk`)と再マージ(`placeManagedTeacherOnlyDesk`)の両方で同じ `isTemplateTeacherDeclinedAtDesk` で判定する。講師の照合は休みと共通の `isSameTeacherRecord`。回帰防止テスト `inv02-manual-teacher-pending.matrix.test.ts`(講師だけの机・空き机のあるコマ・講師の手替え・入れ替え・休み・丸ごと振替)。仕様 spec-template-conflict-v2 §4-1。確認リスト ta-1。 触れる INV: INV-02・INV-03。
+- feat: 確認リストの「準備する」第 3 段(オーナー指示 2026-11-07「他のテンプレにも準備するを適用して」)。tp-59・tp-69・tp-70 に新しい置き方(テンプレの空き机へ講師も登録し、準備の印 `checklistPrepTeacherId` を付ける・手で置く生徒は体験)、mn-1・tp-66 は tp-64 の置き方を使い回す。後片づけは印の講師だけをテンプレから外す。テスト `checklistPrepStage3.test.ts`(実際のテンプレ保存まで通して項目の目安の形を固定)。 触れる INV: INV-02・INV-06・INV-08・INV-12。
+- fix: 確認リスト ap-3 要改善「後片付けのボタンが出てこない」→ 「後片づけ」を各項目の「準備する」の右にも出す(上の 1 つは残す)。
+- docs: 確認リスト第116版(v1.5.696)。OK の ap-2・tp-64・wc-1・wc-2 を外し、ap-3・tp-59・tp-69・tp-70・mn-1・tp-66 を書き換え、ta-1 を足した。仕様 spec-developer-report §E-2-4-3・計画 docs/plan-2026-11-07-checklist-auto-prep-stage3.md。
+
 ## v1.5.695 (2026-11-06)
 
 - docs: 退塾の確認文と使い方の「未消化へは戻りません」を「消したコマの分は未消化へ戻りません」に書き分け(取消で戻る残数と矛盾しないように・退塾取消のレビュー Minor-1)。確認リスト wc-1・wc-2 の版の記載を実際に入る v1.5.695 へ。

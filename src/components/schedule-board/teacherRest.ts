@@ -11,7 +11,7 @@
 
 import type { DeskCell, SlotCell } from './types'
 import type { TemplateTeacherRestPredicate } from './templateConflictRules'
-import { isSameTeacherByAliases, type TeacherAliasResolver } from './templateDiffApply'
+import { isSameTeacherRecord, type TeacherAliasResolver } from './templateDiffApply'
 
 export type DeskTeacherRest = NonNullable<DeskCell['teacherRest']>
 
@@ -28,9 +28,8 @@ export function hasDeskTeacherRest(desk: Pick<DeskCell, 'teacherRest'> | null | 
 
 /** 休みの記録がこの講師（表示名か ID）と同じ講師か。呼び名の対応表（講師 ID・登録名・表示名）で重なりを見る（講師の一意判定と同じ鍵）。 */
 export function doesTeacherRestMatch(rest: DeskTeacherRest, teacher: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
-  const restKeys = [rest.teacherId ?? '', rest.teacher].map((key) => key.trim()).filter(Boolean)
-  const targetKeys = [teacher.teacher, teacher.teacherAssignmentTeacherId ?? ''].map((key) => key.trim()).filter(Boolean)
-  return restKeys.some((restKey) => targetKeys.some((targetKey) => isSameTeacherByAliases(restKey, targetKey, aliases)))
+  // 照合の本体は講師欄の採用の記録と共有（templateDiffApply.ts の isSameTeacherRecord・中身は 2026-11-07 までここにあったものと同じ）。
+  return isSameTeacherRecord(rest, teacher, aliases)
 }
 
 /** そのコマ（机のどれか）にこの講師の休みがあるか（§2-4「X の休みがそのコマにある」）。 */

@@ -4,7 +4,7 @@ import { getJstTodayDateKey } from '../../utils/jstDate'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isHiddenAutoAssignRule, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, setTemplateEditorDeskTeacher, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
 import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specialSessionModel'
 import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, selectStudentFacingSpecialSessions } from '../special-data/specialSessionModel'
@@ -39,7 +39,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -5442,6 +5442,11 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
 
       // Skip if this teacher was explicitly deleted from any desk in the cell
       if (isDeletedTeacher(managedDesk, mi)) return
+
+      // 2026-11-07（regression-reviewer M-1・spec-template-conflict-v2 §4-1 の講師欄版）: 「下段(手入力)の講師を採用する」で取り下げたテンプレの講師は空き机へも置かない。
+      // 差分反映（applyRulesToDesk）と同じ isTemplateTeacherDeclinedAtDesk で判定する（片方だけだと保存直後の再マージで取り下げた講師が空き机に湧く＝INV-03）。
+      // 記録の机は並び替え（§9-22 案 A）で机番号がずれることがあるので、そのコマのどの机の記録でも見る（同じ講師は 1 コマに 1 机＝INV-01）。
+      if (nextDesks.some((desk) => isTemplateTeacherDeclinedAtDesk(desk, managedTeacherRef(managedDesk, mi), teacherAliases))) return
 
       // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
       // 講師の休み（§2-4）の机は最後の候補（休みの記録は机に残るので消えないが、空き机を先に使い、休みのグレーを別の講師で隠さない）。
@@ -12000,7 +12005,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = next.find((c) => c.id === teacherMenu.cellId)
     const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
     if (!targetDesk) return
-    targetDesk.teacher = teacherMenu.selectedTeacherName
+    // 講師を選び直した机は確認リストの準備の印を外す(後片づけで室長の講師を外さない・regression-reviewer M-1・INV-02)。
+    setTemplateEditorDeskTeacher(targetDesk, teacherMenu.selectedTeacherName)
     setTemplateCells(next)
     setTeacherMenu(null)
     setStatusMessage(`講師を ${teacherMenu.selectedTeacherName || '未設定'} に変更しました。`)
@@ -12013,7 +12019,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = next.find((c) => c.id === teacherMenu.cellId)
     const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
     if (!targetDesk) return
-    targetDesk.teacher = ''
+    setTemplateEditorDeskTeacher(targetDesk, '')
     setTemplateCells(next)
     setTeacherMenu(null)
     setStatusMessage('講師を削除しました。')
@@ -15738,10 +15744,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       if (phase.kind === 'cleanup') {
-        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
+        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateTeachersRemoved: phase.templateTeachersRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
         return
       }
-      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
+      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, assignedTeachers: phase.assignedTeachers, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
     }
     // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
     // ★盤面を当てたのと同じレンダーのクロージャ(準備前の weeks)では保存しない(StrictMode の effect の 2 回目など。保存すると準備前の weeks から
@@ -15784,7 +15790,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       // queuedFromWeeks / queuedFromPendingDesks は盤面を当てる前の参照(両方そのままのレンダーでは保存しない・I-1。下の行だけ消すと weeks は同じ参照のまま・修正ラウンド 2)。
-      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, templateTeachersRemoved: cleanupPlan.templateTeachersRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       if (cleanupPlan.boardChanged) {
         checklistPrepTemplatePhaseRef.current = cleanupPhase
         onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })
@@ -15830,8 +15836,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
     // 第 2 段: 保存するテンプレ(確認用の生徒の登録)を盤面を当てる前に作る。作れなければ盤面も変えない(それより後は行わない・§E-2-4-2 安全)。
-    const templateSave = step.plan.templateRegistrations.length > 0
-      ? prepareChecklistPrepTemplateSave({ registrations: step.plan.templateRegistrations, baseTemplate: prepTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
+    // 第 3 段(§E-2-4-3): テンプレへの講師の登録(講師も生徒も居ない机だけ・準備の印つき)も同じテンプレで行う(tp-70 は講師だけ)。
+    const templateSave = step.plan.templateRegistrations.length > 0 || step.plan.templateTeacherRegistrations.length > 0
+      ? prepareChecklistPrepTemplateSave({ registrations: step.plan.templateRegistrations, teacherRegistrations: step.plan.templateTeacherRegistrations, baseTemplate: prepTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
       : null
     if (templateSave && !templateSave.ok) {
       finish(false, templateSave.reason)
@@ -15850,7 +15857,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(step.plan.deskIndex)
     if (templateSave) {
       setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
-      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, assignedTeachers: templateSave.assignedTeachers, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })
       return
     }

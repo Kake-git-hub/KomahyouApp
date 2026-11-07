@@ -11,7 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell, type TeacherAliasResolver } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, buildTemplateTeacherDeclined, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell, type TeacherAliasResolver } from './templateDiffApply'
 import { releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import {
   buildTemplatePendingDeskKey,
@@ -511,6 +511,12 @@ export function computePendingTeacherChoice(params: {
       return { status: 'blocked', message: `手入力の講師を採用できません。講師 ${manualName} が同じコマの机 ${elsewhere} に居ます（同じ講師を 2 つの机に置けません）。「テンプレの講師を採用」を選ぶか、机 ${elsewhere} の講師を片づけてから選んでください。` }
     }
     const adopted = alignTeacherIdentityWithRemerge(applyTemplatePendingLowerTeacherToDesk(location.desk, teacher))
+    // 2026-11-07（開発用教室の操作ログ・tp-64 / tp-69 / tp-70・spec-template-conflict-v2 §4-1 の講師欄版）: 取り下げた上の行のテンプレの講師を机に記録する。
+    // 記録が無いと、次のテンプレ保存（毎回全コマを当て直す・§6 Q39）が「手置き講師 × テンプレの別の講師」として講師欄を緑 2 行に戻し、
+    // 机にテンプレの講師を戻していた（採用が保存のたびに取り消される＝INV-02 / INV-03）。反映は isTemplateTeacherDeclinedAtDesk でこの講師をこの机に置かない。
+    const declined = buildTemplateTeacherDeclined(location.desk, teacher, params.teacherAliases)
+    if (declined) adopted.templateTeacherDeclined = declined
+    else delete adopted.templateTeacherDeclined
     // §9-19: 休んだ講師本人を「下段(手入力)の講師を採用する」で置き直したら休みを解除する（別の講師なら残す）。
     if (adopted.teacherRest) {
       const released = { ...adopted }
