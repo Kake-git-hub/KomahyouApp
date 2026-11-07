@@ -1648,16 +1648,14 @@ export function applyStudentEdit(params: {
       dateKey: previous.sameDayMoveSourceDate ?? cellDateKey,
       slotNumber: parseOriginSlotNumberFromLabel(previous.sameDayMoveSourceLabel) ?? cellSlotNumber,
     }
-    const occurrenceKey = buildManagedOccurrenceKey(previous, original.dateKey, original.slotNumber)
-    if (!suppressedRegularLessonOccurrences.includes(occurrenceKey)) {
+    // キーは権威関数 resolveSuppressedRegularLessonOccurrenceKeys（1 本目＝今の科目・buildManagedOccurrenceKey(previous, …) と同じ）。
+    // INV-12（2026-11-07・フラグ OFF）: 先に「編集」で科目だけ変えていた（数→国）テンプレの授業は、2 本目＝テンプレの科目（数）のキーも積む。
+    //   今の科目のキーだけだと、振替にしたコマが席を空けた後の再マージで元の机にテンプレの生徒（数）が戻る。ON（stampOrigin）は従来どおり 1 本。
+    const [occurrenceKey, templateOccurrenceKey] = resolveSuppressedRegularLessonOccurrenceKeys(previous, original.dateKey, original.slotNumber, { templateOriginRules: Boolean(params.stampOrigin) })
+    if (occurrenceKey && !suppressedRegularLessonOccurrences.includes(occurrenceKey)) {
       suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, occurrenceKey)
       original.addedOccurrenceKey = occurrenceKey
     }
-    // INV-12（2026-11-07・フラグ OFF）: 先に「編集」で科目だけ変えていた（数→国）テンプレの授業は、テンプレの科目（数）のキーも積む。
-    //   今の科目のキーだけだと、振替にしたコマが席を空けた後の再マージで元の机にテンプレの生徒（数）が戻る。キーの決め方は権威関数
-    //   resolveSuppressedRegularLessonOccurrenceKeys と同じ（授業 ID からテンプレの科目を読む）。ON（stampOrigin）は従来どおり 1 本。
-    const templateOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKeys(previous, original.dateKey, original.slotNumber, { templateOriginRules: Boolean(params.stampOrigin) })
-      .find((key) => key !== occurrenceKey)
     if (templateOccurrenceKey && !suppressedRegularLessonOccurrences.includes(templateOccurrenceKey)) {
       suppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, templateOccurrenceKey)
       original.addedTemplateOccurrenceKey = templateOccurrenceKey
@@ -3467,7 +3465,7 @@ function resolveTemplateLessonSubjectFromId(student: Pick<StudentEntry, 'id' | '
  *   今の科目のキーも従来どおり返す（既に保存された記録の解除で外れるよう・保護者ページの写しも同じ形）。積む側と外す側で必ず同じ関数を使う
  *   （片方だけテンプレの科目を足すと、休み解除で戻した生徒がテンプレの席ごと抑止されて再マージで消える）。
  * ★フラグ ON（第 2 版）は従来どおり今の科目の 1 本だけ（§2-2 の規則で同じコマに置かない・同日移動の写しのキー外し collectSameDayMovedTemplateOccurrenceKeys が 1 本前提）。
- * キーの形（buildManagedOccurrenceKey）は変えない。
+ * キーの形（buildManagedOccurrenceKey）は変えない。戻り値の順は [今の科目のキー, テンプレの科目のキー（あれば）]（applyStudentEdit が 1 本目・2 本目を分けて控える）。
  */
 export function resolveSuppressedRegularLessonOccurrenceKeys(student: StudentEntry, dateKey: string, slotNumber: number, options: { templateOriginRules: boolean }): string[] {
   const primary = resolveSuppressedRegularLessonOccurrenceKey(student, dateKey, slotNumber)
@@ -6515,8 +6513,9 @@ export function computeStudentMove(params: {
   }
   // Issue #56: 入れ替え相手の着地先(移動元コマ)にも同一生徒がいないか検査する。ここに検査が無く、
   // 相手が移動元コマへ入ったとき既に同じ生徒が居ると二重配置になっていた(日程表D&Dスワップで顕在化)。
-  // movedStudent は上で移動元から抜いた後なので、除外するのは相手自身のIDだけで足りる(保険で両方除外)。
-  // INV-12（2026-11-07）: ここも席で除外する。相手は移動先の席に居るので、同じコマの中の入れ替えならその席だけを除く（別のコマなら除くものは無い）。
+  // movedStudent は上で移動元から抜いた後なので、移動元コマに残っているのは「相手が入る前」の状態。
+  // INV-12（2026-11-07）: 除外は授業 ID でなく席で行う（以前は相手と動かす生徒の ID を除外していたが、同じ ID の相手の写しが移動元コマに居ても素通りした）。
+  //   相手は移動先の席に居るので、同じコマの中の入れ替えならその席だけを除く（別のコマなら除くものは無い＝移動元コマの同じ生徒は必ず止める）。
   if (targetStudentBeforeMove) {
     const sourceCellForSwapCheck = nextWeeks.flat().find((c) => c.id === sourceCellId)
     const swapDuplicate = sourceCellForSwapCheck
@@ -7949,7 +7948,9 @@ export function computePendingLowerStudentMove(params: {
   // INV-12: 実際の盤面（上段を含む）で同じコマに同じ生徒が生きていないか。
   const targetRealCell = params.weeks.flat().find((cell) => cell.id === params.cellId)
   const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, params.managedStudentByAnyName, params.resolveBoardStudentDisplayName)
-  const duplicate = targetRealCell ? findDuplicateStudentInCellByKey(targetRealCell, resolveComparableKey(lowerStudent), resolveComparableKey, [lowerStudent.id]) : null
+  // INV-12（2026-11-07）: 下段の生徒は盤面の席（weeks）に居ないので、授業 ID で除外しない（同じ ID の同じ生徒が上段・別の机に居ても素通りした）。
+  //   移動先の席は上で空きを確かめてあるので、除外する席も無い（computeStudentMove の席での除外と同じ考え方）。
+  const duplicate = targetRealCell ? findDuplicateStudentInCellByKey(targetRealCell, resolveComparableKey(lowerStudent), resolveComparableKey, []) : null
   if (duplicate) return { status: 'blocked', message: `同コマにすでに${params.resolveBoardStudentDisplayName(duplicate.name)}が組まれているため移動できません。` }
 
   // 同じ保留の机の上段の空席へ戻す（regression-reviewer H-1・2026-10-02・INV-02 / INV-13 / INV-06）。
@@ -8008,6 +8009,9 @@ export function computePendingLowerStudentMove(params: {
     suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
     managedStudentByAnyName: params.managedStudentByAnyName,
     resolveBoardStudentDisplayName: params.resolveBoardStudentDisplayName,
+    // templateOriginRules は渡さない（従来どおり）。保留の机はフラグ ON の教室だけの経路だが、true にすると同じ日の中のテンプレの授業の移動が
+    // 抑止キーを積まなくなる（isSameDayTemplateMove）＝下段に戻ったテンプレの授業を動かしたときの挙動が変わるので、ここでは決めない（2026-11-07 報告）。
+    // 抑止キーの権威関数は一時 id（`…__template_pending_lower_move`）からテンプレの科目を読まないので、フラグ OFF 側の 2 本目は出ない。
   })
   if (result.status !== 'moved') return result
 

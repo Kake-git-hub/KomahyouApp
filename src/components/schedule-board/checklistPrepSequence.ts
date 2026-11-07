@@ -593,6 +593,8 @@ function applyBoardOps(env: ChecklistPrepSequenceEnv, ops: readonly ChecklistPre
         managedStudentByAnyName: env.managedStudentByAnyName,
         resolveDisplayName: env.resolveDisplayName,
         resolveStockId: env.resolveStockId,
+        // 確認リストの準備は開発用教室（機能フラグ templateDiffApply が ON）で動く＝上の移動と同じく第 2 版の抑止キーの決め方（INV-12 2026-11-07）。
+        templateOriginRules: true,
       })
       if (!result || result.kind !== 'makeup-returned' || !result.makeupStock) return { ok: false, reason: `${studentName(env, op.studentId)} の授業を休みにできませんでした。` }
       work = { weeks: result.nextWeeks, ledgers: result.ledgers, lastAbsent: result.makeupStock }
