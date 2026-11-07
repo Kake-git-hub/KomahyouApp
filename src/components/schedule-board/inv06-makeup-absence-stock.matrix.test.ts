@@ -1932,6 +1932,21 @@ describe('INV-06 経路: 同じ日に同じ科目 2 コマを両方「休み」�
     expect(stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments, { settings: createSettings({ holidayDates: [BOARD_DATE] }) })?.balance).toBe(2)
   })
 
+  it('S-3: 手で足した通常授業（テンプレと別の 6限）を休み、その日を休日にする → テンプレの 5限（休日）と 6限（休み）で 2', () => {
+    // テンプレは 5限だけ。5限のテンプレ授業は盤面に置いたまま、6限の手で足した授業を休む。
+    const weeks = [[slotCell(5, boardStudent({ id: 'entry-5' })), slotCell(6, boardStudent({ id: 'entry-6', manualAdded: true }))]]
+    const absent = markAbsent(weeks, emptyLedgers(), 'cell-6')
+    expect(absent.ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE, slotNumber: 6 }])
+    // 休日設定は 5限のテンプレ授業を時限なしで返す（自動発生 D#5 と畳まれる）。
+    const ledger = { [STOCK_KEY]: [...absent.ledgers.manualMakeupAdjustments[STOCK_KEY], { dateKey: BOARD_DATE }] }
+    const holidayWeeks = [[slotCell(5, null), absent.nextWeeks[0][1]]]
+    const entry = buildMakeupStockEntries({
+      students: [student], teachers: [teacher], regularLessons: [regularLesson], classroomSettings: createSettings({ holidayDates: [BOARD_DATE] }),
+      weeks: holidayWeeks, manualAdjustments: ledger, resolveStudentKey: resolveStudentKey as (entry: StudentEntry) => string, today: TODAY,
+    }).find((item) => item.key === STOCK_KEY)
+    expect(entry?.balance).toBe(2) // 修正前は時限なし 2 件が自動発生 D#5 に畳まれて 1（1 コマ消えていた）
+  })
+
   it('後方互換: 旧データ（時限なし 1 件）＋時限つきの休みの記録は従来どおり 1 件に吸収される', () => {
     const second = markBoth()
     expect(stockOf(second.nextWeeks, { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] })?.balance).toBe(1)

@@ -28,7 +28,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, isStockNeutralEditedMakeup, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, isStockNeutralEditedMakeup, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveDeletedLessonSuppressionOrigin, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { resolveClosedDayStudentPlacementBlock, resolveStudentMoveClosedDayBlock } from './closedDayPlacementGuard'
 import { findStudentMoveSource, type StudentMoveSourceSeat } from './studentMoveSource'
@@ -6659,6 +6659,11 @@ export function computeStudentAbsentMark(params: {
   // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
   // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
   // ★時限つきで積む（2026-11-07・INV-06）: 時限なしだと同じ日に同じ科目を 2 コマ休んだとき 1 件に畳まれる（resolveLessonMakeupOriginSlotNumber）。
+  //   既知の限界 S-2: 修正前に時限なしで積んだ休み（4限 `D`）と修正後の休み（5限 `D#5`）が同じ日に並ぶと、時限なしはワイルドカードなので 1 件に数える
+  //   （旧データは読み替えない＝過大計上しない側。直すならその 4限で休み解除 → もう一度休み）。
+  //   既知の限界 S-3: 休日の自動発生はテンプレ行の時限で立つ。テンプレの時限を変えた後に、変える前の時限に残った休みの記録の日を休日にすると
+  //   `D#旧限`（休み）と `D#新限`（自動発生）を別に数える（修正前は 1）。同じ日の中で動かした授業は元の時限（sameDayMoveSourceLabel）で積むので当たらない。
+  //   手で足した通常授業（テンプレと別の時限）の休みは、テンプレの授業とは別のコマなので別に数えるのが正しい（修正前は 1 に畳まれていた）。
   const absentOriginSlotNumber = resolveLessonMakeupOriginSlotNumber(targetStudent, targetCell.slotNumber)
   const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
     ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey), absentOriginSlotNumber)
@@ -15747,7 +15752,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       makeupStock: {
         stockKey: result.makeupStock!.stockKey,
         originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-        originSlotNumber: resolveLessonMakeupOriginSlotNumber(targetStudent, targetCell.slotNumber),
+        originSlotNumber: result.makeupStock!.originSlotNumber,
       },
     }
   }
@@ -16500,15 +16505,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (menuStudent.student.lessonType === 'regular' || isStockNeutralEditedMakeup(menuStudent.student)) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
       // INV-06（2026-11-07）: 抑制は時限つき（テンプレ上の元の時限＝全コマ削除の抑制と同じ）。時限なしはその日付を丸ごと落とし、
-      //   同じ日の別のコマの休み（未消化振替）まで消す。
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey), resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
+      //   同じ日の別のコマの休み（未消化振替）まで消す。ただし時限なしの旧データがある日は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
+      const suppression = resolveDeletedLessonSuppressionOrigin({
+        dateKey: resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
+        slotNumber: resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
+        effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
+        ledgerOrigins: normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students)[stockKey] ?? [],
+        requireExactOrigin: false,
+      })
+      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
       statusSuffix = '振替対象にはしません。'
     }
 
     if (menuStudent.student.lessonType === 'makeup' && menuStudent.student.makeupSourceDate) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
-      // INV-06（2026-11-07）: 振替元ラベルの時限で抑制する（同じ日の別のコマの振替元を巻き込まない）。ラベルの無い旧データは従来どおり時限なし。
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, menuStudent.student.makeupSourceDate, resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
+      // INV-06（2026-11-07）: 振替元ラベルの時限で抑制する（同じ日の別のコマの振替元を巻き込まない）。ラベルの無い振替・時限なしの旧データから置いた振替・
+      //   ラベルの時限の origin が無い振替は従来どおり時限なし（M-1・resolveDeletedLessonSuppressionOrigin）。
+      const suppression = resolveDeletedLessonSuppressionOrigin({
+        dateKey: menuStudent.student.makeupSourceDate,
+        slotNumber: resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
+        effectiveOriginTokens: makeupOriginDatesByKey[stockKey] ?? [],
+        ledgerOrigins: normalizeMakeupOriginMapKeys(manualMakeupAdjustments, students)[stockKey] ?? [],
+        requireExactOrigin: true,
+      })
+      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, suppression.dateKey, suppression.slotNumber)
     }
 
     if (menuStudent.student.lessonType === 'special') {

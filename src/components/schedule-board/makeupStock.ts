@@ -717,6 +717,39 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
   return origins
 }
 
+/**
+ * 単発削除（×・handleDeleteStudent）で積む抑制の形（INV-06・2026-11-07 regression-reviewer M-1）。
+ * 時限つきの抑制は「その (日付,時限) の origin」だけを落とし、時限なしの抑制はその日付を丸ごと落とす（resolveEffectiveMakeupOriginDates）。
+ * 本番の台帳には時限なしの origin（2026-11-07 より前の休み・格納、休日設定・全コマ削除の返却）が大量にあり、時限なしの origin から置いた振替にも
+ * buildOriginLabels で「… 5限」のラベルが付く（消化は同じ日のフォールバック）。それを `D#5` で抑制すると時限なしの `D` に当たらず未消化として生き返る（誤増）。
+ * 規則（上から順に）:
+ *   1. 時限が分からない → 時限なし（従来どおり）。
+ *   2. その日に**時限なしの origin がある**（台帳の生の行 ledgerOrigins／有効 origin effectiveOriginTokens のどちらか）→ 時限なし（従来どおり＝その日を丸ごと落とす）。
+ *      ★有効 origin だけを見ると、休日の自動発生 `D#5` に畳まれて見えない時限なしの返却 `D` を見落とし、`D#5` を抑制した途端に `D` が浮上する。
+ *   3. 振替の削除（requireExactOrigin）で `D#限` の有効 origin が無い（同じ日のフォールバックで別の時限を消化していた）→ 時限なし（従来どおり）。
+ *   4. それ以外 → 時限つき（同じ日の別のコマの休みを巻き込まない）。
+ * ★既知の限界: 2 の規則のため、時限なしの旧データが残る日は従来どおりその日を丸ごと落とす（別のコマの休みも消える＝修正前と同じ。新しく積む休みは時限つき）。
+ */
+export function resolveDeletedLessonSuppressionOrigin(params: {
+  dateKey: string
+  slotNumber: number | null
+  /** その在庫キーの有効 origin（collectMakeupOriginDatesByKey の行・抑制適用後）。 */
+  effectiveOriginTokens: readonly string[]
+  /** その在庫キーの手動台帳の生の行（キー正規化後・抑制前）。 */
+  ledgerOrigins: readonly ManualMakeupOrigin[]
+  /** 振替の削除は true（`D#限` の有効 origin があるときだけ時限つき）。通常授業の削除は false（休日の自動発生に当てる時限）。 */
+  requireExactOrigin: boolean
+}): ManualMakeupOrigin {
+  const { dateKey, slotNumber, effectiveOriginTokens, ledgerOrigins, requireExactOrigin } = params
+  const wholeDate: ManualMakeupOrigin = { dateKey }
+  if (!slotNumber) return wholeDate
+  const hasSlotlessOnDate = ledgerOrigins.some((origin) => origin.dateKey === dateKey && !origin.slotNumber)
+    || effectiveOriginTokens.some((token) => token === dateKey)
+  if (hasSlotlessOnDate) return wholeDate
+  if (requireExactOrigin && !effectiveOriginTokens.includes(buildOriginToken(dateKey, slotNumber))) return wholeDate
+  return { dateKey, slotNumber }
+}
+
 // 有効な未消化 origin を決める唯一の権威関数（分散させない）。入出力はいずれも origin トークン
 // （`YYYY-MM-DD` または `YYYY-MM-DD#限`）。4 発生源の和集合から抑制分を除き、日付＋時限で一意にする。
 //
