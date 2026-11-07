@@ -572,6 +572,77 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
       }
     }
 
+    // 2026-11-07（残るリスクの兄弟・案 2）: 印 wholeDayPairMovedFrom が落ちた自分の授業（休み→解除で席へ戻した・D' の中で動かした）を D' で単発削除・格納しても、
+    //   D のテンプレの A を D' に戻さない（v1.5.706 の「戻さない」と同じ）。削除・格納のキー決め（resolveRemovedLessonOccurrenceKeysFor）に組のキーを渡し、
+    //   授業 ID が D のテンプレの授業で振替元が D なら（isWholeDayPairSourceOwnEntry）D の日付のキーを積む。
+    const seatOfAOnTarget = (weeks: SlotCell[][]) => {
+      const desks = cellAt(weeks, D2).desks
+      const deskIndex = desks.findIndex((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'sA'))
+      const studentIndex = desks[deskIndex]!.lesson!.studentSlots.findIndex((student) => student?.managedStudentId === 'sA')
+      return { deskIndex, studentIndex, student: desks[deskIndex]!.lesson!.studentSlots[studentIndex]! }
+    }
+    const removeOwn = (opName: '削除' | '格納') => (weeks: SlotCell[][], suppressed: string[], manual: Record<string, Array<{ dateKey: string; slotNumber?: number }>>) => {
+      const next = structuredClone(weeks)
+      const seat = seatOfAOnTarget(next)
+      const keys = resolveRemovedLessonOccurrenceKeysFor(seat.student, D2, SLOT, true, suppressed)
+      const ledgers = opName === '格納'
+        ? computeStoredLessonMakeupLedgers({ student: seat.student, cellDateKey: D2, cellSlotNumber: SLOT, manualMakeupAdjustments: manual, suppressedMakeupOrigins: {}, makeupOriginDatesByKey: {}, resolveStockId: resolveKey }).nextManualMakeupAdjustments
+        : manual
+      removeStudentFromDeskLesson(cellAt(next, D2).desks[seat.deskIndex], seat.studentIndex)
+      return { weeks: next, suppressed: [...suppressed, ...keys.filter((key) => !suppressed.includes(key))], manual: ledgers }
+    }
+    const lostMarkOps = {
+      休み解除: absentThenClear,
+      'D\' の中で別の机へ移動': moveWithinTarget,
+    }
+    for (const [kindName, kind] of Object.entries(dataKinds)) {
+      for (const [priorName, prior] of Object.entries(lostMarkOps)) {
+        for (const opName of ['削除', '格納'] as const) {
+          it(`${kindName}を D' で${priorName}してから${opName} → 保存でも再マージでも D' に D のテンプレの A を戻さない・解除しても D に戻らない`, () => {
+            const paired = pairedWith(kind.setup)
+            const before = prior(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+            const own = seatOfAOnTarget(before.weeks).student
+            expect(own.wholeDayPairMovedFrom).toBeUndefined()
+            const after = removeOwn(opName)(before.weeks, before.suppressed, before.manual)
+            expect(after.suppressed).toContain(`sA__数__${D}__${SLOT}`)
+            const expected = opName === '格納' ? { [`sA__${own.subject}`]: 1 } : {}
+            const remerged = remerge(after.weeks, ROWS, after.suppressed)
+            const saved = save(after.weeks, ROWS, after.suppressed, { manualMakeupAdjustments: after.manual })
+            for (const [label, weeks] of [['再マージ', remerged], ['テンプレ保存', saved.nextWeeks]] as const) {
+              expect(placesOfA(weeks), label).toEqual([])
+              expect(stockWith(weeks, after.manual, kind.suppressedOrigins), label).toEqual(expected)
+            }
+            for (const dateKey of [D, D2]) expect(JSON.stringify(cellAt(saved.nextWeeks, dateKey)), dateKey).toBe(JSON.stringify(cellAt(remerged, dateKey)))
+            const released = releaseOf(remerged, after.suppressed)
+            if (released.status !== 'transferred') throw new Error(released.message)
+            for (const weeks of [released.nextWeeks, remerge(released.nextWeeks, ROWS, released.nextSuppressedRegularLessonOccurrences)]) {
+              expect(placesOfA(weeks)).toEqual([`${D2}:数`]) // D' 自身の曜日のテンプレの A だけ（D の A は消したまま）。
+            }
+          })
+        }
+      }
+    }
+
+    it('組が無い・フラグ OFF・付け替えの移動先でない日は今と同じ答え（組のキーを渡しても変わらない）', () => {
+      const pairKeys = [buildWholeDayTransferPairKey(D, D2)]
+      // ふだんの日に別の日へ動かしたテンプレの授業（授業 ID は D のテンプレの授業・振替元 D）。
+      const movedRegular: StudentEntry = { id: `sA_${D}_数`, name: '青木', managedStudentId: 'sA', grade: '中2', subject: '英', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: D, makeupSourceLabel: '2026/10/7(水) 5限', origin: 'manual' }
+      const regular: StudentEntry = { id: `sA_${D2}_数`, name: '青木', managedStudentId: 'sA', grade: '中2', subject: '英', lessonType: 'regular', teacherType: 'normal', origin: 'manual' }
+      for (const student of [movedRegular, regular]) {
+        for (const flag of [true, false]) {
+          const base = resolveRemovedLessonOccurrenceKeysFor(student, D2, SLOT, flag)
+          expect(resolveRemovedLessonOccurrenceKeysFor(student, D2, SLOT, flag, [])).toEqual(base)
+          expect(resolveRemovedLessonOccurrenceKeysFor(student, '2026-10-21', SLOT, flag, pairKeys)).toEqual(resolveRemovedLessonOccurrenceKeysFor(student, '2026-10-21', SLOT, flag))
+          if (!flag) expect(resolveRemovedLessonOccurrenceKeysFor(student, D2, SLOT, flag, pairKeys)).toEqual(base)
+        }
+      }
+      expect(resolveRemovedLessonOccurrenceKeysFor(movedRegular, D2, SLOT, true)).toEqual([])
+      // 組の移動先の日だけ D の日付のキー（今の科目とテンプレの科目）。
+      expect(resolveRemovedLessonOccurrenceKeysFor(movedRegular, D2, SLOT, true, pairKeys)).toEqual([`sA__英__${D}__${SLOT}`, `sA__数__${D}__${SLOT}`])
+      // 在庫からの振替（授業 ID が D のテンプレの授業でない）は対象外。
+      expect(resolveRemovedLessonOccurrenceKeysFor({ ...movedRegular, id: 'mkA' }, D2, SLOT, true, pairKeys)).toEqual([])
+    })
+
     it('付け替えで展開した（科目を変えていない）テンプレの授業を D\' で休み → 未消化 1 件（従来どおり）', () => {
       const paired = pairedOrThrow(pairOf(baseBoard()))
       const seat = { cellId: cellAt(paired.nextWeeks, D2).id, deskIndex: 0, studentIndex: 0 }

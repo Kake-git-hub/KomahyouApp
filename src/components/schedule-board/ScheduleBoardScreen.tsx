@@ -81,7 +81,7 @@ import { buildChecklistPrepCleanupMessage, buildChecklistPrepDoneMessage, buildC
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
-import { appendWholeDayTransferPair, applyWholeDayTransferPairToManagedCell, settleWholeDayPairBlockedRecords, stripWholeDayPairOwnEntries, type WholeDayPairTargetBlockResolver, cellsHaveNonDerivedStatusEntries, deriveWholeDayPairSourceRecords, findWholeDayTransferPairForDate, isWholeDayPairExpandedStudent, parseWholeDayTransferPairs, removeWholeDayTransferPair, resolveWholeDayTransferPairWeekdayBlock, stripWholeDayPairDerivedRecords, type WholeDayTransferPair } from './wholeDayTransferPair'
+import { appendWholeDayTransferPair, applyWholeDayTransferPairToManagedCell, isWholeDayPairSourceOwnEntry, settleWholeDayPairBlockedRecords, stripWholeDayPairOwnEntries, type WholeDayPairTargetBlockResolver, cellsHaveNonDerivedStatusEntries, deriveWholeDayPairSourceRecords, findWholeDayTransferPairForDate, isWholeDayPairExpandedStudent, parseWholeDayTransferPairs, removeWholeDayTransferPair, resolveWholeDayTransferPairWeekdayBlock, stripWholeDayPairDerivedRecords, type WholeDayTransferPair } from './wholeDayTransferPair'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -3621,21 +3621,33 @@ export function resolveRemovedLessonOccurrenceKeyFor(student: StudentEntry, date
  * 格納では未消化 +1 と D' の授業の二重になっていた。在庫からの振替・体験・手で足した授業・別の生徒（授業 ID が D のテンプレの授業でない）は対象外＝null。
  * ★削除・格納だけに使う（休み・出席は記録が §2-4 で止め、記録の生徒は印を持たないので積む／外すが対称にならない）。
  */
-function resolveWholeDayPairMovedOwnLessonKeys(student: StudentEntry): string[] | null {
+function resolveWholeDayPairMovedOwnLessonKeys(student: StudentEntry, cellDateKey: string, cellSlotNumber: number, templateOriginRules: boolean, wholeDayPairKeys: readonly string[]): string[] | null {
   const movedFrom = student.wholeDayPairMovedFrom
-  if (!movedFrom || student.makeupSourceDate !== movedFrom.dateKey) return null
+  // ★2026-11-07（残るリスクの兄弟・案 2）: 印は記録を通ると（休み→解除）・D' の中で動かすと落ちる。印が無くても、今の日が組の移動先 D' で、
+  //   授業 ID が D のテンプレの授業のままで振替元が D なら（§9-21 の根拠外しと同じ判定 isWholeDayPairSourceOwnEntry）その生徒自身の D の授業として扱う。
+  //   付け替えで展開した授業（出自テンプレ）は権威関数 resolveSuppressedRegularLessonOccurrenceKeys が D の日付のキーを返すので従来どおりそちらへ。
+  //   組が無い・フラグ OFF・移動先でない日は今と同じ答え（印のある授業だけ）。
+  const unmarkedPair = !movedFrom && templateOriginRules && !isWholeDayPairExpandedStudent(student)
+    ? findWholeDayTransferPairForDate(wholeDayPairKeys, cellDateKey)
+    : null
+  const sourceDateKey = movedFrom?.dateKey
+    ?? (unmarkedPair?.role === 'target' && isWholeDayPairSourceOwnEntry(student, unmarkedPair.sourceDateKey) ? unmarkedPair.sourceDateKey : null)
+  if (!sourceDateKey || student.makeupSourceDate !== sourceDateKey) return null
   const templateSubject = resolveMovedTemplateLessonSubjectFromId(student)
   if (!templateSubject) return null
-  const slotNumber = parseOriginSlotNumber(student.makeupSourceLabel) ?? movedFrom.slotNumber
+  const slotNumber = parseOriginSlotNumber(student.makeupSourceLabel) ?? movedFrom?.slotNumber ?? (movedFrom ? null : cellSlotNumber)
   if (!slotNumber) return null
-  const keys = [buildManagedOccurrenceKey(student, movedFrom.dateKey, slotNumber)]
-  if (templateSubject !== student.subject) keys.push(buildManagedOccurrenceKey({ ...student, subject: templateSubject as SubjectLabel }, movedFrom.dateKey, slotNumber))
+  const keys = [buildManagedOccurrenceKey(student, sourceDateKey, slotNumber)]
+  if (templateSubject !== student.subject) keys.push(buildManagedOccurrenceKey({ ...student, subject: templateSubject as SubjectLabel }, sourceDateKey, slotNumber))
   return keys
 }
 
-/** 単発削除・格納で積む抑止キー（resolveRemovedLessonOccurrenceKeyFor の時限の決め方＋権威関数 resolveSuppressedRegularLessonOccurrenceKeys）。 */
-export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dateKey: string, slotNumber: number, templateOriginRules: boolean): string[] {
-  const pairMovedOwnLessonKeys = resolveWholeDayPairMovedOwnLessonKeys(student)
+/**
+ * 単発削除・格納で積む抑止キー（resolveRemovedLessonOccurrenceKeyFor の時限の決め方＋権威関数 resolveSuppressedRegularLessonOccurrenceKeys）。
+ * wholeDayPairKeys＝今の抑止キーの配列（丸ごと振替の組を読む・印の落ちた自分の D の授業の判定に使う）。省略＝組なし（今と同じ答え）。
+ */
+export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dateKey: string, slotNumber: number, templateOriginRules: boolean, wholeDayPairKeys: readonly string[] = []): string[] {
+  const pairMovedOwnLessonKeys = resolveWholeDayPairMovedOwnLessonKeys(student, dateKey, slotNumber, templateOriginRules, wholeDayPairKeys)
   if (pairMovedOwnLessonKeys) return pairMovedOwnLessonKeys
   return resolveSuppressedRegularLessonOccurrenceKeys(student, dateKey, templateOriginRules ? (resolveSameDayMoveSourceSlot(student, dateKey) ?? slotNumber) : slotNumber, { templateOriginRules })
 }
@@ -9425,7 +9437,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const templatePendingDesksRef = useRef(templatePendingDesks)
   templatePendingDesksRef.current = templatePendingDesks
   // 単発削除・格納の抑止キー（権威関数 resolveSuppressedRegularLessonOccurrenceKeys・フラグ OFF で科目だけ編集した授業はテンプレの科目のキーも・INV-12）。
-  const resolveRemovedLessonOccurrenceKeys = (student: StudentEntry, dateKey: string, slotNumber: number) => resolveRemovedLessonOccurrenceKeysFor(student, dateKey, slotNumber, templateDiffApplyEnabled)
+  const resolveRemovedLessonOccurrenceKeys = (student: StudentEntry, dateKey: string, slotNumber: number) => resolveRemovedLessonOccurrenceKeysFor(student, dateKey, slotNumber, templateDiffApplyEnabled, suppressedRegularLessonOccurrences)
   // 第 1 段 (B)（Issue #72）: 盤面の 2 行表示・解決操作はフラグ ON の教室だけ。OFF の教室は保留マップがあっても
   // 描画・メニュー・ハンドラとも従来どおり（保留データの保存・往復だけはフラグに依らず続く＝Q33-3）。
   const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null
