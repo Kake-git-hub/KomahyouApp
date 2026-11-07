@@ -647,8 +647,6 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                       ))}
                     </ul>
                   ) : null}
-                  {/* オーナーが新たに決めたこと(2026-11-01 オーナー指示「私が行った新たな判断があるものは、確認リストの説明に新たに定義したことを記載しテスト担当者が分かるように」)。 */}
-                  {item.ownerDecision ? <p className="verification-checklist-owner-decision" data-testid={`verification-checklist-owner-decision-${item.id}`}><span className="verification-checklist-label">オーナーの決定</span>{text(item.ownerDecision)}</p> : null}
                   {item.prep ? (
                     <div className="verification-checklist-prep-row">
                       {/* 「準備する」(2026-11-06・案 C 第 1 段・ボタンは文の左=ap-1): autoPrep の項目だけ・App が onPrepare を渡したとき(検証用教室)だけ。 */}
@@ -700,13 +698,13 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                       {cleanupResult.message}
                     </p>
                   ) : null}
-                  <div className="verification-checklist-label">やること</div>
+                  <div className="verification-checklist-label">操作</div>
                   <ol className="verification-checklist-steps">
                     {item.steps.map((step) => <li key={step}>{text(step)}</li>)}
                   </ol>
                   {item.check && item.check.length > 0 ? (
                     <>
-                      <div className="verification-checklist-label">OKの目安</div>
+                      <div className="verification-checklist-label">結果</div>
                       <ul className="verification-checklist-check">
                         {item.check.map((line) => <li key={line}>{text(line)}</li>)}
                       </ul>
