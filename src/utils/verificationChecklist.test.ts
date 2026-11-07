@@ -196,7 +196,7 @@ describe('確認リストの項目定義', () => {
     // 第109版(2026-11-05): pc-1 は OK(受付 20261104-225226706-9e21e4df)で外した。残りはテンプレ関係だけ(テスト教室にも出す)。
     // 第111版(2026-11-05): 退塾取消の確認 wc-1・wc-2 は開発用教室だけ(テスト教室には出さない)。第116版(2026-11-07): wc-1・wc-2 は OK で外した。
     // 第118版(2026-11-07): 同じ日に同じ科目 2 コマの不具合の確認 sd-1・sd-2 は開発用教室だけ。
-    const developmentOnly: string[] = ['sd-1', 'sd-2']
+    const developmentOnly: string[] = ['sd-1', 'sd-2', 'mg-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.697')
@@ -246,7 +246,7 @@ describe('確認リストの項目定義', () => {
     // 同じ第110版(2026-11-05 夜・段 4 の監査後の決定 §9-20・§9-21): 解除で移した手入力が元の日へ戻る・振替先に同じ生徒の手入力なら振替元は休みの v2-6 を足した(版は据え置き)。
     // 第115版(2026-11-06・v1.5.694 据え置き): 退塾取消の確認 wc-1・wc-2 を ap-3 の後に足した(開発用教室だけ)。
     // 第116版(2026-11-07・v1.5.696): OK の ap-2・tp-64・wc-1・wc-2 を外した。
-    expect(ids).toEqual(['ap-3', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6', 'sd-1', 'sd-2'])
+    expect(ids).toEqual(['ap-3', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6', 'sd-1', 'sd-2', 'mg-1'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
