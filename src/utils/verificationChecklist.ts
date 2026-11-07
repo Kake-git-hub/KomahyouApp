@@ -617,7 +617,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       check: [
         '保存の詳細に「講師未割当」の行が出ない',
         '講師欄のメニューに「講師削除」「休み」が出ない',
-        'どの画面・PDF にも「講師未割当」の文字が出ない',
+        'どの画面・PDF にも「講師未割当」の文字が出ない。空欄の机も生徒が居れば席ごと動かせる',
       ],
       introducedIn: 'v1.5.700',
     },
