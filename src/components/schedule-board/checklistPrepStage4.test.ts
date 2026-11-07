@@ -612,10 +612,13 @@ describe('もう一度「準備する」を押すと、別の机・別の確認�
 describe('第119版: 段を続ける項目の facts（項目の文に差し込む・いつ・どの机・誰）', () => {
   for (const itemId of CHECKLIST_PREP_SEQUENCE_ITEM_IDS) {
     it(`${itemId}: 文に使うキーが全部埋まり、結果の文は 2 行だけ`, () => {
-      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
-      expect(item.autoPrep).toBe(true)
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)
+      // 第122版(2026-11-07): tp-71 は OK で確認リストから外れた(準備の処理は残してある)。外す前の文が使っていたキーで同じ検査を続ける。
+      const RETIRED_ITEM_KEYS: Record<string, string[]> = { 'tp-71': ['A', 'B', 'deskT', 'slot'] }
+      if (item) expect(item.autoPrep).toBe(true)
+      else expect(RETIRED_ITEM_KEYS[itemId], `${itemId} は外した項目なのでキーの一覧が要る`).toBeDefined()
       const run = runPrep(itemId, initialStage())
-      const keys = listChecklistPrepFactTokenKeys(item)
+      const keys = item ? listChecklistPrepFactTokenKeys(item) : RETIRED_ITEM_KEYS[itemId]
       expect(keys.length).toBeGreaterThan(0)
       for (const key of keys) expect(run.state.facts[key], `${itemId}: ${key}`).toBeTruthy()
       expect(run.message.split('\n')).toEqual([`準備しました（${run.state.facts.slot}）。`, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER])

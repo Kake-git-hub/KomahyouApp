@@ -17,7 +17,8 @@ const classroomId = 'v8OZ7zH8vONNHjjYVcR1'
 const autoPrepIds = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep).map((item) => item.id)
 const plainItem = VERIFICATION_CHECKLIST.items.find((item) => !item.autoPrep)!
 // 押して確かめる autoPrep の項目(確認リストに残っているもの)。
-const PREP_ITEM = 'tp-69'
+// 第122版(2026-11-07): tp-69 は OK で外したので tp-70 を使う。
+const PREP_ITEM = 'tp-70'
 
 describe('VerificationChecklistPanel の「準備する」', () => {
   let container: HTMLDivElement
@@ -46,13 +47,14 @@ describe('VerificationChecklistPanel の「準備する」', () => {
   const button = (itemId: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-prep-${itemId}"]`)
 
   // 第113版(2026-11-06): v2-1 は OK で確認リストから外した。第116版(2026-11-07・v1.5.696): tp-64 も OK で外し、tp-59・tp-69・tp-70・mn-1・tp-66 に広げた。
-  it('autoPrep の項目(tp-59・tp-69・tp-70・mn-1・tp-66・第 4 段の tp-71・tp-72・tp-75・v2-3・v2-6)だけに出す', () => {
-    expect([...autoPrepIds].sort()).toEqual(['mn-1', 'tp-59', 'tp-66', 'tp-69', 'tp-70', 'tp-71', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
+  // 第122版(2026-11-07): tp-69・mn-1・tp-66・tp-71 も OK で外した(残るのは tp-59・tp-70・tp-72・tp-75・v2-3・v2-6)。
+  it('autoPrep の項目(tp-59・tp-70・tp-72・tp-75・v2-3・v2-6)だけに出す', () => {
+    expect([...autoPrepIds].sort()).toEqual(['tp-59', 'tp-70', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(button(id), id).not.toBeNull()
     expect(button(plainItem.id)).toBeNull()
-    // 文に「準備する」を含むが autoPrep ではない項目(tp-69 の準備を使う ap-3・ta-1)にはボタンを出さない。
-    for (const id of ['ap-3', 'ta-1']) expect(button(id), id).toBeNull()
+    // 外した項目(ap-3・ta-1・tp-69 など)にはボタンを出さない。
+    for (const id of ['ap-3', 'ta-1', 'tp-69']) expect(button(id), id).toBeNull()
     expect(container.querySelectorAll('[data-testid^="verification-checklist-prep-"]:not([data-testid="verification-checklist-prep-result"])').length).toBe(autoPrepIds.length)
   })
 
@@ -148,17 +150,17 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     expect(itemCard(PREP_ITEM).textContent).toContain('準備したコマ 机 A の下の行の講師名(講師 X)')
     act(() => button(PREP_ITEM)!.click())
     await act(async () => {
-      resolvePrepare({ ok: true, message: '準備しました（2/2(火) 2限）。', facts: { slot: '2/2(火) 2限', deskA: '机 2', X: '講師A', Y: '講師B', A: '確認用 生徒B' } })
+      resolvePrepare({ ok: true, message: '準備しました（2/2(火) 2限）。', facts: { slot: '2/2(火) 2限', deskA: '机 2', X: '講師A', Y: '講師B', trial: '確認用 体験B' } })
     })
     const card = itemCard(PREP_ITEM).textContent ?? ''
     expect(card).toContain('2/2(火) 2限 机 2 の下の行の講師名(講師A)')
-    expect(card).toContain('上の行=講師Bと確認用 生徒B、講師欄の下の行=講師A(緑)')
-    expect(card).toContain('手入力を採用 → 講師A＋確認用 生徒B の 1 行')
+    expect(card).toContain('確認用 体験Bは席に 1 行のまま、講師欄だけ上=講師B・下=講師A(緑)')
+    expect(card).toContain('手入力を採用 → 講師A＋確認用 体験B の 1 行')
     expect(card).not.toContain('講師 X')
     expect(container.textContent).not.toContain('{{prep:')
     // ほかの項目はその項目の準備結果だけを使う(押していない項目は既定の言葉のまま)。
-    expect(itemCard('tp-70').textContent).toContain('講師 X')
-    expect(itemCard('tp-70').textContent).not.toContain('講師A')
+    expect(itemCard('tp-59').textContent).toContain('講師 X')
+    expect(itemCard('tp-59').textContent).not.toContain('講師A')
     // facts の無い結果(失敗)は既定の言葉に戻す(前の準備の名前を残さない)。
     const failing = vi.fn(async () => ({ ok: false, message: '準備できる席が見つかりませんでした。' }))
     render({ onPrepare: failing })
@@ -168,7 +170,7 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     // facts は画面だけ(下書きに保存しない)。
     for (let index = 0; index < window.localStorage.length; index += 1) {
       const key = window.localStorage.key(index) ?? ''
-      expect(window.localStorage.getItem(key) ?? '').not.toContain('確認用 生徒B')
+      expect(window.localStorage.getItem(key) ?? '').not.toContain('確認用 体験B')
     }
   })
 

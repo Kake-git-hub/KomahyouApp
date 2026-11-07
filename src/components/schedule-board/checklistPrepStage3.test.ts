@@ -583,11 +583,18 @@ describe('tp-59 の盤面の文・登録の文（regression-reviewer S-5）', ()
 })
 
 describe('第119版: 項目の文の {{prep:キー}} は、その項目の準備が facts に入れる', () => {
-  for (const itemId of ['tp-59', 'tp-69', 'tp-70', 'mn-1', 'tp-66']) {
+  // 第122版(2026-11-07): tp-69・mn-1・tp-66 は OK で確認リストから外れた(準備の処理は残してある)。外す前の文が使っていたキーで同じ検査を続ける。
+  const RETIRED_ITEM_KEYS: Record<string, string[]> = {
+    'tp-69': ['A', 'X', 'Y', 'deskA', 'slot'],
+    'mn-1': ['A', 'X', 'desk1', 'slot', 'trial'],
+    'tp-66': ['A', 'X', 'Y', 'desk1', 'slot', 'trial'],
+  }
+  for (const itemId of ['tp-59', 'tp-70', 'tp-69', 'mn-1', 'tp-66']) {
     it(`${itemId}: 文に使うキーが全部埋まる`, () => {
-      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
-      expect(item.autoPrep).toBe(true)
-      const keys = listChecklistPrepFactTokenKeys(item)
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)
+      if (item) expect(item.autoPrep).toBe(true)
+      else expect(RETIRED_ITEM_KEYS[itemId], `${itemId} は外した項目なのでキーの一覧が要る`).toBeDefined()
+      const keys = item ? listChecklistPrepFactTokenKeys(item) : RETIRED_ITEM_KEYS[itemId]
       expect(keys.length).toBeGreaterThan(0)
       const { facts } = prepareAndSave(itemId, initialStage())
       for (const key of keys) expect(facts[key], `${itemId}: ${key}`).toBeTruthy()
