@@ -23,6 +23,15 @@ export type RegularLessonTemplateDesk = {
   checklistPrepTeacherId?: string
 }
 
+/**
+ * テンプレ作成の画面の机の講師を替える・消す（講師メニューの「保存」「削除」）。室長が講師を選び直した机は準備の印（checklistPrepTemplateTeacherId）を外す
+ * （同じ講師を選び直しても室長が置いた講師として扱い、後片づけで外さない・regression-reviewer M-1・INV-02）。
+ */
+export function setTemplateEditorDeskTeacher(desk: DeskCell, teacherName: string) {
+  desk.teacher = teacherName
+  delete desk.checklistPrepTemplateTeacherId
+}
+
 /** 準備の印（checklistPrepTeacherId）が今の講師と同じときだけ印を返す（講師が替わった・外れた机の古い印は落とす）。 */
 export function resolveChecklistPrepTemplateTeacherMark(desk: Pick<RegularLessonTemplateDesk, 'teacherId' | 'checklistPrepTeacherId'> | undefined): { checklistPrepTeacherId: string } | Record<string, never> {
   const mark = desk?.checklistPrepTeacherId?.trim()

@@ -6292,6 +6292,18 @@ body.verification-checklist-window {
 .verification-checklist-cleanup-row .verification-checklist-prep-result {
   flex-basis: 100%;
 }
+/* 項目の準備の行の「後片づけ」(2026-11-07・ap-3)と、その横の一言(準備で作ったもの全部を消す・regression-reviewer S-1)。 */
+.verification-checklist-prep-row .verification-checklist-cleanup-button {
+  margin-top: 6px;
+}
+.verification-checklist-cleanup-note {
+  margin-top: 12px;
+  flex-shrink: 0;
+  color: #475569;
+  font-size: 18px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
 
 .verification-checklist-check {
   margin: 4px 0 8px;

@@ -206,9 +206,17 @@ function templateSeatLabel(registration: Pick<ChecklistPrepTemplateRegistration,
   return `${templateDeskLabel(registration)} の生徒 ${registration.studentIndex + 1}`
 }
 
+/**
+ * テンプレの机に講師か生徒が居るか（§E-2-4-3）。準備の置き場（checklistPrep.ts の resolvePackedTemplateSlot＝盤面に詰めて置かれる机の数え方）と、
+ * 講師を登録してよい机（講師も生徒も居ない机）の判定がこの 1 つを使う（regression-reviewer S-8・判定を二重に持たない）。
+ */
+export function hasChecklistPrepTemplateDeskContent(desk: Pick<RegularLessonTemplateDesk, 'teacherId' | 'students'>): boolean {
+  return Boolean(desk.teacherId.trim()) || desk.students.some((student) => Boolean(student?.studentId))
+}
+
 /** テンプレの机に講師も生徒も居ないか（講師を登録してよい机・§E-2-4-3）。 */
 function isEmptyTemplateDesk(desk: RegularLessonTemplateDesk | undefined): boolean {
-  return !desk || (!desk.teacherId.trim() && !desk.students.some((student) => student?.studentId))
+  return !desk || !hasChecklistPrepTemplateDeskContent(desk)
 }
 
 function cloneTemplateCell(cell: RegularLessonTemplateCell): RegularLessonTemplateCell {
@@ -301,10 +309,11 @@ export function assignChecklistPrepTemplateTeachers(
 }
 
 /**
- * テンプレの準備の印の付いた机の講師を外す（§E-2-4-3・後片づけ）。外すのは今の講師が印の講師と同じ机だけ（あとで替えた講師は外さない・INV-02）。
- * 講師が替わった机の古い印は落とす（数には入れない）。印の無い机はそのまま。何も変わらなければ同じテンプレを返す。
+ * テンプレの準備の印の付いた机の講師を外す（§E-2-4-3・後片づけ）。外すのは今の講師が印の講師と同じで、席が空か確認用の生徒（prepStudentIds）だけの机。
+ * 室長が確認用でない生徒を足した机は、その生徒の通常授業（全部の週）から講師を抜かないよう講師を残し、印だけ落とす（regression-reviewer M-1・INV-02）。
+ * 講師が替わった机の古い印も落とす（数には入れない）。印の無い机はそのまま。何も変わらなければ同じテンプレを返す。
  */
-export function removeChecklistPrepTemplateTeachers(template: RegularLessonTemplate): { template: RegularLessonTemplate; removed: number } {
+export function removeChecklistPrepTemplateTeachers(template: RegularLessonTemplate, prepStudentIds: ReadonlySet<string>): { template: RegularLessonTemplate; removed: number } {
   let removed = 0
   let changed = false
   const cells = template.cells.map((cell) => {
@@ -315,7 +324,8 @@ export function removeChecklistPrepTemplateTeachers(template: RegularLessonTempl
       desks: cell.desks.map((desk) => {
         if (desk.checklistPrepTeacherId === undefined) return desk
         const { checklistPrepTeacherId: mark, ...rest } = desk
-        if (mark && mark === desk.teacherId) {
+        const onlyPrepStudents = desk.students.every((student) => !student?.studentId || prepStudentIds.has(student.studentId))
+        if (mark && mark === desk.teacherId && onlyPrepStudents) {
           removed += 1
           return { ...rest, teacherId: '' }
         }
@@ -581,10 +591,15 @@ export function buildChecklistPrepTemplateSavedMessage(params: {
   scopeNote?: TemplateDiffScopeNote
   todayKey: string
 }): string {
-  const withLabel = (label: string, text: string) => (label ? `${label} ${text}` : text)
+  // 「(1)」「(2)」の印は前に続けて書く（tp-64 から不変）。「机 B」のような名前の印は「机 B（木曜 5限 机 4）」と括弧で書く（regression-reviewer S-5）。
+  const withLabel = (label: string, place: string, rest: string) => {
+    if (!label) return `${place} ${rest}`
+    if (label.startsWith('(')) return `${label} ${place} ${rest}`
+    return `${label}（${place}）${rest}`
+  }
   const seats = [
-    ...(params.assignedTeachers ?? []).map((entry) => withLabel(entry.label, `${templateDeskLabel(entry)} に講師「${entry.teacherName}」`)),
-    ...params.assigned.map((entry) => withLabel(entry.label, `${templateSeatLabel(entry)} に「${entry.studentName}」`)),
+    ...(params.assignedTeachers ?? []).map((entry) => withLabel(entry.label, templateDeskLabel(entry), `に講師「${entry.teacherName}」`)),
+    ...params.assigned.map((entry) => withLabel(entry.label, templateSeatLabel(entry), `に「${entry.studentName}」`)),
   ].join('、')
   return [
     ...stripBoardSaveReminder(params.boardMessage),
@@ -683,7 +698,7 @@ export function planChecklistPrepCleanup(params: {
   const removedTemplate = params.savedTemplate && prepStudentIds.size > 0 ? removeChecklistPrepTemplateStudents(params.savedTemplate, prepStudentIds) : null
   const templateRemoved = removedTemplate?.removed ?? 0
   // 第 3 段（§E-2-4-3）: 準備の印の付いたテンプレの机の講師も外す（今の講師が印の講師と同じ机だけ）。
-  const removedTeachers = params.savedTemplate ? removeChecklistPrepTemplateTeachers(removedTemplate?.template ?? params.savedTemplate) : null
+  const removedTeachers = params.savedTemplate ? removeChecklistPrepTemplateTeachers(removedTemplate?.template ?? params.savedTemplate, prepStudentIds) : null
   const templateTeachersRemoved = removedTeachers?.removed ?? 0
   if (!boardChanged && templateRemoved === 0 && templateTeachersRemoved === 0) return { nothing: true }
   return {

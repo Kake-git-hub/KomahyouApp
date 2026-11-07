@@ -161,6 +161,8 @@ type SharedResultsState =
 
 /** 「後片づけ」をパネルの上の 1 つで押したときの押した場所(項目 id とぶつからない空文字)。 */
 const CLEANUP_SOURCE_TOP = ''
+/** 項目の「後片づけ」の横の一言(項目の分だけでなく準備で作ったもの全部を消す)。 */
+const ITEM_CLEANUP_NOTE = '準備で作ったものを全部消します'
 
 export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, onCleanup, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
@@ -669,10 +671,13 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                           onClick={() => { void handleCleanup(item.id) }}
                           disabled={cleaningUp || preparingItemId !== null}
                           data-testid={`verification-checklist-cleanup-${item.id}`}
+                          title={ITEM_CLEANUP_NOTE}
                         >
                           {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
                         </button>
                       ) : null}
+                      {/* この項目の分だけでなく、準備で作ったもの全部を消す(上の「後片づけ」と同じ処理・regression-reviewer S-1)。 */}
+                      {item.autoPrep && onPrepare && onCleanup ? <span className="verification-checklist-cleanup-note">{ITEM_CLEANUP_NOTE}</span> : null}
                       <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
                     </div>
                   ) : null}

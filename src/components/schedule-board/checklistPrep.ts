@@ -18,6 +18,7 @@ import {
   CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE,
   CHECKLIST_PREP_TRIAL_NAME_PREFIX,
   findChecklistPrepTemplateDesk,
+  hasChecklistPrepTemplateDeskContent,
   isUsableChecklistPrepStudent,
   isChecklistPrepTemplateSeatTaken,
   listAvailableChecklistPrepStudents,
@@ -434,10 +435,6 @@ function planTp64(context: CellContext, input: ChecklistPrepInput, aliases: Teac
 // 第 3 段（§E-2-4-3・2026-11-07）: テンプレへ講師を登録する項目（tp-59・tp-69・tp-70）
 // ─────────────────────────────────────────────────────────────────────────────
 
-function hasTemplateDeskContent(desk: RegularLessonTemplateDesk) {
-  return Boolean(desk.teacherId.trim()) || desk.students.some((student) => Boolean(student?.studentId))
-}
-
 /**
  * 盤面のテンプレの机が、テンプレの中身のある机（机番号の順）と同じ位置に並んでいるか。テンプレの生徒の居る机は授業 id か生徒
  * （resolveChecklistPrepTemplateDeskIndex）で、講師だけの机はテンプレの講師（呼び名の対応表）で見る。
@@ -466,15 +463,18 @@ type PackedTemplateSlot = {
  * 盤面はテンプレの中身のある机を机番号の順に**詰めて**置く（buildManagedScheduleCellsForRange）。そのため中身のある机の**後ろ**の空き机へ登録すれば、
  * 保存後にその机は盤面の「中身のある机の数」番目（0 始まり）に入り、ほかのテンプレの机の位置は動かない（途中の空き机へ登録すると後ろの机が 1 つずれる）。
  * 盤面のテンプレの机がその並びのとき（並び替えていない・講師を替えていない）だけ使う。並び替えた週の机は差分反映の直前に戻されて手入力の机が動くので使わない。
+ * ★この数え方は ScheduleBoardScreen の buildManagedScheduleCellsForRange（テンプレの行を机番号の順に最初の空き机へ詰める）の写し
+ *   （regression-reviewer S-3）。向こうの詰め方を変えたら、ここも直す。食い違いは checklistPrepStage3.test.ts の
+ *   「準備 → 実際のテンプレ保存（computeTemplateDiffApplyForBoard）→ 形」のテストが落ちて知らせる（途中の空き机・並び替えた盤面の形も固定）。
  */
 function resolvePackedTemplateSlot(context: CellContext, input: ChecklistPrepInput, aliases: TeacherAliasResolver): PackedTemplateSlot | null {
   const dayOfWeek = resolveCellDayOfWeek(context.cell)
   const templateCell: RegularLessonTemplateCell | undefined = input.template?.cells.find((cell) => cell.dayOfWeek === dayOfWeek && cell.slotNumber === context.cell.slotNumber)
   if (!templateCell) return null
   const sorted = [...templateCell.desks].sort((left, right) => left.deskIndex - right.deskIndex)
-  const content = sorted.filter(hasTemplateDeskContent)
+  const content = sorted.filter(hasChecklistPrepTemplateDeskContent)
   const lastContentIndex = content.length > 0 ? content[content.length - 1].deskIndex : 0
-  const free = sorted.find((desk) => desk.deskIndex > lastContentIndex && !hasTemplateDeskContent(desk))
+  const free = sorted.find((desk) => desk.deskIndex > lastContentIndex && !hasChecklistPrepTemplateDeskContent(desk))
   if (!free) return null
   const landingDeskIndex = content.length
   if (landingDeskIndex >= context.cell.desks.length) return null
@@ -572,8 +572,8 @@ function planTp59(context: CellContext, input: ChecklistPrepInput, aliases: Teac
       { kind: 'trial', cellId: cell.id, deskIndex: deskA, studentIndex: 0, name: trialName, grade: profile.grade, subject: profile.subject },
     ],
     lines: [
-      `机 A: ${cellLabel(cell)} 机 ${deskA + 1} に講師 ${teacherName} を手で置き、生徒 1 に体験「${trialName}」を置きました。`,
-      `机 B: テンプレの ${templateDeskText(cell, slot.templateDeskIndex)} に講師 ${teacherName} と確認用の生徒を登録して保存します（保存後はコマ表の机 ${deskB + 1} に入ります）。保存すると机 A は ${teacherName} と体験の 1 行のまま、机 B は確認用の生徒だけが入り講師欄は空になります。`,
+      `机 A（${cellLabel(cell)} 机 ${deskA + 1}）に講師 ${teacherName} を手で置き、生徒 1 に体験「${trialName}」を置きました。`,
+      `机 B（テンプレの ${templateDeskText(cell, slot.templateDeskIndex)}）に講師 ${teacherName} と確認用の生徒を登録して保存します（保存後はコマ表の机 ${deskB + 1} に入ります）。保存すると机 A は ${teacherName} と体験の 1 行のまま、机 B は確認用の生徒だけが入り講師欄は空になります。`,
     ],
     templateRegistrations: [{ dayOfWeek: slot.dayOfWeek, slotNumber: cell.slotNumber, deskIndex: deskB, templateDeskIndex: slot.templateDeskIndex, studentIndex: 0, subject: profile.subject, label: '机 B' }],
     templateTeacherRegistrations: [{ dayOfWeek: slot.dayOfWeek, slotNumber: cell.slotNumber, deskIndex: deskB, templateDeskIndex: slot.templateDeskIndex, teacherId: teacher.id, teacherName, label: '机 B' }],

@@ -7,6 +7,8 @@
 //   mn-1・tp-66: tp-64 と同じ置き方（(1) の机が講師欄も席も緑 2 行）。
 // あわせて、ほかの生徒の授業・未消化が動かない（INV-06）、後片づけで準備の印の付いたテンプレの講師だけが外れる（INV-02）、
 // 2 回押すと別の机・別の確認用の生徒を使う（INV-12）を固定する。
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
@@ -19,14 +21,17 @@ import {
   ensureChecklistPrepStudents,
   planChecklistPrepCleanup,
   prepareChecklistPrepTemplateSave,
+  removeChecklistPrepTemplateTeachers,
+  resolveChecklistPrepCleanupEffectiveStartDate,
   resolveChecklistPrepStudentCount,
 } from './checklistPrepTemplate'
-import { buildRegularLessonsFromTemplate, buildTemplateBoardCells, convertTemplateCellsToTemplate, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildTemplateBoardCells, convertTemplateCellsToTemplate, resolveTemplateDiffBaseline, setTemplateEditorDeskTeacher, type RegularLessonTemplate, type RegularLessonTemplateDesk } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
+import { collectExpectedTemplateLessons } from './templateLessonAccountingOracle'
 import { buildManagedScheduleCellsForRange, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
 import { buildTeacherAliasResolver } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
-import type { DeskCell, SlotCell, StudentStatusEntry } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
 // 木曜 2026-10-08 の 5 限（反映開始日 10/7 の翌日）。机 6 つ。テンプレは 机 1=田中＋青木・机 2=鈴木＋馬場・机 3=佐藤だけ・机 4〜6 は空。
 const WEEK_START = '2026-10-05'
@@ -89,10 +94,12 @@ function buildWeek(rows: RegularLessonRow[]): SlotCell[] {
     regularLessons: rows,
     boardWeeks: [],
   })
-  return week.map((cell) => (cell.id !== `2026-10-09_${SLOT}` ? cell : {
-    ...cell,
-    desks: cell.desks.map((desk, index) => (index === 5 ? { ...desk, statusSlots: [absentRecord(), null] as DeskCell['statusSlots'] } : desk)),
-  }))
+  return week.map((cell) => {
+    if (cell.id === `2026-10-09_${SLOT}`) return { ...cell, desks: cell.desks.map((desk, index) => (index === 5 ? { ...desk, statusSlots: [absentRecord(), null] as DeskCell['statusSlots'] } : desk)) }
+    // 水曜 4 限に生徒 千葉 の講習 1 コマ（講習の残りが準備の前後で変わらないことを見る・INV-06）。
+    if (cell.id === '2026-10-07_4') return { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' as const, lesson: { id: 'special-1', studentSlots: [{ id: 'sp1', name: '千葉', managedStudentId: 'sC', grade: '中1' as const, subject: '数' as const, lessonType: 'special' as const, teacherType: 'normal' as const, manualAdded: true }, null] as [StudentEntry | null, StudentEntry | null] } } : desk)) }
+    return cell
+  })
 }
 
 function cellOf(weeks: SlotCell[][]) {
@@ -154,7 +161,17 @@ function rosterName(id: string) {
 }
 
 /** 確認用でない生徒の授業（盤面の週の机・席ごと）と、振替の未消化（INV-06）。 */
+/** 講習の申し込み数（千葉・数 3 コマ）。残り＝申し込み − 盤面に置いた講習。 */
+const LECTURE_REQUESTED = 3
+const prepStudentIds = new Set(roster.filter((student) => student.name.startsWith('確認用')).map((student) => student.id))
+
 function othersSnapshot(week: SlotCell[], pendingDesks: TemplatePendingDeskMap, rows: RegularLessonRow[]) {
+  // 予定数: テンプレの通常授業の「生徒×科目×日付」の数（確認用でない生徒だけ）。
+  const { expected } = collectExpectedTemplateLessons({ weeks: [week], regularLessons: rows, classroomSettings: settings(), fromDate: EFFECTIVE, toDate: WEEK_END })
+  const planned = [...expected].filter(([key]) => ![...prepStudentIds].some((id) => key.includes(id))).sort(([left], [right]) => left.localeCompare(right))
+  // 講習の残り（確認用でない生徒）。
+  const placedSpecial = week.flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.lessonType === 'special' && student.managedStudentId === 'sC').length
+  const lectureRemaining = LECTURE_REQUESTED - placedSpecial
   const lessons = week.flatMap((cell) => cell.desks.flatMap((desk, deskIndex) => (desk.lesson?.studentSlots ?? []).map((student, seat) => (
     student && !student.name.startsWith('確認用') ? `${cell.id}:${deskIndex}:${seat}:${student.name}:${student.subject}:${student.lessonType}` : null
   )).filter(Boolean)))
@@ -162,7 +179,7 @@ function othersSnapshot(week: SlotCell[], pendingDesks: TemplatePendingDeskMap, 
     students: roster, teachers, regularLessons: rows, classroomSettings: settings(), weeks: [week], manualAdjustments: {},
     resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id, today: new Date('2026-09-29T00:00:00'), templatePendingDesks: pendingDesks,
   }).map((entry) => ({ key: entry.key, balance: entry.balance }))
-  return { lessons, stock }
+  return { lessons, stock, planned, lectureRemaining }
 }
 
 describe('tp-69: 手置き講師だけの机にテンプレで別の講師と生徒を登録すると、講師ごと保留（緑）', () => {
@@ -272,8 +289,14 @@ describe('ほかの生徒の授業と未消化は動かない（INV-06）', () =
       const stage = initialStage()
       const before = othersSnapshot(stage.week, stage.pendingDesks, rowsOf(stage.template))
       expect(before.stock.length).toBeGreaterThan(0)
+      expect(before.planned.length).toBeGreaterThan(0)
+      expect(before.lectureRemaining).toBe(LECTURE_REQUESTED - 1)
       const { next, saved } = prepareAndSave(itemId, stage)
       expect(othersSnapshot(next.week, saved.nextPendingDesks, rowsOf(next.template))).toEqual(before)
+      // 予定数の補正（希望回数の −1）と未消化の台帳には何も積まない。
+      expect(saved.wholeDayTransferCountAdjustments).toEqual([])
+      expect(saved.manualMakeupOriginAdditions).toEqual([])
+      expect(saved.manualMakeupOriginRemovals).toEqual([])
       // 足した生徒は体験（手入力）か確認用の生徒だけ。
       const added = next.week.flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.name.startsWith('確認用'))
       expect(added.every((student) => student?.lessonType === 'trial' ? student.manualAdded === true : student?.name.startsWith('確認用 生徒'))).toBe(true)
@@ -455,5 +478,85 @@ describe('テンプレへの講師の登録と準備の印（checklistPrepTeache
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 0)).toBe(0)
     expect(resolveChecklistPrepStudentCount(withPrep, roster, 1)).toBe(2)
     expect(CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT).toEqual({ 'tp-64': 2, 'mn-1': 2, 'tp-66': 2, 'tp-69': 1, 'tp-70': 0, 'tp-59': 1 })
+  })
+})
+
+describe('後片づけ: 室長が手を入れたテンプレの準備の机（regression-reviewer M-1・INV-02）', () => {
+  const markedTemplate = (students: RegularLessonTemplateDesk['students']): RegularLessonTemplate => ({
+    ...BASE_TEMPLATE,
+    cells: [{ ...BASE_TEMPLATE.cells[0], desks: [...BASE_TEMPLATE.cells[0].desks, { deskIndex: 4, teacherId: 't5', checklistPrepTeacherId: 't5', students }] }],
+  })
+
+  it('準備の机に室長が確認用でない生徒（千葉）を足していたら、講師は外さず印だけ外す（ほかの週の千葉の通常授業から講師を抜かない）', () => {
+    const removed = removeChecklistPrepTemplateTeachers(markedTemplate([{ studentId: 'sC', subject: '数' }, null]), new Set(prepStudentIds))
+    expect(removed.removed).toBe(0)
+    expect(templateDeskOf(removed.template, 4)).toEqual({ deskIndex: 4, teacherId: 't5', students: [{ studentId: 'sC', subject: '数' }, null] })
+  })
+
+  it('確認用の生徒と千葉が居る机: 後片づけは確認用の生徒の登録だけ外し、講師（伊藤）と千葉は残す', () => {
+    const prepId = roster.find((student) => student.name === '確認用 生徒A')!.id
+    const cleanup = planChecklistPrepCleanup({ weeks: [buildWeek(rowsOf(BASE_TEMPLATE))], pendingDesks: {}, savedTemplate: markedTemplate([{ studentId: 'sC', subject: '数' }, { studentId: prepId, subject: '算' }]), students: roster, toSaveTemplate: (template) => template })
+    if (cleanup.nothing) throw new Error('nothing to clean')
+    expect(cleanup.templateRemoved).toBe(1)
+    expect(cleanup.templateTeachersRemoved).toBe(0)
+    expect(templateDeskOf(cleanup.template!, 4)).toEqual({ deskIndex: 4, teacherId: 't5', students: [{ studentId: 'sC', subject: '数' }, null] })
+  })
+
+  it('確認用の生徒だけ・生徒なしの準備の机は今までどおり講師を外す', () => {
+    const prepId = roster.find((student) => student.name === '確認用 生徒A')!.id
+    for (const students of [[null, null], [{ studentId: prepId, subject: '算' }, null]] as RegularLessonTemplateDesk['students'][]) {
+      const removed = removeChecklistPrepTemplateTeachers(markedTemplate(students), new Set(prepStudentIds))
+      expect(removed.removed).toBe(1)
+      expect(templateDeskOf(removed.template, 4).teacherId).toBe('')
+    }
+  })
+
+  it('テンプレ作成で準備の講師を消して同じ講師を選び直すと、印は戻らない（室長が置いた講師として扱う）', () => {
+    const cells = buildTemplateBoardCells({ template: baselineOf(markedTemplate([null, null])), teachers, students: roster, deskCount: 6 })
+    const desk = cells.find((cell) => cell.id === `template_4_${SLOT}`)!.desks[3]
+    expect(desk.checklistPrepTemplateTeacherId).toBe('t5')
+    setTemplateEditorDeskTeacher(desk, '')
+    expect(desk).not.toHaveProperty('checklistPrepTemplateTeacherId')
+    setTemplateEditorDeskTeacher(desk, '伊藤')
+    const saved = convertTemplateCellsToTemplate({ cells, teachers, students: roster, effectiveStartDate: EFFECTIVE, deskCount: 6 })
+    expect(templateDeskOf(saved, 4)).toEqual({ deskIndex: 4, teacherId: 't5', students: [null, null] })
+  })
+
+  it('テンプレ作成の講師メニュー（変更・削除）は setTemplateEditorDeskTeacher を通す（印を残したまま講師名だけ替えない）', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    for (const name of ['handleTemplateConfirmTeacher', 'handleTemplateDeleteTeacher']) {
+      const start = source.indexOf(`const ${name} = () => {`)
+      const body = source.slice(start, source.indexOf('\n  }\n', start))
+      expect(body, name).toContain('setTemplateEditorDeskTeacher(targetDesk, ')
+      expect(body, name).not.toMatch(/targetDesk\.teacher = /u)
+    }
+  })
+})
+
+describe('後片づけのテンプレ保存の形（コマ表と同じ toSaveTemplate・regression-reviewer S-4）', () => {
+  it('在籍の絞り込みと反映開始日の差し替えを通しても、外した机は空の机になり、印は戻らない', () => {
+    const { next } = prepareAndSave('tp-69', initialStage())
+    const savedEffectiveStartDate = next.template.effectiveStartDate
+    // ScheduleBoardScreen の後片づけの toSaveTemplate と同じ組み立て。
+    const toSaveTemplate = (template: RegularLessonTemplate): RegularLessonTemplate => ({
+      ...(resolveTemplateDiffBaseline({ template, deskCount: 6, teachers, students: roster, todayKey: TODAY_KEY }) ?? template),
+      effectiveStartDate: resolveChecklistPrepCleanupEffectiveStartDate(TODAY_KEY, savedEffectiveStartDate),
+      savedAt: SAVED_AT,
+    })
+    const cleanup = planChecklistPrepCleanup({ weeks: [next.week], pendingDesks: next.pendingDesks, savedTemplate: next.template, students: roster, toSaveTemplate })
+    if (cleanup.nothing) throw new Error('nothing to clean')
+    expect(templateDeskOf(cleanup.template!, 4)).toEqual({ deskIndex: 4, teacherId: '', students: [null, null] })
+    expect(cleanup.template!.cells.some((cell) => cell.desks.some((desk) => 'checklistPrepTeacherId' in desk))).toBe(false)
+    expect(cleanup.template!.effectiveStartDate).toBe(EFFECTIVE)
+  })
+})
+
+describe('tp-59 の結果の文（regression-reviewer S-5）', () => {
+  it('机 A・机 B のあとに括弧でコマ表・テンプレの机を書く（「机 B 木曜 5限 机 4」と続けて書かない）', () => {
+    const { plan, message } = prepareAndSave('tp-59', initialStage())
+    expect(plan.message).toContain('机 A（10/8(木) 5限 机 5）に講師 高木 を手で置き')
+    expect(plan.message).toContain('机 B（テンプレの 木曜 5限 机 4）に講師 高木 と確認用の生徒を登録して保存します')
+    expect(message).toContain('テンプレの 机 B（木曜 5限 机 4）に講師「高木」、机 B（木曜 5限 机 4 の生徒 1）に「確認用 生徒')
+    expect(message).not.toContain('机 B 木曜')
   })
 })

@@ -45,7 +45,8 @@ import { trimBoardWeeksForMemory } from './boardWeekTrim'
 import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import * as FX from './templateTransferFollow.fixture'
 import * as pairFx from './wholeDayTransferPair.fixture'
-import { cleanupChecklistPrepBoard } from './checklistPrepTemplate'
+import { cleanupChecklistPrepBoard, planChecklistPrepCleanup } from './checklistPrepTemplate'
+import { buildTemplateBoardCells, convertTemplateCellsToTemplate, setTemplateEditorDeskTeacher, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { setManualTeacherAssignment } from './deskTeacherAssignment'
 
 // ============================================================================
@@ -2958,5 +2959,38 @@ describe('INV-02 × 確認リストの後片づけ（列「後片づけ」）: �
     expect(result.removed.teachers).toBe(0)
     expect(teacherOf(result.weeks, 'd0')).toBe('講師E')
     expect(result.weeks).toBe(weeks)
+  })
+})
+
+describe('INV-02 × 確認リストの後片づけ（列「後片づけ」・テンプレの机）: 準備で講師を登録したテンプレの机を室長が手直ししたあとは、室長の登録を外さない（regression-reviewer M-1・§E-2-4-3）', () => {
+  const teacherRows: TeacherRow[] = [{ id: 't5', name: '講師E', email: '', entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }]
+  const studentRows: StudentRow[] = [
+    { id: 's001', name: '生徒A', displayName: '生徒A', email: '', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+    { id: 'p1', name: '確認用 生徒A', displayName: '確認用 生徒A', email: '', entryDate: '2025-04-01', withdrawDate: '', birthDate: '2016-04-02' },
+  ]
+  const template = (students: RegularLessonTemplate['cells'][number]['desks'][number]['students']): RegularLessonTemplate => ({
+    version: 1, effectiveStartDate: '2026-11-11', savedAt: '2026-11-10T00:00:00.000Z',
+    cells: [{ dayOfWeek: 4, slotNumber: 1, desks: [{ deskIndex: 1, teacherId: 't5', checklistPrepTeacherId: 't5', students }] }],
+  })
+  const cleanup = (saved: RegularLessonTemplate) => planChecklistPrepCleanup({ weeks: [], pendingDesks: null, savedTemplate: saved, students: studentRows, toSaveTemplate: (entry) => entry })
+
+  it('配置（生徒）: 準備の机に室長が確認用でない生徒を足した → 後片づけは講師を外さない（確認用の生徒の登録だけ外す）', () => {
+    const plan = cleanup(template([{ studentId: 's001', subject: '数' }, { studentId: 'p1', subject: '算' }]))
+    if (plan.nothing) throw new Error('nothing')
+    expect(plan.templateTeachersRemoved).toBe(0)
+    expect(plan.template!.cells[0].desks[0]).toEqual({ deskIndex: 1, teacherId: 't5', students: [{ studentId: 's001', subject: '数' }, null] })
+    // 確認用の生徒も居なければ何もしない（室長の講師と生徒はそのまま）。
+    expect(cleanup(template([{ studentId: 's001', subject: '数' }, null])).nothing).toBe(true)
+  })
+
+  it('削除（講師）→ 選び直し: テンプレ作成で準備の講師を消して同じ講師を選び直した → 印は戻らず、後片づけは講師を外さない', () => {
+    const cells = buildTemplateBoardCells({ template: template([null, null]), teachers: teacherRows, students: studentRows, deskCount: 1 })
+    const desk = cells.find((cell) => cell.id === 'template_4_1')!.desks[0]
+    setTemplateEditorDeskTeacher(desk, '')
+    setTemplateEditorDeskTeacher(desk, '講師E')
+    const resaved = convertTemplateCellsToTemplate({ cells, teachers: teacherRows, students: studentRows, effectiveStartDate: '2026-11-11', deskCount: 1 })
+    const resavedDesk = resaved.cells.find((cell) => cell.dayOfWeek === 4 && cell.slotNumber === 1)!.desks[0]
+    expect(resavedDesk).toEqual({ deskIndex: 1, teacherId: 't5', students: [null, null] })
+    expect(cleanup(resaved).nothing).toBe(true)
   })
 })

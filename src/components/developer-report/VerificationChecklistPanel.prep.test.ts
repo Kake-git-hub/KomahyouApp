@@ -179,6 +179,7 @@ describe('VerificationChecklistPanel の「準備する」', () => {
 
   // 第116版(2026-11-07・確認リスト ap-3「後片付けのボタンが出てこない」): 上の 1 つだけでは、項目を見ながら下へ送っていると見つからない。
   // autoPrep の項目の準備の行(「準備する」の右)にも同じ「後片づけ」を出す。処理は同じ onCleanup・同時に 1 つだけ・結果はその項目の下に出す。
+  const ITEM_CLEANUP_NOTE = '準備で作ったものを全部消します'
   const itemCleanupButton = (itemId: string) => container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-cleanup-${itemId}"]`)
   const itemCleanupResult = (itemId: string) => container.querySelector<HTMLElement>(`[data-testid="verification-checklist-cleanup-result-${itemId}"]`)
 
@@ -195,6 +196,11 @@ describe('VerificationChecklistPanel の「準備する」', () => {
       expect(cleanup.closest('.verification-checklist-prep-row'), id).toBe(row)
       expect(button(id)!.nextElementSibling, id).toBe(cleanup)
       expect(cleanup.compareDocumentPosition(row.querySelector('.verification-checklist-prep')!) & Node.DOCUMENT_POSITION_FOLLOWING, id).toBeTruthy()
+      // regression-reviewer S-1: 項目の「後片づけ」もその項目の分だけでなく準備で作ったもの全部を消すので、ボタンの横に短く書く(title にも)。
+      expect(cleanup.getAttribute('title'), id).toBe(ITEM_CLEANUP_NOTE)
+      const note = row.querySelector('.verification-checklist-cleanup-note')
+      expect(note?.textContent, id).toBe(ITEM_CLEANUP_NOTE)
+      expect(cleanup.nextElementSibling, id).toBe(note)
     }
     expect(itemCleanupButton(plainItem.id)).toBeNull()
   })

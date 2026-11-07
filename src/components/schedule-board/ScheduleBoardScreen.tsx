@@ -4,7 +4,7 @@ import { getJstTodayDateKey } from '../../utils/jstDate'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isHiddenAutoAssignRule, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, setTemplateEditorDeskTeacher, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, resolveTemplateDiffBaseline, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
 import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specialSessionModel'
 import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration, selectStudentFacingSpecialSessions } from '../special-data/specialSessionModel'
@@ -12005,7 +12005,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = next.find((c) => c.id === teacherMenu.cellId)
     const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
     if (!targetDesk) return
-    targetDesk.teacher = teacherMenu.selectedTeacherName
+    // 講師を選び直した机は確認リストの準備の印を外す(後片づけで室長の講師を外さない・regression-reviewer M-1・INV-02)。
+    setTemplateEditorDeskTeacher(targetDesk, teacherMenu.selectedTeacherName)
     setTemplateCells(next)
     setTeacherMenu(null)
     setStatusMessage(`講師を ${teacherMenu.selectedTeacherName || '未設定'} に変更しました。`)
@@ -12018,7 +12019,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetCell = next.find((c) => c.id === teacherMenu.cellId)
     const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
     if (!targetDesk) return
-    targetDesk.teacher = ''
+    setTemplateEditorDeskTeacher(targetDesk, '')
     setTemplateCells(next)
     setTeacherMenu(null)
     setStatusMessage('講師を削除しました。')
