@@ -1754,8 +1754,9 @@ describe('休日設定 × 科目だけ編集したテンプレの授業（2026-1
     const stock = (suppressedOrigins: Record<string, Array<{ dateKey: string; slotNumber?: number }>>) => keysOf(Object.fromEntries(buildMakeupStockEntries({
       students: pairFx.students, teachers: pairFx.teachers, regularLessons: pairFx.ROWS, classroomSettings: pairFx.settings(), weeks: remerged, manualAdjustments: {}, suppressedOrigins, resolveStudentKey: pairFx.resolveStudentKey, today: pairFx.TODAY,
     }).map((item) => [item.key, item.balance])))
-    // 修正前（編集が抑止を積まない）は D の付け替えに置かなかった A の「休み」（数）が未消化 1 件になっていた。
-    expect(stock({})).toEqual({ sA__数: 1 })
+    // 修正前（編集が抑止を積まない）は D の付け替えに置かなかった A の「休み」（数）が未消化 1 件になっていた。抑止の無い既存データ（stock({})）も、
+    // 2026-11-07 から作成で D から移した手入力を §9-21 の「D' に先にあった手入力」に数えないので 0 件（D の記録は「休)→D'」・spec-template-conflict-v2 §4-1-2）。
+    expect(stock({})).toEqual({})
     expect(stock(edited.suppressedMakeupOrigins)).toEqual({})
     expect(pairFx.cellAt(remerged, pairFx.D2).desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA').map((item) => item!.subject)).toEqual(['国'])
   })

@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+- fix: 11/7 より前に「編集」で科目だけ変えたテンプレの授業(テンプレの科目の振替の抑止が無い既存データ)を、編集し直さずに削除・格納・休み・全コマ削除してから、またはそのまま・振無休・出席・別の日へ移動のまま休日設定すると、テンプレの元の科目の未消化振替が 1 件増えていた。外す操作と休日設定の側でも同じ抑止を立てる(権威関数 `resolveTemplateSubjectMakeupOrigin`・`ensureTemplateSubjectMakeupSuppression`・既にあれば重ねない・休日設定は `collectHolidayTemplateSubjectSuppressions`)。削除と格納の会計はハンドラから純関数 `computeDeletedLessonMakeupSuppressions`・`computeStoredLessonMakeupLedgers` へ切り出した(挙動不変・配線テストは切り出しに合わせて移した)。修正前に 19 件落ちる。 触れる INV: INV-06。
+- fix: 丸ごと振替の付け替え(機能フラグ templateDiffApply の教室だけ)で、移した先の日から科目を変えたテンプレの授業を同じ週の別の日へ動かすと、テンプレ保存のときだけ元の日のテンプレの生徒が移した先に出ていた(保存と再マージで答えが割れる)。付け替えの日の暗黙の抑止キーに授業 ID のテンプレの科目のキーも足す(`collectMovedTemplateSubjectOccurrenceKeys`・付け替えでない日には当てない)。移した先の日でその生徒自身の元の日の授業を削除・格納したら、テンプレを保存しても戻さない(オーナー選択「戻さない」・解除しても元の日に戻らない・`resolveWholeDayPairMovedOwnLessonKeys`)。付け替えを作っただけで元の日が休みになり未消化振替が +1 になっていた穴(§9-21 の根拠に作成で移した手入力を数えていた)も直した(`stripWholeDayPairOwnEntries`・既存マトリクスの期待 +1 → 0 は在庫中立のバグ修正による変化)。修正前に 10 件落ちる。 触れる INV: INV-03・INV-06。
+- docs: 確認リストに se-4〜se-6(丸ごと振替の付け替えで科目を変えた授業を消す・動かす・付け替えを作る・テスト教室にも出す)。
+
 ## v1.5.705 (2026-11-07)
 
 - fix: **「編集」で科目だけ変えたテンプレの授業を削除・格納・休み・別の日や別の机へ移動しても、機能フラグ templateDiffApply が ON の教室(開発用・テスト教室)でもテンプレの元の科目の授業が戻らないよう揃えた**(オーナー指示 2026-11-07「本番の教室での、削除したあと戻らなくなる方に揃えて」・仕様 spec-template-conflict-v2 §4-1-2)。権威関数 `resolveSuppressedRegularLessonOccurrenceKeys` が ON でもテンプレの科目のキーを返す(丸ごと振替の付け替えで展開した授業は 1 本のまま)。兄弟監査で、科目を変えてから別の日へ動かした振替が ON のテンプレ保存でだけ「根拠を失った振替」として消され元の日に元の科目が戻っていた(保存と再マージで答えが割れる)のも直した(`collectOrphanedMakeups`・`collectOrphanedMakeupSuppressionKeys` が授業 ID のテンプレの科目でも根拠を引く・`resolveMovedTemplateLessonSubjectFromId`)。旧テスト「フラグ ON は不変」2 件はこの決定による変化として置き換えた。 触れる INV: INV-12・INV-03。

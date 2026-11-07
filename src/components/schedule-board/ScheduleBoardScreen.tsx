@@ -3612,8 +3612,31 @@ export function resolveRemovedLessonOccurrenceKeyFor(student: StudentEntry, date
   return resolveSuppressedRegularLessonOccurrenceKey(student, dateKey, templateOriginRules ? (resolveSameDayMoveSourceSlot(student, dateKey) ?? slotNumber) : slotNumber)
 }
 
+/**
+ * 丸ごと振替の付け替え（段 4）の作成で D から D' へ移した手入力（印 wholeDayPairMovedFrom）のうち、**その生徒自身の D の授業**（授業 ID が D のテンプレの授業のまま・
+ * 振替元が D＝resolveMovedTemplateLessonSubjectFromId）を D' で単発削除・格納したときの抑止キー（D の日付・その時限・今の科目とテンプレの科目）。
+ * 2026-11-07 オーナー選択「戻さない」（spec-template-conflict-v2 §4-1-2）: D' の付け替えの展開は D の日付の削除記録で外れる（applyWholeDayTransferPairsToManagedWeek）ので、
+ * テンプレ保存・再マージとも D' に D のテンプレのその生徒を戻さず、組を解除しても D に戻らない（ふだんの日の削除・科目を変えた授業の削除と同じ）。
+ * 移した授業は振替（makeup）になっていて resolveSuppressedRegularLessonOccurrenceKeys がキーを返さないため、以前は §2-2 の根拠が消えた D' に D のテンプレの A が戻り、
+ * 格納では未消化 +1 と D' の授業の二重になっていた。在庫からの振替・体験・手で足した授業・別の生徒（授業 ID が D のテンプレの授業でない）は対象外＝null。
+ * ★削除・格納だけに使う（休み・出席は記録が §2-4 で止め、記録の生徒は印を持たないので積む／外すが対称にならない）。
+ */
+function resolveWholeDayPairMovedOwnLessonKeys(student: StudentEntry): string[] | null {
+  const movedFrom = student.wholeDayPairMovedFrom
+  if (!movedFrom || student.makeupSourceDate !== movedFrom.dateKey) return null
+  const templateSubject = resolveMovedTemplateLessonSubjectFromId(student)
+  if (!templateSubject) return null
+  const slotNumber = parseOriginSlotNumber(student.makeupSourceLabel) ?? movedFrom.slotNumber
+  if (!slotNumber) return null
+  const keys = [buildManagedOccurrenceKey(student, movedFrom.dateKey, slotNumber)]
+  if (templateSubject !== student.subject) keys.push(buildManagedOccurrenceKey({ ...student, subject: templateSubject as SubjectLabel }, movedFrom.dateKey, slotNumber))
+  return keys
+}
+
 /** 単発削除・格納で積む抑止キー（resolveRemovedLessonOccurrenceKeyFor の時限の決め方＋権威関数 resolveSuppressedRegularLessonOccurrenceKeys）。 */
 export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dateKey: string, slotNumber: number, templateOriginRules: boolean): string[] {
+  const pairMovedOwnLessonKeys = resolveWholeDayPairMovedOwnLessonKeys(student)
+  if (pairMovedOwnLessonKeys) return pairMovedOwnLessonKeys
   return resolveSuppressedRegularLessonOccurrenceKeys(student, dateKey, templateOriginRules ? (resolveSameDayMoveSourceSlot(student, dateKey) ?? slotNumber) : slotNumber, { templateOriginRules })
 }
 
@@ -7451,23 +7474,6 @@ export type DayDeskDisposalCounts = {
   returnedLectureCount: number
 }
 
-// INV-06(Issue #58): 「その日の生徒を全コマ削除」で処分する通常授業の振替抑制(suppressedMakeupOrigins)を集める。
-// 処分の裁定(v1.5.464)は「通常授業＝返さず希望回数−1(＝もうやらない)」なのに、その後この日を休日設定すると
-// 休日振替の自動計算(computeAutomaticShortageOrigins)が**盤面ではなくテンプレを根拠に**振替を積み直し、
-// 同じ1コマに「希望回数−1」と「未消化振替+1」が両方かかっていた(5週目を空けたい運用を直接妨げる)。
-// 1コマずつの「削除」(handleDeleteStudent)が抑制を積むのと同じ扱いへ対称化する。
-// ★時限つきで積む: 同じ生徒×科目の**欠席済み origin**(mark-absent が台帳へ確定済み＝未消化に立っている)を、
-//   時限なし抑制(＝その日付を丸ごと落とすワイルドカード)で巻き込んで消さないため。
-// ★absent の記録には積まない: その1コマの在庫は既に台帳に立っており、抑制すると立っている在庫が消える(誤減)。
-// ★moved の記録にも積まない(INV監査 2026-08-29): moved の会計は**移動先の振替コマ**が持つ。移動先を休みに
-//   すると算出復元(collectAbsentMakeupOrigins)が移動元日の origin を立てるが、ここで移動元日に抑制を積むと
-//   その origin まで消える(誤減)。積まなくても #58 の狙いは崩れない: 休日設定の自動 origin は、盤面に残る
-//   移動先の振替コマが消化(usedOriginDates)として打ち消すため中立になる。
-//   attended/振無休の通常授業は「実施済み・振替なしで処理済み」なので、休日設定の自動計算が
-//   積み直すべきでない＝抑制を積む。
-// ★「全コマ削除→コマを足し直して休み」は順序方式(v1.5.459・後にやった操作が勝つ)のまま:
-//   休み(handleMarkStudentAbsent)側の clearMakeupOrigins が同じ(日付,時限)の抑制を解除するので振替に入る。
-// disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に呼ぶこと。
 /**
  * 休日設定で、そのコマに残っている「編集」で科目だけ変えたテンプレの通常授業（席・出欠記録〔休み・振無休・出席・別の日へ動かした移動元〕）のテンプレの科目の
  * 振替の抑止を立てる（INV-06・2026-11-07 兄弟監査・ensureTemplateSubjectMakeupSuppression を通す）。休日設定は席の授業を今の科目（国）で未消化へ返し、
@@ -7476,6 +7482,7 @@ export type DayDeskDisposalCounts = {
  * ★今の科目の台帳・抑止には触れない（返却は reconcileHolidayDeskStockReturns の仕事）。表示専用の holiday 記録は見ない（前の休日設定で返し終えた）。
  * ★休日解除（computeHolidayReleaseRestoration）では外さない: 席へ戻るのは 国 の授業なので、抑止が残るのが「科目がテンプレと違えば抑止 1 件」の規則どおり
  *   （「編集」でテンプレの科目へ戻したとき applyStudentEdit が外す）。
+ * ★moved の記録にも積むが、今の科目とは別のキー（テンプレの科目）なので collectClearedDayMakeupSuppressions の moved のガード（INV 監査 2026-08-29）とぶつからない。
  */
 export function collectHolidayTemplateSubjectSuppressions(params: {
   cell: SlotCell
@@ -7496,6 +7503,23 @@ export function collectHolidayTemplateSubjectSuppressions(params: {
   return next
 }
 
+// INV-06(Issue #58): 「その日の生徒を全コマ削除」で処分する通常授業の振替抑制(suppressedMakeupOrigins)を集める。
+// 処分の裁定(v1.5.464)は「通常授業＝返さず希望回数−1(＝もうやらない)」なのに、その後この日を休日設定すると
+// 休日振替の自動計算(computeAutomaticShortageOrigins)が**盤面ではなくテンプレを根拠に**振替を積み直し、
+// 同じ1コマに「希望回数−1」と「未消化振替+1」が両方かかっていた(5週目を空けたい運用を直接妨げる)。
+// 1コマずつの「削除」(handleDeleteStudent)が抑制を積むのと同じ扱いへ対称化する。
+// ★時限つきで積む: 同じ生徒×科目の**欠席済み origin**(mark-absent が台帳へ確定済み＝未消化に立っている)を、
+//   時限なし抑制(＝その日付を丸ごと落とすワイルドカード)で巻き込んで消さないため。
+// ★absent の記録には積まない: その1コマの在庫は既に台帳に立っており、抑制すると立っている在庫が消える(誤減)。
+// ★moved の記録にも積まない(INV監査 2026-08-29): moved の会計は**移動先の振替コマ**が持つ。移動先を休みに
+//   すると算出復元(collectAbsentMakeupOrigins)が移動元日の origin を立てるが、ここで移動元日に抑制を積むと
+//   その origin まで消える(誤減)。積まなくても #58 の狙いは崩れない: 休日設定の自動 origin は、盤面に残る
+//   移動先の振替コマが消化(usedOriginDates)として打ち消すため中立になる。
+//   attended/振無休の通常授業は「実施済み・振替なしで処理済み」なので、休日設定の自動計算が
+//   積み直すべきでない＝抑制を積む。
+// ★「全コマ削除→コマを足し直して休み」は順序方式(v1.5.459・後にやった操作が勝つ)のまま:
+//   休み(handleMarkStudentAbsent)側の clearMakeupOrigins が同じ(日付,時限)の抑制を解除するので振替に入る。
+// disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に呼ぶこと。
 export function collectClearedDayMakeupSuppressions(params: {
   cell: SlotCell
   suppressedMakeupOrigins: MakeupOriginMap
