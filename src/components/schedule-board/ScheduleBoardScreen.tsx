@@ -3455,7 +3455,8 @@ export function resolveRemovedLessonOccurrenceKeysFor(student: StudentEntry, dat
  *   今の科目のキーも従来どおり返す（既に保存された記録の解除で外れるよう・保護者ページの写しも同じ形）。積む側と外す側で必ず同じ関数を使う
  *   （片方だけテンプレの科目を足すと、休み解除で戻した生徒がテンプレの席ごと抑止されて再マージで消える）。
  * ★フラグ ON（第 2 版）は従来どおり今の科目の 1 本だけ（§2-2 の規則で同じコマに置かない）。OFF で積んだ 2 本は、昇格後に写しを外すとき
- *   collectSameDayMovedTemplateOccurrenceKeys / resolveSameDayMoveCopyKeysToRemove が同じ科目の並び（resolveTemplateLessonSubjectVariants）で両方外す。
+ *   collectSameDayMovedTemplateOccurrenceKeys が同じ科目の並び（resolveTemplateLessonSubjectVariants）で両方外す（実際に外すのはこの関数。
+ *   templateDiffApply.ts の resolveSameDayMoveCopyKeysToRemove も同じ並びを使うが、今はテストからだけ呼ばれる）。
  * キーの形（buildManagedOccurrenceKey）は変えない。戻り値の順は [今の科目のキー, テンプレの科目のキー（あれば）]（applyStudentEdit が 1 本目・2 本目を分けて控える）。
  */
 export function resolveSuppressedRegularLessonOccurrenceKeys(student: StudentEntry, dateKey: string, slotNumber: number, options: { templateOriginRules: boolean }): string[] {
