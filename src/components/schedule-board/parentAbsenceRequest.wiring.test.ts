@@ -92,8 +92,9 @@ describe('保護者からの休み連絡の自動処理(ScheduleBoardScreen.tsx)
     const effect = sliceFrom("if (request.action === 'makeup-now' && applied.makeupStock) {", 200)
     expect(effect).toContain('setPendingParentMakeupPlacement(applied.makeupStock)')
     // 休みの本体は振替元を「日付＋時限」で返す(素の日付だけだと同日同科目 2 コマで別コマを指す・INV-06/INV-11)。
+    // 時限は台帳へ積んだ origin と同じ決め方(resolveLessonMakeupOriginSlotNumber・2026-11-07)＝在庫行の時限と完全一致で選べる。
     const absentBody = sliceFrom('const markStudentAbsentAt = ', 9000)
-    expect(absentBody).toContain('originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),')
+    expect(absentBody).toContain('originSlotNumber: resolveLessonMakeupOriginSlotNumber(targetStudent, targetCell.slotNumber),')
     const placement = sliceFrom('if (!pendingParentMakeupPlacement) return', 1500)
     // 入るかどうか・どの振替元を選ぶかは純関数 resolveParentMakeupPlacement(その科目の在庫行の残数＋在庫行自身の値で作るトークン)で決める。
     // 振る舞いは parentMakeupPlacement.test.ts が固定している。ここは「その結果をそのまま既存の配置モードへ渡している」ことだけを見る。

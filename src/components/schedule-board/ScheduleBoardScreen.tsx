@@ -31,6 +31,7 @@ import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, 
 import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, isClosedDate, isStockNeutralEditedMakeup, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { resolveClosedDayStudentPlacementBlock, resolveStudentMoveClosedDayBlock } from './closedDayPlacementGuard'
+import { findStudentMoveSource, type StudentMoveSourceSeat } from './studentMoveSource'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
 export { packSortCellDesks } from './deskSort'
@@ -521,6 +522,8 @@ export function collectStudentMoveLandingPlacements(params: {
   studentIndex: number
   managedStudentByAnyName: Map<string, StudentRow>
   resolveBoardStudentDisplayName: (name: string) => string
+  /** 移動元として選んだ席（同じ id の授業が 2 つあっても選んだ方の着地で確認する・findStudentMoveSource）。 */
+  sourceSeat?: StudentMoveSourceSeat | null
 }): ReopenPlacementCheck[] {
   const { weeks, cells, movingStudentId, cellId, deskIndex, studentIndex, managedStudentByAnyName, resolveBoardStudentDisplayName } = params
   const targetCell = cells.find((cell) => cell.id === cellId)
@@ -532,22 +535,10 @@ export function collectStudentMoveLandingPlacements(params: {
     return byName?.id ?? null
   }
 
-  let movingEntry: StudentEntry | null = null
-  let sourceCell: SlotCell | null = null
-  for (const week of weeks) {
-    for (const cell of week) {
-      for (const desk of cell.desks) {
-        const hit = desk.lesson?.studentSlots.find((student) => student?.id === movingStudentId) ?? null
-        if (hit) {
-          movingEntry = hit
-          sourceCell = cell
-          break
-        }
-      }
-      if (movingEntry) break
-    }
-    if (movingEntry) break
-  }
+  // 移動元は computeStudentMove と同じ権威関数で決める（選んだ席・無ければ id で最初の授業）。
+  const movingSource = findStudentMoveSource(weeks.flat(), movingStudentId, params.sourceSeat)
+  const movingEntry: StudentEntry | null = movingSource?.student ?? null
+  const sourceCell: SlotCell | null = movingSource?.cell ?? null
 
   const placements: ReopenPlacementCheck[] = []
   const isSameSlot = (left: SlotCell | null, right: SlotCell) => Boolean(left && left.dateKey === right.dateKey && left.slotNumber === right.slotNumber)
@@ -3388,6 +3379,25 @@ function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: stri
 function resolveOriginalRegularSlotNumber(student: StudentEntry, fallbackSlotNumber: number) {
   if (student.makeupSourceDate) return parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
   return fallbackSlotNumber
+}
+
+/**
+ * 盤面の授業 1 コマを未消化振替の origin として扱うときの時限（INV-06・2026-11-07）。「休み」（computeStudentAbsentMark）・休み解除
+ * （handleClearStudentStatus・テンプレ上書きの相殺）・格納（handleStoreStudent）・単発削除の抑制（handleDeleteStudent）が**同じ値**を使う
+ * （積んだ形で外す＝removeMakeupOrigin の前提・origin の同一性は 日付＋時限＝spec-makeup-stock §2）。
+ * - 振替元のあるコマ … 振替元ラベルの時限（resolveOriginalRegularSlotNumber と同じ）。
+ * - それ以外（通常・増コマ・振替元のない振替）… 同じ日の中で動かした授業は**元の時限**（sameDayMoveSourceLabel）、動かしていなければそのコマの時限。
+ *   全コマ削除の抑制（collectClearedDayMakeupSuppressions）・休日の自動発生（テンプレ行の時限）と同じ時限にそろえる。今の時限で積むと、
+ *   後からその日を休日にしたとき自動発生と別の origin に数えて 1 コマが 2 件になる（誤増）。
+ * ★以前は時限なし（日付だけ）で積んでいたため、同じ日に同じ科目を 2 コマ休むと resolveEffectiveMakeupOriginDates の Set で 1 件に畳まれていた
+ *   （誤減）。時限なしの旧データは従来どおりワイルドカードとして数える（読み替えない）。
+ */
+export function resolveLessonMakeupOriginSlotNumber(
+  student: Pick<StudentEntry, 'makeupSourceDate' | 'makeupSourceLabel' | 'sameDayMoveSourceLabel'>,
+  cellSlotNumber: number,
+): number | null {
+  if (student.makeupSourceDate) return parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+  return parseOriginSlotNumberFromLabel(student.sameDayMoveSourceLabel) ?? cellSlotNumber
 }
 
 /**
@@ -6315,6 +6325,12 @@ export function computeStudentMove(params: {
    * 移動の抑止キーを積まない（再マージは写しの元の時限にテンプレの同じ授業を置き直さない＝collectSameDayMoveSourcesByDate。次のテンプレ反映でテンプレの位置へ戻る）。
    */
   templateOriginRules?: boolean
+  /**
+   * 移動元として選んだ席（メニューの「移動」・長押し D&D・日程表 D&D）。テンプレの授業の id は時限を含まない（生徒ID_日付_科目）ので、
+   * 同じ日に同じ科目を 2 コマ持つ生徒は id が重なる。席で移動元を決めないと後ろの時限を選んでも前の時限が動く（2026-11-07・INV-02 / INV-11）。
+   * 省略・古い席（席の生徒が別の id）は従来どおり id で最初に見つかった授業（findStudentMoveSource）。
+   */
+  sourceSeat?: StudentMoveSourceSeat | null
 }): ComputeStudentMoveResult {
   const {
     weeks, weekIndex, cells, movingStudentId, cellId, deskIndex, studentIndex,
@@ -6348,33 +6364,25 @@ export function computeStudentMove(params: {
   const nextWeeks = cloneWeeks(weeks)
   const nextCells = nextWeeks[weekIndex]
 
-  let sourceFound = false
-  for (const week of nextWeeks) {
-    if (sourceFound) break
-    for (const cell of week) {
-      if (sourceFound) break
-      for (const desk of cell.desks) {
-        if (!desk.lesson) continue
-        const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === movingStudentId)
-        if (currentIndex < 0) continue
-
-        movedStudent = desk.lesson.studentSlots[currentIndex]
-        sourceLessonSnapshot = {
-          ...desk.lesson,
-          studentSlots: desk.lesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
-        }
-        sourceCellId = cell.id
-        sourceDeskId = desk.id
-        sourceSlotIndex = currentIndex
-        sourceDateKey = cell.dateKey
-        sourceSlotNumber = cell.slotNumber
-        desk.lesson.studentSlots[currentIndex] = null
-        if (!desk.lesson.studentSlots[0] && !desk.lesson.studentSlots[1]) {
-          desk.lesson = undefined
-        }
-        sourceFound = true
-        break
-      }
+  // 移動元は選んだ席で決める（同じ id の授業が 2 つあると id だけでは前の時限を取る・findStudentMoveSource）。
+  // 席が無い・古いときは従来どおり全週を先頭から走査して最初に id が一致した授業。
+  const sourceHit = findStudentMoveSource(nextWeeks.flat(), movingStudentId, params.sourceSeat)
+  if (sourceHit && sourceHit.desk.lesson) {
+    const { cell, desk, studentIndex: currentIndex } = sourceHit
+    const sourceLesson = desk.lesson!
+    movedStudent = sourceLesson.studentSlots[currentIndex]
+    sourceLessonSnapshot = {
+      ...sourceLesson,
+      studentSlots: sourceLesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
+    }
+    sourceCellId = cell.id
+    sourceDeskId = desk.id
+    sourceSlotIndex = currentIndex
+    sourceDateKey = cell.dateKey
+    sourceSlotNumber = cell.slotNumber
+    sourceLesson.studentSlots[currentIndex] = null
+    if (!sourceLesson.studentSlots[0] && !sourceLesson.studentSlots[1]) {
+      desk.lesson = undefined
     }
   }
 
@@ -6650,8 +6658,10 @@ export function computeStudentAbsentMark(params: {
   // 台帳に origin が無い（＝別日へ移動しただけの）振替は makeupStock.ts の collectAbsentMakeupOrigins が
   // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
   // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
+  // ★時限つきで積む（2026-11-07・INV-06）: 時限なしだと同じ日に同じ科目を 2 コマ休んだとき 1 件に畳まれる（resolveLessonMakeupOriginSlotNumber）。
+  const absentOriginSlotNumber = resolveLessonMakeupOriginSlotNumber(targetStudent, targetCell.slotNumber)
   const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
-    ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
+    ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey), absentOriginSlotNumber)
     : displacedLedgers.manualMakeupAdjustments
   // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
   // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
@@ -6661,7 +6671,7 @@ export function computeStudentAbsentMark(params: {
     params.suppressedMakeupOrigins,
     stockKey,
     resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-    resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+    absentOriginSlotNumber,
   )
   const managedStudent = managedStudentByAnyName.get(targetStudent.name)
   const nextFallbackMakeupStudents = managedStudent
@@ -6684,10 +6694,11 @@ export function computeStudentAbsentMark(params: {
       suppressedRegularLessonOccurrences: nextSuppressedRegularLessonOccurrences,
     },
     // 振替元は日付と**時限**の両方を返す（呼び出し側の markStudentAbsentAt も同じ値を返す・INV-06/INV-11）。
+    // 時限は台帳へ積んだ origin と同じ値（resolveLessonMakeupOriginSlotNumber）＝在庫行の時限と完全一致で選べる。
     makeupStock: {
       stockKey,
       originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-      originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+      originSlotNumber: absentOriginSlotNumber,
     },
   }
 }
@@ -8807,6 +8818,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [selectedCellId, setSelectedCellId] = useState(initialBoardSnapshot.selectedCellId)
   const [selectedDeskIndex, setSelectedDeskIndex] = useState(initialBoardSnapshot.selectedDeskIndex)
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
+  // 移動元として選んだ席（2026-11-07・INV-02 / INV-11）。テンプレの授業の id は時限を含まないので、同じ日に同じ科目を 2 コマ持つ生徒は
+  // id が重なる。selectedStudentId を立てる所（メニューの「移動」・長押し D&D・テンプレ編集）では必ず一緒に立てる（テンプレ編集は id が席ごとなので null）。
+  // 使う側は findStudentMoveSource で「席の生徒が同じ id か」を確かめるので、解除し忘れて古い席が残っても別の生徒は動かない。
+  const [selectedStudentSeat, setSelectedStudentSeat] = useState<StudentMoveSourceSeat | null>(null)
   // 長押しD&D移動の「掴んでいる」状態(画面周囲の色枠/盤面ハイライトの切替に使う)。開始・終了で
   // 1回だけ更新し、毎フレーム再描画は起こさない(追従プレビューは CursorFollowPreview に隔離済み)。
   const [isDragMoveActive, setIsDragMoveActive] = useState(false)
@@ -9350,7 +9365,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
                 const restoredStudent = buildStudentEntryFromStatus(statusEntry)
                 const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)
-                nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey))
+                // INV-06（2026-11-07）: 休みで積んだのと同じ時限で外す（休み解除と同じ）。
+                nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey), resolveLessonMakeupOriginSlotNumber(restoredStudent, cell.slotNumber))
               }
             }
           }
@@ -11207,27 +11223,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const movingStudentContext = useMemo(() => {
     if (!selectedStudentId) return null
-
-    for (const week of normalizedWeeks) {
-      for (const cell of week) {
-        for (const desk of cell.desks) {
-          const studentIndex = desk.lesson?.studentSlots.findIndex((student) => student?.id === selectedStudentId) ?? -1
-          if (studentIndex < 0) continue
-
-          const student = desk.lesson?.studentSlots[studentIndex] ?? null
-          if (!student) continue
-
-          return {
-            cell,
-            desk,
-            student,
-          }
-        }
-      }
+    // 移動中の表示（「〜を移動中」・日程表の強調・盤面の選択枠）も、動かす授業と同じ権威関数で決める（同じ id の授業の取り違え防止）。
+    const hit = findStudentMoveSource(normalizedWeeks.flat(), selectedStudentId, selectedStudentSeat)
+    if (!hit) return null
+    return {
+      cell: hit.cell,
+      desk: hit.desk,
+      student: hit.student,
+      deskIndex: hit.deskIndex,
+      studentIndex: hit.studentIndex,
     }
-
-    return null
-  }, [normalizedWeeks, selectedStudentId])
+  }, [normalizedWeeks, selectedStudentId, selectedStudentSeat])
+  // 盤面の選択枠は動かす授業の席だけに付ける（同じ id の授業が 2 つあると id では両方に枠が付いていた）。BoardGrid は memo なので useMemo で同じ参照を保つ。
+  const selectedStudentBoardSeat = useMemo<StudentMoveSourceSeat | null>(
+    () => (!isTemplateMode && movingStudentContext
+      ? { cellId: movingStudentContext.cell.id, deskIndex: movingStudentContext.deskIndex, studentIndex: movingStudentContext.studentIndex }
+      : null),
+    [isTemplateMode, movingStudentContext],
+  )
 
   useEffect(() => {
     syncStudentScheduleHtml({
@@ -11964,6 +11977,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleTemplateStartMove = () => {
     if (!templateMenuStudent) return
     setSelectedStudentId(templateMenuStudent.student.id)
+    setSelectedStudentSeat(null) // テンプレ編集の生徒の id は席ごと（regularLessonTemplate）なので席は要らない。盤面の古い席を残さない。
     setStudentMenu(null)
     setStatusMessage(`${templateMenuStudent.student.name} を選択しました。移動先セルを左クリックしてください。（移動先に生徒がいる場合は入れ替えます）`)
   }
@@ -13859,7 +13873,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除しました。`)
   }
 
-  const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number, sourceStudentIdOverride?: string | null) => {
+  const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number, sourceStudentIdOverride?: string | null, sourceSeatOverride?: StudentMoveSourceSeat | null) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setStudentMenu(null)
@@ -13867,6 +13881,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 長押しD&D は確定時に「掴んでいる生徒ID」を明示で渡す。state(selectedStudentId)は更新が
     // 非同期のため、ドロップ時に旧クロージャ経由で null と判定され配置されない不具合があった。
     const movingStudentId = sourceStudentIdOverride ?? selectedStudentId
+    // 移動元として選んだ席（同じ id の授業が 2 つあっても選んだ方を動かす・2026-11-07 INV-02 / INV-11）。D&D は掴んだ席を明示で渡す
+    // （id と同じく state 更新が非同期のため）。id だけ明示で渡された（席の無い）呼び出しは席を使わない（古い選択の席を混ぜない）。
+    const movingSourceSeat = sourceStudentIdOverride ? (sourceSeatOverride ?? null) : selectedStudentSeat
     if (!movingStudentId) {
       setStatusMessage('移動する生徒はメニューの「移動」から選択してください。')
       return
@@ -13875,7 +13892,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // INV-02 / INV-06（オーナー指示 2026-10-27・確認リスト tp-63）: 休日（休校）のコマへは移動・入れ替えで生徒を置かない。
     // 休日の再マージは盤面の授業を持ち込まない（8559c28）ので、置けても再マージで黙って消える。判定は開校ルール適用後の
     // normalizedWeeks で行う（生 weeks の isOpenDay は古いことがある）。選択は維持して置き直せるようにする（blocked と同じ）。
-    const closedDayMoveBlock = resolveStudentMoveClosedDayBlock({ cells: normalizedWeeks.flat(), movingStudentId, cellId, deskIndex, studentIndex })
+    const closedDayMoveBlock = resolveStudentMoveClosedDayBlock({ cells: normalizedWeeks.flat(), movingStudentId, cellId, deskIndex, studentIndex, sourceSeat: movingSourceSeat })
     if (closedDayMoveBlock) {
       setStatusMessage(closedDayMoveBlock)
       return
@@ -13884,8 +13901,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // spec-template-behavior Q26-5（第 1 段 (B)・フラグ ON の教室だけ）: 他の机から保留（2 行）の机（上段の空席を含む）への
     // 移動・D&D の着地は不可。選択は維持して選び直せるようにする（blocked と同じ）。同じ机の中の席替えは通す。
     if (activeTemplatePendingDesks) {
-      const sourceCell = weeks.flat().find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student?.id === movingStudentId)))
-      const sourceDesk = sourceCell?.desks.find((desk) => desk.lesson?.studentSlots.some((student) => student?.id === movingStudentId))
+      // 移動元の机は computeStudentMove と同じ権威関数で決める（同じ id の授業が 2 つあっても選んだ席の机・findStudentMoveSource）。
+      const movingSourceHit = findStudentMoveSource(weeks.flat(), movingStudentId, movingSourceSeat)
+      const sourceCell = movingSourceHit?.cell
+      const sourceDesk = movingSourceHit?.desk
       const landingBlock = resolveTemplatePendingLandingBlock(
         activeTemplatePendingDesks,
         cells.find((cell) => cell.id === cellId),
@@ -13913,6 +13932,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,
       templateOriginRules: templateDiffApplyEnabled,
+      sourceSeat: movingSourceSeat,
     })
 
     if (result.status === 'blocked') {
@@ -13938,6 +13958,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentIndex,
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,
+      sourceSeat: movingSourceSeat,
     }))
     if (!reopenTargets) {
       setStatusMessage('出席不可コマへの移動を取りやめました。')
@@ -14039,6 +14060,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,
       templateOriginRules: templateDiffApplyEnabled,
+      // 日付＋時限で見つけた移動元の席で動かす（同じ id の授業が同じ日の別の時限にあっても取り違えない・INV-02 / INV-11）。
+      sourceSeat: { cellId: sourceHit.cellId, deskIndex: sourceHit.deskIndex, studentIndex: sourceHit.studentIndex },
     })
     if (result.status !== 'moved') {
       return { ok: false, message: result.message }
@@ -14056,6 +14079,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         studentIndex: resolvedSeat.studentIndex,
         managedStudentByAnyName,
         resolveBoardStudentDisplayName,
+        sourceSeat: { cellId: sourceHit.cellId, deskIndex: sourceHit.deskIndex, studentIndex: sourceHit.studentIndex },
       }),
       studentUnavailableSlotsById,
     })
@@ -14634,6 +14658,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const sourceCell = cells.find((cell) => cell.id === cellId)
     const sourceStudentId = sourceCell?.desks[deskIndex]?.lesson?.studentSlots[studentIndex]?.id ?? null
     if (!sourceStudentId) return
+    // 掴んだ席（同じ id の授業が同じ日の別の時限にあっても、掴んだ授業を動かす・INV-02 / INV-11）。
+    const sourceSeat: StudentMoveSourceSeat = { cellId, deskIndex, studentIndex }
 
     const DRAG_LONG_PRESS_MS = 250
     const PRE_ARM_CANCEL_PX = 8
@@ -14734,7 +14760,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       }
       // 実移動は既存処理を再利用(入れ替え/メモ/出席済み/重複/同位置などのブロックを踏襲)。
       // 掴んでいる生徒IDを明示で渡し、最新クロージャ経由で実行する(ドロップで確実に配置)。
-      stableExecuteMoveStudent(targetCellId, targetDeskIndex, targetStudentIndex, sourceStudentId)
+      stableExecuteMoveStudent(targetCellId, targetDeskIndex, targetStudentIndex, sourceStudentId, sourceSeat)
       // D&D は「離した瞬間に確定 or キャンセル」。配置できないコマ(メモ/出席済み/重複等)に離した
       // 場合 executeMoveStudent はブロックして選択を残すが、D&D ではそのままキャンセル扱いにするため
       // 必ず選択を解除する(再クリックでの配置を残さない)。
@@ -14762,6 +14788,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // 掴んだ瞬間に、長押し中に始まっていた文字選択を消す(以降は CSS の user-select:none で発生しない)。
       window.getSelection?.()?.removeAllRanges()
       setSelectedStudentId(sourceStudentId) // これで pointerPreviewLabel/CursorFollowPreview が出る。
+      setSelectedStudentSeat(sourceSeat) // 移動中の表示（選択枠・「〜を移動中」）も掴んだ授業にする。
       setIsDragMoveActive(true)
       // 端へ寄ると盤面が自動スクロールする(画面外のコマへも移動できる)。掴んだ間だけ rAF で回す。
       if (autoScrollRafId === null) autoScrollRafId = window.requestAnimationFrame(autoScrollStep)
@@ -14991,8 +15018,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleStartMove = () => {
-    if (!menuStudent) return
+    if (!menuStudent || !studentMenu) return // menuStudent は studentMenu の席から引くので、menuStudent があれば studentMenu もある。
     setSelectedStudentId(menuStudent.student.id)
+    // メニューを開いた席を移動元として覚える（同じ id の授業が同じ日の別の時限にあっても、この席の授業を動かす・INV-02 / INV-11）。
+    setSelectedStudentSeat({ cellId: studentMenu.cellId, deskIndex: studentMenu.deskIndex, studentIndex: studentMenu.studentIndex })
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(null)
     setIsMakeupStockOpen(false)
@@ -15590,8 +15619,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       cellDateKey: targetCell.dateKey,
       ledgerOriginDates: makeupOriginDatesByKey[stockKey] ?? [],
     })
+    // INV-06（2026-11-07）: 休みと同じ「元の授業の日付＋時限」で積む（時限なしだと同じ日に同じ科目の 2 コマを格納したとき 1 件に畳まれる）。
     const nextManualMakeupAdjustments = storeOriginDate
-      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate)
+      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
       : manualMakeupAdjustments
     // INV-06（順序方式）: 格納は「未消化振替へ戻す」意思表示なので、過去の削除でこの元コマ日が抑制
     // されていても解除する。在庫由来（storeOriginDate=null）でも台帳 origin の再浮上を抑制が止めるため、
@@ -15600,7 +15630,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedMakeupOrigins,
       stockKey,
       resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
-      resolveOriginalRegularSlotNumber(menuStudent.student, targetCell.slotNumber),
+      resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber),
     )
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
@@ -15717,7 +15747,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       makeupStock: {
         stockKey: result.makeupStock!.stockKey,
         originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
-        originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+        originSlotNumber: resolveLessonMakeupOriginSlotNumber(targetStudent, targetCell.slotNumber),
       },
     }
   }
@@ -16372,7 +16402,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         }
       } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
         const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)
-        nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey))
+        // INV-06（2026-11-07）: 休みで積んだのと同じ時限で外す（同じ日の別のコマの休みを外さない）。時限なしの旧データは removeMakeupOrigin が拾う。
+        nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey), resolveLessonMakeupOriginSlotNumber(restoredStudent, targetCell.slotNumber))
       }
     }
 
@@ -16468,13 +16499,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // (積まないと、削除した日を後から休日設定したときにテンプレの自動発生が +1 で湧く＝Issue #58 と同型の誤増)。
     if (menuStudent.student.lessonType === 'regular' || isStockNeutralEditedMakeup(menuStudent.student)) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey))
+      // INV-06（2026-11-07）: 抑制は時限つき（テンプレ上の元の時限＝全コマ削除の抑制と同じ）。時限なしはその日付を丸ごと落とし、
+      //   同じ日の別のコマの休み（未消化振替）まで消す。
+      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey), resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
       statusSuffix = '振替対象にはしません。'
     }
 
     if (menuStudent.student.lessonType === 'makeup' && menuStudent.student.makeupSourceDate) {
       const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
-      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, menuStudent.student.makeupSourceDate)
+      // INV-06（2026-11-07）: 振替元ラベルの時限で抑制する（同じ日の別のコマの振替元を巻き込まない）。ラベルの無い旧データは従来どおり時限なし。
+      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, menuStudent.student.makeupSourceDate, resolveLessonMakeupOriginSlotNumber(menuStudent.student, targetCell.slotNumber))
     }
 
     if (menuStudent.student.lessonType === 'special') {
@@ -17179,6 +17213,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             cells={displayCells}
             linkResolutionCells={isTemplateMode ? displayCells : normalizedWeeksFlat}
             selectedStudentId={selectedStudentId}
+            selectedStudentSeat={selectedStudentBoardSeat}
             highlightedCell={highlightedCell}
             highlightedHolidayDate={isTemplateMode ? null : selectedHolidayDate}
             yearLabel={isTemplateMode ? '' : yearLabel}

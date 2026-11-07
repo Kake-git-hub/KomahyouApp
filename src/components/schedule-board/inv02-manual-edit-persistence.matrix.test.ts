@@ -2994,3 +2994,89 @@ describe('INV-02 × 確認リストの後片づけ（列「後片づけ」・テ
     expect(cleanup(resaved).nothing).toBe(true)
   })
 })
+
+// ============================================================================
+// 行: 移動(生徒)・入替(生徒swap) × 同じ日・同じ科目の 2 コマ（2026-11-07 オーナー報告「すぐ直して」）
+//   テンプレの授業の id は `生徒ID_日付_科目` で時限を含まない（createManagedStudentEntry）。同じ日に同じ科目を 2 コマ持つ生徒は
+//   2 つの授業が同じ id になり、移動が id で移動元を探していたため、2 限を選んでも 1 限が動いていた（＝手で触っていない 1 限の授業が
+//   操作で動く・消える）。移動元は選んだ席で決める（findStudentMoveSource・computeStudentMove の sourceSeat）。
+//   列: 操作の直後 / テンプレ再マージ（リロード相当）/ serialize 往復。経路テストは sameIdLessonMove.test.ts。
+// ============================================================================
+describe('INV-02 × 同じ日・同じ科目の 2 コマ: 選んだ授業だけが動き、触っていない授業は動かない', () => {
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-11'
+  const DATE = '2026-10-07'
+  const OTHER = '2026-10-08'
+  const SAME_ID = `sA_${DATE}_数`
+  const settings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 3 } as unknown as ClassroomSettings
+  const studentRows = [['sA', '生徒A'], ['sB', '生徒B']].map(([id, name]) => ({
+    id, name, displayName: name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01',
+  })) as StudentRow[]
+  const teacherRows = [['t1', '講師A'], ['t2', '講師B'], ['t3', '講師C']].map(([id, name]) => ({
+    id, name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+  })) as TeacherRow[]
+  const row = (id: string, teacherId: string, studentId: string, subject: string, dayOfWeek: number, slotNumber: number): RegularLessonRow => ({
+    id, schoolYear: 2026, teacherId, student1Id: studentId, subject1: subject, startDate: '', endDate: '', student2Id: '', subject2: '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek, slotNumber,
+  })
+  const ROWS = [row('r1', 't1', 'sA', '数', 3, 1), row('r2', 't2', 'sA', '数', 3, 2), row('r3', 't3', 'sB', '英', 4, 3)]
+  const board = (): SlotCell[][] => [buildManagedScheduleCellsForRange({
+    range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+    fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END,
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: ROWS, boardWeeks: [],
+  })]
+  const seatOf = (weeks: SlotCell[][], cellId: string, managedStudentId = 'sA') => {
+    const cell = weeks.flat().find((item) => item.id === cellId)
+    for (const [deskIndex, desk] of (cell?.desks ?? []).entries()) {
+      const studentIndex = desk.lesson?.studentSlots.findIndex((student) => student?.managedStudentId === managedStudentId) ?? -1
+      if (studentIndex >= 0) return { cellId, deskIndex, studentIndex, student: desk.lesson!.studentSlots[studentIndex]! }
+    }
+    return null
+  }
+  const remerge = (weeks: SlotCell[][], suppressed: string[]) => remergeBoardWeeksWithManagedData(weeks, {
+    classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: ROWS, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-10-01',
+  })
+  // 列ごとに「操作の結果」を同じ見方で確かめる（操作の直後・再マージ・serialize 往復）。
+  const columns = (weeks: SlotCell[][], suppressed: string[]): Array<[string, SlotCell[][]]> => [
+    ['操作の直後', weeks],
+    ['×テンプレ再マージ', remerge(weeks, suppressed)],
+    ['×リロード相当(serialize往復)', remerge(reloadRoundTrip(weeks), suppressed)],
+  ]
+
+  it('前提: 1 限と 2 限の授業は同じ id', () => {
+    const weeks = board()
+    expect(seatOf(weeks, `${DATE}_1`)?.student.id).toBe(SAME_ID)
+    expect(seatOf(weeks, `${DATE}_2`)?.student.id).toBe(SAME_ID)
+  })
+
+  it('移動(生徒): 2 限を選んで別の日へ → 2 限だけが動き、1 限は全列で残る', () => {
+    const weeks = board()
+    const second = seatOf(weeks, `${DATE}_2`)!
+    const result = computeStudentMove({
+      weeks, weekIndex: 0, cells: weeks[0], movingStudentId: SAME_ID, cellId: `${OTHER}_1`, deskIndex: 0, studentIndex: 0,
+      sourceSeat: { cellId: second.cellId, deskIndex: second.deskIndex, studentIndex: second.studentIndex }, ...moveDefaults,
+    })
+    if (result.status !== 'moved') throw new Error(`expected moved, got ${result.status}`)
+    for (const [label, view] of columns(result.nextWeeks, result.nextSuppressedRegularLessonOccurrences)) {
+      expect(seatOf(view, `${DATE}_1`)?.student.lessonType, label).toBe('regular')
+      expect(seatOf(view, `${DATE}_2`), label).toBeNull()
+      expect(seatOf(view, `${OTHER}_1`)?.student.lessonType, label).toBe('makeup')
+    }
+  })
+
+  it('入替(生徒swap): 2 限を選んで生徒B の席へ → 生徒B は 2 限へ、1 限は全列で残る', () => {
+    const weeks = board()
+    const second = seatOf(weeks, `${DATE}_2`)!
+    const partner = seatOf(weeks, `${OTHER}_3`, 'sB')!
+    const result = computeStudentMove({
+      weeks, weekIndex: 0, cells: weeks[0], movingStudentId: SAME_ID, cellId: partner.cellId, deskIndex: partner.deskIndex, studentIndex: partner.studentIndex,
+      sourceSeat: { cellId: second.cellId, deskIndex: second.deskIndex, studentIndex: second.studentIndex }, ...moveDefaults,
+    })
+    if (result.status !== 'moved') throw new Error(`expected moved, got ${result.status}`)
+    for (const [label, view] of columns(result.nextWeeks, result.nextSuppressedRegularLessonOccurrences)) {
+      expect(seatOf(view, `${DATE}_1`)?.student.lessonType, label).toBe('regular')
+      expect(seatOf(view, `${DATE}_2`, 'sB')?.student.lessonType, label).toBe('makeup')
+      expect(seatOf(view, `${OTHER}_3`)?.student.lessonType, label).toBe('makeup')
+    }
+  })
+})

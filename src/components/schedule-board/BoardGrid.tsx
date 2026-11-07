@@ -13,6 +13,7 @@ import { hasDeskTeacherRest, TEACHER_REST_CELL_CLASS, TEACHER_REST_LABEL_CLASS }
 import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 import { buildSameDayRegularSlotIndex, resolveSameDayMoveCopyNotice, SAME_DAY_MOVE_COPY_NOTE_CLASS, SAME_DAY_MOVE_COPY_NOTICE_CLASS, type SameDayMoveCopyNoticeView } from './sameDayMoveCopyNotice'
 import type { OpenedPendingRowHighlight } from './templatePendingRowHighlight'
+import { isBoardStudentSeatSelected, type StudentMoveSourceSeat } from './studentMoveSource'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -264,6 +265,8 @@ type BoardGridProps = {
   cells: SlotCell[]
   linkResolutionCells?: SlotCell[]
   selectedStudentId: string | null
+  /** 動かす授業の席（同じ id の授業が 2 つあっても選んだ方にだけ枠を付ける・isBoardStudentSeatSelected）。省略は id で全部。 */
+  selectedStudentSeat?: StudentMoveSourceSeat | null
   highlightedCell: { cellId: string; deskIndex: number; studentIndex: number } | null
   highlightedHolidayDate: string | null
   yearLabel: string
@@ -330,6 +333,7 @@ function BoardGridComponent({
   cells,
   linkResolutionCells,
   selectedStudentId,
+  selectedStudentSeat,
   highlightedCell,
   highlightedHolidayDate,
   yearLabel,
@@ -873,10 +877,10 @@ function BoardGridComponent({
                       const firstStatus = desk.statusSlots?.[0] ?? null
                       const secondStatus = desk.statusSlots?.[1] ?? null
                       const firstSelected =
-                        (selectedStudentId !== null && firstStudent?.id === selectedStudentId) ||
+                        isBoardStudentSeatSelected({ selectedStudentId, selectedSeat: selectedStudentSeat, student: firstStudent, cellId: cell.id, deskIndex, studentIndex: 0 }) ||
                         (highlightedCell?.cellId === cell.id && highlightedCell.deskIndex === deskIndex && highlightedCell.studentIndex === 0)
                       const secondSelected =
-                        (selectedStudentId !== null && secondStudent?.id === selectedStudentId) ||
+                        isBoardStudentSeatSelected({ selectedStudentId, selectedSeat: selectedStudentSeat, student: secondStudent, cellId: cell.id, deskIndex, studentIndex: 1 }) ||
                         (highlightedCell?.cellId === cell.id && highlightedCell.deskIndex === deskIndex && highlightedCell.studentIndex === 1)
                       return [
                         <td

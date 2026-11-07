@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -8,10 +10,11 @@ import {
   collectMakeupOriginDatesByKey,
   isStockNeutralEditedMakeup,
   ledgerOriginsIncludeDate,
+  resolveRemainingOriginToken,
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { applyStudentEdit, applyStudentEditDraft, buildManagedOccurrenceKey, buildStudentEntryFromStatus, buildStudentStatusEntry, prepareStudentForMove, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { applyStudentEdit, applyStudentEditDraft, buildManagedOccurrenceKey, buildStudentEntryFromStatus, buildStudentStatusEntry, prepareStudentForMove, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeMakeupStockPlacement, computePendingDeskResolution, computeStudentAbsentMark, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveLessonMakeupOriginSlotNumber, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 
@@ -1123,6 +1126,8 @@ describe('INV-06 マトリクス: 退塾スイープは在庫を増やさず減�
 // 照合先が入れ替わり(makeupStock.ts resolveEffectiveMakeupOriginDates)、以後の消化判定がずれて残数が狂う。
 // 呼び出し側(欠席解除 handleClearStudentStatus / テンプレ上書き)は時限を渡さない＝「時限なしで積んだ分」を
 // 外す意図なので、時限なしを優先して外すことをここで固定する。
+// ※2026-11-07 から休みは時限つきで積み、欠席解除・テンプレ上書きも同じ時限を渡す（下の「同じ日に同じ科目 2 コマ」の表）。
+//   時限を渡さない呼び出しの規則（時限なし優先）は、時限なしの旧データを外す受け皿としてそのまま残す。
 // ============================================================================
 describe('INV-06: removeMakeupOrigin は積んだときと同じ形の origin を外す', () => {
   const ORIGIN_DATE = '2026-08-05'
@@ -1797,5 +1802,193 @@ describe('INV-06 マトリクス: 編集で区分を振替へ変えたコマは�
     const backToRegular = applyStudentEditDraft(edited, { ...editToMakeup, lessonType: 'regular' })
     expect(isStockNeutralEditedMakeup(backToRegular)).toBe(false)
     expect(applyStudentEditDraft(boardStudent(), { ...editToMakeup, lessonType: 'extra' }).editedToMakeup).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// INV-06（2026-11-07・オーナー報告「同じ日に同じ科目の授業が 2 コマある生徒を両方休みにすると、未消化振替が 1 しか増えない」）
+//
+// 真因: 「休み」(computeStudentAbsentMark＝メニューの休み・保護者連絡の休み)が通常授業の origin を**時限なし**（日付だけ）で
+//   台帳へ積んでいた。時限なしの origin は resolveEffectiveMakeupOriginDates の Set で同じ日の 2 件が 1 件に畳まれる。
+//   2026-07-31 の時限単位化は「台帳に時限つきで入っている」前提の表（上の「同日に同じ科目が2コマ（時限単位）」）だけで固定しており、
+//   実際に積む経路を通していなかった＝表は緑のまま経路が穴だった。
+// 固定するルール: 休みは「元の授業の日付＋時限」で積む（同じ日の中で動かしたテンプレの授業は**テンプレ上の元の時限**＝
+//   全コマ削除の抑制・休日の自動発生と同じ時限。今の時限で積むと、後からその日を休日にしたとき自動発生と別物に数えて誤増する）。
+//   休み解除は同じ時限で外す。旧データ（時限なし）は従来どおり数える（ワイルドカード）。
+// 兄弟: 増コマ・振替元のない振替（同じ積み方）／講習（数の台帳で別経路）／配置で 1 件だけ消化／解除／保護者連絡の振替元の選択／休日設定との重なり。
+// ============================================================================
+describe('INV-06 経路: 同じ日に同じ科目 2 コマを両方「休み」にすると未消化振替が 2 増える（2026-11-07）', () => {
+  const resolveStudentKey = (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => entry.managedStudentId ?? entry.name
+  const regularLesson4: RegularLessonRow = { ...regularLesson, id: 'regular-4', slotNumber: 4 }
+  const managedStudentByAnyName = new Map<string, StudentRow>([[student.name, student]])
+  const emptyLedgers = () => ({
+    manualMakeupAdjustments: {} as Record<string, ManualMakeupOrigin[]>,
+    suppressedMakeupOrigins: {} as Record<string, ManualMakeupOrigin[]>,
+    fallbackMakeupStudents: {},
+    manualLectureStockCounts: {},
+    manualLectureStockOrigins: {},
+    fallbackLectureStockStudents: {},
+    suppressedRegularLessonOccurrences: [] as string[],
+  })
+  const slotCell = (slotNumber: number, entry: StudentEntry | null): SlotCell => ({
+    ...cellWithDesk(entry ? { ...deskWithStudent(entry), id: `desk-${slotNumber}` } : { id: `desk-${slotNumber}`, teacher: '田中講師' }),
+    id: `cell-${slotNumber}`,
+    slotLabel: `${slotNumber}限`,
+    slotNumber,
+  })
+  const twoLessonDay = (overrides: Partial<StudentEntry> = {}) => [[
+    slotCell(4, boardStudent({ id: 'entry-4', ...overrides })),
+    slotCell(5, boardStudent({ id: 'entry-5', ...overrides })),
+    slotCell(6, null),
+  ]]
+  const markAbsent = (weeks: SlotCell[][], ledgers: ReturnType<typeof emptyLedgers>, cellId: string) => {
+    const result = computeStudentAbsentMark({
+      weeks, weekIndex: 0, seat: { cellId, deskIndex: 0, studentIndex: 0 }, ...ledgers,
+      ledgerOriginDatesByKey: {}, managedStudentByAnyName, resolveDisplayName: (name) => name, resolveStockId: resolveStudentKey,
+    })
+    if (!result) throw new Error(`seat not found: ${cellId}`)
+    return result
+  }
+  const markBoth = (overrides: Partial<StudentEntry> = {}) => {
+    const first = markAbsent(twoLessonDay(overrides), emptyLedgers(), 'cell-4')
+    return markAbsent(first.nextWeeks, { ...emptyLedgers(), ...first.ledgers }, 'cell-5')
+  }
+  const stockOf = (weeks: SlotCell[][], manualAdjustments: Record<string, ManualMakeupOrigin[]>, options: { settings?: ClassroomSettings; key?: string; suppressedOrigins?: Record<string, ManualMakeupOrigin[]> } = {}) => buildMakeupStockEntries({
+    students: [student], teachers: [teacher], regularLessons: [regularLesson4, regularLesson], classroomSettings: options.settings ?? createSettings(),
+    weeks, manualAdjustments, suppressedOrigins: options.suppressedOrigins ?? {}, resolveStudentKey: resolveStudentKey as (entry: StudentEntry) => string, today: TODAY,
+  }).find((entry) => entry.key === (options.key ?? STOCK_KEY))
+
+  it('回帰防止: 4限と5限の通常授業を順に休み → 未消化振替は 2（時限ごとに別の振替元）', () => {
+    const second = markBoth()
+    expect(second.ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([
+      { dateKey: BOARD_DATE, slotNumber: 4 },
+      { dateKey: BOARD_DATE, slotNumber: 5 },
+    ])
+    const entry = stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments)
+    expect(entry?.balance).toBe(2)
+    expect(entry?.remainingOriginSlots).toEqual([4, 5])
+    expect(second.makeupStock).toEqual({ stockKey: STOCK_KEY, originDate: BOARD_DATE, originSlotNumber: 5 })
+  })
+
+  it('兄弟: 増コマ・振替元のない振替（同じ積み方）も 2 コマ休めば 2', () => {
+    for (const overrides of [{ lessonType: 'extra' as const }, { lessonType: 'makeup' as const, editedToMakeup: true }]) {
+      const second = markBoth(overrides)
+      expect(stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments)?.balance, overrides.lessonType).toBe(2)
+    }
+  })
+
+  it('兄弟: 講習 2 コマ（同じ講習・同じ科目）を両方休み → 未消化講習は 2（数の台帳なので元から畳まれない）', () => {
+    const second = markBoth({ lessonType: 'special', specialSessionId: 'session-1', specialStockSource: 'session' })
+    expect(second.kind).toBe('lecture-returned')
+    expect(Object.values(second.ledgers.manualLectureStockCounts)).toEqual([2])
+    expect(second.ledgers.manualMakeupAdjustments).toEqual({})
+  })
+
+  it('配置: 選んだ振替元（5限）を置くと 1 件だけ消化して 4限が残る／選ばなければ最古の 1 件だけ消化', () => {
+    const second = markBoth()
+    const entry = stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments)!
+    for (const [selectedOriginToken, expectedSlots] of [[`${BOARD_DATE}#5`, [4]], [null, [5]]] as const) {
+      const placed = computeMakeupStockPlacement({
+        weeks: second.nextWeeks, weekIndex: 0, cellId: 'cell-6', deskIndex: 0, studentIndex: 0,
+        stockStudentKey: 'student-1', stockDisplayName: student.displayName, placementEntry: entry, selectedOriginToken, students: [student],
+        createStudentId: () => 'placed-1', managedStudentByAnyName, resolveDisplayName: (name) => name,
+      })
+      if (placed.status !== 'placed') throw new Error(placed.status)
+      const after = stockOf(placed.nextWeeks, second.ledgers.manualMakeupAdjustments)
+      expect(after?.balance, String(selectedOriginToken)).toBe(1)
+      expect(after?.remainingOriginSlots, String(selectedOriginToken)).toEqual(expectedSlots)
+    }
+  })
+
+  it('保護者連絡の「振替先を今決める」: 休みにした時限の振替元を在庫行から選べる（最古へフォールバックしない）', () => {
+    const second = markBoth()
+    const entry = stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments)!
+    expect(resolveRemainingOriginToken(entry, second.makeupStock!.originDate, second.makeupStock!.originSlotNumber)).toBe(`${BOARD_DATE}#5`)
+  })
+
+  it('休み解除: 解除した時限の振替元だけを外す（同じ時限で外す）。旧データ（時限なし）も 1 件ずつ外れる', () => {
+    const ledger = markBoth().ledgers.manualMakeupAdjustments
+    const releasedSlot = resolveLessonMakeupOriginSlotNumber(boardStudent(), 5)
+    expect(removeMakeupOrigin(ledger, STOCK_KEY, BOARD_DATE, releasedSlot)[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE, slotNumber: 4 }])
+    const legacy = { [STOCK_KEY]: [{ dateKey: BOARD_DATE }, { dateKey: BOARD_DATE }] }
+    expect(removeMakeupOrigin(legacy, STOCK_KEY, BOARD_DATE, releasedSlot)[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE }])
+  })
+
+  it('同じ日の中で動かしたテンプレの授業（5限 → 6限）の休みはテンプレ上の元の時限（5限）で積む＝後でその日を休日にしても 1 件', () => {
+    const weeks = [[slotCell(6, boardStudent({ id: 'entry-6', sameDayMoveSourceDate: BOARD_DATE, sameDayMoveSourceLabel: '2026/8/5(水) 5限' }))]]
+    const result = markAbsent(weeks, emptyLedgers(), 'cell-6')
+    expect(result.ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE, slotNumber: 5 }])
+    expect(result.makeupStock?.originSlotNumber).toBe(5)
+    const onlyFive = buildMakeupStockEntries({
+      students: [student], teachers: [teacher], regularLessons: [regularLesson], classroomSettings: createSettings({ holidayDates: [BOARD_DATE] }),
+      weeks: result.nextWeeks, manualAdjustments: result.ledgers.manualMakeupAdjustments, resolveStudentKey: resolveStudentKey as (entry: StudentEntry) => string, today: TODAY,
+    }).find((entry) => entry.key === STOCK_KEY)
+    expect(onlyFive?.balance).toBe(1)
+  })
+
+  it('休みの後でその日を休日にしても誤増しない（休日の自動発生と同じ時限＝1 件ずつ）', () => {
+    const second = markBoth()
+    expect(stockOf(second.nextWeeks, second.ledgers.manualMakeupAdjustments, { settings: createSettings({ holidayDates: [BOARD_DATE] }) })?.balance).toBe(2)
+  })
+
+  it('後方互換: 旧データ（時限なし 1 件）＋時限つきの休みの記録は従来どおり 1 件に吸収される', () => {
+    const second = markBoth()
+    expect(stockOf(second.nextWeeks, { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] })?.balance).toBe(1)
+  })
+})
+
+// ============================================================================
+// INV-06 兄弟監査（2026-11-07）: 休みと同じ「元の授業の日付＋時限」で台帳・抑制を扱う盤面の経路。
+// 格納（未消化振替へ戻す・handleStoreStudent）と単発削除（×・handleDeleteStudent）は巨大コンポーネントの中なので、
+// 時限の決め方（resolveLessonMakeupOriginSlotNumber）を通していることを字面で固定し、その時限での残数を表で固定する。
+//   格納 … 時限なしで積むと、同じ日に同じ科目の 2 コマを格納したとき 1 件に畳まれる（休みと同じ誤減）。
+//   削除 … 時限なしの抑制はその日付を丸ごと落とすので、同じ日の別のコマの休み（未消化振替）まで消える（誤減）。
+//          休みが時限ごとに別の振替元になった今、振替を 1 コマ置いて × で消すと、もう 1 コマの休みまで消えてしまう。
+// ============================================================================
+describe('INV-06 兄弟: 格納・単発削除も同じ時限で台帳と抑制を扱う（2026-11-07）', () => {
+  const BOARD_TSX = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+  const sliceHandler = (name: string) => {
+    const start = BOARD_TSX.indexOf(`const ${name} = `)
+    expect(start, name).toBeGreaterThan(0)
+    const end = BOARD_TSX.indexOf('\n  const handle', start + 10)
+    return BOARD_TSX.slice(start, end > start ? end : undefined)
+  }
+
+  it('格納: 台帳へ積む origin に時限を付ける（resolveLessonMakeupOriginSlotNumber）', () => {
+    expect(sliceHandler('handleStoreStudent')).toMatch(/appendMakeupOrigin\(manualMakeupAdjustments, stockKey, storeOriginDate, resolveLessonMakeupOriginSlotNumber\(/)
+  })
+
+  it('単発削除: 通常授業・振替の抑制に時限を付ける（同じ日の別のコマを巻き込まない）', () => {
+    const handler = sliceHandler('handleDeleteStudent')
+    expect(handler).toMatch(/appendMakeupOrigin\(nextSuppressedMakeupOrigins, stockKey, resolveOriginalRegularDate\(menuStudent\.student, targetCell\.dateKey\), resolveLessonMakeupOriginSlotNumber\(/)
+    expect(handler).toMatch(/appendMakeupOrigin\(nextSuppressedMakeupOrigins, stockKey, menuStudent\.student\.makeupSourceDate, resolveLessonMakeupOriginSlotNumber\(/)
+  })
+
+  it('時限の決め方: 振替は振替元ラベルの時限／同じ日の中で動かした授業はテンプレ上の元の時限／それ以外はそのコマの時限', () => {
+    expect(resolveLessonMakeupOriginSlotNumber(boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '2026/7/29(水) 4限' }), 6)).toBe(4)
+    expect(resolveLessonMakeupOriginSlotNumber(boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE }), 6)).toBeNull() // ラベル無しの旧データは時限なし（従来どおり）
+    expect(resolveLessonMakeupOriginSlotNumber(boardStudent({ sameDayMoveSourceDate: BOARD_DATE, sameDayMoveSourceLabel: '2026/8/5(水) 5限' }), 6)).toBe(5)
+    expect(resolveLessonMakeupOriginSlotNumber(boardStudent(), 4)).toBe(4)
+  })
+
+  const regularLesson4: RegularLessonRow = { ...regularLesson, id: 'regular-4', slotNumber: 4 }
+  const balanceWith = (manualAdjustments: Record<string, ManualMakeupOrigin[]>, suppressedOrigins: Record<string, ManualMakeupOrigin[]>, weeks: SlotCell[][] = [[]]) => buildMakeupStockEntries({
+    students: [student], teachers: [teacher], regularLessons: [regularLesson4, regularLesson], classroomSettings: createSettings(),
+    weeks, manualAdjustments, suppressedOrigins, resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id, today: TODAY,
+  }).find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+  const bothAbsent = { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }, { dateKey: BOARD_DATE, slotNumber: 5 }] }
+
+  it('格納: 同じ日の 4限と5限を格納 → 時限つきの 2 件で残2', () => {
+    expect(balanceWith(bothAbsent, {})).toBe(2)
+  })
+
+  it('単発削除: 4限・5限を休んで 4限の振替を置き、その振替を × で消すと 5限の 1 件が残る（時限つきの抑制）', () => {
+    expect(balanceWith(bothAbsent, { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }] })).toBe(1)
+    // 対照: 時限なしの抑制（旧データ・ラベルの無い振替の削除）は従来どおりその日を丸ごと落とす。
+    expect(balanceWith(bothAbsent, { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] })).toBe(0)
+  })
+
+  it('単発削除: 4限を休み、5限の通常授業を × で消しても 4限の未消化振替は残る', () => {
+    expect(balanceWith({ [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }] }, { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 5 }] })).toBe(1)
   })
 })
