@@ -1175,6 +1175,14 @@ describe('第117版(2026-11-07・v1.5.697): 「準備する」の第 4 段(オ�
     expect(byId.get('v2-6')!.prep).toContain('C をその曜日・時限のテンプレに登録')
   })
 
+  it('v2-6: 確認用の生徒 C には保護者用QRが無いので、保護者ページは基本データで C の QR を出してから見る手順を目安に書く', () => {
+    const check = byId.get('v2-6')!.check!
+    expect(check.length).toBeLessThanOrEqual(4)
+    const parentLine = check.find((line) => line.includes('保護者ページ'))!
+    expect(parentLine).toContain('基本データで C の保護者用QRを出してから開く')
+    expect(parentLine).toContain('「お休み」だけで振替先の日付は出ない')
+  })
+
   it('オーナーの決定の文は変えない', () => {
     for (const id of STAGE4) expect(byId.get(id)!.ownerDecision, id).toContain('オーナーが 11/5 に決めたこと')
   })

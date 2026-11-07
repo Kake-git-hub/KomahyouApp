@@ -546,6 +546,16 @@ describe('後片づけ: 確認用の生徒の手入力の授業・出欠記録�
     })
   }
 
+  it('講習の台帳は確認用の生徒の分でも外さない（準備は講習を作らない・室長が手で置いた講習の休みの分は準備で作ったものではないので残す）', () => {
+    const stage = initialStage()
+    const prepId = [...prepIds][0]
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [`${prepId}__数__ss1`]: 1 }, manualLectureStockOrigins: { [`${prepId}__数__ss1`]: [{ displayName: '確認用 生徒A', sessionId: 'ss1', originDateKey: '2026-10-08', originSlotNumber: 5 }] } }
+    const result = cleanupChecklistPrepStudentRecords({ weeks: stage.weeks, pendingDesks: {}, prepStudentIds: prepIds, ledgers })
+    expect(result.ledgers.manualLectureStockCounts).toBe(ledgers.manualLectureStockCounts)
+    expect(result.ledgers.manualLectureStockOrigins).toBe(ledgers.manualLectureStockOrigins)
+    expect(result.removed.ledgerEntries).toBe(0)
+  })
+
   it('鍵が確認用の生徒でない台帳・記録・手入力の授業は消さない（ほかの生徒の休みの記録・講習・台帳）', () => {
     const stage = initialStage()
     const ledgers = { ...emptyLedgers(), manualMakeupAdjustments: { 'sC__数': [{ dateKey: '2026-10-02' }] } as unknown as StudentAbsentMarkLedgers['manualMakeupAdjustments'], suppressedRegularLessonOccurrences: ['sA__数__2026-10-15__5', 'WHOLE_DAY_PAIR__2026-10-08__2026-10-15__0'] }

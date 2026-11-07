@@ -93,6 +93,34 @@ describe('computeStudentAbsentMark（休みの本体・markStudentAbsentAt と�
     }
   })
 
+  // Issue #57（INV-06）: 席に前の生徒の振替コマの出欠記録（移動で残った休みの記録）が残っていると、休みの記録で上書きする前に台帳へ確定する。
+  it('席に前の生徒の振替の休みの記録が残っていれば、上書きする前にその振替元を台帳に積む（台帳に既にあれば積まない）', () => {
+    const previousRecord = {
+      id: 'st-prev', studentId: 's2', managedStudentId: 's2', sourceManagedLesson: false, name: '馬場', grade: '中2' as const, subject: '数' as const, lessonType: 'makeup' as const, teacherType: 'normal' as const,
+      teacherName: '田中', dateKey: '2026-10-08', slotNumber: 5, recordedAt: '2026-10-05T10:00:00Z', status: 'absent' as const, sourceLessonId: 'l-prev',
+      makeupSourceDate: '2026-10-01', makeupSourceLabel: '2026/10/1(木) 4限',
+    }
+    const run = (ledgerOriginDatesByKey: Record<string, string[]>) => {
+      const weeks = board()
+      weeks[0][0].desks[0].statusSlots = [previousRecord, null]
+      return computeStudentAbsentMark({
+        weeks, weekIndex: 0, seat: { cellId: '2026-10-08_5', deskIndex: 0, studentIndex: 0 }, ...emptyLedgers(),
+        ledgerOriginDatesByKey, managedStudentByAnyName: byName, resolveDisplayName: (name) => name, resolveStockId,
+      })!
+    }
+    const result = run({})
+    expect(result.displacedStatusEntry).toMatchObject({ id: 'st-prev', managedStudentId: 's2' })
+    // 前の生徒（馬場）の振替元（10/1 4限）と、休みにした生徒（青木）の振替元の両方が台帳に入る。
+    expect(result.ledgers.manualMakeupAdjustments).toEqual({
+      's2__数': [{ dateKey: '2026-10-01', slotNumber: 4 }],
+      's1__数': [expect.objectContaining({ dateKey: '2026-10-08' })],
+    })
+    // 席の記録は休みにした生徒の記録に替わる。
+    expect(result.nextWeeks[0][0].desks[0].statusSlots?.[0]).toMatchObject({ status: 'absent', managedStudentId: 's1' })
+    // 台帳に既にある振替元は二重に積まない。
+    expect(run({ 's2__数': ['2026-10-01'] }).ledgers.manualMakeupAdjustments).toEqual({ 's1__数': [expect.objectContaining({ dateKey: '2026-10-08' })] })
+  })
+
   it('席が見つからなければ null', () => {
     expect(computeStudentAbsentMark({
       weeks: board(), weekIndex: 0, seat: { cellId: '2026-10-08_5', deskIndex: 1, studentIndex: 0 }, ...emptyLedgers(),
@@ -156,5 +184,17 @@ describe('コマ表の経路が純関数を通す（別実装を持たない）'
     expect(body.indexOf('computeMakeupStockPlacement({')).toBeGreaterThan(guard)
     expect(body.indexOf('commitWeeks(placement.nextWeeks')).toBeGreaterThan(body.indexOf('computeMakeupStockPlacement({'))
     expect(body).not.toContain('normalizeLessonPlacement(')
+  })
+
+  it('handlePlaceMakeupFromStock は出席不可コマの確認（confirmReopenForPlacements）を通してから commit し、承認分を黄色化する', () => {
+    const start = BOARD_TSX.indexOf('const handlePlaceMakeupFromStock = (')
+    const body = BOARD_TSX.slice(start, BOARD_TSX.indexOf('const handlePlaceLectureFromStock = (', start))
+    const placementIndex = body.indexOf('computeMakeupStockPlacement({')
+    const confirmIndex = body.indexOf('const reopenTargets = confirmReopenForPlacements([{')
+    const commitIndex = body.indexOf('commitWeeks(placement.nextWeeks')
+    expect(confirmIndex).toBeGreaterThan(placementIndex)
+    expect(commitIndex).toBeGreaterThan(confirmIndex)
+    expect(body.slice(confirmIndex, commitIndex)).toContain("setStatusMessage('出席不可コマへの配置を取りやめました。')")
+    expect(body.slice(commitIndex)).toContain('if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)')
   })
 })

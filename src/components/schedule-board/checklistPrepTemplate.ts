@@ -584,6 +584,9 @@ function dropPrepStudentKeys<T>(map: Record<string, T>, prepStudentIds: Readonly
  * （prepStudentIds＝名前が「確認用 生徒」の名簿の生徒）の手入力の授業と出欠記録を消し、在庫の台帳（未消化振替の手動 origin・抑止・控え）と削除記録
  * （抑止キー）から確認用の生徒の分だけを外す。鍵は管理生徒 ID（`ID__科目…`）で引く＝ほかの生徒の分は触らない（INV-02・INV-06）。
  * テンプレ由来の授業は残す（テンプレの登録を外す保存が消す）。消すものが無ければ入力と同じ参照を返す。
+ * ★講習の台帳（未消化講習の数・origin・控え）は外さない（ledgers の余りの項目はそのまま返す）: 準備は講習を作らない（休み・振替だけ）ので、
+ *   準備が積んだ分は無い。室長が確認用の生徒に講習を手で置いて休みにした分は準備で作ったものではないので残す（後片づけは「準備で作ったものを
+ *   消す」以上のことはしない・§E-2-4-3）。手で置いた講習の授業そのもの（手入力）は上の行・下の行から消える。
  */
 export function cleanupChecklistPrepStudentRecords<L extends ChecklistPrepStudentLedgers>(params: {
   weeks: SlotCell[][]
