@@ -9,6 +9,7 @@ import { collectMakeupOriginDatesByKey } from './makeupStock'
 import { applyStudentEdit, buildStudentEntryFromStatus, buildStudentStatusEntry, buildTemplateTeacherSuppressionKey, clearStudentStatusFromDesk, computeStudentAbsentMark, computeWholeDayTransfer, computeHolidayReleaseRestoration, convertHolidayDeskEntriesToRecords, reconcileHolidayDeskStockReturns, resolveHolidayReleaseSuppressedOccurrences, resolveRemovedLessonOccurrenceKeyFor, resolveRemovedLessonOccurrenceKeysFor, resolveSuppressedRegularLessonOccurrenceKeys, buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, findDuplicateStudentInCellByKey, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
+import { resolveSameDayMoveCopyKeysToRemove } from './templateDiffApply'
 import * as FX from './templateTransferFollow.fixture'
 import * as pairFx from './wholeDayTransferPair.fixture'
 import { buildTemplateDuplicateStudentsMessage, findTemplateDuplicateStudents } from './templateEditorGuards'
@@ -1007,13 +1008,33 @@ describe('INV-12 × 科目だけ編集したテンプレの授業（フラグ OF
     })
   })
 
-  // 昇格互換（要確認 1・2026-11-07 に実テストで確認して落ちた・未修正）: OFF で「科目編集（数→国）→ 同じコマの別の机へ移動」をした盤面は
-  // 抑止キーが 国・数 の 2 本になる。この教室を ON（templateDiffApply）へ上げてテンプレ保存（computeTemplateDiffApplyForBoard）すると、移動した A は
-  // 同日移動の写し（印なし＝テンプレ・sameDayMoveSourceDate がその日）として Q36 で外され、外すキーは collectSameDayMovedTemplateOccurrenceKeys が
-  // 今の科目の 1 本（国）だけを選ぶので、テンプレの A（数）は 数 のキーで抑止されたまま＝A がその日 0 か所になる（INV-02）。修正前の 1 本（国）だけの
-  // データなら 1 か所。直すなら collectSameDayMovedTemplateOccurrenceKeys のキーを権威関数 resolveSuppressedRegularLessonOccurrenceKeys（OFF の決め方）で
-  // 作る（ON で作られた写しは科目を変えると印 manual が付き写しにならないので、ON の既存データの結果は変わらない見込み）。昇格の前に直すこと。
-  it.todo('昇格互換: OFF で 国・数 の 2 本のキーを持った盤面 → ON のテンプレ保存 → 再マージ（第 2 版）で A はちょうど 1 か所（今は 0 か所）')
+  // 昇格互換（要確認 1・2026-11-07）: OFF で「科目編集（数→国）→ 同じコマの別の机へ移動」をした盤面は抑止キーが 国・数 の 2 本になる。この教室を
+  // ON（templateDiffApply）へ上げてテンプレ保存すると、移動した A は同日移動の写し（印なし）として Q36 で外される。外すキー（collectSameDayMovedTemplateOccurrenceKeys・
+  // resolveSameDayMoveCopyKeysToRemove）が今の科目（国）だけだと、テンプレの A（数）は 数 のキーで抑止されたまま＝A がその日 0 か所になっていた（INV-02）。
+  // 外すキーも授業 ID のテンプレの科目（数）まで含める（resolveTemplateLessonSubjectVariants）。修正前は 0 か所。
+  it('昇格互換: OFF で 国・数 の 2 本のキーを持った盤面 → ON のテンプレ保存（computeTemplateDiffApplyForBoard）→ 再マージ（第 2 版）で A はちょうど 1 か所・再保存も同じ', () => {
+    const edited = edit(boardOff(), [])
+    const moved = movedOrThrow(move(edited.weeks, edited.suppressed, A_SEAT, FREE_SEAT))
+    const offBoard = remergeOff(moved.nextWeeks, moved.nextSuppressedRegularLessonOccurrences)
+    const suppressed = moved.nextSuppressedRegularLessonOccurrences
+    expect(suppressed).toEqual([keyOf('国'), keyOf('数')])
+    const saved = FX.save(offBoard, ROWS, suppressed)
+    expect(countIn(saved.nextWeeks, FX.WED_CELL)).toBe(1)
+    expect(saved.removedSuppressedRegularLessonOccurrences).toEqual(expect.arrayContaining([keyOf('国'), keyOf('数')]))
+    const after = FX.suppressedAfter(suppressed, saved)
+    const remerged = FX.remerge(saved.nextWeeks, ROWS, after, FX.settings(), saved.nextPendingDesks)
+    expect(countIn(remerged, FX.WED_CELL)).toBe(1)
+    expect(countIn(FX.save(remerged, ROWS, after, { templatePendingDesks: saved.nextPendingDesks }).nextWeeks, FX.WED_CELL)).toBe(1)
+  })
+
+  it('昇格互換: 写しを外すときのキー（resolveSameDayMoveCopyKeysToRemove）も授業 ID のテンプレの科目のキーまで外す（編集の記録・別の日・別の生徒のキーは残す）', () => {
+    const copy: StudentEntry = { id: `sA_${FX.WED}_数`, name: '青木', managedStudentId: 'sA', grade: '中2', subject: '国', lessonType: 'regular', teacherType: 'normal', sameDayMoveSourceDate: FX.WED }
+    const suppressed = [keyOf('国'), keyOf('数'), keyOf('数', 4), keyOf('数', 5, FX.THU), `sB__数__${FX.WED}__5`]
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copy, dateKey: FX.WED }, suppressed)).toEqual([keyOf('国'), keyOf('数'), keyOf('数', 4)])
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: copy, dateKey: FX.WED }, suppressed, new Set([keyOf('数', 4)]))).toEqual([keyOf('国'), keyOf('数')])
+    // 科目を変えていない写し（ON で作った写しの形）は従来どおり今の科目だけ。
+    expect(resolveSameDayMoveCopyKeysToRemove({ student: { ...copy, subject: '数' }, dateKey: FX.WED }, [keyOf('国'), keyOf('数')])).toEqual([keyOf('数')])
+  })
 
   describe('フラグ ON（第 2 版）は不変', () => {
     it('編集（印つき）→ 同じコマの別の机へ移動: 積む抑止キーは編集後の科目の 1 本だけ・再マージ（第 2 版）で A は 1 か所', () => {
