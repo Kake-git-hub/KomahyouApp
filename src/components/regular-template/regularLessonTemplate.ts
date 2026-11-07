@@ -15,6 +15,18 @@ export type RegularLessonTemplateDesk = {
   deskIndex: number
   teacherId: string
   students: [RegularLessonTemplateStudent | null, RegularLessonTemplateStudent | null]
+  /**
+   * 確認リストの「準備する」（docs/spec-developer-report.md §E-2-4-3・開発用教室とテスト教室だけ）がこの机に登録した講師の ID（準備の印）。
+   * 「後片づけ」は teacherId がこの ID と同じ机の講師だけを外す（あとで室長が替えた講師は外さない＝INV-02）。
+   * teacherId と違えば印は無いのと同じ（正規化・在籍の絞り込み・テンプレ作成の画面の往復で落とす）。画面・日程表・PDF には出さない。
+   */
+  checklistPrepTeacherId?: string
+}
+
+/** 準備の印（checklistPrepTeacherId）が今の講師と同じときだけ印を返す（講師が替わった・外れた机の古い印は落とす）。 */
+export function resolveChecklistPrepTemplateTeacherMark(desk: Pick<RegularLessonTemplateDesk, 'teacherId' | 'checklistPrepTeacherId'> | undefined): { checklistPrepTeacherId: string } | Record<string, never> {
+  const mark = desk?.checklistPrepTeacherId?.trim()
+  return mark && mark === desk?.teacherId ? { checklistPrepTeacherId: mark } : {}
 }
 
 export type RegularLessonTemplateCell = {
@@ -201,6 +213,8 @@ export function normalizeRegularLessonTemplate(template: RegularLessonTemplate |
               normalizeTemplateStudent(existingDesk?.students?.[0]),
               normalizeTemplateStudent(existingDesk?.students?.[1]),
             ],
+            // 確認リストの準備の印（§E-2-4-3）。保存の基準・次の準備の土台（resolveTemplateDiffBaseline）を通っても残す。
+            ...resolveChecklistPrepTemplateTeacherMark(existingDesk),
           }
         }),
       }
@@ -238,14 +252,20 @@ export function filterTemplateParticipantsForReferenceDate(params: {
     ...normalizedTemplate,
     cells: normalizedTemplate.cells.map((cell) => ({
       ...cell,
-      desks: cell.desks.map((desk) => ({
-        ...desk,
-        teacherId: visibleTeacherIds.has(desk.teacherId) ? desk.teacherId : '',
-        students: desk.students.map((student) => {
-          if (!student?.studentId) return null
-          return visibleStudentIds.has(student.studentId) ? normalizeTemplateStudent(student) : null
-        }) as RegularLessonTemplateDesk['students'],
-      })),
+      desks: cell.desks.map((desk) => {
+        const { checklistPrepTeacherId: _mark, ...rest } = desk
+        const teacherId = visibleTeacherIds.has(desk.teacherId) ? desk.teacherId : ''
+        return {
+          ...rest,
+          teacherId,
+          students: desk.students.map((student) => {
+            if (!student?.studentId) return null
+            return visibleStudentIds.has(student.studentId) ? normalizeTemplateStudent(student) : null
+          }) as RegularLessonTemplateDesk['students'],
+          // 退塾で講師を外した机の印は落とす（印は今の講師と同じときだけ・§E-2-4-3）。
+          ...resolveChecklistPrepTemplateTeacherMark({ teacherId, checklistPrepTeacherId: _mark }),
+        }
+      }),
     })),
   }
 }
@@ -484,9 +504,12 @@ export function buildTemplateBoardCells(params: {
         const student2Row = student2 ? studentById.get(student2.studentId) : null
         const hasContent = Boolean(desk.teacherId || student1?.studentId || student2?.studentId)
 
+        const prepMark = resolveChecklistPrepTemplateTeacherMark(desk)
         return {
           id: `${cellId}_${desk.deskIndex}`,
           teacher: teacherName,
+          // 確認リストの準備の印（§E-2-4-3）。テンプレ作成で講師名を替えた机は convertTemplateCellsToTemplate が印を落とす。
+          ...(prepMark.checklistPrepTeacherId ? { checklistPrepTemplateTeacherId: prepMark.checklistPrepTeacherId } : {}),
           lesson: hasContent ? {
             id: `${cellId}_lesson_${desk.deskIndex}`,
             studentSlots: [
@@ -597,6 +620,8 @@ export function convertTemplateCellsToTemplate(params: {
             s0 ? { studentId: s0.managedStudentId ?? studentIdByName.get(s0.name) ?? '', subject: s0.subject, note: normalizeRegularLessonNote(s0.noteSuffix) } : null,
             s1 ? { studentId: s1.managedStudentId ?? studentIdByName.get(s1.name) ?? '', subject: s1.subject, note: normalizeRegularLessonNote(s1.noteSuffix) } : null,
           ],
+          // 確認リストの準備の印（§E-2-4-3）: 何も変えずに保存し直しても残す。講師を替えた机（今の講師が印の講師と違う）は落とす。
+          ...resolveChecklistPrepTemplateTeacherMark({ teacherId, checklistPrepTeacherId: desk.checklistPrepTemplateTeacherId }),
         }
       }),
     })

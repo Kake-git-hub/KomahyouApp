@@ -224,6 +224,11 @@ export type DeskCell = {
    * 室長が講師メニューで講師を置き直したら外れる（setManualTeacherAssignment・あとで手で替えた講師は後片づけで消さない＝INV-02）。
    */
   checklistPrepTeacher?: true
+  /**
+   * テンプレ作成の画面の机（buildTemplateBoardCells が作る・盤面の週には入らない）だけが持つ、確認リストの準備の印
+   * （RegularLessonTemplateDesk.checklistPrepTeacherId の写し・§E-2-4-3）。convertTemplateCellsToTemplate が、今の講師が同じときだけテンプレへ戻す。
+   */
+  checklistPrepTemplateTeacherId?: string
   teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   /** §9-20: 付け替えの作成で移動元 D から移したメモ（席ごとに D と移した本文）。解除は今のメモが同じ本文のときだけ D の同じ席へ戻す（再監査 要修正-2）。 */

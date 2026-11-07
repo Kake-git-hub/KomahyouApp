@@ -159,6 +159,9 @@ type SharedResultsState =
   | { status: 'ready'; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
   | { status: 'error'; message: string; results: ChecklistItemClassroomResults; pendingOtherNotes: ChecklistPendingOtherNote[] }
 
+/** 「後片づけ」をパネルの上の 1 つで押したときの押した場所(項目 id とぶつからない空文字)。 */
+const CLEANUP_SOURCE_TOP = ''
+
 export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, onCleanup, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
   const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
@@ -181,9 +184,14 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   const [preparingItemId, setPreparingItemId] = useState<string | null>(null)
   /** 「準備する」の結果文(項目ごと・画面だけ。下書きには保存しない)。 */
   const [prepResults, setPrepResults] = useState<Record<string, { ok: boolean; message: string }>>({})
-  /** 「後片づけ」を実行中か(準備と同時には行わない)。結果文は画面だけ(下書きには保存しない)。 */
-  const [cleaningUp, setCleaningUp] = useState(false)
-  const [cleanupResult, setCleanupResult] = useState<{ ok: boolean; message: string } | null>(null)
+  /**
+   * 「後片づけ」を実行中の押した場所(準備と同時には行わない・同時に 1 つだけ)。CLEANUP_SOURCE_TOP＝パネルの上の 1 つ、項目 id＝その項目の準備の行の 1 つ
+   * (2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」→ 準備の行にも出す)。null＝実行していない。結果文は画面だけ(下書きには保存しない)。
+   */
+  const [cleanupSource, setCleanupSource] = useState<string | null>(null)
+  const cleaningUp = cleanupSource !== null
+  /** 最後の後片づけの結果文。押した場所(source)の下にだけ出す(上で押せば上、項目で押せばその項目の下)。 */
+  const [cleanupResult, setCleanupResult] = useState<{ source: string; ok: boolean; message: string } | null>(null)
   const [shared, setShared] = useState<SharedResultsState>({ status: 'idle' })
   /** 別タブで表示中なら、そのタブと描き込み先。null = この画面の右下に表示。 */
   const [detached, setDetached] = useState<{ win: Window; root: HTMLElement } | null>(null)
@@ -403,17 +411,18 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
     }
   }, [cleaningUp, onPrepare, preparingItemId])
 
-  /** 「後片づけ」(2026-11-06 第 2 段)。準備と同時には行わない(同時に 1 つだけ)。 */
-  const handleCleanup = useCallback(async () => {
+  /** 「後片づけ」(2026-11-06 第 2 段)。準備と同時には行わない(同時に 1 つだけ)。上の 1 つも項目の準備の行の 1 つも同じ onCleanup を呼ぶ。 */
+  const handleCleanup = useCallback(async (source: string = CLEANUP_SOURCE_TOP) => {
     if (!onCleanup || cleaningUp || preparingItemId !== null) return
-    setCleaningUp(true)
+    setCleanupSource(source)
     try {
-      setCleanupResult(await onCleanup())
+      const result = await onCleanup()
+      setCleanupResult({ source, ...result })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      setCleanupResult({ ok: false, message: `後片づけできませんでした: ${message}` })
+      setCleanupResult({ source, ok: false, message: `後片づけできませんでした: ${message}` })
     } finally {
-      setCleaningUp(false)
+      setCleanupSource(null)
     }
   }, [cleaningUp, onCleanup, preparingItemId])
 
@@ -545,14 +554,14 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
             <button
               type="button"
               className="secondary-button verification-checklist-cleanup-button"
-              onClick={() => { void handleCleanup() }}
+              onClick={() => { void handleCleanup(CLEANUP_SOURCE_TOP) }}
               disabled={cleaningUp || preparingItemId !== null}
               data-testid="verification-checklist-cleanup"
             >
-              {cleaningUp ? '後片づけ中…' : '後片づけ'}
+              {cleanupSource === CLEANUP_SOURCE_TOP ? '後片づけ中…' : '後片づけ'}
             </button>
             <span className="verification-checklist-cleanup-help">準備で置いた「確認用」のものだけを消して、テンプレを保存します(「保存」は手で押します)。</span>
-            {cleanupResult ? (
+            {cleanupResult && cleanupResult.source === CLEANUP_SOURCE_TOP ? (
               <p
                 className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
                 data-testid="verification-checklist-cleanup-result"
@@ -652,6 +661,18 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                           {preparingItemId === item.id ? '準備中…' : '準備する'}
                         </button>
                       ) : null}
+                      {/* 「後片づけ」を準備の行にも出す(2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」・§E-2-4-3): 上の 1 つと同じ処理・同時に 1 つだけ。 */}
+                      {item.autoPrep && onPrepare && onCleanup ? (
+                        <button
+                          type="button"
+                          className="secondary-button verification-checklist-cleanup-button"
+                          onClick={() => { void handleCleanup(item.id) }}
+                          disabled={cleaningUp || preparingItemId !== null}
+                          data-testid={`verification-checklist-cleanup-${item.id}`}
+                        >
+                          {cleanupSource === item.id ? '後片づけ中…' : '後片づけ'}
+                        </button>
+                      ) : null}
                       <p className="verification-checklist-prep"><span className="verification-checklist-label">準備</span>{text(item.prep)}</p>
                     </div>
                   ) : null}
@@ -663,6 +684,15 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                       role="status"
                     >
                       {prepResults[item.id].message}
+                    </p>
+                  ) : null}
+                  {cleanupResult && cleanupResult.source === item.id ? (
+                    <p
+                      className={`verification-checklist-prep-result ${cleanupResult.ok ? 'is-ok' : 'is-error'}`}
+                      data-testid={`verification-checklist-cleanup-result-${item.id}`}
+                      role="status"
+                    >
+                      {cleanupResult.message}
                     </p>
                   ) : null}
                   <div className="verification-checklist-label">やること</div>

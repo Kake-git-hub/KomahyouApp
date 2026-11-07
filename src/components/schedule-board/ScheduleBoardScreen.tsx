@@ -15738,10 +15738,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       if (phase.kind === 'cleanup') {
-        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
+        finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, templateRemoved: phase.templateRemoved, templateTeachersRemoved: phase.templateTeachersRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
         return
       }
-      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
+      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, assignedTeachers: phase.assignedTeachers, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
     }
     // 前のレンダーで盤面を当てたリクエストなら、ほかより先にテンプレ保存の段を行う(積んだ段は別のリクエストへ持ち越さない)。
     // ★盤面を当てたのと同じレンダーのクロージャ(準備前の weeks)では保存しない(StrictMode の effect の 2 回目など。保存すると準備前の weeks から
@@ -15784,7 +15784,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       // queuedFromWeeks / queuedFromPendingDesks は盤面を当てる前の参照(両方そのままのレンダーでは保存しない・I-1。下の行だけ消すと weeks は同じ参照のまま・修正ラウンド 2)。
-      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      const cleanupPhase: ChecklistPrepTemplatePhase = { kind: 'cleanup', requestId: request.requestId, classroomId: request.classroomId, template: cleanupPlan.template, removed: cleanupPlan.removed, templateRemoved: cleanupPlan.templateRemoved, templateTeachersRemoved: cleanupPlan.templateTeachersRemoved, boardMessage, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       if (cleanupPlan.boardChanged) {
         checklistPrepTemplatePhaseRef.current = cleanupPhase
         onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'cleanup' })
@@ -15830,8 +15830,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
     // 第 2 段: 保存するテンプレ(確認用の生徒の登録)を盤面を当てる前に作る。作れなければ盤面も変えない(それより後は行わない・§E-2-4-2 安全)。
-    const templateSave = step.plan.templateRegistrations.length > 0
-      ? prepareChecklistPrepTemplateSave({ registrations: step.plan.templateRegistrations, baseTemplate: prepTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
+    // 第 3 段(§E-2-4-3): テンプレへの講師の登録(講師も生徒も居ない机だけ・準備の印つき)も同じテンプレで行う(tp-70 は講師だけ)。
+    const templateSave = step.plan.templateRegistrations.length > 0 || step.plan.templateTeacherRegistrations.length > 0
+      ? prepareChecklistPrepTemplateSave({ registrations: step.plan.templateRegistrations, teacherRegistrations: step.plan.templateTeacherRegistrations, baseTemplate: prepTemplate, effectiveStartDate, students, savedAt: new Date().toISOString() })
       : null
     if (templateSave && !templateSave.ok) {
       finish(false, templateSave.reason)
@@ -15850,7 +15851,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(step.plan.deskIndex)
     if (templateSave) {
       setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
-      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, assignedTeachers: templateSave.assignedTeachers, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
       onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })
       return
     }
