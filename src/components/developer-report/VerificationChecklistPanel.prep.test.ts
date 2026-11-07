@@ -137,6 +137,41 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     expect(container.querySelector(`[data-testid="verification-checklist-prep-result"][data-item-id="${PREP_ITEM}"]`)?.textContent).toContain('boom')
   })
 
+  // 第119版(2026-11-07・オーナー指示「今のシンプルにした文に、いつの誰を追記して」): 項目の操作・確認の {{prep:キー}} は、その項目の最後の準備結果の
+  // facts で置き換える。押す前・facts の無い結果(失敗)では既定の言葉(講師 X・生徒 A など)。生の {{prep: は画面に出さない。
+  it('操作・確認の {{prep:キー}} を、その項目の最後の準備結果の facts で置き換える(押す前・facts の無い結果では既定の言葉)', async () => {
+    const itemCard = (itemId: string) => container.querySelector<HTMLElement>(`[data-testid="verification-checklist-item-${itemId}"]`)!
+    let resolvePrepare: (value: { ok: boolean; message: string; facts?: Record<string, string> }) => void = () => {}
+    const onPrepare = vi.fn(() => new Promise<{ ok: boolean; message: string; facts?: Record<string, string> }>((resolve) => { resolvePrepare = resolve }))
+    render({ onPrepare })
+    expect(container.textContent).not.toContain('{{prep:')
+    expect(itemCard(PREP_ITEM).textContent).toContain('準備したコマ 机 A の下の行の講師名(講師 X)')
+    act(() => button(PREP_ITEM)!.click())
+    await act(async () => {
+      resolvePrepare({ ok: true, message: '準備しました（2/2(火) 2限）。', facts: { slot: '2/2(火) 2限', deskA: '机 2', X: '講師A', Y: '講師B', A: '確認用 生徒B' } })
+    })
+    const card = itemCard(PREP_ITEM).textContent ?? ''
+    expect(card).toContain('2/2(火) 2限 机 2 の下の行の講師名(講師A)')
+    expect(card).toContain('上の行=講師Bと確認用 生徒B、講師欄の下の行=講師A(緑)')
+    expect(card).toContain('手入力を採用 → 講師A＋確認用 生徒B の 1 行')
+    expect(card).not.toContain('講師 X')
+    expect(container.textContent).not.toContain('{{prep:')
+    // ほかの項目はその項目の準備結果だけを使う(押していない項目は既定の言葉のまま)。
+    expect(itemCard('tp-70').textContent).toContain('講師 X')
+    expect(itemCard('tp-70').textContent).not.toContain('講師A')
+    // facts の無い結果(失敗)は既定の言葉に戻す(前の準備の名前を残さない)。
+    const failing = vi.fn(async () => ({ ok: false, message: '準備できる席が見つかりませんでした。' }))
+    render({ onPrepare: failing })
+    await act(async () => { button(PREP_ITEM)!.click() })
+    expect(itemCard(PREP_ITEM).textContent).toContain('準備したコマ 机 A の下の行の講師名(講師 X)')
+    expect(itemCard(PREP_ITEM).textContent).not.toContain('講師A')
+    // facts は画面だけ(下書きに保存しない)。
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index) ?? ''
+      expect(window.localStorage.getItem(key) ?? '').not.toContain('確認用 生徒B')
+    }
+  })
+
   // 「後片づけ」(2026-11-06 第 2 段・spec-developer-report §E-2-4-2 決定 4): パネルの上の方に 1 つ。onCleanup が無ければ出さない(本番 3 校)。
   const cleanupButton = () => container.querySelector<HTMLButtonElement>('[data-testid="verification-checklist-cleanup"]')
   const cleanupResult = () => container.querySelector<HTMLElement>('[data-testid="verification-checklist-cleanup-result"]')

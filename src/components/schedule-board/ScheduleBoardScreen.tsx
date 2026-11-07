@@ -75,8 +75,9 @@ import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate,
 import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
 import { applyChecklistPrepOps, checklistPrepNeedsTemplate, isChecklistPrepSequenceItemId, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, CHECKLIST_PREP_MAX_JUMPS, type ChecklistPrepRequest, type ChecklistPrepRequestProgress, type ChecklistPrepRequestResult } from './checklistPrep'
+import type { ChecklistPrepFacts } from '../../utils/verificationChecklist'
 import { buildChecklistPrepSequenceFailedMessage, buildChecklistPrepSequenceMessage, isChecklistPrepSequenceComplete, planChecklistPrepSequenceStep, recordChecklistPrepSequenceTemplateSaved, resolveChecklistPrepSequenceStartBlock, summarizeChecklistPrepSequenceProgress, type ChecklistPrepBoardOperations, type ChecklistPrepSequenceState } from './checklistPrepSequence'
-import { buildChecklistPrepCleanupMessage, buildChecklistPrepTemplateFailedMessage, buildChecklistPrepTemplateSavedMessage, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepCleanupEffectiveStartDate, resolveChecklistPrepTemplatePhaseBlock, resolveChecklistPrepTemplatePhaseTiming, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
+import { buildChecklistPrepCleanupMessage, buildChecklistPrepDoneMessage, buildChecklistPrepTemplateFailedMessage, completeChecklistPrepFacts, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepCleanupEffectiveStartDate, resolveChecklistPrepTemplatePhaseBlock, resolveChecklistPrepTemplatePhaseTiming, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
@@ -15941,11 +15942,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       isEditingStateLoaded: isEditingStateLoadedForActingClassroom,
     })) return
     const request = checklistPrepRequest!
-    const finish = (ok: boolean, message: string) => {
+    // facts(第119版・2026-11-07): 成功したとき、項目の文に差し込む準備の事実(いつ・どの机・誰)も返す。
+    const finish = (ok: boolean, message: string, facts?: ChecklistPrepFacts) => {
       checklistPrepTemplatePhaseRef.current = null
       checklistPrepSequenceRef.current = null
       processedChecklistPrepRequestIdRef.current = request.requestId
-      onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })
+      onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message, ...(facts ? { facts } : {}) })
     }
     const todayKey = toDateKey(new Date())
     const savedEffectiveStartDate = classroomSettings.regularLessonTemplate?.effectiveStartDate
@@ -15977,7 +15979,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         finish(true, buildChecklistPrepCleanupMessage({ removed: phase.removed, prepStudentsRemoved: phase.prepStudentsRemoved, templateRemoved: phase.templateRemoved, templateTeachersRemoved: phase.templateTeachersRemoved, templateSaved: { ...saved, effectiveStartDate: phase.template.effectiveStartDate, todayKey } }))
         return
       }
-      finish(true, buildChecklistPrepTemplateSavedMessage({ boardMessage: phase.boardMessage, assigned: phase.assigned, assignedTeachers: phase.assignedTeachers, effectiveStartDate: phase.template.effectiveStartDate, ...saved, todayKey }))
+      // 第119版(2026-11-07・オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して」): 結果の文は 2 行だけ。
+      // 確認用の生徒の名前はテンプレへの登録で決まるので、保存の後で facts に足して返す(項目の文へ差し込む)。
+      finish(true, buildChecklistPrepDoneMessage({ slot: phase.facts.slot, templateSaved: true }), completeChecklistPrepFacts(phase.facts, phase.assigned))
     }
     // 第 4 段(§6・tp-71 / tp-72 / tp-75 / v2-3 / v2-6): テンプレ保存と盤面の操作を 1 レンダーに 1 段ずつ続ける。段の中身は純関数 planChecklistPrepSequenceStep、
     // 盤面の操作は室長の操作と同じ純関数(CHECKLIST_PREP_BOARD_OPERATIONS)、保存は手で保存するときと同じ handleSaveRegularLessonTemplateByDiff(確認画面は出さない)。
@@ -16029,7 +16033,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       if (action.kind === 'done') {
-        finish(true, buildChecklistPrepSequenceMessage(action.state))
+        finish(true, buildChecklistPrepSequenceMessage(action.state), action.state.facts)
         return
       }
       let nextSequenceState: ChecklistPrepSequenceState
@@ -16045,14 +16049,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           finish(false, buildChecklistPrepSequenceFailedMessage(action.state, buildTemplateDuplicateStudentsMessage(sequenceDuplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`)))
           return
         }
-        let sequenceSaved: ChecklistPrepTemplateSaveResult
         try {
-          sequenceSaved = handleSaveRegularLessonTemplateByDiff(prepared.template)
+          // 手で保存するときと同じ保存。返す中身(確認画面の「詳細」の材料)は第119版から結果の文に載せない(手で保存するときに確認画面で見る)。
+          handleSaveRegularLessonTemplateByDiff(prepared.template)
         } catch (error) {
           finish(false, buildChecklistPrepSequenceFailedMessage(action.state, error instanceof Error ? error.message : String(error)))
           return
         }
-        nextSequenceState = recordChecklistPrepSequenceTemplateSaved(action.state, { assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers, effectiveStartDate: prepared.template.effectiveStartDate, todayKey, ...sequenceSaved })
+        nextSequenceState = recordChecklistPrepSequenceTemplateSaved(action.state, { assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers })
       } else {
         // 室長の操作と同じ確定(出自の印・保留の片づけ・Undo)。台帳は操作の純関数が返したもの(休みで +1・配置は算出で −1)。
         commitWeeks(
@@ -16064,7 +16068,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       }
       if (isChecklistPrepSequenceComplete(nextSequenceState)) {
         setStatusMessage('確認リストの準備をしました。保存を押してください。')
-        finish(true, buildChecklistPrepSequenceMessage(nextSequenceState))
+        finish(true, buildChecklistPrepSequenceMessage(nextSequenceState), nextSequenceState.facts)
         return
       }
       setStatusMessage('確認リストの準備を続けています。')
@@ -16202,12 +16206,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(step.plan.deskIndex)
     if (templateSave) {
       setStatusMessage('確認リストの準備を置きました。続けてテンプレを保存します。')
-      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, assignedTeachers: templateSave.assignedTeachers, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks }
+      checklistPrepTemplatePhaseRef.current = { kind: 'prep', requestId: request.requestId, classroomId: request.classroomId, template: templateSave.template, assigned: templateSave.assigned, assignedTeachers: templateSave.assignedTeachers, boardMessage: step.plan.message, queuedFromWeeks: weeks, queuedFromPendingDesks: templatePendingDesks, facts: step.plan.facts }
       onChecklistPrepRequestProgress?.({ requestId: request.requestId, stage: 'board-applied', kind: 'prep' })
       return
     }
     setStatusMessage('確認リストの準備を置きました。保存を押してください。')
-    finish(true, step.plan.message)
+    finish(true, step.plan.doneMessage, step.plan.facts)
     // jumpToWeekByDate / commitWeeks / handleSaveRegularLessonTemplateByDiff は毎レンダー作り直されるクロージャ。二重処理は processedChecklistPrepRequestIdRef と
     // App 側の消費で防ぐ(parentAbsenceRequest と同じ作法)。値の deps は漏らさない。テンプレ保存の段は commitWeeks が変えた weeks で次のレンダーに走る。
     // eslint-disable-next-line react-hooks/exhaustive-deps

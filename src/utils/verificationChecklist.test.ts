@@ -18,6 +18,10 @@ import {
   getVerificationChecklistEntry,
   parseVerificationChecklistDraft,
   resolveVerificationChecklistText,
+  resolveChecklistPrepFactTokens,
+  listChecklistPrepFactTokenKeys,
+  CHECKLIST_PREP_FACT_DEFAULTS,
+  CHECKLIST_PREP_FACT_TOKEN,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
   setVerificationChecklistMemo,
@@ -249,8 +253,8 @@ describe('確認リストの項目定義', () => {
     // 同じ第110版(2026-11-05 夜・段 4 の監査後の決定 §9-20・§9-21): 解除で移した手入力が元の日へ戻る・振替先に同じ生徒の手入力なら振替元は休みの v2-6 を足した(版は据え置き)。
     // 第115版(2026-11-06・v1.5.694 据え置き): 退塾取消の確認 wc-1・wc-2 を ap-3 の後に足した(開発用教室だけ)。
     // 第116版(2026-11-07・v1.5.696): OK の ap-2・tp-64・wc-1・wc-2 を外した。
-    // 第120版(2026-11-07・v1.5.697 据え置き): 確認リストの書き方の確認 c-8 を ap-3 の後に足した(開発用教室だけ)。
-    expect(ids).toEqual(['ap-3', 'c-8', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6', 'sd-1', 'sd-2', 'pl-1', 'mg-1'])
+    // 第120版(2026-11-07・v1.5.697 据え置き): 確認リストの書き方の確認 c-8 を ap-3 の後に足した(開発用教室だけ)。第119版: ap-4 を c-8 の後に足した。
+    expect(ids).toEqual(['ap-3', 'c-8', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6', 'sd-1', 'sd-2', 'pl-1', 'mg-1'])
     // 第64版の結果(2026-10-22)で OK → 外す(sv-1 は開発者側の読み取り確認も合格)。
     for (const okId of ['c-7', 'rp-1', 'rp-2', 'rp-3', 'sv-1', 'sv-2', 'bs-1', 'sr-1', 'sr-2', 'sr-3', 'qa-ai-1', 'qa-ai-2', 'qa-ai-3', 'qa-ai-4']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['tp-55']) expect(ids, okId).not.toContain(okId)
@@ -292,7 +296,8 @@ describe('確認リストの項目定義', () => {
     // 第98版(2026-11-01・決定記録 52): ずらし(tp-60)は廃止 → tp-70(講師ごと緑 2 段)へ。
     expect(byIdOf(VERIFICATION_CHECKLIST.items).has('tp-60')).toBe(false)
     // 第109版(2026-11-05): tp-70 は「生徒は席に残し講師だけ緑」(オーナー決定 2026-11-05)へ書き換え。ずらしは出ない(文面からも外した)。
-    expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-70')?.check ?? []).some((line) => line.includes('体験は席に 1 行のまま'))).toBe(true)
+    // 第119版(2026-11-07): 体験の名前は準備の結果から差し込む({{prep:trial}}・押す前は「体験」)。
+    expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-70')?.check ?? []).some((line) => line.includes('{{prep:trial}}は席に 1 行のまま'))).toBe(true)
     expect((byIdOf(VERIFICATION_CHECKLIST.items).get('tp-70')?.check ?? []).join('\n')).not.toContain('ずらす')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 第54版(2026-10-15): 基本仕様の確認 tp-55〜57 は v1.5.602 で追加 → 第109版(2026-11-05): tp-57 は OK(受付 20261105-050513537-81cacbd0)で外した。
@@ -304,11 +309,11 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-69')!.introducedIn).toBe('v1.5.696')
     expect(byId.get('tp-70')!.introducedIn).toBe('v1.5.696')
     for (const id of ['tp-69', 'tp-70']) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
-    expect(byId.get('tp-69')!.check!.join(' / ')).toContain('手入力を採用 → 手置き講師＋生徒の 1 行')
+    expect(byId.get('tp-69')!.check!.join(' / ')).toContain('手入力を採用 → {{prep:X}}＋{{prep:A}} の 1 行')
     expect(byId.get('tp-59')!.introducedIn).toBe('v1.5.696')
     expect(byId.get('tp-59')!.title).toContain('X は 1 つの机だけに出る')
     // 第 2 版(2026-11-05 午後・§9-1): 手入力が勝つ＝テンプレの机 B に X を置かない(午前の「講師の保留」は取り消し)。
-    expect(byId.get('tp-59')!.check!.join(' / ')).toContain('机 B は生徒だけで、講師欄は空')
+    expect(byId.get('tp-59')!.check!.join(' / ')).toContain('{{prep:deskB}} は{{prep:A}}だけで、講師欄は空')
     expect(byId.get('tp-59')!.check!.join(' / ')).not.toContain('講師欄だけ上が空白・下が X の緑')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-59')
     // #75 の段 2(tp-48〜51): テスト教室で tp-48/tp-51 が要改善(2026-10-20)→ 修正して再確認。導入版は据え置き。
@@ -662,7 +667,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['ap-3', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['ap-3', 'ap-4', 'ta-1', 'tp-66', 'tp-71', 'tp-72', 'tp-75', 'tp-59', 'tp-69', 'tp-70', 'mn-1', 'v2-3', 'v2-5', 'v2-6'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
@@ -672,7 +677,8 @@ describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示�
       expect(item, id).toBeDefined()
       // 第112版(2026-11-06): 「準備する」そのものの確認 ap-1(分類「確認リスト」)もテスト教室に出す(テンプレ関係の準備を自動で作る仕組みなので両教室で確かめる)。
       // 第113版: ap-1 は OK で外し、ボタンの位置の確認 ap-2 を同じ扱いで出す。第116版: ap-2 も OK で外した(残るのは後片づけの ap-3)。
-      expect(item!.area, id).toBe(id === 'ap-3' ? '確認リスト' : 'テンプレ作成')
+      // 第119版(2026-11-07): 「準備する」の結果の文と項目の文の確認 ap-4 も同じ扱い。
+      expect(item!.area, id).toBe(id === 'ap-3' || id === 'ap-4' ? '確認リスト' : 'テンプレ作成')
       const text = [item!.title, ...item!.steps, ...(item!.check ?? [])].join('\n')
       expect(text, id).not.toMatch(VERIFICATION_CHECKLIST_STUDENT_PLACEHOLDER)
       expect(text, id).not.toContain('tp-41')
@@ -713,7 +719,7 @@ describe('第96版(2026-11-01・v1.5.670): テスト教室 受付 20261101-01563
     expect(item.introducedIn).toBe('v1.5.696')
     // 第113版(2026-11-06): 原因は表示(下の行が次の机の講師欄の下に隠れていた)と分かって直したので、【オーナー確認】ではなく見え方の確認に書き換えた。
     expect(item.title).toContain('講師欄の下の行に手置き講師が見える')
-    expect(item.check?.join('\n')).toContain('講師欄は上=テンプレの講師、下=手置き講師(緑)')
+    expect(item.check?.join('\n')).toContain('講師欄は上={{prep:Y}}、下={{prep:X}}(緑)')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-66')
   })
 
@@ -721,10 +727,10 @@ describe('第96版(2026-11-01・v1.5.670): テスト教室 受付 20261101-01563
   // 写しはテンプレどおりの位置へ戻す(緑も「※」の帯も出ない)。例外は出席・休みの記録がある日と、戻せない写しだけ。
   it('tp-71 / tp-72: 同日移動の写しはテンプレどおりに戻る(2026-11-05・決定記録 53 の取り消し)', () => {
     expect(byId.get('tp-71')!.check?.join('\n')).not.toContain('※4限にも')
-    expect(byId.get('tp-71')!.check?.join('\n')).toContain('テンプレの位置に 1 行で戻る(緑にならない)')
+    expect(byId.get('tp-71')!.check?.join('\n')).toContain('はテンプレの机({{prep:deskT}})に 1 行で戻る(緑にならない)')
     // 第 2 版(2026-11-05 午後・§6 Q36 の H-1 は廃止): 休みの記録があっても動かした授業はテンプレの位置へ戻る。
     expect(byId.get('tp-71')!.check?.join('\n')).not.toContain('出席・休みの記録を付けていた授業だけは動かした先に残り')
-    expect(byId.get('tp-72')!.check?.join('\n')).toContain('A はテンプレの元の机に戻る')
+    expect(byId.get('tp-72')!.check?.join('\n')).toContain('{{prep:A}}はテンプレの元の机({{prep:deskA}})に戻る')
     for (const id of ['tp-71', 'tp-72']) {
       // 第117版(2026-11-07): 「準備する」を付けて書き換えたので v1.5.697。
       expect(byId.get(id)!.introducedIn, id).toBe('v1.5.697')
@@ -763,7 +769,7 @@ describe('第100版(2026-11-01・v1.5.671): オーナーの決定の明記・判
   // 第 2 版(2026-11-05 午後・spec-template-conflict-v2 §2-2): 決定記録 57(テンプレ机が上の行・手入力が下の行)は取り消し。手入力が勝つ＝テンプレのその生徒は置かない。
   it('tp-75: 同じコマの別の机に手で置いた生徒が居れば、テンプレの机には置かない(手入力が勝つ・第 2 版 §2-2)', () => {
     expect(byId.get('tp-75')!.check?.join('\n')).not.toContain('上の行が空白のまま緑 2 段')
-    expect(byId.get('tp-75')!.check?.join('\n')).toContain('テンプレの机に A は入らない')
+    expect(byId.get('tp-75')!.check?.join('\n')).toContain('テンプレの机({{prep:deskT}})に{{prep:A}}は入らない')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('tp-75')
   })
 
@@ -962,7 +968,7 @@ describe('第109版(2026-11-05・v1.5.689): 11/4 夜〜11/5 の送信(受付 202
   it('tp-70: 講師だけのテンプレ机では手で置いた生徒を席に残し、講師だけ緑(オーナー決定 2026-11-05)', () => {
     const item = byId.get('tp-70')!
     expect(item.introducedIn).toBe('v1.5.696')
-    expect(item.check?.join('\n')).toContain('体験は席に 1 行のまま、講師欄だけ上下 2 行の緑')
+    expect(item.check?.join('\n')).toContain('{{prep:trial}}は席に 1 行のまま、講師欄だけ上={{prep:Y}}・下={{prep:X}}(緑)')
     expect(item.check?.join('\n')).not.toContain('上の行の席は空')
   })
 })
@@ -1058,12 +1064,13 @@ describe('第113版(2026-11-06・v1.5.693): 11/6 朝の送信(版 v1.5.692)を�
 describe('「準備する」の中身と確認の目安を揃える(regression-reviewer 要修正 1・2・2026-11-06)', () => {
   const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
 
-  it('tp-64 の準備(テンプレの席への登録と保存まで自動)は第116版で OK になった。同じ置き方を使う mn-1・tp-66 は結果の文の (1) の机を見る', () => {
+  it('tp-64 の準備(テンプレの席への登録と保存まで自動)は第116版で OK になった。同じ置き方を使う mn-1・tp-66 は準備したコマの (1) の机を見る', () => {
     expect(byId.has('tp-64')).toBe(false)
     for (const id of ['mn-1', 'tp-66']) {
       const item = byId.get(id)!
       expect(item.autoPrep, id).toBe(true)
-      expect(item.steps.join('\n'), id).toContain('結果の文の (1) の机')
+      // 第119版(2026-11-07): 「結果の文の (1) の机」ではなく、準備の結果の日付と机を項目の文に差し込む。
+      expect(item.steps.join('\n'), id).toContain('{{prep:slot}} {{prep:desk1}}')
     }
   })
 })
@@ -1091,8 +1098,8 @@ describe('第116版(2026-11-07・v1.5.696): 11/7 未明の送信(版 v1.5.695)�
       expect(item.steps.join('\n'), id).not.toContain('「保存を実行」')
     }
     expect(byId.get('tp-59')!.steps.join('\n')).toContain('何も変えずにもう一度保存')
-    // 手で置く生徒は体験(在庫が動かない・INV-06)。準備の文からは外したので結果の行で見る。
-    for (const id of ['tp-59', 'tp-70']) expect(byId.get(id)!.check!.join('\n'), id).toContain('体験')
+    // 手で置く生徒は体験(在庫が動かない・INV-06)。準備の文からは外したので結果の行で見る(第119版: 体験の名前は {{prep:trial}} で差し込む)。
+    for (const id of ['tp-59', 'tp-70']) expect(byId.get(id)!.check!.join('\n'), id).toContain('{{prep:trial}}')
   })
 
   it('ap-3: 「後片づけ」は項目の「準備する」の右にも出る(要改善「後片付けのボタンが出てこない」)。準備は tp-69 で作る', () => {
@@ -1126,7 +1133,7 @@ describe('第117版(2026-11-07・v1.5.697): 「準備する」の第 4 段(オ�
     // 確かめたい操作そのものは手で行う: tp-71・tp-72・tp-75 は何も変えないテンプレ保存、v2-6 は丸ごと振替と解除。
     for (const id of ['tp-71', 'tp-72', 'tp-75', 'v2-3']) expect(byId.get(id)!.steps.join('\n'), id).toContain('何も変えずに')
     expect(byId.get('v2-6')!.steps.join('\n')).toContain('「丸ごと振替」')
-    expect(byId.get('v2-6')!.steps.join('\n')).toContain('結果の文の A の日付')
+    expect(byId.get('v2-6')!.steps.join('\n')).toContain('{{prep:dayA}} の日付')
     expect(byId.get('v2-6')!.steps.join('\n')).toContain('「丸ごと振替を解除」')
   })
 
@@ -1137,13 +1144,14 @@ describe('第117版(2026-11-07・v1.5.697): 「準備する」の第 4 段(オ�
 describe('第118版(2026-11-07): 文面は「準備 → 操作 → 結果」の短い言い切り', () => {
   // 画面の文字(ボタン名・メニュー名)は「」で引いてそのまま書くので、長さは「」の外だけで数える。
   const outsideQuotes = (line: string) => line.replace(/「[^「」]*(?:「[^「」]*」[^「」]*)*」/gu, '')
-  const lengthOf = (line: string) => [...outsideQuotes(line)].length
+  // 第119版(2026-11-07): {{prep:キー}} は押す前の既定の言葉(講師 X・生徒 A など)に置き換えてから数える(画面に出る長さ)。
+  const lengthOf = (line: string) => [...outsideQuotes(resolveChecklistPrepFactTokens(line))].length
 
   it('「オーナーの決定」の説明を持たない', () => {
     for (const item of VERIFICATION_CHECKLIST.items) expect('ownerDecision' in item, item.id).toBe(false)
   })
 
-  it('題名・操作・結果の各行は「」の外で 40 字まで。結果は 3 つまで', () => {
+  it('題名・操作・確認の各行は「」の外で 40 字まで。結果は 3 つまで', () => {
     for (const item of VERIFICATION_CHECKLIST.items) {
       expect(item.check?.length ?? 0, `${item.id} の結果が多すぎる`).toBeLessThanOrEqual(3)
       for (const line of [item.title, ...item.steps, ...(item.check ?? [])]) {
@@ -1160,6 +1168,96 @@ describe('第118版(2026-11-07): 文面は「準備 → 操作 → 結果」の�
     for (const item of VERIFICATION_CHECKLIST.items) {
       for (const line of item.check ?? []) expect(line, item.id).not.toContain('「詳細」')
     }
+  })
+})
+
+// 第119版(2026-11-07・オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して。わかりにくいので。」):
+// 「準備する」の結果の文は短くし、何を置いたか(いつ・どの机・誰)は項目の操作・確認の文に {{prep:キー}} で差し込む
+// (パネルがその項目の最後の準備結果の facts で置き換える。facts が無ければ既定の言葉)。送信本文(項目 id とメモ)には影響しない。
+describe('第119版(2026-11-07): 項目の文に準備の日付と名前を差し込む({{prep:キー}})', () => {
+  const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+  const autoPrepItems = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep)
+  const linesOf = (item: VerificationChecklistItem) => [item.title, ...item.steps, ...(item.check ?? [])]
+
+  it('resolveChecklistPrepFactTokens: facts の値で置き換え、無い・空のキーは既定の言葉にする(生の {{prep: は残さない)', () => {
+    const line = '{{prep:slot}} {{prep:deskA}} の下の行の講師名({{prep:X}})'
+    expect(resolveChecklistPrepFactTokens(line, { slot: '2/2(火) 2限', deskA: '机 2', X: '講師A' })).toBe('2/2(火) 2限 机 2 の下の行の講師名(講師A)')
+    expect(resolveChecklistPrepFactTokens(line)).toBe(`${CHECKLIST_PREP_FACT_DEFAULTS.slot} ${CHECKLIST_PREP_FACT_DEFAULTS.deskA} の下の行の講師名(${CHECKLIST_PREP_FACT_DEFAULTS.X})`)
+    expect(resolveChecklistPrepFactTokens(line, { slot: '2/2(火) 2限', X: '  ' })).toBe(`2/2(火) 2限 ${CHECKLIST_PREP_FACT_DEFAULTS.deskA} の下の行の講師名(${CHECKLIST_PREP_FACT_DEFAULTS.X})`)
+    expect(CHECKLIST_PREP_FACT_DEFAULTS.slot).toBe('準備したコマ')
+    expect(CHECKLIST_PREP_FACT_DEFAULTS.X).toBe('講師 X')
+    expect(CHECKLIST_PREP_FACT_DEFAULTS.A).toBe('生徒 A')
+    expect(resolveChecklistPrepFactTokens('トークンなし')).toBe('トークンなし')
+  })
+
+  it('resolveVerificationChecklistText は {{student:ID}} と {{prep:キー}} を同じ場所で一緒に置き換える', () => {
+    expect(resolveVerificationChecklistText('{{student:s001}} と {{prep:X}}', (id) => (id === 's001' ? '生徒の名前' : null), { X: '講師A' })).toBe('生徒の名前 と 講師A')
+    expect(resolveVerificationChecklistText('{{prep:X}}')).toBe(CHECKLIST_PREP_FACT_DEFAULTS.X)
+  })
+
+  it('項目の文に使う {{prep:キー}} はすべて既定の言葉を持つ。置き換えた後に生の {{prep: は残らない', () => {
+    for (const item of VERIFICATION_CHECKLIST.items) {
+      for (const key of listChecklistPrepFactTokenKeys(item)) expect(Object.keys(CHECKLIST_PREP_FACT_DEFAULTS), `${item.id}: ${key}`).toContain(key)
+      for (const line of linesOf(item)) {
+        expect(resolveChecklistPrepFactTokens(line), item.id).not.toContain('{{prep:')
+        expect(resolveVerificationChecklistText(line, () => '名前'), item.id).not.toContain('{{prep:')
+      }
+    }
+  })
+
+  it('{{prep:キー}} は「準備する」の付いた項目の操作・確認だけに書く(題名と「準備する」の手順の文には書かない)', () => {
+    for (const item of VERIFICATION_CHECKLIST.items) {
+      expect(item.title, item.id).not.toMatch(CHECKLIST_PREP_FACT_TOKEN)
+      const prepIndex = findVerificationChecklistPrepStepIndex(item)
+      if (prepIndex >= 0) expect(item.steps[prepIndex], item.id).not.toMatch(CHECKLIST_PREP_FACT_TOKEN)
+      if (!item.autoPrep) expect(listChecklistPrepFactTokenKeys(item), item.id).toEqual([])
+    }
+  })
+
+  it('「準備する」の付いた項目はどれも、いつ(日付)と誰(講師・生徒・体験の名前)を操作・確認の文に差し込む', () => {
+    expect(autoPrepItems.length).toBeGreaterThan(0)
+    const when = ['slot', 'dayA']
+    const who = ['X', 'Y', 'W', 'A', 'B', 'C', 'R', 'trial']
+    for (const item of autoPrepItems) {
+      const keys = listChecklistPrepFactTokenKeys(item)
+      expect(keys.some((key) => when.includes(key)), `${item.id}: いつ`).toBe(true)
+      expect(keys.some((key) => who.includes(key)), `${item.id}: 誰`).toBe(true)
+    }
+  })
+
+  it('tp-69 の操作・確認(オーナー指示の例): 日付・机・手で置いた講師・テンプレの講師・確認用の生徒が入る', () => {
+    const item = byId.get('tp-69')!
+    expect(item.steps[1]).toBe('{{prep:slot}} {{prep:deskA}} の下の行の講師名({{prep:X}}) →「下段(手入力)の講師を採用する」')
+    expect(item.check).toEqual([
+      '上の行={{prep:Y}}と{{prep:A}}、講師欄の下の行={{prep:X}}(緑)',
+      '手入力を採用 → {{prep:X}}＋{{prep:A}} の 1 行',
+      'テンプレを採用 → {{prep:Y}}＋{{prep:A}} の 1 行',
+    ])
+    const facts = { slot: '2/2(火) 2限', deskA: '机 2', X: '講師A', Y: '講師B', A: '確認用 生徒B' }
+    expect(resolveVerificationChecklistText(item.steps[1], undefined, facts)).toBe('2/2(火) 2限 机 2 の下の行の講師名(講師A) →「下段(手入力)の講師を採用する」')
+    expect(resolveVerificationChecklistText(item.check![0], undefined, facts)).toBe('上の行=講師Bと確認用 生徒B、講師欄の下の行=講師A(緑)')
+  })
+
+  it('ap-4(この変更の確認)を c-8 の後に足し、テスト教室にも出す。版は v1.5.697 据え置き(確認中の版へ項目を足すだけ)', () => {
+    const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
+    expect(ids.indexOf('ap-4')).toBe(ids.indexOf('c-8') + 1)
+    const item = byId.get('ap-4')!
+    expect(item.area).toBe('確認リスト')
+    expect(item.introducedIn).toBe('v1.5.702')
+    expect(item.autoPrep).toBeUndefined()
+    expect(item.steps[0]).toContain('tp-69 の「準備する」')
+    expect(item.check!.join('\n')).toContain('1〜2 行')
+    expect(item.check!.join('\n')).toContain('日付・机・講師と生徒の名前')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('ap-4')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.697')
+  })
+
+  it('送信本文は項目 id と結果・メモだけ(準備の facts は載らない)', () => {
+    const draft = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'tp-69', { status: 'ok' })
+    const note = buildVerificationChecklistItemReportNote(draft, 'tp-69', { items: VERIFICATION_CHECKLIST.items }) ?? ''
+    expect(note).toContain('tp-69')
+    expect(note).not.toContain('{{prep:')
+    expect(note).not.toContain(CHECKLIST_PREP_FACT_DEFAULTS.X)
   })
 })
 
@@ -1189,7 +1287,8 @@ describe('第120版(2026-11-07): 項目は「操作 → 確認」の 2 段(準�
     expect(byId.get('sd-2')!.steps[0]).toBe('テンプレで生徒 1 人を同じ曜日の 1限・2限に同じ科目で登録')
     expect(byId.get('pl-1')!.steps[0]).toBe('講師欄が空欄で生徒が居る机があるコマを開く')
     expect(byId.get('mg-1')!.steps[0]).toBe('緑が丘を開く(見るだけ・「保存」しない)')
-    expect(byId.get('tp-71')!.steps).toEqual(['「準備する」を押して「保存」', 'テンプレを何も変えずに保存する', 'もう一度「準備する」→ A をテンプレから外して保存する'])
+    // 第119版(2026-11-07): 準備の後の手順には {{prep:キー}} で日付と名前が入る。
+    expect(byId.get('tp-71')!.steps).toEqual(['「準備する」を押して「保存」', 'テンプレを何も変えずに保存し、{{prep:slot}} を見る', 'もう一度「準備する」→ {{prep:A}}をテンプレから外して保存する'])
   })
 
   it('この変更の確認項目 c-8 を開発用教室だけに出す(版は据え置き＝下書きを消さない)', () => {
