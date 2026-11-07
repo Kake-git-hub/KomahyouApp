@@ -5,11 +5,13 @@ import type { ClassroomSettings } from '../../types/appState'
 import {
   applyStudentEdit,
   carryBoardStatusRecordsOntoClosedDayCell,
+  clearMakeupOrigins,
   clearStudentStatusFromDesk,
   computeStudentAbsentMark,
   computeHolidayReleaseRestoration,
   computePendingDeskResolution,
   computeStudentMove,
+  resolveLessonMakeupOriginSlotNumber,
   convertHolidayDeskEntriesToRecords,
   isStaleSeatMarkerStatus,
   materializeDisplacedStatusEntryIntoLedgers,
@@ -22,7 +24,7 @@ import {
   summarizeHolidayReleaseSkips,
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
-import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey, resolveDeletedLessonSuppressionOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 import * as FX from './templateTransferFollow.fixture'
@@ -1679,6 +1681,49 @@ describe('休日設定 × 科目だけ編集したテンプレの授業（2026-1
       const setOther = holidaySet(other.weeks)
       expect(keysOf(FX.balances(setOther.weeks, ROWS, setOther.ledgers.manualMakeupAdjustments, HOLIDAY, other.suppressedMakeupOrigins))).toEqual({ sA__英: 1 })
     })
+
+    // 修正で良い方へ変わった兄弟（regression-reviewer 2026-11-07）: 編集の抑止は席から外した後も残るので、外し方によらずテンプレの科目（数）が立たない。
+    // 単発削除・格納は盤面の handleDeleteStudent・handleStoreStudent と同じ会計（削除＝今の科目の時限つき抑制／格納＝今の科目の時限つき origin＋抑制の解除）を写す。
+    const removeA = (weeks: SlotCell[][]) => {
+      const next = structuredClone(weeks)
+      const desk = FX.cellOf(next, FX.WED_CELL).desks[0]
+      const removed = desk.lesson!.studentSlots[0]!
+      desk.lesson!.studentSlots[0] = null
+      return { weeks: next, removed }
+    }
+
+    it(`${flag}: 科目編集（数→国）→ 単発削除 → 休日設定: 未消化振替は 0 件（削除は振替の対象にしない・テンプレの 数 も立たない）`, () => {
+      const edited = editA(board(on), {}, '国', on)
+      const { weeks, removed } = removeA(edited.weeks)
+      const deletion = resolveDeletedLessonSuppressionOrigin({ dateKey: FX.WED, slotNumber: resolveLessonMakeupOriginSlotNumber(removed, FX.SLOT), effectiveOriginTokens: [], ledgerOrigins: [], requireExactOrigin: false })
+      const suppressed = { ...edited.suppressedMakeupOrigins, [buildMakeupStockKey('sA', removed.subject)]: [deletion] }
+      const set = holidaySet(weeks)
+      expect(keysOf(FX.balances(set.weeks, ROWS, set.ledgers.manualMakeupAdjustments, HOLIDAY, suppressed))).toEqual({})
+    })
+
+    it(`${flag}: 科目編集（数→国）→ 別の日へ移動 → 元の日を休日設定: 未消化振替は 0 件・移動先の振替（国）は残る`, () => {
+      const edited = editA(board(on), {}, '国', on)
+      const moving = FX.cellOf(edited.weeks, FX.WED_CELL).desks[0].lesson!.studentSlots[0]!
+      const moved = computeStudentMove({
+        weeks: edited.weeks, weekIndex: 0, cells: edited.weeks[0], movingStudentId: moving.id, cellId: FX.THU_CELL, deskIndex: 1, studentIndex: 0,
+        suppressedRegularLessonOccurrences: [], managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: on, sourceSeat: { cellId: FX.WED_CELL, deskIndex: 0, studentIndex: 0 },
+      })
+      if (moved.status !== 'moved') throw new Error(moved.message)
+      const set = holidaySet(moved.nextWeeks)
+      expect(keysOf(FX.balances(set.weeks, ROWS, set.ledgers.manualMakeupAdjustments, HOLIDAY, edited.suppressedMakeupOrigins))).toEqual({})
+      expect(FX.cellOf(set.weeks, FX.THU_CELL).desks[1].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', subject: '国', lessonType: 'makeup', makeupSourceDate: FX.WED })
+    })
+
+    it(`${flag}: 科目編集（数→国）→ 格納 → 休日設定: 未消化振替は 国 の 1 件だけ（格納した分。テンプレの 数 は立たない）`, () => {
+      const edited = editA(board(on), {}, '国', on)
+      const { weeks, removed } = removeA(edited.weeks)
+      const stockKey = buildMakeupStockKey('sA', removed.subject)
+      const slot = resolveLessonMakeupOriginSlotNumber(removed, FX.SLOT)
+      const stored = { [stockKey]: [{ dateKey: FX.WED, slotNumber: slot! }] }
+      const suppressed = clearMakeupOrigins(edited.suppressedMakeupOrigins, stockKey, FX.WED, slot)
+      const set = holidaySet(weeks)
+      expect(keysOf(FX.balances(set.weeks, ROWS, { ...stored, ...set.ledgers.manualMakeupAdjustments }, HOLIDAY, suppressed))).toEqual({ sA__国: 1 })
+    })
   }
 
   it('ロック: 編集していない授業の休日設定は 数 の 1 件・科目を変えない編集（区分も同じ）は抑止を積まない', () => {
@@ -1706,6 +1751,24 @@ describe('休日設定 × 科目だけ編集したテンプレの授業（2026-1
     expect(stock(edited.suppressedMakeupOrigins)).toEqual({})
     expect(pairFx.cellAt(remerged, pairFx.D2).desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA').map((item) => item!.subject)).toEqual(['国'])
   })
+
+  it('科目をテンプレの科目へ戻したときは、編集で振替にして通常へ戻した後に残った抑止（数→国 振替→国 通常）も外す（席の授業がテンプレの科目に戻れば、その日その時限の テンプレの科目 の抑止は自分の休みまで消すだけ）', () => {
+    // 外すのを「通常→通常の編集で積んだ分だけ」に絞らない理由のロック: 振替へ編集した分（addedMakeupSuppressionKey）は、科目を変えたまま通常へ戻すと
+    // 印（editedFromRegular）ごと消えて誰が積んだか分からなくなる。絞ると下の 国→数 で抑止が残り、数 の授業を休んでも未消化に入らない（誤減）。
+    const base = board(false)
+    const cell = FX.cellOf(base, FX.WED_CELL)
+    const target = cell.desks[0].lesson!.studentSlots[0]!
+    const toMakeup = applyStudentEdit({ student: target, draft: { subject: '国', lessonType: 'makeup', teacherType: 'normal', noteSuffix: '' }, cellDateKey: FX.WED, cellSlotNumber: FX.SLOT, suppressedRegularLessonOccurrences: [], suppressedMakeupOrigins: {}, resolveStockId: FX.resolveStudentKey })
+    const backRegular = applyStudentEdit({ student: toMakeup.student, draft: { subject: '国', lessonType: 'regular', teacherType: 'normal', noteSuffix: '' }, cellDateKey: FX.WED, cellSlotNumber: FX.SLOT, suppressedRegularLessonOccurrences: toMakeup.suppressedRegularLessonOccurrences, suppressedMakeupOrigins: toMakeup.suppressedMakeupOrigins, resolveStockId: FX.resolveStudentKey })
+    expect(backRegular.student.editedFromRegular).toBeUndefined()
+    expect(backRegular.suppressedMakeupOrigins).toEqual({ [buildMakeupStockKey('sA', '数')]: [{ dateKey: FX.WED, slotNumber: FX.SLOT }] })
+    const toTemplateSubject = applyStudentEdit({ student: backRegular.student, draft: { subject: '数', lessonType: 'regular', teacherType: 'normal', noteSuffix: '' }, cellDateKey: FX.WED, cellSlotNumber: FX.SLOT, suppressedRegularLessonOccurrences: backRegular.suppressedRegularLessonOccurrences, suppressedMakeupOrigins: backRegular.suppressedMakeupOrigins, resolveStockId: FX.resolveStudentKey })
+    expect(toTemplateSubject.suppressedMakeupOrigins).toEqual({})
+  })
+
+  // 既知の限界（regression-reviewer 2026-11-07）: 抑止は「編集したとき」に積むので、この修正より前に科目を編集した授業（テンプレの科目の振替の抑止が無い保存データ）を
+  // 編集し直さずに単発削除・格納してからその日を休日にすると、テンプレの科目（数）の休日の自動発生が立つ（+1 の誤増・修正前と同じ）。編集し直せば揃う（上のテスト）。
+  it.todo('修正前に科目を編集した授業（抑止なし）を編集し直さずに削除して休日設定すると、テンプレの科目が +1 になる（既存データの限界・直すなら削除・格納の側でも授業 ID のテンプレの科目を抑止する）')
 
   it('この修正より前に科目を編集した授業（抑止なしの 国）も、次の科目の編集（国→英）で抑止が 1 件付く', () => {
     const legacy = structuredClone(board(false))
