@@ -30,7 +30,9 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(BOARD_TSX).toContain('const processedChecklistPrepRequestIdRef = useRef<number | null>(null)')
     const body = effectBody()
     expect(body).toContain('processedChecklistPrepRequestIdRef.current = request.requestId')
-    expect(body).toContain('onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message })')
+    // 第119版(2026-11-07): 成功の結果は項目の文に差し込む facts(いつ・どの机・誰)も返す(無ければ載せない)。
+    expect(body).toContain('const finish = (ok: boolean, message: string, facts?: ChecklistPrepFacts) => {')
+    expect(body).toContain('onChecklistPrepRequestProcessed?.({ requestId: request.requestId, ok, message, ...(facts ? { facts } : {}) })')
     expect(body).not.toContain('processedParentAbsenceRequestIdRef')
     expect(body).not.toContain('parentAbsenceJumpedRequestIdRef')
     // 早期 return の直前は finish か、週を移る・テンプレ保存の段を積んで App へ知らせる(次のレンダーで続ける)・保存の段をその場で行う(必ず finish する)だけ。
@@ -101,7 +103,7 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(body).toContain('if (templateSave && !templateSave.ok) {')
   })
 
-  it('第 2 段: commitWeeks の後は ref に保存の段を積んで finish せず、次のレンダーで handleSaveRegularLessonTemplateByDiff → finish(true, buildChecklistPrepTemplateSavedMessage(', () => {
+  it('第 2 段: commitWeeks の後は ref に保存の段を積んで finish せず、次のレンダーで handleSaveRegularLessonTemplateByDiff → finish(true, buildChecklistPrepDoneMessage(', () => {
     const body = effectBody()
     expect(BOARD_TSX).toContain('const checklistPrepTemplatePhaseRef = useRef<ChecklistPrepTemplatePhase | null>(null)')
     const commitIndex = body.indexOf('commitWeeks(applied.weeks, weekIndex, step.plan.cellId, step.plan.deskIndex)')
@@ -133,7 +135,14 @@ describe('確認リストの「準備する」(ScheduleBoardScreen.tsx)', () => 
     expect(duplicateIndex).toBeGreaterThan(0)
     expect(duplicateIndex).toBeLessThan(runner.indexOf('saved = handleSaveRegularLessonTemplateByDiff(phase.template)'))
     expect(runner).toContain('finish(false, buildChecklistPrepTemplateFailedMessage({ kind: phase.kind, reason: buildTemplateDuplicateStudentsMessage(duplicates, resolveBoardStudentDisplayName, (cell) => `${cell.dateLabel}曜 ${cell.slotLabel}`), boardMessage: phase.boardMessage }))')
-    expect(runner).toContain('finish(true, buildChecklistPrepTemplateSavedMessage({')
+    // 第119版: 成功の文は 2 行だけ(buildChecklistPrepDoneMessage)。facts はテンプレへの登録で決まった確認用の生徒の名前を保存後に足して返す。
+    expect(runner).toContain('finish(true, buildChecklistPrepDoneMessage({ slot: phase.facts.slot, templateSaved: true }), completeChecklistPrepFacts(phase.facts, phase.assigned))')
+    expect(body).not.toContain('buildChecklistPrepTemplateSavedMessage')
+    // 盤面だけの準備(テンプレ保存なし)も短い文と facts。段を続ける準備も同じ(state.facts)。
+    expect(body).toContain('finish(true, step.plan.doneMessage, step.plan.facts)')
+    expect(body).not.toContain('finish(true, step.plan.message)')
+    expect(body).toContain('finish(true, buildChecklistPrepSequenceMessage(nextSequenceState), nextSequenceState.facts)')
+    expect(body).toContain('finish(true, buildChecklistPrepSequenceMessage(action.state), action.state.facts)')
     expect(runner).toContain('finish(true, buildChecklistPrepCleanupMessage({')
     // 保存前の盤面の PDF・確認画面は出さない。
     expect(body).not.toContain('exportTemplateOverwriteReport')

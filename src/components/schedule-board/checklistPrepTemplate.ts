@@ -22,10 +22,16 @@ export const CHECKLIST_PREP_TRIAL_NAME_PREFIX = '確認用 体験'
 /** 準備で書くメモの頭（第 1 段から不変・checklistPrep.ts が再公開する）。 */
 export const CHECKLIST_PREP_MEMO_PREFIX = '確認用メモ'
 export const CHECKLIST_PREP_STUDENT_NAME_PREFIX = '確認用 生徒'
-/** 盤面だけを準備したときの結果の文の最後の一言（第 1 段から不変・checklistPrep.ts が再公開する）。 */
-export const CHECKLIST_PREP_SAVE_REMINDER = '盤面はまだ保存していません。「保存」を押してから、項目の「やること」を行ってください。'
-/** 第 2 段: 盤面の準備に続けてテンプレも保存したときの最後の一言（盤面だけの一言の代わりに 1 つだけ付ける）。 */
-export const CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER = '盤面とテンプレはまだサーバーに保存していません。「保存」を押してから、項目の「やること」を行ってください。'
+/**
+ * 盤面だけを準備したときの結果の文の最後の一言（checklistPrep.ts が再公開する）。第119版（2026-11-07・オーナー指示「など細かい事象説明は不要。
+ * 今のシンプルにした文に、いつの誰を追記して」）で短くし、見出しの「やること」→「操作」に合わせた。盤面だけの準備は「元に戻す」も使える。
+ */
+export const CHECKLIST_PREP_SAVE_REMINDER = '「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」。'
+/**
+ * 第 2 段: 盤面の準備に続けてテンプレも保存したときの最後の一言（盤面だけの一言の代わりに 1 つだけ付ける）。
+ * テンプレ保存は「元に戻す」の履歴を空にする（handleSaveRegularLessonTemplateByDiff）ので、戻し方を書く（M-9・第119版で旧 CHECKLIST_PREP_TEMPLATE_UNDO_NOTE をここへまとめた）。
+ */
+export const CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER = '「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。'
 /** 第 2 段: 盤面には置いたが、テンプレの保存の段で断った・失敗した（途中まで進んだものは黙って消さない・§E-2-4-2 安全）。 */
 export const CHECKLIST_PREP_TEMPLATE_FAILED_PREFIX = '盤面には置きましたが、テンプレは保存していません: '
 /** 名簿の確認用の生徒が足りない（App の足し忘れ）。何も置かない。 */
@@ -41,10 +47,8 @@ export const CHECKLIST_PREP_CLEANUP_TEMPLATE_FAILED_PREFIX = '盤面からは消
 export const CHECKLIST_PREP_CLEANUP_SAVE_REMINDER = '盤面とテンプレはまだサーバーに保存していません。「保存」を押してください。'
 /** 後片づけで盤面だけ消したとき（テンプレは保存していない）の最後の一言（M-1）。 */
 export const CHECKLIST_PREP_CLEANUP_BOARD_SAVE_REMINDER = '盤面はまだサーバーに保存していません。「保存」を押してください。'
-/** 準備でテンプレの保存の段を断った・失敗したときの最後の一言（テンプレが無いので「やること」はまだできない・M-1）。 */
-export const CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER = '盤面はまだサーバーに保存していません。テンプレは保存していないので、項目の「やること」はまだ行えません。「後片づけ」で盤面の準備を消せます。'
-/** テンプレ保存は「元に戻す」の履歴を空にする（handleSaveRegularLessonTemplateByDiff）ので、戻し方を結果の文に書く（M-9）。 */
-export const CHECKLIST_PREP_TEMPLATE_UNDO_NOTE = 'テンプレ保存で「元に戻す」は使えません。戻すときは「後片づけ」を押してください。'
+/** 準備でテンプレの保存の段を断った・失敗したときの最後の一言（テンプレが無いので「操作」はまだできない・M-1）。 */
+export const CHECKLIST_PREP_TEMPLATE_FAILED_REMINDER = '盤面はまだサーバーに保存していません。テンプレは保存していないので、項目の「操作」はまだ行えません。「後片づけ」で盤面の準備を消せます。'
 
 /**
  * 確認用の生徒の生年月日: todayKey の属する年度（4/1 始まり）に小 4 になる 4/2 生まれ（＝年度の開始年の 10 年前の 4/2）。
@@ -118,6 +122,11 @@ export type ChecklistPrepTemplateRegistration = {
    * 無ければ今どおり、その曜日・時限に登録の無い確認用の生徒を名前の順で選ぶ。決めた生徒が使えない（退塾・同じ曜日・時限に登録あり）なら失敗。
    */
   studentId?: string
+  /**
+   * 第119版（2026-11-07）: 登録した確認用の生徒の名前を、項目の文の `{{prep:<factKey>}}` に差し込む（completeChecklistPrepFacts・例 'A'）。
+   * 登録で決まる名前なので、テンプレへ登録した後で facts に足す。
+   */
+  factKey?: string
 }
 
 export type ChecklistPrepTemplateAssignment = ChecklistPrepTemplateRegistration & { studentId: string; studentName: string }
@@ -670,7 +679,11 @@ export function cleanupChecklistPrepStudentRecords<L extends ChecklistPrepStuden
  * （保存の段で断った・失敗したときにも黙って消さずに出す。後片づけで盤面を変えていなければ空）。
  */
 export type ChecklistPrepTemplatePhase =
-  | { kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; assignedTeachers?: ChecklistPrepTemplateTeacherRegistration[]; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
+  | {
+    kind: 'prep'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; assigned: ChecklistPrepTemplateAssignment[]; assignedTeachers?: ChecklistPrepTemplateTeacherRegistration[]; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null
+    /** 第119版: 項目の文に差し込む準備の事実（盤面の準備で決まったもの。確認用の生徒の名前は保存後に completeChecklistPrepFacts で足す）。 */
+    facts: { slot: string } & Record<string, string>
+  }
   | { kind: 'cleanup'; requestId: number; classroomId: string | null; template: RegularLessonTemplate; removed: ChecklistPrepRemovedCounts; prepStudentsRemoved?: ChecklistPrepStudentRemovedCounts; templateRemoved: number; templateTeachersRemoved?: number; boardMessage: string; queuedFromWeeks: SlotCell[][]; queuedFromPendingDesks: TemplatePendingDeskMap | null }
 
 /**
@@ -697,28 +710,29 @@ export function resolveChecklistPrepCleanupEffectiveStartDate(todayKey: string, 
  * App が名簿へ確認用の生徒を足したことを結果の文に書く（M-2）。足したあとで断られても名簿は変わっているので、断った文の「何も変えていません」は
  * 「盤面とテンプレは変えていません」にする（名簿の確認用の生徒は次の準備で使うので残す）。足していなければ同じ結果を返す。
  */
-export function annotateChecklistPrepResultWithAddedStudents(result: { ok: boolean; message: string }, added: readonly Pick<StudentRow, 'name'>[]): { ok: boolean; message: string } {
+export function annotateChecklistPrepResultWithAddedStudents<T extends { ok: boolean; message: string }>(result: T, added: readonly Pick<StudentRow, 'name'>[]): T {
   if (added.length === 0) return result
+  // 第119版（2026-11-07）: 成功の文は 2 行のまま（1 行目の後ろに人数だけ）。名前は項目の文に facts で出る。facts など結果のほかの中身はそのまま運ぶ。
+  if (result.ok) {
+    const [head = '', ...rest] = result.message.split('\n')
+    return { ...result, message: [`${head}名簿に確認用の生徒を ${added.length} 人足しました。`, ...rest].join('\n') }
+  }
   const line = `名簿に確認用の生徒（${added.map((student) => student.name.trim()).join('・')}）を足しました（次の準備でも使うので残します）。`
-  const message = result.ok ? result.message : result.message.split('何も変えていません。').join('盤面とテンプレは変えていません。')
-  return { ok: result.ok, message: [line, message].filter(Boolean).join('\n') }
+  const message = result.message.split('何も変えていません。').join('盤面とテンプレは変えていません。')
+  return { ...result, message: [line, message].filter(Boolean).join('\n') }
 }
 
 /** handleSaveRegularLessonTemplateByDiff が返す、保存した計画の中身（確認画面の「詳細」と同じ材料）。 */
 export type ChecklistPrepTemplateSaveResult = { summary: TemplateDiffApplySummary; studentNotes?: readonly TemplateDiffStudentNote[]; scopeNote?: TemplateDiffScopeNote }
 
-/** 盤面の文の最後の一言（CHECKLIST_PREP_SAVE_REMINDER）を外す（テンプレも保存したときは別の一言を最後に 1 つだけ付ける）。 */
+/** 盤面の文の最後の一言（CHECKLIST_PREP_SAVE_REMINDER）を外す（テンプレ保存の段で止まったときは失敗用の一言を最後に 1 つだけ付ける）。 */
 function stripBoardSaveReminder(boardMessage: string): string[] {
   const lines = boardMessage.split('\n')
   while (lines.length > 0 && (lines[lines.length - 1] === CHECKLIST_PREP_SAVE_REMINDER || !lines[lines.length - 1].trim())) lines.pop()
   return lines
 }
 
-/** 確認画面の「詳細」と同じ組み立て（buildTemplateDiffConfirmDetail は studentNotes を渡すと生徒ごとの理由〔buildTemplateDiffStudentNoteLines〕も載せる）。 */
-export function buildChecklistPrepSavedDetailLines(params: { effectiveStartDate: string; todayKey: string } & ChecklistPrepTemplateSaveResult): string[] {
-  return buildSavedDetailLines(params)
-}
-
+/** 確認画面の「詳細」と同じ組み立て（buildTemplateDiffConfirmDetail は studentNotes を渡すと生徒ごとの理由〔buildTemplateDiffStudentNoteLines〕も載せる）。後片づけの結果の文だけが使う。 */
 function buildSavedDetailLines(params: { effectiveStartDate: string; todayKey: string } & ChecklistPrepTemplateSaveResult): string[] {
   return ['詳細:', buildTemplateDiffConfirmDetail(params.effectiveStartDate, params.summary, { scopeNote: params.scopeNote, todayKey: params.todayKey, studentNotes: params.studentNotes })]
 }
@@ -739,27 +753,23 @@ export function describeChecklistPrepTemplateRegistered(assigned: readonly Check
 }
 
 /**
- * 準備 → テンプレ保存まで済んだときの結果の文: 盤面の行（盤面だけの一言は外す）→ テンプレへ登録した席と確認用の生徒 →「詳細:」＋確認画面の「詳細」と同じ文
- * （言い回しを二重に持たない）→ 最後に CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER を 1 つだけ。
+ * 準備が済んだときの結果の文（第119版・2026-11-07 オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して。わかりにくいので。」）:
+ * 「準備しました（日付 時限）。」＋保存の一言の 2 行だけ。何を置いたか・テンプレへ登録した席・保存の「詳細」は書かない（いつ・どの机・誰は facts で項目の文へ差し込む）。
+ * todo は手で残る作業（テンプレの差分反映の無い教室の tp-64 など）があるときだけ 1 行目に続けて書く。
+ * テンプレも保存したときは「元に戻す」が使えない一言（CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER）、盤面だけなら CHECKLIST_PREP_SAVE_REMINDER。
+ * 止まった・失敗したときの文（何が起きたか・ここまでに行ったこと）はこれを使わない（buildChecklistPrepTemplateFailedMessage など・安全のための説明は残す）。
  */
-export function buildChecklistPrepTemplateSavedMessage(params: {
-  boardMessage: string
-  assigned: readonly ChecklistPrepTemplateAssignment[]
-  /** テンプレへ登録した講師（第 3 段・§E-2-4-3）。生徒より先に書く。 */
-  assignedTeachers?: readonly ChecklistPrepTemplateTeacherRegistration[]
-  effectiveStartDate: string
-  summary: TemplateDiffApplySummary
-  studentNotes?: readonly TemplateDiffStudentNote[]
-  scopeNote?: TemplateDiffScopeNote
-  todayKey: string
-}): string {
-  return [
-    ...stripBoardSaveReminder(params.boardMessage),
-    describeChecklistPrepTemplateRegistered(params.assigned, params.assignedTeachers),
-    ...buildSavedDetailLines(params),
-    CHECKLIST_PREP_TEMPLATE_UNDO_NOTE,
-    CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER,
-  ].join('\n')
+export function buildChecklistPrepDoneMessage(params: { slot: string; templateSaved: boolean; todo?: string }): string {
+  return [`準備しました（${params.slot}）。${params.todo ?? ''}`, params.templateSaved ? CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER : CHECKLIST_PREP_SAVE_REMINDER].join('\n')
+}
+
+/** テンプレへの登録で決まった確認用の生徒の名前を facts に足す（factKey のある登録だけ・入力は書き換えない・第119版）。 */
+export function completeChecklistPrepFacts<F extends Record<string, string>>(facts: F, assigned: readonly ChecklistPrepTemplateAssignment[]): F {
+  const named = assigned.filter((entry) => entry.factKey && entry.studentName.trim())
+  if (named.length === 0) return facts
+  const next: Record<string, string> = { ...facts }
+  for (const entry of named) next[entry.factKey!] = entry.studentName.trim()
+  return next as F
 }
 
 /**

@@ -22,7 +22,8 @@ import {
   type ChecklistPrepInput,
   type ChecklistPrepOp,
 } from './checklistPrep'
-import { CHECKLIST_PREP_STUDENT_BIRTH_DATE, assignChecklistPrepTemplateStudents, type ChecklistPrepTemplateRegistration } from './checklistPrepTemplate'
+import { CHECKLIST_PREP_STUDENT_BIRTH_DATE, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER, assignChecklistPrepTemplateStudents, completeChecklistPrepFacts, type ChecklistPrepTemplateRegistration } from './checklistPrepTemplate'
+import { VERIFICATION_CHECKLIST, listChecklistPrepFactTokenKeys } from '../../utils/verificationChecklist'
 import { buildMakeupStockEntries } from './makeupStock'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildTeacherAliasResolver } from './templateDiffApply'
@@ -141,6 +142,17 @@ describe('planChecklistPrep: v2-1（青字・案 A の並び替え → テンプ
     // 保存は自動でしない（計画 §0-3）。結果文の最後に「保存を押してください」を必ず添える。
     expect(plan.message.endsWith(CHECKLIST_PREP_SAVE_REMINDER)).toBe(true)
     expect(plan.message).toContain('「保存」を押してから')
+  })
+
+  // 第119版(2026-11-07・オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して」): 成功したときの結果の文は 1〜2 行
+  // (何を置いたかは項目の文に facts で差し込む)。plan.message(盤面で行ったことの詳しい文)は、テンプレ保存の段で止まったときの文に使うので残す。
+  it('成功したときの結果の文(doneMessage)は 2 行: 「準備しました（日付 時限）。」と保存の一言。facts に日付・時限を入れる', () => {
+    const plan = planChecklistPrep(baseInput('v2-1', [[fullCell('2026-11-12', 1)]]))
+    if (!plan.ok) throw new Error(plan.reason)
+    expect(plan.doneMessage).toBe(`準備しました（11/12(木) 1限）。\n${CHECKLIST_PREP_SAVE_REMINDER}`)
+    expect(plan.doneMessage).not.toContain('体験「')
+    expect(plan.facts).toMatchObject({ slot: '11/12(木) 1限', trial: '確認用 体験1' })
+    expect(CHECKLIST_PREP_SAVE_REMINDER).toBe('「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」。')
   })
 
   it('当てた形: 体験 2 人の机は講師なし・メモの机は授業なし・手で置いた講師の机は授業なし（manual）', () => {
@@ -296,6 +308,12 @@ describe('planChecklistPrep: tp-64（講師欄の緑）', () => {
     expect(plan.message).not.toContain('確かめるときは')
     expect(plan.message).not.toContain('何も変えずに')
     expect(plan.message.endsWith(CHECKLIST_PREP_SAVE_REMINDER)).toBe(true)
+    // 第119版: 成功の文は 2 行。テンプレの差分反映の無い教室では手作業が残るので、その一文だけは 1 行目に残す(置いた物の説明・保存後の見え方は出さない)。
+    const lines = plan.doneMessage.split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toBe('準備しました（11/12(木) 1限）。残る手作業（必須）: 「通常授業テンプレ作成」で 木曜 1限 机 1 の生徒 2 と 木曜 1限 机 2 の生徒 2 の両方に誰かを登録して、テンプレを保存してください。')
+    expect(lines[1]).toBe(CHECKLIST_PREP_SAVE_REMINDER)
+    expect(plan.doneMessage).not.toContain('緑の 2 行')
   })
 
   it('テンプレの机が 2 つ揃わないコマは使わない（席 2 が埋まっている・テンプレの生徒が居ない）', () => {
@@ -367,7 +385,8 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
       { kind: 'trial', cellId: '2026-11-12_1', deskIndex: 1, studentIndex: 1, name: '確認用 体験2', grade: '中1', subject: '英' },
     ])
     expect(plan.templateRegistrations).toEqual<ChecklistPrepTemplateRegistration[]>([
-      { dayOfWeek: 4, slotNumber: 1, deskIndex: 0, templateDeskIndex: 1, studentIndex: 1, subject: '英', label: '(1)' },
+      // 第119版: (1) の席に登録した確認用の生徒の名前は、項目の文の {{prep:A}} に差し込む(factKey)。
+      { dayOfWeek: 4, slotNumber: 1, deskIndex: 0, templateDeskIndex: 1, studentIndex: 1, subject: '英', label: '(1)', factKey: 'A' },
       { dayOfWeek: 4, slotNumber: 1, deskIndex: 1, templateDeskIndex: 2, studentIndex: 1, subject: '英', label: '(2)' },
     ])
     expect(plan.message).not.toContain('残る手作業')
@@ -378,6 +397,20 @@ describe('planChecklistPrep: tp-64 第 2 段（テンプレへの登録と保存
     // 結果の文が言うテンプレの席へそのまま登録できる。
     const assigned = assignChecklistPrepTemplateStudents(template, plan.templateRegistrations, [prepStudent('s950', 'A'), prepStudent('s951', 'B')])
     expect(assigned.ok).toBe(true)
+    if (!assigned.ok) return
+    // 第119版: 項目の文に入れる facts。(1) の机・手で置いた講師(X)・テンプレの講師(Y)・(1) の体験。確認用の生徒(A)はテンプレへの登録で決まるので後から足す。
+    expect(plan.facts).toEqual({ slot: '11/12(木) 1限', desk1: '机 1', X: '講師D', Y: '講師A', trial: '確認用 体験1' })
+    const facts = completeChecklistPrepFacts(plan.facts, assigned.assigned)
+    expect(facts).toEqual({ ...plan.facts, A: '確認用 生徒A' })
+    // 同じ置き方の mn-1・tp-66 の文が使うキーは全部ある。
+    for (const itemId of ['mn-1', 'tp-66']) {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
+      for (const key of listChecklistPrepFactTokenKeys(item)) expect(facts[key], `${itemId}: ${key}`).toBeTruthy()
+    }
+    // テンプレも保存する項目の成功の文は、保存の一言がテンプレ保存の後のもの(「元に戻す」が使えない・M-9)。
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「後片づけ」')
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「元に戻す」は使えません')
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toContain('「操作」')
   })
 
   it('科目は体験と同じ（見本の生徒の科目）', () => {

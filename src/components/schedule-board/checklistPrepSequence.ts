@@ -33,20 +33,18 @@ import {
   CHECKLIST_PREP_UNKNOWN_ITEM_MESSAGE,
   type CellContext,
   type ChecklistPrepInput,
+  type ChecklistPrepPlanFacts,
   type ChecklistPrepSequenceItemId,
 } from './checklistPrep'
 import {
-  CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER,
-  CHECKLIST_PREP_TEMPLATE_UNDO_NOTE,
   CHECKLIST_PREP_TRIAL_NAME_PREFIX,
   CHECKLIST_PREP_STUDENTS_MISSING_MESSAGE,
-  buildChecklistPrepSavedDetailLines,
+  buildChecklistPrepDoneMessage,
   isUsableChecklistPrepStudent,
   describeChecklistPrepTemplateRegistered,
   listAvailableChecklistPrepStudents,
   type ChecklistPrepTemplateAssignment,
   type ChecklistPrepTemplateRegistration,
-  type ChecklistPrepTemplateSaveResult,
   type ChecklistPrepTemplateTeacherRegistration,
 } from './checklistPrepTemplate'
 import { getTeacherDisplayName } from '../basic-data/basicDataModel'
@@ -113,8 +111,8 @@ export type ChecklistPrepSequenceBoardOp =
   | { kind: 'manual-teacher'; to: ChecklistPrepSeatRef; teacherName: string; teacherId: string }
 
 export type ChecklistPrepSequenceStep =
-  /** detail＝結果の文に保存の「詳細」を載せる（項目が「詳細」を読ませる保存だけ）。 */
-  | { kind: 'template'; registrations: ChecklistPrepTemplateRegistration[]; teacherRegistrations?: ChecklistPrepTemplateTeacherRegistration[]; detail: boolean }
+  // 第119版（2026-11-07）: 結果の文に保存の「詳細」を載せなくなったので、旧 detail の印は外した。
+  | { kind: 'template'; registrations: ChecklistPrepTemplateRegistration[]; teacherRegistrations?: ChecklistPrepTemplateTeacherRegistration[] }
   | { kind: 'board'; ops: ChecklistPrepSequenceBoardOp[]; lines: string[] }
 
 export type ChecklistPrepSequenceState = {
@@ -124,9 +122,12 @@ export type ChecklistPrepSequenceState = {
   step: number
   /** 盤面の操作のあとに表示する週・コマ・机（項目の目安の机）。 */
   anchor: { weekIndex: number; cellId: string; deskIndex: number }
-  /** 最初の段で書く文（何をどこに作るか）。 */
-  intro: string[]
-  /** 行ったことの文（結果の文・途中で止まったときの文）。 */
+  /**
+   * 項目の文に差し込む準備の事実（第119版・2026-11-07 オーナー指示「今のシンプルにした文に、いつの誰を追記して」）。最初の段で全部決める
+   * （確認用の生徒は段を決めるときに選ぶので名前も入る）。旧 intro（何をどこに作るかの文）の代わり。
+   */
+  facts: ChecklistPrepPlanFacts
+  /** 行ったことの文（途中で止まったとき・取りやめたときの「ここまでに行ったこと」）。成功の結果の文には載せない。 */
   done: string[]
 }
 
@@ -138,7 +139,7 @@ export type ChecklistPrepSequenceAction =
   | { kind: 'board'; weeks: SlotCell[][]; ledgers: StudentAbsentMarkLedgers; weekIndex: number; cellId: string; deskIndex: number; state: ChecklistPrepSequenceState }
   | { kind: 'done'; state: ChecklistPrepSequenceState }
 
-export const CHECKLIST_PREP_SEQUENCE_FAILED_REMINDER = '盤面とテンプレはまだサーバーに保存していません。ここまでに行ったものは盤面とテンプレに残っています。「後片づけ」で準備を消せます。項目の「やること」はまだ行えません。'
+export const CHECKLIST_PREP_SEQUENCE_FAILED_REMINDER = '盤面とテンプレはまだサーバーに保存していません。ここまでに行ったものは盤面とテンプレに残っています。「後片づけ」で準備を消せます。項目の「操作」はまだ行えません。'
 /** テンプレの差分反映が無い教室・テンプレがまだ無い教室（第 3 段の項目と同じ文）。 */
 export const CHECKLIST_PREP_SEQUENCE_TEMPLATE_REQUIRED_MESSAGE = CHECKLIST_PREP_TEMPLATE_REQUIRED_MESSAGE
 const DEFAULT_TRIAL_PROFILE: { grade: GradeLabel; subject: SubjectLabel } = { grade: '中1', subject: '英' }
@@ -207,7 +208,16 @@ function emptyDeskIndexes(context: CellContext, exclude: readonly number[] = [])
   return context.cell.desks.map((desk, index) => (!exclude.includes(index) && isEmptyDesk(context, desk) ? index : -1)).filter((index) => index >= 0)
 }
 
-type PlanResult = { steps: ChecklistPrepSequenceStep[]; anchor: ChecklistPrepSequenceState['anchor']; intro: string[] }
+type PlanResult = { steps: ChecklistPrepSequenceStep[]; anchor: ChecklistPrepSequenceState['anchor']; facts: ChecklistPrepPlanFacts }
+
+function deskText(deskIndex: number) {
+  return `机 ${deskIndex + 1}`
+}
+
+/** 日付だけ（「2/2(火)」・丸ごと振替は日付で選ぶ）。 */
+function dayText(cell: SlotCell) {
+  return `${cell.dateLabel}${cell.dayLabel ? `(${cell.dayLabel})` : ''}`
+}
 
 // tp-71: 確認用の生徒 A・B をテンプレの同じ机（席 1・席 2）に登録して保存 → A を同じ日の別の時限の空き机へ、B を同じコマの別の空き机へ動かす。
 // 手で: 何も変えずにテンプレを保存して、A・B がテンプレの机へ戻る（動かした先は空く）のを見る。
@@ -228,12 +238,12 @@ function planTp71(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliase
     if (!other) continue
     const deskA = emptyDeskIndexes(other)[0]
     const templateDeskIndex = packed.templateDeskIndexes[0]
-    const dayLabel = context.cell.dayLabel ? `${context.cell.dayLabel}曜 ` : ''
     return {
       anchor: { weekIndex: context.weekIndex, cellId: context.cell.id, deskIndex: landing },
-      intro: [`テンプレの ${dayLabel}${context.cell.slotLabel} 机 ${templateDeskIndex} に確認用の生徒 2 人（A＝${studentA.name.trim()}・B＝${studentB.name.trim()}）を登録して保存し、${cellLabel(context.cell)} の机 ${landing + 1} に入った 2 人を室長の移動と同じ処理で動かします。`],
+      // 項目の文（tp-71）: コマ・A・B・テンプレの机（保存で 2 人が入る盤面の机）。
+      facts: { slot: cellLabel(context.cell), A: studentA.name.trim(), B: studentB.name.trim(), deskT: deskText(landing) },
       steps: [
-        { kind: 'template', detail: false, registrations: [registration(context, templateDeskIndex, landing, 0, studentA.id, subject), registration(context, templateDeskIndex, landing, 1, studentB.id, subject)] },
+        { kind: 'template', registrations: [registration(context, templateDeskIndex, landing, 0, studentA.id, subject), registration(context, templateDeskIndex, landing, 1, studentB.id, subject)] },
         {
           kind: 'board',
           ops: [
@@ -252,7 +262,7 @@ function planTp71(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliase
 }
 
 // tp-72: 確認用の生徒 A をテンプレの机 T1 に登録して保存 → A を同じコマの次の机（テンプレの机 T2 が保存後に入る机）へ動かす →
-// テンプレの T2 の同じ席に確認用の生徒 C を登録して保存（「詳細」を結果の文に載せる）。目安: その机は C の 1 行・A はテンプレの元の机。
+// テンプレの T2 の同じ席に確認用の生徒 C を登録して保存。目安: その机は C の 1 行・A はテンプレの元の机。
 function planTp72(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases: TeacherAliasResolver): PlanResult | null {
   const input = toInput(env, 'tp-72')
   const subject = (env.trialProfile ?? DEFAULT_TRIAL_PROFILE).subject
@@ -264,18 +274,18 @@ function planTp72(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliase
     const [studentA, studentC] = availableInAll(env, [{ dayOfWeek: packed.dayOfWeek, slotNumber: context.cell.slotNumber }]).filter((student) => !dateHasStudent(env, context.cell.dateKey, student.id))
     if (!studentA || !studentC) continue
     const [templateDeskA, templateDeskC] = packed.templateDeskIndexes
-    const dayLabel = context.cell.dayLabel ? `${context.cell.dayLabel}曜 ` : ''
     return {
       anchor: { weekIndex: context.weekIndex, cellId: context.cell.id, deskIndex: landingC },
-      intro: [`テンプレの ${dayLabel}${context.cell.slotLabel} 机 ${templateDeskA} に確認用の生徒 A（${studentA.name.trim()}）を登録して保存し、${cellLabel(context.cell)} の机 ${landingA + 1} に入った A を同じコマの机 ${landingC + 1} へ動かしてから、テンプレの机 ${templateDeskC} の同じ席に確認用の生徒 C（${studentC.name.trim()}）を登録して保存します。`],
+      // 項目の文（tp-72）: コマ・A・C・A のテンプレの机・C の机（A を動かした先）。
+      facts: { slot: cellLabel(context.cell), A: studentA.name.trim(), C: studentC.name.trim(), deskA: deskText(landingA), deskC: deskText(landingC) },
       steps: [
-        { kind: 'template', detail: false, registrations: [registration(context, templateDeskA, landingA, 0, studentA.id, subject)] },
+        { kind: 'template', registrations: [registration(context, templateDeskA, landingA, 0, studentA.id, subject)] },
         {
           kind: 'board',
           ops: [{ kind: 'move', studentId: studentA.id, fromCellId: context.cell.id, to: seatRef(context, landingC) }],
           lines: [`A（${studentA.name.trim()}）を同じコマの ${seatText(context.cell, landingC, 0)} へ動かしました（机替え・テンプレの位置は机 ${landingA + 1}）。`],
         },
-        { kind: 'template', detail: true, registrations: [registration(context, templateDeskC, landingC, 0, studentC.id, subject)] },
+        { kind: 'template', registrations: [registration(context, templateDeskC, landingC, 0, studentC.id, subject)] },
       ],
     }
   }
@@ -283,7 +293,7 @@ function planTp72(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliase
 }
 
 // tp-75: 確認用の生徒 A を別の日のコマ（α・別の曜日か時限）のテンプレに登録して保存 → A の α の授業を「休み」（未消化振替 +1）→ その振替を
-// このコマ（β）の空き机に置く → β のテンプレの別の机に A の通常授業を登録して保存（「詳細」を載せる）。目安: 振替の机は A の 1 行のまま・テンプレの机に A は入らない。
+// このコマ（β）の空き机に置く → β のテンプレの別の机に A の通常授業を登録して保存。目安: 振替の机は A の 1 行のまま・テンプレの机に A は入らない。
 function planTp75(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases: TeacherAliasResolver): PlanResult | null {
   // 休みにする日は振替を置く日より前を先に探す（振替を元の日に置くと通常授業に戻る＝normalizeLessonPlacement なので、同じ日は使わない）。
   return planTp75Pass(env, contexts, aliases, (alpha, beta) => alpha < beta) ?? planTp75Pass(env, contexts, aliases, (alpha, beta) => alpha !== beta)
@@ -312,12 +322,12 @@ function planTp75Pass(env: ChecklistPrepSequenceEnv, contexts: CellContext[], al
         .filter((student) => !dateHasStudent(env, context.cell.dateKey, student.id) && !dateHasStudent(env, alpha.cell.dateKey, student.id))
       if (!studentA) continue
       const name = studentA.name.trim()
-      const dayLabel = context.cell.dayLabel ? `${context.cell.dayLabel}曜 ` : ''
       return {
         anchor: { weekIndex: context.weekIndex, cellId: context.cell.id, deskIndex: makeupDesk },
-        intro: [`確認用の生徒 A（${name}）を ${dayLabel}${alpha.cell.slotLabel} のテンプレに登録して保存し、${cellLabel(alpha.cell)} の A を休みにして、その振替を ${seatText(context.cell, makeupDesk, 0)} に置いてから、${dayLabel}${context.cell.slotLabel} のテンプレの机 ${packedBeta.templateDeskIndexes[0]} に A の通常授業を登録して保存します。`],
+        // 項目の文（tp-75）: コマ・A・振替の机・テンプレの机（A を登録しても入らない机）。
+        facts: { slot: cellLabel(context.cell), A: name, deskM: deskText(makeupDesk), deskT: deskText(landingBeta) },
         steps: [
-          { kind: 'template', detail: false, registrations: [registration(alpha, packedAlpha.templateDeskIndexes[0], landingAlpha, 0, studentA.id, subject)] },
+          { kind: 'template', registrations: [registration(alpha, packedAlpha.templateDeskIndexes[0], landingAlpha, 0, studentA.id, subject)] },
           {
             kind: 'board',
             ops: [
@@ -329,7 +339,7 @@ function planTp75Pass(env: ChecklistPrepSequenceEnv, contexts: CellContext[], al
               `その振替を ${seatText(context.cell, makeupDesk, 0)} に置きました（未消化振替の一覧から置くのと同じ処理・A の未消化振替は元に戻る）。`,
             ],
           },
-          { kind: 'template', detail: true, registrations: [registration(context, packedBeta.templateDeskIndexes[0], landingBeta, 0, studentA.id, subject)] },
+          { kind: 'template', registrations: [registration(context, packedBeta.templateDeskIndexes[0], landingBeta, 0, studentA.id, subject)] },
         ],
       }
     }
@@ -378,13 +388,12 @@ function planV26(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases
       if (!studentC) continue
       const name = studentC.name.trim()
       const trialName = `${CHECKLIST_PREP_TRIAL_NAME_PREFIX}${nextTrialSerial(env.weeks)}`
-      const dayLabel = source.cell.dayLabel ? `${source.cell.dayLabel}曜 ` : ''
-      const absenceDay = absence.cell.dayLabel ? `${absence.cell.dayLabel}曜 ` : ''
       return {
         anchor: { weekIndex: source.weekIndex, cellId: source.cell.id, deskIndex: trialDesk },
-        intro: [`振替元の日 A＝${cellLabel(source.cell)}、振替先の日 B＝${cellLabel(target.cell)}（同じ曜日の 1 週後）。確認用の生徒 C（${name}）を ${absenceDay}${absence.cell.slotLabel} のテンプレに登録して保存し、${cellLabel(absence.cell)} の C を休みにして、その振替を B の机 ${makeupDesk + 1} に置き、A の机 ${trialDesk + 1} に体験を置いてから、${dayLabel}${source.cell.slotLabel} のテンプレの机 ${packedSource.templateDeskIndexes[0]} に C を登録して保存します。`],
+        // 項目の文（v2-6）: 振替元の日（A）・振替先の日（B・1 週後）・確認用の生徒 C・体験。丸ごと振替は日付で選ぶので日付だけ。
+        facts: { slot: `${dayText(source.cell)}・${dayText(target.cell)} ${source.cell.slotLabel}`, dayA: dayText(source.cell), dayB: dayText(target.cell), C: name, trial: trialName },
         steps: [
-          { kind: 'template', detail: false, registrations: [registration(absence, packedAbsence.templateDeskIndexes[0], landingAbsence, 0, studentC.id, profile.subject)] },
+          { kind: 'template', registrations: [registration(absence, packedAbsence.templateDeskIndexes[0], landingAbsence, 0, studentC.id, profile.subject)] },
           {
             kind: 'board',
             ops: [
@@ -398,7 +407,7 @@ function planV26(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases
               `A の ${seatText(source.cell, trialDesk, 0)} に体験「${trialName}」を置きました。`,
             ],
           },
-          { kind: 'template', detail: true, registrations: [registration(source, packedSource.templateDeskIndexes[0], landing, 0, studentC.id, profile.subject)] },
+          { kind: 'template', registrations: [registration(source, packedSource.templateDeskIndexes[0], landing, 0, studentC.id, profile.subject)] },
         ],
       }
     }
@@ -411,7 +420,7 @@ function planV26(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases
 //      登録して保存（P は上＝Q・下＝A の振替の緑）。
 //  (2) 手置き講師 X の机: K に講師 X を手で置く。
 //  (3) 同じ日の中で動かして休みにした授業: 確認用の生徒 R を D の別の時限 r1 のテンプレに登録して保存 → D の R を r2 の空き机へ動かして休み。
-//  最後に A を L_A のテンプレの机に・X を L_X のテンプレの机に・K のテンプレの机に別の講師 W を登録して保存（「詳細」を載せる）。手で: 何も変えずにもう一度保存。
+//  最後に A を L_A のテンプレの机に・X を L_X のテンプレの机に・K のテンプレの机に別の講師 W を登録して保存。手で: 何も変えずにもう一度保存。
 function planV23(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases: TeacherAliasResolver): PlanResult | null {
   const input = toInput(env, 'v2-3')
   const subject = (env.trialProfile ?? DEFAULT_TRIAL_PROFILE).subject
@@ -447,14 +456,18 @@ function planV23(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases
         if (!teacherW) continue
         const nameX = getTeacherDisplayName(teacherX)
         const nameW = getTeacherDisplayName(teacherW)
-        const [nameA, nameQ, nameR] = [studentA, studentQ, studentR].map((student) => student.name.trim())
+        const [nameA, nameR] = [studentA, studentR].map((student) => student.name.trim())
         const cell = context.cell
         const teacherRegistration = (templateDeskIndex: number, deskIndex: number, teacher: { id: string; name: string }): ChecklistPrepTemplateTeacherRegistration => ({ dayOfWeek: packed.dayOfWeek, slotNumber: cell.slotNumber, deskIndex, templateDeskIndex, teacherId: teacher.id, teacherName: teacher.name, label: '' })
         return {
           anchor: { weekIndex: context.weekIndex, cellId: cell.id, deskIndex: landingP },
-          intro: [`${cellLabel(cell)} に 3 つの形を作ります: (1) 机 ${landingP + 1} の緑の上の行に Q（${nameQ}）・下の行に A（${nameA}）の振替、(2) 机 ${landingK + 1} に手置き講師 ${nameX}、(3) ${cellLabel(moveFrom.cell)} の R（${nameR}）を同じ日の ${moveTo.cell.slotLabel} へ動かして休み。最後に A を机 ${landingA + 1} の、${nameX} を机 ${landingX + 1} のテンプレの机に、机 ${landingK + 1} のテンプレの机に別の講師 ${nameW} を登録して保存します。`],
+          // 項目の文（v2-3）: コマ・A（緑の下の行から上がる生徒）とテンプレの机・緑の机（P）・手置き講師 X の机（K）と X・別の講師 W・R と R の元のコマ。
+          facts: {
+            slot: cellLabel(cell), A: nameA, X: nameX, W: nameW, R: nameR,
+            deskA: deskText(landingA), deskP: deskText(landingP), deskK: deskText(landingK), rFrom: cellLabel(moveFrom.cell),
+          },
           steps: [
-            { kind: 'template', detail: false, registrations: [registration(absence, packedAbsence.templateDeskIndexes[0], packedAbsence.landingDeskIndexes[0], 0, studentA.id, subject), registration(moveFrom, packedR.templateDeskIndexes[0], packedR.landingDeskIndexes[0], 0, studentR.id, subject)] },
+            { kind: 'template', registrations: [registration(absence, packedAbsence.templateDeskIndexes[0], packedAbsence.landingDeskIndexes[0], 0, studentA.id, subject), registration(moveFrom, packedR.templateDeskIndexes[0], packedR.landingDeskIndexes[0], 0, studentR.id, subject)] },
             {
               kind: 'board',
               ops: [
@@ -470,10 +483,9 @@ function planV23(env: ChecklistPrepSequenceEnv, contexts: CellContext[], aliases
                 `${cellLabel(moveFrom.cell)} の R（${nameR}）を同じ日の ${seatText(moveTo.cell, moveToDesk, 0)} へ動かし、そこで「休み」にしました（R の未消化振替 +1）。`,
               ],
             },
-            { kind: 'template', detail: false, registrations: [registration(context, templateP, landingP, 0, studentQ.id, subject)] },
+            { kind: 'template', registrations: [registration(context, templateP, landingP, 0, studentQ.id, subject)] },
             {
               kind: 'template',
-              detail: true,
               registrations: [registration(context, templateA, landingA, 0, studentA.id, subject)],
               teacherRegistrations: [teacherRegistration(templateK, landingK, { id: teacherW.id, name: nameW }), teacherRegistration(templateX, landingX, { id: teacherX.id, name: nameX })],
             },
@@ -649,7 +661,7 @@ export function planChecklistPrepSequenceStep(itemId: string, state: ChecklistPr
     if (!planned) {
       return { kind: 'fail', reason: `${earliest} 以降の表示できる週に、${SEQUENCE_NOT_FOUND[itemId]}（確認用の生徒をテンプレに登録できる机）が見つかりませんでした（休校日・保留（2 行）の机・出欠記録のある机は使いません）。何も変えていません。` }
     }
-    current = { itemId, steps: planned.steps, step: 0, anchor: planned.anchor, intro: planned.intro, done: [] }
+    current = { itemId, steps: planned.steps, step: 0, anchor: planned.anchor, facts: planned.facts, done: [] }
   }
   const step = current.steps[current.step]
   if (!step) return { kind: 'done', state: current }
@@ -660,26 +672,27 @@ export function planChecklistPrepSequenceStep(itemId: string, state: ChecklistPr
   return { kind: 'board', weeks: applied.work.weeks, ledgers: applied.work.ledgers, weekIndex: current.anchor.weekIndex, cellId: current.anchor.cellId, deskIndex: current.anchor.deskIndex, state: next }
 }
 
-/** テンプレ保存の段が済んだ（登録した席の文・「詳細」を載せる段なら確認画面と同じ「詳細」）。 */
+/**
+ * テンプレ保存の段が済んだ（登録した席の文を「ここまでに行ったこと」に足す）。第119版（2026-11-07）: 成功の結果の文に保存の「詳細」を載せなくなったので、
+ * 保存の中身は受け取らない（確認画面の「詳細」は手で保存するときに見る）。
+ */
 export function recordChecklistPrepSequenceTemplateSaved(state: ChecklistPrepSequenceState, params: {
   assigned: readonly ChecklistPrepTemplateAssignment[]
   assignedTeachers?: readonly ChecklistPrepTemplateTeacherRegistration[]
-  effectiveStartDate: string
-  todayKey: string
-} & ChecklistPrepTemplateSaveResult): ChecklistPrepSequenceState {
-  const step = state.steps[state.step]
-  const lines = [describeChecklistPrepTemplateRegistered(params.assigned, params.assignedTeachers)]
-  if (step?.kind === 'template' && step.detail) lines.push(...buildChecklistPrepSavedDetailLines(params))
-  return { ...state, step: state.step + 1, done: [...state.done, ...lines] }
+}): ChecklistPrepSequenceState {
+  return { ...state, step: state.step + 1, done: [...state.done, describeChecklistPrepTemplateRegistered(params.assigned, params.assignedTeachers)] }
 }
 
 export function isChecklistPrepSequenceComplete(state: ChecklistPrepSequenceState) {
   return state.step >= state.steps.length
 }
 
-/** 全部の段を行ったときの結果の文。 */
+/**
+ * 全部の段を行ったときの結果の文（第119版・2026-11-07 オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して」）:
+ * 「準備しました（日付 時限）。」＋テンプレ保存の後の一言の 2 行だけ。何を作ったか（いつ・どの机・誰）は state.facts で項目の文へ差し込む。
+ */
 export function buildChecklistPrepSequenceMessage(state: ChecklistPrepSequenceState): string {
-  return [...state.intro, ...state.done, CHECKLIST_PREP_TEMPLATE_UNDO_NOTE, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER].join('\n')
+  return buildChecklistPrepDoneMessage({ slot: state.facts.slot, templateSaved: true })
 }
 
 /** 途中の段で止まったときの文（行ったことは黙って消さずに書く・§E-2-4-2 安全）。最初の段より前なら理由だけ。 */

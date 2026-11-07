@@ -3,7 +3,10 @@
 // 実際のテンプレ保存の差分反映（computeTemplateDiffApplyForBoard）を通し、保存後の形が確認リストの項目の「OK の目安」と合うことを固定する。
 //   tp-69: 手置き講師だけの机 → テンプレに別の講師＋確認用の生徒 → 保留（緑）: 上＝テンプレの講師＋確認用の生徒・講師欄の下＝手置き講師。
 //   tp-70: 手置き講師＋体験の机 → テンプレに別の講師だけ → 体験は席に 1 行のまま・講師欄だけ上＝テンプレ・下＝手置き。
-//   tp-59: 机 A に手置き講師 X＋体験 → テンプレの別の机 B に X＋確認用の生徒 → A は X＋体験の 1 行・B は確認用の生徒だけで講師欄は空・「詳細」に講師 X の行。
+//   tp-59: 机 A に手置き講師 X＋体験 → テンプレの別の机 B に X＋確認用の生徒 → A は X＋体験の 1 行・B は確認用の生徒だけで講師欄は空・保存の「詳細」に講師 X の行。
+// 第119版（2026-11-07）: 準備の結果の文は「準備しました（日付 時限）。」＋保存の一言の 2 行だけ。保存の中身（確認画面の「詳細」と同じ文）は
+// 結果の文に載せなくなったので、保存が返した summary・studentNotes から確認画面と同じ文（buildTemplateDiffConfirmDetail）を作って見る。
+// 項目の文に差し込む facts（いつ・どの机・誰）が、その項目の文の {{prep:キー}} を全部埋めることも固定する。
 //   mn-1・tp-66: tp-64 と同じ置き方（(1) の机が講師欄も席も緑 2 行）。
 // あわせて、ほかの生徒の授業・未消化が動かない（INV-06）、後片づけで準備の印の付いたテンプレの講師だけが外れる（INV-02）、
 // 2 回押すと別の机・別の確認用の生徒を使う（INV-12）を固定する。
@@ -17,7 +20,9 @@ import type { ClassroomSettings } from '../../types/appState'
 import { applyChecklistPrepOps, planChecklistPrep, CHECKLIST_PREP_TEMPLATE_STUDENT_COUNT } from './checklistPrep'
 import {
   buildChecklistPrepCleanupMessage,
-  buildChecklistPrepTemplateSavedMessage,
+  buildChecklistPrepDoneMessage,
+  completeChecklistPrepFacts,
+  describeChecklistPrepTemplateRegistered,
   ensureChecklistPrepStudents,
   planChecklistPrepCleanup,
   prepareChecklistPrepTemplateSave,
@@ -29,7 +34,8 @@ import { buildRegularLessonsFromTemplate, buildTemplateBoardCells, convertTempla
 import { buildMakeupStockEntries } from './makeupStock'
 import { collectExpectedTemplateLessons } from './templateLessonAccountingOracle'
 import { buildManagedScheduleCellsForRange, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
-import { buildTeacherAliasResolver } from './templateDiffApply'
+import { buildTeacherAliasResolver, buildTemplateDiffConfirmDetail } from './templateDiffApply'
+import { VERIFICATION_CHECKLIST, listChecklistPrepFactTokenKeys } from '../../utils/verificationChecklist'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
@@ -140,11 +146,12 @@ function prepareAndSave(itemId: string, stage: Stage, options: { cellIds?: reado
     todayKey: TODAY_KEY, templateOriginRules: { pendingDesks: saved.nextPendingDesks },
   })
   expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
-  const message = buildChecklistPrepTemplateSavedMessage({
-    boardMessage: plan.message, assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers, effectiveStartDate: EFFECTIVE,
-    summary: saved.summary, studentNotes: saved.studentNotes, todayKey: TODAY_KEY,
-  })
-  return { plan, prepared, saved, message, next: { week: saved.nextWeeks[0], template: prepared.template, pendingDesks: saved.nextPendingDesks } as Stage }
+  // コマ表の effect と同じ: 結果の文は短く、facts はテンプレへの登録で決まった確認用の生徒の名前を足して返す。
+  const message = buildChecklistPrepDoneMessage({ slot: plan.facts.slot, templateSaved: true })
+  const facts = completeChecklistPrepFacts(plan.facts, prepared.assigned)
+  // 保存の中身（確認画面の「詳細」と同じ文）。結果の文には載せない。
+  const detail = buildTemplateDiffConfirmDetail(EFFECTIVE, saved.summary, { todayKey: TODAY_KEY, studentNotes: saved.studentNotes })
+  return { plan, prepared, saved, message, facts, detail, next: { week: saved.nextWeeks[0], template: prepared.template, pendingDesks: saved.nextPendingDesks } as Stage }
 }
 
 function initialStage(): Stage {
@@ -184,7 +191,7 @@ function othersSnapshot(week: SlotCell[], pendingDesks: TemplatePendingDeskMap, 
 
 describe('tp-69: 手置き講師だけの机にテンプレで別の講師と生徒を登録すると、講師ごと保留（緑）', () => {
   it('準備 → テンプレ保存: 上の行＝テンプレの講師と確認用の生徒、講師欄の下の行＝手置き講師。「詳細」に講師欄を 2 行にする理由が出る', () => {
-    const { plan, prepared, saved, message } = prepareAndSave('tp-69', initialStage())
+    const { plan, prepared, saved, message, facts, detail } = prepareAndSave('tp-69', initialStage())
     // 盤面: テンプレの机（机 1〜3）の次の空き机（盤面の机 4）に手置き講師（このコマに居ない最初の在籍講師＝高木）だけ。
     expect(plan.ops).toEqual([{ kind: 'manual-teacher', cellId: CELL_ID, deskIndex: 3, teacherName: '高木', teacherId: 't4' }])
     // テンプレ: 空いている机 4 に別の講師（伊藤）と確認用の生徒。講師の机には準備の印。
@@ -201,18 +208,26 @@ describe('tp-69: 手置き講師だけの机にテンプレで別の講師と生
     expect(Object.keys(saved.nextPendingDesks)).toHaveLength(1)
     // テンプレのほかの机は動かない。
     expect(cellOf(saved.nextWeeks).desks.slice(0, 3).map((entry) => entry.teacher)).toEqual(['田中', '鈴木', '佐藤'])
-    // 結果の文: 盤面 → テンプレの登録 →「詳細」（確認画面と同じ文）。
-    expect(message).toContain(`${plan.message.split('\n')[0]}`)
-    expect(message).toContain('木曜 5限 机 4 に講師「伊藤」')
-    expect(message).toContain('手で置いた講師の机にテンプレの講師（伊藤）が入るため、講師欄を 2 行（上＝テンプレ／下＝手入力）にします。')
-    expect(message).toContain('手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: 1机。')
-    expect(message).not.toContain('手で置いた講師を机に戻さずテンプレに合わせる机')
+    // 保存の中身（確認画面の「詳細」と同じ文）: 講師欄を 2 行にする理由。
+    expect(detail).toContain('手で置いた講師の机にテンプレの講師（伊藤）が入るため、講師欄を 2 行（上＝テンプレ／下＝手入力）にします。')
+    expect(detail).toContain('手で置いた講師の机をテンプレの講師と重ねて保留（緑）にする机: 1机。')
+    expect(detail).not.toContain('手で置いた講師を机に戻さずテンプレに合わせる机')
+    // テンプレへの登録の文（途中で止まったときの「ここまでに行ったこと」に使う）。
+    expect(describeChecklistPrepTemplateRegistered(prepared.assigned, prepared.assignedTeachers)).toContain('木曜 5限 机 4 に講師「伊藤」')
+    // 第119版: 結果の文は 2 行だけ。いつ・どの机・誰は facts（項目の文へ差し込む）。
+    expect(message.split('\n')).toHaveLength(2)
+    expect(message.split('\n')[0]).toBe('準備しました（10/8(木) 5限）。')
+    expect(message).not.toContain('伊藤')
+    expect(message).not.toContain('詳細')
+    expect(facts).toEqual({ slot: '10/8(木) 5限', deskA: '机 4', X: '高木', Y: '伊藤', A: prepared.assigned[0].studentName })
+    // plan.message（盤面で行ったことの詳しい文）は、テンプレ保存の段で止まったときの文に使うので残す。
+    expect(plan.message).toContain('10/8(木) 5限 机 4 に講師 高木 を手で置きました')
   })
 })
 
 describe('tp-70: 講師だけのテンプレ机と同じ番号に手置き講師と手で置いた生徒（体験）', () => {
   it('準備 → テンプレ保存: 体験は席に 1 行のまま（生徒の席は緑にならない）。講師欄だけ上＝テンプレの講師・下＝手置き講師', () => {
-    const { plan, prepared, saved, message } = prepareAndSave('tp-70', initialStage())
+    const { plan, prepared, saved, message, facts, detail } = prepareAndSave('tp-70', initialStage())
     expect(plan.ops.map((op) => [op.kind, op.deskIndex])).toEqual([['manual-teacher', 3], ['trial', 3]])
     // テンプレには講師だけ（確認用の生徒は登録しない）。
     expect(plan.templateRegistrations).toEqual([])
@@ -224,14 +239,16 @@ describe('tp-70: 講師だけのテンプレ机と同じ番号に手置き講師
     const lower = lowerOf(saved.nextPendingDesks, desk)
     expect(lower?.teacher).toMatchObject({ teacher: '高木', manualTeacher: true, checklistPrepTeacher: true })
     expect(lower?.lesson).toBeUndefined()
-    expect(message).toContain('木曜 5限 机 4 に講師「伊藤」')
-    expect(message).toContain('テンプレのこの机は講師だけなので、手で置いた 確認用 体験1 は席に残ります。')
+    expect(describeChecklistPrepTemplateRegistered(prepared.assigned, prepared.assignedTeachers)).toContain('木曜 5限 机 4 に講師「伊藤」')
+    expect(detail).toContain('テンプレのこの机は講師だけなので、手で置いた 確認用 体験1 は席に残ります。')
+    expect(message.split('\n')).toHaveLength(2)
+    expect(facts).toEqual({ slot: '10/8(木) 5限', deskA: '机 4', X: '高木', Y: '伊藤', trial: '確認用 体験1' })
   })
 })
 
 describe('tp-59: 手置き講師 X の机があるコマで、テンプレが別の机に X を生徒つきで置く', () => {
   it('準備 → テンプレ保存: 机 A は X＋体験の 1 行（緑にならない）。机 B は確認用の生徒だけで講師欄は空。「詳細」に講師 X の行', () => {
-    const { plan, prepared, saved, message } = prepareAndSave('tp-59', initialStage())
+    const { plan, prepared, saved, message, facts, detail } = prepareAndSave('tp-59', initialStage())
     // 机 A は盤面の机 5（机 B が入る盤面の机 4 は空けておく）。
     expect(plan.ops.map((op) => [op.kind, op.deskIndex])).toEqual([['manual-teacher', 4], ['trial', 4]])
     expect(plan.ops[0]).toMatchObject({ teacherName: '高木', teacherId: 't4' })
@@ -247,7 +264,9 @@ describe('tp-59: 手置き講師 X の机があるコマで、テンプレが別
     expect(names(desks[3])).toEqual([prepared.assigned[0].studentName, null])
     // X は 1 つの机だけ。
     expect(desks.filter((desk) => desk.teacher === '高木')).toHaveLength(1)
-    expect(message).toContain('講師 高木: 同じコマの机 5 に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません')
+    expect(detail).toContain('講師 高木: 同じコマの机 5 に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません')
+    expect(message.split('\n')).toHaveLength(2)
+    expect(facts).toEqual({ slot: '10/8(木) 5限', deskA: '机 5', deskB: '机 4', X: '高木', trial: '確認用 体験1', A: prepared.assigned[0].studentName })
   })
 
   it('何も変えずにもう一度テンプレを保存しても形は変わらない', () => {
@@ -551,12 +570,27 @@ describe('後片づけのテンプレ保存の形（コマ表と同じ toSaveTem
   })
 })
 
-describe('tp-59 の結果の文（regression-reviewer S-5）', () => {
+describe('tp-59 の盤面の文・登録の文（regression-reviewer S-5）', () => {
+  // 第119版: 成功の結果の文には載せないが、テンプレ保存の段で止まったときの文（盤面で行ったこと・登録した席）に使う。
   it('机 A・机 B のあとに括弧でコマ表・テンプレの机を書く（「机 B 木曜 5限 机 4」と続けて書かない）', () => {
-    const { plan, message } = prepareAndSave('tp-59', initialStage())
+    const { plan, prepared } = prepareAndSave('tp-59', initialStage())
+    const registered = describeChecklistPrepTemplateRegistered(prepared.assigned, prepared.assignedTeachers)
     expect(plan.message).toContain('机 A（10/8(木) 5限 机 5）に講師 高木 を手で置き')
     expect(plan.message).toContain('机 B（テンプレの 木曜 5限 机 4）に講師 高木 と確認用の生徒を登録して保存します')
-    expect(message).toContain('テンプレの 机 B（木曜 5限 机 4）に講師「高木」、机 B（木曜 5限 机 4 の生徒 1）に「確認用 生徒')
-    expect(message).not.toContain('机 B 木曜')
+    expect(registered).toContain('テンプレの 机 B（木曜 5限 机 4）に講師「高木」、机 B（木曜 5限 机 4 の生徒 1）に「確認用 生徒')
+    expect(registered).not.toContain('机 B 木曜')
   })
+})
+
+describe('第119版: 項目の文の {{prep:キー}} は、その項目の準備が facts に入れる', () => {
+  for (const itemId of ['tp-59', 'tp-69', 'tp-70', 'mn-1', 'tp-66']) {
+    it(`${itemId}: 文に使うキーが全部埋まる`, () => {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
+      expect(item.autoPrep).toBe(true)
+      const keys = listChecklistPrepFactTokenKeys(item)
+      expect(keys.length).toBeGreaterThan(0)
+      const { facts } = prepareAndSave(itemId, initialStage())
+      for (const key of keys) expect(facts[key], `${itemId}: ${key}`).toBeTruthy()
+    })
+  }
 })

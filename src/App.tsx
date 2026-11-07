@@ -1977,7 +1977,8 @@ function AuthenticatedApp() {
   }, [armChecklistPrepTimeout])
   const handleChecklistPrepRequestProcessed = useCallback((result: ChecklistPrepRequestResult) => {
     setChecklistPrepRequest((current) => consumeChecklistPrepRequest(current, result.requestId))
-    settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message })
+    // facts(第119版・2026-11-07): 項目の文に差し込む準備の事実(いつ・どの机・誰)もパネルまで運ぶ。
+    settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message, ...(result.facts ? { facts: result.facts } : {}) })
   }, [settleChecklistPrep])
   // 「振替先を今決める」の配置が終わった(配置した/キャンセルした)。残りの連絡があればモーダルを開き直す。
   const handleParentAbsencePlacementSettled = useCallback(() => {

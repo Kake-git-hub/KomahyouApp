@@ -1,6 +1,7 @@
 // 確認リストの「準備する」第 2 段（docs/plan-2026-11-06-checklist-auto-prep-stage2.md Task 3・spec-developer-report §E-2-4-2）の
 // コマ表の 2 段処理（盤面の準備 → テンプレ保存）と後片づけを組む純関数のテスト。
-// - 結果の文: 盤面の行 → テンプレへ登録した席 → 「詳細:」（確認画面と同じ buildTemplateDiffConfirmDetail）→ 保存の一言（1 つだけ）。
+// - 結果の文（成功）: 第119版（2026-11-07 オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して」）で
+//   「準備しました（日付 時限）。」＋保存の一言の 2 行（何を置いたか・「詳細」は出さない。いつ・誰は項目の文へ facts で差し込む）。
 // - テンプレ保存の段で失敗（テンプレ編集中になった・教室が切り替わった）→ 盤面は置いたままで「テンプレは保存していません」と出す（Review Focus 3）。
 // - 後片づけ: 何も無ければ件数で「片づけるものはありません」（Review Focus 5）・テンプレから消すのは確認用の生徒だけ（退塾した確認用も・INV-02）。
 import { describe, expect, it } from 'vitest'
@@ -32,11 +33,11 @@ import {
   CHECKLIST_PREP_TEMPLATE_PHASE_CLASSROOM_REASON,
   CHECKLIST_PREP_TEMPLATE_PHASE_MODE_REASON,
   CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER,
-  CHECKLIST_PREP_TEMPLATE_UNDO_NOTE,
   annotateChecklistPrepResultWithAddedStudents,
   buildChecklistPrepCleanupMessage,
+  buildChecklistPrepDoneMessage,
   buildChecklistPrepTemplateFailedMessage,
-  buildChecklistPrepTemplateSavedMessage,
+  completeChecklistPrepFacts,
   planChecklistPrepCleanup,
   prepareChecklistPrepTemplateSave,
   resolveChecklistPrepCleanupBlock,
@@ -47,7 +48,7 @@ import {
   type ChecklistPrepTemplateAssignment,
   type ChecklistPrepTemplateRegistration,
 } from './checklistPrepTemplate'
-import { buildTemplateDiffConfirmDetail, createEmptyTemplateDiffApplySummary, type TemplateDiffStudentNote } from './templateDiffApply'
+import { buildTemplateDiffConfirmDetail, createEmptyTemplateDiffApplySummary } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import type { DeskCell, SlotCell, StudentEntry } from './types'
 
@@ -101,39 +102,28 @@ const ASSIGNED: ChecklistPrepTemplateAssignment[] = [
   { ...registration(3, '(2)'), studentId: 's902', studentName: '確認用 生徒B' },
 ]
 
-describe('buildChecklistPrepTemplateSavedMessage（準備 → テンプレ保存の結果の文）', () => {
-  const summary = { ...createEmptyTemplateDiffApplySummary(), replaced: 1, pending: 1 }
-  const studentNotes: TemplateDiffStudentNote[] = [{ kind: 'teacher-pending', studentName: '講師D', subject: '', dateKey: '2026-11-19', slotNumber: 3 }]
-
-  it('盤面の行 → テンプレへ登録した席と確認用の生徒 → 「詳細:」＋確認画面と同じ詳細 → 最後に保存の一言（盤面だけの一言は外す）', () => {
-    const message = buildChecklistPrepTemplateSavedMessage({ boardMessage: BOARD_MESSAGE, assigned: ASSIGNED, effectiveStartDate: EFFECTIVE, summary, studentNotes, todayKey: TODAY })
-    const detail = buildTemplateDiffConfirmDetail(EFFECTIVE, summary, { todayKey: TODAY, studentNotes })
-    const lines = message.split('\n')
-    expect(lines.slice(0, 3)).toEqual(BOARD_LINES)
-    expect(lines[3]).toBe('テンプレの (1) 木曜 3限 机 2 の生徒 2 に「確認用 生徒A」、(2) 木曜 3限 机 3 の生徒 2 に「確認用 生徒B」を登録して、テンプレを保存しました。')
-    expect(lines[4]).toBe('詳細:')
-    expect(message).toContain(`詳細:\n${detail}\n`)
-    // 生徒ごとの理由（buildTemplateDiffStudentNoteLines）も詳細の中に載る。
-    expect(message).toContain('テンプレの生徒・講師の扱いの理由:')
-    expect(lines[lines.length - 1]).toBe(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER)
-    // テンプレ保存は「元に戻す」の履歴を空にする（handleSaveRegularLessonTemplateByDiff）ので、戻し方を一言（M-9）。
-    expect(lines[lines.length - 2]).toBe(CHECKLIST_PREP_TEMPLATE_UNDO_NOTE)
-    expect(CHECKLIST_PREP_TEMPLATE_UNDO_NOTE).toBe('テンプレ保存で「元に戻す」は使えません。戻すときは「後片づけ」を押してください。')
-    // 一言は 1 つだけ（盤面だけの一言は残さない）。
-    expect(message).not.toContain(CHECKLIST_PREP_SAVE_REMINDER)
-    expect(message.split(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER)).toHaveLength(2)
+describe('buildChecklistPrepDoneMessage（準備が済んだときの結果の文・第119版）', () => {
+  it('テンプレも保存したとき: 「準備しました（日付 時限）。」とテンプレ保存の後の一言の 2 行だけ（置いた物・登録した席・「詳細」は書かない）', () => {
+    const message = buildChecklistPrepDoneMessage({ slot: '11/19(木) 3限', templateSaved: true })
+    expect(message.split('\n')).toEqual(['準備しました（11/19(木) 3限）。', CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER])
+    expect(CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER).toBe('「保存」を押してから「操作」を行ってください。戻すときは「後片づけ」（「元に戻す」は使えません）。')
+    expect(message).not.toContain('詳細')
+    expect(message).not.toContain('やること')
   })
 
-  it('範囲の説明（scopeNote）も確認画面と同じく詳細に載る', () => {
-    const scopeNote = { scope: 'changed-slots' as const, slotLabels: ['木 3限'], extraSlotLabels: [] }
-    const message = buildChecklistPrepTemplateSavedMessage({ boardMessage: BOARD_MESSAGE, assigned: ASSIGNED, effectiveStartDate: EFFECTIVE, summary, scopeNote, todayKey: TODAY })
-    expect(message).toContain(buildTemplateDiffConfirmDetail(EFFECTIVE, summary, { todayKey: TODAY, scopeNote }))
-    expect(message).toContain('テンプレで変えたコマ（木 3限）だけを突き合わせます。')
+  it('盤面だけのとき: 盤面だけの一言（「元に戻す」も使える）。残る手作業があれば 1 行目に続けて書く', () => {
+    expect(buildChecklistPrepDoneMessage({ slot: '11/19(木) 3限', templateSaved: false })).toBe(`準備しました（11/19(木) 3限）。\n${CHECKLIST_PREP_SAVE_REMINDER}`)
+    expect(buildChecklistPrepDoneMessage({ slot: '11/19(木) 3限', templateSaved: false, todo: '残る手作業: X。' })).toBe(`準備しました（11/19(木) 3限）。残る手作業: X。\n${CHECKLIST_PREP_SAVE_REMINDER}`)
   })
+})
 
-  it('盤面の文に一言が無くてもそのまま使う（二重に外さない）', () => {
-    const message = buildChecklistPrepTemplateSavedMessage({ boardMessage: BOARD_LINES.join('\n'), assigned: ASSIGNED, effectiveStartDate: EFFECTIVE, summary, todayKey: TODAY })
-    expect(message.split('\n').slice(0, 3)).toEqual(BOARD_LINES)
+describe('completeChecklistPrepFacts（テンプレへの登録で決まる名前を facts に足す・第119版）', () => {
+  it('登録に factKey のある確認用の生徒の名前を足す（factKey の無い登録・入力の facts は変えない）', () => {
+    const facts = { slot: '11/19(木) 3限', X: '講師D' }
+    const assigned: ChecklistPrepTemplateAssignment[] = [{ ...ASSIGNED[0], factKey: 'A' }, ASSIGNED[1]]
+    expect(completeChecklistPrepFacts(facts, assigned)).toEqual({ slot: '11/19(木) 3限', X: '講師D', A: '確認用 生徒A' })
+    expect(facts).toEqual({ slot: '11/19(木) 3限', X: '講師D' })
+    expect(completeChecklistPrepFacts(facts, [])).toEqual(facts)
   })
 })
 
@@ -294,7 +284,7 @@ describe('resolveChecklistPrepTemplatePhaseTiming（テンプレ保存の段を�
   const postWeeks: SlotCell[][] = [[]]
   const prePending: TemplatePendingDeskMap = {}
   const postPending: TemplatePendingDeskMap = {}
-  const phase: ChecklistPrepTemplatePhase = { kind: 'prep', requestId: 7, classroomId: 'c1', template: template([]), assigned: [], boardMessage: '', queuedFromWeeks: preWeeks, queuedFromPendingDesks: prePending }
+  const phase: ChecklistPrepTemplatePhase = { kind: 'prep', requestId: 7, classroomId: 'c1', template: template([]), assigned: [], boardMessage: '', queuedFromWeeks: preWeeks, queuedFromPendingDesks: prePending, facts: { slot: '11/19(木) 3限' } }
 
   it('段が無ければ none、別のリクエストの段は stale（捨てる）', () => {
     expect(resolveChecklistPrepTemplatePhaseTiming({ phase: null, requestId: 7, weeks: postWeeks, pendingDesks: postPending })).toBe('none')
@@ -348,8 +338,11 @@ describe('annotateChecklistPrepResultWithAddedStudents（名簿へ足したこ�
     expect(refused.message.split('\n')[0]).toBe('名簿に確認用の生徒（確認用 生徒A・確認用 生徒B）を足しました（次の準備でも使うので残します）。')
     expect(refused.message).not.toContain('何も変えていません')
     expect(refused.message).toContain('盤面とテンプレは変えていません。')
-    const done = annotateChecklistPrepResultWithAddedStudents({ ok: true, message: '置きました。' }, added)
-    expect(done).toEqual({ ok: true, message: '名簿に確認用の生徒（確認用 生徒A・確認用 生徒B）を足しました（次の準備でも使うので残します）。\n置きました。' })
+    // 第119版（2026-11-07）: 成功の文は短く（2 行のまま）。足したことは 1 行目の後ろに人数だけ書く。facts はそのまま運ぶ。
+    const done = annotateChecklistPrepResultWithAddedStudents({ ok: true, message: `準備しました（11/19(木) 3限）。\n${CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER}`, facts: { slot: '11/19(木) 3限' } }, added)
+    expect(done).toEqual({ ok: true, message: `準備しました（11/19(木) 3限）。名簿に確認用の生徒を 2 人足しました。\n${CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER}`, facts: { slot: '11/19(木) 3限' } })
+    const refusedWithFacts = annotateChecklistPrepResultWithAddedStudents({ ok: false, message: '何も変えていません。', facts: { slot: 'x' } }, added)
+    expect(refusedWithFacts.facts).toEqual({ slot: 'x' })
   })
   it('足していなければそのまま', () => {
     const result = { ok: false, message: '何も変えていません。' }

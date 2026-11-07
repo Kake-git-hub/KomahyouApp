@@ -57,6 +57,7 @@ import {
   setVerificationChecklistMemo,
   setVerificationChecklistOtherNotes,
   verificationChecklistStorageKey,
+  type ChecklistPrepFacts,
   type VerificationChecklistDraft,
   type VerificationChecklistStatus,
 } from '../../utils/verificationChecklist'
@@ -101,10 +102,12 @@ export type VerificationChecklistPanelProps = {
   onCaptureTab?: (view: Window) => Promise<{ name: string; dataUrl: string }>
   /**
    * 「準備する」(2026-11-06 オーナー選択「案 C(段階導入)」・spec-developer-report §E-2-4)。autoPrep の項目に出すボタンから呼ぶ。
-   * App が開いているコマ表へ一過性リクエスト(checklistPrepRequest)を渡し、結果文(どこに何を置いたか・残る手作業)を返す。
+   * App が開いているコマ表へ一過性リクエスト(checklistPrepRequest)を渡し、結果文を返す。
    * App は検証用教室(開発用・テスト教室)のときだけ渡す。無ければボタンを出さない。保存はしない(「保存」を押してもらう)。
+   * 第119版(2026-11-07): 結果文は短く(「準備しました（日付 時限）。」＋保存の一言)、いつ・どの机・誰は facts で返し、項目の操作・結果の
+   * `{{prep:<キー>}}` をその項目の最後の準備結果の facts で置き換える(無ければ既定の言葉・下書きには残さない)。
    */
-  onPrepare?: (itemId: string) => Promise<{ ok: boolean; message: string }>
+  onPrepare?: (itemId: string) => Promise<{ ok: boolean; message: string; facts?: ChecklistPrepFacts }>
   /**
    * 「後片づけ」(2026-11-06 第 2 段・spec-developer-report §E-2-4-2 決定 4)。パネルの上の方に 1 つ出すボタンから呼ぶ。
    * 盤面の「確認用」の体験・メモ・準備で置いた講師と、テンプレの確認用の生徒の登録だけを消してテンプレを保存し、消した件数の文を返す。
@@ -166,7 +169,8 @@ const ITEM_CLEANUP_NOTE = '準備で作ったものを全部消します'
 
 export function VerificationChecklistPanel({ classroomId, classroomName, audience, onSubmitNote, loadSharedResults, resolveStudentName, onCaptureTab, onPrepare, onCleanup, shrinkImage = shrinkChecklistImageToDataUrl }: VerificationChecklistPanelProps) {
   const items = useMemo(() => selectVerificationChecklistItems(audience), [audience])
-  const text = (line: string) => resolveVerificationChecklistText(line, resolveStudentName)
+  // 文面の {{student:ID}} と {{prep:キー}}(第119版・その項目の最後の準備結果の facts)を同じ場所で置き換える。
+  const text = (line: string, prepFacts?: ChecklistPrepFacts) => resolveVerificationChecklistText(line, resolveStudentName, prepFacts)
   const storageKey = verificationChecklistStorageKey(classroomId)
   const [draft, setDraft] = useState<VerificationChecklistDraft>(() => {
     pruneStaleDrafts(classroomId)
@@ -184,8 +188,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
   const [resultMessage, setResultMessage] = useState<string | null>(null)
   /** 「準備する」を実行中の項目 id(同時に 1 件だけ)。 */
   const [preparingItemId, setPreparingItemId] = useState<string | null>(null)
-  /** 「準備する」の結果文(項目ごと・画面だけ。下書きには保存しない)。 */
-  const [prepResults, setPrepResults] = useState<Record<string, { ok: boolean; message: string }>>({})
+  /** 「準備する」の結果文と facts(項目ごと・画面だけ。下書きには保存しない)。 */
+  const [prepResults, setPrepResults] = useState<Record<string, { ok: boolean; message: string; facts?: ChecklistPrepFacts }>>({})
   /**
    * 「後片づけ」を実行中の押した場所(準備と同時には行わない・同時に 1 つだけ)。CLEANUP_SOURCE_TOP＝パネルの上の 1 つ、項目 id＝その項目の準備の行の 1 つ
    * (2026-11-07 確認リスト ap-3「後片付けのボタンが出てこない」→ 準備の行にも出す)。null＝実行していない。結果文は画面だけ(下書きには保存しない)。
@@ -624,6 +628,8 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
               const sentRecord = draft.sent[item.id]
               const sharedResults = shared.status === 'ready' || shared.status === 'error' ? shared.results[item.id] ?? [] : []
               const isSending = sendingKey === item.id
+              // その項目の最後の準備結果の facts(無ければ既定の言葉に置き換わる)。
+              const prepFacts = prepResults[item.id]?.facts
               return (
                 <div key={item.id} className={`verification-checklist-item is-${entry.status}`} data-testid={`verification-checklist-item-${item.id}`}>
                   <div className="verification-checklist-item-title">
@@ -700,13 +706,13 @@ export function VerificationChecklistPanel({ classroomId, classroomName, audienc
                   ) : null}
                   <div className="verification-checklist-label">操作</div>
                   <ol className="verification-checklist-steps">
-                    {item.steps.map((step) => <li key={step}>{text(step)}</li>)}
+                    {item.steps.map((step) => <li key={step}>{text(step, prepFacts)}</li>)}
                   </ol>
                   {item.check && item.check.length > 0 ? (
                     <>
                       <div className="verification-checklist-label">結果</div>
                       <ul className="verification-checklist-check">
-                        {item.check.map((line) => <li key={line}>{text(line)}</li>)}
+                        {item.check.map((line) => <li key={line}>{text(line, prepFacts)}</li>)}
                       </ul>
                     </>
                   ) : null}

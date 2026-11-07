@@ -95,6 +95,9 @@ describe('確認リストパネルの配線(App.tsx)', () => {
     const loaded = body.indexOf('if (loadedEditingClassroomIdRef.current !== actingClassroomId) return Promise.resolve({ ok: false, message: CHECKLIST_PREP_NOT_LOADED_MESSAGE })')
     expect(loaded).toBeGreaterThan(needs)
     expect(loaded).toBeLessThan(ensure)
+    // 第119版(2026-11-07): コマ表が返した facts(項目の文に差し込む・いつ・どの机・誰)をパネルまで運ぶ(落とさない)。
+    const processed = APP_TSX.slice(APP_TSX.indexOf('const handleChecklistPrepRequestProcessed = useCallback('), APP_TSX.indexOf('const handleParentAbsencePlacementSettled = useCallback('))
+    expect(processed).toContain('settleChecklistPrep(result.requestId, { ok: result.ok, message: result.message, ...(result.facts ? { facts: result.facts } : {}) })')
     // M-2: 足したあとで断られても、名簿に足したことを結果の文に書く(「何も変えていません」と言わない)。
     expect(body).toContain("return startChecklistPrepRequest(itemId, 'prep').then((result) => annotateChecklistPrepResultWithAddedStudents(result, added))")
     // 二重のガードは名簿へ足す前(本番 3 校の名簿に確認用の生徒を足さない)。
@@ -157,7 +160,11 @@ describe('確認リストパネル本体', () => {
     expect(APP_TSX).toContain('const student = students.find((row) => row.id === studentId)')
     expect(PANEL_TSX).toContain('resolveVerificationChecklistText')
     expect(PANEL_TSX).toContain('resolveStudentName')
-    for (const field of ['item.title', 'item.prep', 'step', 'line']) expect(PANEL_TSX).toContain(`{text(${field})}`)
+    for (const field of ['item.title', 'item.prep']) expect(PANEL_TSX).toContain(`{text(${field})}`)
+    // 第119版(2026-11-07): 操作・結果の {{prep:キー}} は、その項目の最後の準備結果の facts で置き換える(同じ text を通す)。
+    for (const field of ['step', 'line']) expect(PANEL_TSX).toContain(`{text(${field}, prepFacts)}`)
+    expect(PANEL_TSX).toContain('const prepFacts = prepResults[item.id]?.facts')
+    expect(PANEL_TSX).toContain('const text = (line: string, prepFacts?: ChecklistPrepFacts) => resolveVerificationChecklistText(line, resolveStudentName, prepFacts)')
   })
 
   it('下書きは localStorage、送信は props 経由(独自の保存先・直送を作らない)', () => {

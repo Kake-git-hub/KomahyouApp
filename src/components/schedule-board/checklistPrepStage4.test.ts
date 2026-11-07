@@ -28,7 +28,7 @@ import {
   type ChecklistPrepSequenceEnv,
   type ChecklistPrepSequenceState,
 } from './checklistPrepSequence'
-import { cleanupChecklistPrepStudentRecords, ensureChecklistPrepStudents, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave } from './checklistPrepTemplate'
+import { CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER, cleanupChecklistPrepStudentRecords, ensureChecklistPrepStudents, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave } from './checklistPrepTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { stampPlacementOrigins } from './placementOrigin'
 import {
@@ -43,7 +43,8 @@ import {
   type StudentAbsentMarkLedgers,
 } from './ScheduleBoardScreen'
 import { collectExpectedTemplateLessons } from './templateLessonAccountingOracle'
-import { buildTeacherAliasResolver } from './templateDiffApply'
+import { buildTeacherAliasResolver, buildTemplateDiffConfirmDetail } from './templateDiffApply'
+import { VERIFICATION_CHECKLIST, listChecklistPrepFactTokenKeys } from '../../utils/verificationChecklist'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
@@ -193,7 +194,7 @@ function runPrep(itemId: string, start: Stage): Run {
       if (!prepared.ok) throw new Error(`template: ${prepared.reason}`)
       const saved = saveTemplate(stage, prepared.template)
       saves.push(saved.diff)
-      state = recordChecklistPrepSequenceTemplateSaved(action.state, { assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers, effectiveStartDate: EFFECTIVE, todayKey: TODAY_KEY, summary: saved.diff.summary, studentNotes: saved.diff.studentNotes })
+      state = recordChecklistPrepSequenceTemplateSaved(action.state, { assigned: prepared.assigned, assignedTeachers: prepared.assignedTeachers })
       stage = saved.next
     } else {
       state = action.state
@@ -209,6 +210,14 @@ const cellOf = (weeks: SlotCell[][], cellId: string) => {
   const cell = weeks.flat().find((entry) => entry.id === cellId)
   if (!cell) throw new Error(`cell ${cellId} not found`)
   return cell
+}
+/** 盤面のコマの書き方（checklistPrep.ts の cellLabel と同じ・結果の文と facts の「いつ」）。 */
+const labelOf = (cell: SlotCell) => `${cell.dateLabel}${cell.dayLabel ? `(${cell.dayLabel})` : ''} ${cell.slotLabel}`
+const rosterName = (id: string) => roster.find((student) => student.id === id)!.name.trim()
+/** 最後のテンプレ保存の中身（確認画面の「詳細」と同じ文）。第119版で結果の文から外したので、保存が返したものから作って見る。 */
+function detailOf(run: Run) {
+  const last = run.saves[run.saves.length - 1]
+  return buildTemplateDiffConfirmDetail(EFFECTIVE, last.summary, { todayKey: TODAY_KEY, studentNotes: last.studentNotes })
 }
 const ids = (desk: DeskCell) => (desk.lesson?.studentSlots ?? [null, null]).map((student) => student?.managedStudentId ?? student?.name ?? null)
 /** 盤面（上の行）でその生徒が居る席（cellId:机:席）。 */
@@ -281,9 +290,12 @@ describe('tp-71: 同じ日の中で手で動かした通常授業は、テンプ
     // ほかの週の同じコマにはテンプレの位置に 2 人とも居る（テンプレへの登録が効いている）。
     const nextWeek = cellOf(run.stage.weeks, `2026-10-15_${anchor.slotNumber}`)
     expect(ids(nextWeek.desks[regA.deskIndex])).toEqual([regA.studentId, regB.studentId])
-    expect(run.message).toContain('を登録して、テンプレを保存しました。')
-    expect(run.message).toContain('同じ日の別の時限')
-    expect(run.message).not.toContain('詳細:')
+    // 行ったことの文（途中で止まったときの「ここまでに行ったこと」に使う）。第119版: 成功の結果の文には載せない（2 行だけ）。
+    expect(run.state.done.join('\n')).toContain('を登録して、テンプレを保存しました。')
+    expect(run.state.done.join('\n')).toContain('同じ日の別の時限')
+    expect(run.message.split('\n')).toEqual([`準備しました（${labelOf(anchor)}）。`, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER])
+    // 項目の文に差し込む facts: いつ（コマ）・A・B・テンプレの机。
+    expect(run.state.facts).toEqual({ slot: labelOf(anchor), A: rosterName(regA.studentId!), B: rosterName(regB.studentId!), deskT: `机 ${regA.deskIndex + 1}` })
   })
 
   it('手で: 何も変えずにテンプレを保存すると、A・B はテンプレの位置に 1 行で戻り、動かした先は空く（緑の机は出ない）。もう一度保存しても変わらない', () => {
@@ -325,9 +337,11 @@ describe('tp-72: 手で動かした通常授業の席をテンプレの別の生
     expect(ids(anchor.desks[regA.deskIndex])).toEqual([regA.studentId, null])
     expect(placesOf(run.stage.weeks, regA.studentId!, anchor.dateKey)).toEqual([`${anchor.id}:${regA.deskIndex}:0`])
     expect(run.stage.pendingDesks).toEqual({})
-    // 結果の文: 2 回目の保存の「詳細」（確認画面と同じ文）を載せる。
-    expect(run.message).toContain('詳細:')
-    expect(run.message.match(/を登録して、テンプレを保存しました。/gu)).toHaveLength(2)
+    // 第119版: 結果の文は 2 行だけ（2 回目の保存の「詳細」は載せない）。行ったことの文には 2 回の保存が残る（途中で止まったとき用）。
+    expect(run.message).not.toContain('詳細')
+    expect(run.message.split('\n')).toHaveLength(2)
+    expect(run.state.done.join('\n').match(/を登録して、テンプレを保存しました。/gu)).toHaveLength(2)
+    expect(run.state.facts).toEqual({ slot: labelOf(anchor), A: rosterName(regA.studentId!), C: rosterName(regC.studentId!), deskA: `机 ${regA.deskIndex + 1}`, deskC: `机 ${regC.deskIndex + 1}` })
   })
 
   it('何も変えずにもう一度保存しても形は変わらない', () => {
@@ -362,8 +376,9 @@ describe('tp-75: 同じコマに手で置いた振替がある生徒をテンプ
     // 1 週後の同じコマにはテンプレの A がテンプレの机に入る（登録は効いている）。
     const nextWeek = cellOf(run.stage.weeks, `2026-10-15_${makeup.to.slotNumber}`)
     expect(ids(nextWeek.desks[second.deskIndex])).toEqual([studentA, null])
-    // 「詳細」に手入力が先にある理由（名前・科目つき）。
-    expect(run.message).toContain(`${roster.find((student) => student.id === studentA)!.name}（${placed.subject}）: 同じコマに手入力の同じ生徒が先にあるため、テンプレのこの授業は置きません（予定数に数えません）。`)
+    // 保存の「詳細」（確認画面と同じ文）に手入力が先にある理由（名前・科目つき）。第119版: 結果の文には載せない。
+    expect(run.message).not.toContain('詳細')
+    expect(detailOf(run)).toContain(`${roster.find((student) => student.id === studentA)!.name}（${placed.subject}）: 同じコマに手入力の同じ生徒が先にあるため、テンプレのこの授業は置きません（予定数に数えません）。`)
     // A の未消化振替: 休みで +1・振替を置いて −1＝0。2 回目の保存でも変わらない。
     expect(balanceOf(run.stage, studentA)).toBe(0)
     // A の予定数: このコマの日は数えない（手入力が先）・1 週後は数える。
@@ -480,14 +495,15 @@ describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席�
     expect(cell.desks[aDesk].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: makeup.studentId, lessonType: 'makeup' })
     expect(placesOf(run.stage.weeks, makeup.studentId, makeup.to.dateKey).filter((place) => place!.startsWith(`${cell.id}:`))).toEqual([`${cell.id}:${aDesk}:0`])
     expect(run.stage.pendingDesks).toEqual({})
-    expect(run.message).toContain('緑の下の行にだけ居た手入力のこの生徒を、テンプレの席')
+    const detail = detailOf(run)
+    expect(detail).toContain('緑の下の行にだけ居た手入力のこの生徒を、テンプレの席')
     // 2026-11-07 オーナー報告（v2-3 の「詳細」で A が 2 行）: 上げた A は「上げて 1 行」の 1 行だけ。「手入力の同じ生徒が先にある」の行・
     // 「別の机に居るため上段に置かなかった」の件数には入れない（テンプレの席に居るのは上げた A なので、どちらも起きたことと違う）。
     const aName = roster.find((student) => student.id === makeup.studentId)!.name
-    const aLines = run.message.split('\n').filter((line) => line.includes(`${aName}（`))
+    const aLines = detail.split('\n').filter((line) => line.includes(`${aName}（`))
     expect(aLines).toHaveLength(1)
     expect(aLines[0]).toContain('緑の下の行にだけ居た手入力のこの生徒を、テンプレの席')
-    expect(run.message).not.toContain(`${aName}（${cell.desks[aDesk].lesson!.studentSlots[0]!.subject}）: 同じコマに手入力の同じ生徒が先にあるため`)
+    expect(detail).not.toContain(`${aName}（${cell.desks[aDesk].lesson!.studentSlots[0]!.subject}）: 同じコマに手入力の同じ生徒が先にあるため`)
     const lastSave = run.saves[run.saves.length - 1]
     expect(lastSave.summary.skippedDuplicateStudents).toBe(0)
     expect(lastSave.studentNotes.filter((note) => note.studentName === aName).map((note) => note.kind)).toEqual(['lower-promoted'])
@@ -497,7 +513,7 @@ describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席�
     expect(cell.desks.filter((desk) => desk.teacher === registeredX.teacherName)).toHaveLength(1)
     expect(cell.desks.some((desk) => desk.teacher === registeredW.teacherName)).toBe(false)
     expect(cell.desks[registeredX.deskIndex].teacher).not.toBe(registeredX.teacherName)
-    expect(run.message).toContain(`この机の手で置いた講師 ${teacherOp.teacherName}は同じコマの別の机にもテンプレで入るため`)
+    expect(detail).toContain(`この机の手で置いた講師 ${teacherOp.teacherName}は同じコマの別の机にもテンプレで入るため`)
     // (3) R の元の時限（テンプレの位置）には授業が戻らず、休みの記録は動かした先のコマ。R の未消化振替は休みの 1 件だけ。
     expect(placesOf(run.stage.weeks, move.studentId, cellOf(run.stage.weeks, move.fromCellId).dateKey)).toEqual([])
     expect(recordsOf(run.stage.weeks, move.studentId)).toEqual([`${move.to.cellId}:absent`])
@@ -592,6 +608,31 @@ describe('もう一度「準備する」を押すと、別の机・別の確認�
   }
 })
 
+// 第119版（2026-11-07・オーナー指示「今のシンプルにした文に、いつの誰を追記して」）: 項目の文の {{prep:キー}} は、その項目の準備が facts に入れる。
+describe('第119版: 段を続ける項目の facts（項目の文に差し込む・いつ・どの机・誰）', () => {
+  for (const itemId of CHECKLIST_PREP_SEQUENCE_ITEM_IDS) {
+    it(`${itemId}: 文に使うキーが全部埋まり、結果の文は 2 行だけ`, () => {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)!
+      expect(item.autoPrep).toBe(true)
+      const run = runPrep(itemId, initialStage())
+      const keys = listChecklistPrepFactTokenKeys(item)
+      expect(keys.length).toBeGreaterThan(0)
+      for (const key of keys) expect(run.state.facts[key], `${itemId}: ${key}`).toBeTruthy()
+      expect(run.message.split('\n')).toEqual([`準備しました（${run.state.facts.slot}）。`, CHECKLIST_PREP_TEMPLATE_SAVE_REMINDER])
+    })
+  }
+
+  it('v2-6: 振替元の日 A・振替先の日 B（1 週後）・確認用の生徒 C・体験の名前', () => {
+    const run = runPrep('v2-6', initialStage())
+    const trial = stepsOf(run).flatMap((step) => (step.kind === 'board' ? step.ops : [])).find((op) => op.kind === 'trial') as { name: string; to: { cellId: string } }
+    const source = cellOf(run.stage.weeks, trial.to.cellId)
+    const day = (cell: SlotCell) => `${cell.dateLabel}(${cell.dayLabel})`
+    const target = run.stage.weeks.flat().find((cell) => cell.slotNumber === source.slotNumber && cell.dateKey > source.dateKey && cell.dayLabel === source.dayLabel)!
+    const c = registrationsOf(run)[0].studentId!
+    expect(run.state.facts).toEqual({ slot: `${day(source)}・${day(target)} ${source.slotLabel}`, dayA: day(source), dayB: day(target), C: rosterName(c), trial: trial.name })
+  })
+})
+
 describe('段ごとの安全（全部か無し・行ったことを書く・INV-08）', () => {
   it('置く先の席が埋まっていたら、その段は当てずに理由を返す（入れ替えで別の生徒を動かさない・INV-02）', () => {
     const start = initialStage()
@@ -600,7 +641,7 @@ describe('段ごとの安全（全部か無し・行ったことを書く・INV-
     const prepared = prepareChecklistPrepTemplateSave({ registrations: first.registrations, baseTemplate: baselineOf(start.template), effectiveStartDate: EFFECTIVE, students: roster, savedAt: SAVED_AT })
     if (!prepared.ok) throw new Error(prepared.reason)
     const saved = saveTemplate(start, prepared.template)
-    const state = recordChecklistPrepSequenceTemplateSaved(first.state, { assigned: prepared.assigned, effectiveStartDate: EFFECTIVE, todayKey: TODAY_KEY, summary: saved.diff.summary })
+    const state = recordChecklistPrepSequenceTemplateSaved(first.state, { assigned: prepared.assigned })
     // A を動かす先の席に別の生徒（体験）が入った盤面。
     const move = state.steps[1].kind === 'board' ? state.steps[1].ops[0] : null
     if (!move || move.kind !== 'move') throw new Error('no move')
