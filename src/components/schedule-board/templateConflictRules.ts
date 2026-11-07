@@ -13,6 +13,7 @@
 import type { ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { DeskCell, DeskLesson, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind } from './types'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveStudentOrigin } from './placementOrigin'
+import { hasRealDeskTeacher, isDeskTeacherPlaceholder } from '../../utils/deskTeacherLabel'
 import { parseOriginSlotNumberFromLabel } from './makeupStock'
 import {
   buildTemplatePendingDeskKey,
@@ -98,7 +99,8 @@ export function collectTemplateBlockersInCell(cell: Pick<SlotCell, 'id' | 'desks
     for (const student of [...liveStudents(desk.lesson), ...liveStudents(pending?.lower.lesson)]) {
       if (isManualOriginStudent(student) || isUnresolvableSameDayMoveCopy(student, cell.dateKey)) students.push({ student, reason: 'manual' })
     }
-    if (pending?.lower.teacher?.teacher.trim()) teachers.push({ deskIndex, teacher: pending.lower.teacher })
+    // 2026-11-07: 下段の講師が埋め草「講師未割当」（既に保存された誤った保留）は手置きの講師に数えない（hasRealDeskTeacher・INV-01）。
+    if (hasRealDeskTeacher(pending?.lower.teacher?.teacher)) teachers.push({ deskIndex, teacher: pending!.lower.teacher! })
     else if (isManualOriginDeskTeacher(desk)) teachers.push({ deskIndex, teacher: desk })
   })
   return { students, teachers }
@@ -415,23 +417,29 @@ function applyRulesToDesk(params: {
   }
 
   // ── 講師（§2-3・§2-4 講師の休み）
+  // 2026-11-07（オーナー指示・INV-01 / INV-02）: テンプレの机の講師が埋め草「講師未割当」（講師の居ない行）でも templateTeacher には入れたまま
+  // （手置き講師の居ない机・削除記録の机には従来どおり埋め草を書く＝再マージが管理授業の机に同じ埋め草を入れる不動点・INV-03）。
+  // 埋め草は手置きの講師（blockers・manualTeacher）に数えないので「別の机に手で置いた同じ講師」にはならず、手置き講師とのぶつかりでは
+  // 「テンプレに講師なし」として扱う（下の manualTeacher の分岐）。
   const templateTeacher = templateDesk.teacher.trim() && !params.isTeacherOnRest(cell, templateDesk) ? templateDesk : null
   const claimedAt = templateTeacher ? findManualTeacherDeskElsewhere(deskIndex, templateTeacher, params.teacherBlockers, params.aliases) : -1
   const placeableTemplateTeacher = templateTeacher && claimedAt < 0 ? templateTeacher : null
   if (templateTeacher && claimedAt >= 0) {
     params.teacherNotes.push({ kind: 'teacher-elsewhere', teacherName: templateTeacher.teacher, templateTeacher: String(claimedAt + 1), dateKey: cell.dateKey, slotNumber: cell.slotNumber })
   }
-  const manualTeacher: TemplatePendingLowerTeacher | null = pending?.lower.teacher?.teacher.trim()
-    ? pending.lower.teacher
+  // 下段の講師が埋め草（既に保存された誤った保留・2026-11-07）は手置きの講師ではない＝外す（下段に講師を残さない）。
+  const manualTeacher: TemplatePendingLowerTeacher | null = hasRealDeskTeacher(pending?.lower.teacher?.teacher)
+    ? pending!.lower.teacher!
     : isManualOriginDeskTeacher(desk) ? pickTeacher(desk) : null
   let upperTeacher: TemplatePendingLowerTeacher
   let lowerTeacher: TemplatePendingLowerTeacher | null = null
   const hasUpperStudents = Boolean(upperSlots[0] || upperSlots[1])
   // 2026-11-07（§4-1 の講師欄版・tp-64 / tp-69 / tp-70）: 「下段(手入力)の講師を採用する」でこの机で取り下げたテンプレの講師は、机に手置き講師が居る間この机に置かない
   // （§2-3「手置き講師 Y × テンプレに講師なし → Y のまま」と同じ形）。下段にまだ講師の選択が残っている机（未解決のぶつかり）には使わない。
-  const declinedHere = !pending?.lower.teacher?.teacher.trim() && isTemplateTeacherDeclinedAtDesk(desk, templateDesk, params.aliases)
+  const declinedHere = !hasRealDeskTeacher(pending?.lower.teacher?.teacher) && isTemplateTeacherDeclinedAtDesk(desk, templateDesk, params.aliases)
   if (manualTeacher) {
-    if (!placeableTemplateTeacher || declinedHere || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
+    // 埋め草（講師の居ない行）は「テンプレに講師なし」＝手置き講師のまま 1 行（講師欄 2 行にしない・2026-11-07）。
+    if (!placeableTemplateTeacher || isDeskTeacherPlaceholder(placeableTemplateTeacher.teacher) || declinedHere || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
     else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases, (templateDesk) => params.isTeacherOnRest(cell, templateDesk))) {
       // §9-15: X がテンプレの別の机にも居る → この机は X のまま（W を置かない・講師欄は 1 行）。別の机の X は §2-3 で置かない。
       upperTeacher = pickTeacher(manualTeacher)

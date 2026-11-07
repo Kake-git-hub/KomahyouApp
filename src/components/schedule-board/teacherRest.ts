@@ -12,6 +12,7 @@
 import type { DeskCell, SlotCell } from './types'
 import type { TemplateTeacherRestPredicate } from './templateConflictRules'
 import { isSameTeacherRecord, type TeacherAliasResolver } from './templateDiffApply'
+import { hasRealDeskTeacher } from '../../utils/deskTeacherLabel'
 
 export type DeskTeacherRest = NonNullable<DeskCell['teacherRest']>
 
@@ -62,7 +63,8 @@ export function buildTemplateTeacherRestPredicate(weeks: ReadonlyArray<ReadonlyA
  */
 export function restDeskTeacher(desk: DeskCell, resolveTeacherId?: (teacherName: string) => string | undefined): DeskCell | null {
   const teacherName = desk.teacher.trim()
-  if (!teacherName || hasDeskTeacherRest(desk)) return null
+  // 講師の居ない行の机の埋め草「講師未割当」は講師ではない＝休みにできない（2026-11-07・utils/deskTeacherLabel.ts）。
+  if (!hasRealDeskTeacher(teacherName) || hasDeskTeacherRest(desk)) return null
   const teacherId = desk.teacherAssignmentTeacherId?.trim() || resolveTeacherId?.(teacherName) || undefined
   const sessionId = desk.teacherAssignmentSource === 'schedule-registration' ? desk.teacherAssignmentSessionId : undefined
   const next: DeskCell = {

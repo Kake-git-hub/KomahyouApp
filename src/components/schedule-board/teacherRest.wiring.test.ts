@@ -76,7 +76,9 @@ describe('3-1・3-5 講師欄のメニューの「休み」ボタン（ScheduleB
   const menu = BOARD_TSX.slice(BOARD_TSX.indexOf('data-testid="teacher-action-menu"'), BOARD_TSX.indexOf('{groupClassMenu ? ('))
   it('ボタンはフラグ templateDiffApply の教室のコマ表（テンプレ編集ではない）だけ。講師が居るか休みの机で出し、休みの机は「休みを解除する」', () => {
     expect(menu).toContain('data-testid="teacher-rest-button"')
-    expect(menu).toContain('!isTemplateMode && templateDiffApplyEnabled && teacherMenuContext && (teacherMenuContext.desk.teacher.trim() || hasDeskTeacherRest(teacherMenuContext.desk))')
+    // 2026-11-07: 講師の居ない行の机の埋め草「講師未割当」は講師ではない（hasRealDeskTeacher）ので、埋め草の机には出さない。
+    expect(menu).toContain('!isTemplateMode && templateDiffApplyEnabled && teacherMenuContext && (hasRealDeskTeacher(teacherMenuContext.desk.teacher) || hasDeskTeacherRest(teacherMenuContext.desk))')
+    expect(menu).toContain('{hasRealDeskTeacher(teacherMenuContext?.desk.teacher) ? (')
     expect(menu).toContain('休みを解除する')
     expect(menu).toContain("'休み'")
   })
