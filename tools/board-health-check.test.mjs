@@ -59,7 +59,7 @@ describe('HEALTH_CODES と閾値', () => {
     expect(HEALTH_CODES).toEqual(['duplicate-placement', 'pending-count', 'pending-delta', 'whole-day-pair-count', 'origin-mark-count', 'roster-shrink', 'teacher-shrink', 'makeup-drop', 'desk-change-burst', 'save-failed', 'save-none', 'user-report'])
     expect(MAKEUP_DROP_MIN).toBe(10)
     expect(MAKEUP_DROP_RATIO).toBe(0.1)
-    expect(DESK_CHANGE_BURST).toBe(200)
+    expect(DESK_CHANGE_BURST).toBe(2000)
   })
 })
 
@@ -179,21 +179,21 @@ describe('前日からの減少', () => {
     expect(codesOf(buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: makeupWeeks(5) }), after: makePayload({ weeks: makeupWeeks(8) }), now: NOW }))).not.toContain('makeup-drop')
   })
 
-  it('机単位の変更が 200 を超えれば desk-change-burst を info(snapshot-diff の diffBoardWeeks を使う)', () => {
+  it('机単位の変更が 2000 を超えれば desk-change-burst を info(snapshot-diff の diffBoardWeeks を使う)', () => {
     const weeksWith = (count, filled) => [[makeCell('2026-11-10', 1, Array.from({ length: count }, (_, index) => makeDesk(`d${index}`, filled ? [makeStudentEntry({ id: `e${index}`, managedStudentId: `s${index}` }), null] : [null, null])))]]
-    const burst = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: weeksWith(201, false) }), after: makePayload({ weeks: weeksWith(201, true) }), now: NOW })
-    expect(burst.counts.deskChanges).toBe(201)
+    const burst = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: weeksWith(2001, false) }), after: makePayload({ weeks: weeksWith(2001, true) }), now: NOW })
+    expect(burst.counts.deskChanges).toBe(2001)
     expect(findingOf(burst, 'desk-change-burst').severity).toBe('info')
-    const calm = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: weeksWith(200, false) }), after: makePayload({ weeks: weeksWith(200, true) }), now: NOW })
-    expect(calm.counts.deskChanges).toBe(200)
+    const calm = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: weeksWith(2000, false) }), after: makePayload({ weeks: weeksWith(2000, true) }), now: NOW })
+    expect(calm.counts.deskChanges).toBe(2000)
     expect(codesOf(calm)).not.toContain('desk-change-burst')
   })
 })
 
 describe('desk-change-burst は前後の両方にあるコマだけ数える', () => {
-  it('前が 1 週、後が「同じ週＋中身のある机 201 個の新しい週」なら desk-change-burst を出さず counts.deskChanges === 0(片方だけのコマは cellsOnlyInOne)', () => {
+  it('前が 1 週、後が「同じ週＋中身のある机 2001 個の新しい週」なら desk-change-burst を出さず counts.deskChanges === 0(片方だけのコマは cellsOnlyInOne)', () => {
     const baseWeek = [makeCell('2026-11-10', 1, [makeDesk('d1', [makeStudentEntry(), null])])]
-    const newWeek = [makeCell('2026-11-17', 1, Array.from({ length: 201 }, (_, index) => makeDesk(`d${index}`, [makeStudentEntry({ id: `e${index}`, managedStudentId: `s${index}` }), null])))]
+    const newWeek = [makeCell('2026-11-17', 1, Array.from({ length: 2001 }, (_, index) => makeDesk(`d${index}`, [makeStudentEntry({ id: `e${index}`, managedStudentId: `s${index}` }), null])))]
     const report = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: [baseWeek] }), after: makePayload({ weeks: [baseWeek, newWeek] }), now: NOW })
     expect(report.counts.deskChanges).toBe(0)
     expect(report.counts.cellsOnlyInOne).toBe(1)

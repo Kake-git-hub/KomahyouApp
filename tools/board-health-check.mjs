@@ -46,8 +46,11 @@ export const HEALTH_CODES = [
 export const MAKEUP_DROP_MIN = 10
 /** 振替の急減: 前より この割合以上 減ったら警告。 */
 export const MAKEUP_DROP_RATIO = 0.1
-/** 机単位の変更がこの数を超えたら知らせる(一括の組み直し・復元・テンプレ反映の印)。 */
-export const DESK_CHANGE_BURST = 200
+/**
+ * 机単位の変更がこの数を超えたら知らせる(一括の組み直し・復元・テンプレ反映の印)。
+ * 2026-11-08 の実データ(平日の 1 日で 250〜930 件・155 名規模)から決めた。週の範囲のずれは別に数える(cellsOnlyInOne)。
+ */
+export const DESK_CHANGE_BURST = 2000
 /** 保存記録・利用者報告を見る範囲(時間)。 */
 export const RECENT_WINDOW_HOURS = 24
 /** 1 つの所見に並べる ID の上限(多すぎると読めない)。 */
