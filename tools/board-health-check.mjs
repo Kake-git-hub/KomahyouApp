@@ -155,6 +155,11 @@ function iterateCells(payload) {
 }
 
 /** 机に置かれた生徒(lesson.studentSlots。旧形の desk.students も念のため読む)。 */
+// snapshot-diff の indexBoardCells と同じキー(diffBoardWeeks の entry も dateKey / slotNumber を持つ)。
+function cellKeyOf(cellOrEntry) {
+  return `${cellOrEntry.dateKey ?? ''}#${cellOrEntry.slotNumber ?? ''}`
+}
+
 function deskStudents(desk) {
   if (!isPlainObject(desk)) return []
   const slots = asArray(desk.lesson?.studentSlots)
@@ -181,7 +186,13 @@ function teacherRowId(row) {
   return trimmedString(row.id)
 }
 
-/** 盤面から件数を集める(振替・出自の印・保留・組・同じコマの 2 か所)。 */
+/**
+ * 盤面から件数を集める(振替・出自の印・保留・組・同じコマの 2 か所)。
+ * ★同じコマの 2 か所の判定は、アプリ側の権威関数 `findDuplicateStudentInCellByKey`
+ *   (src/components/schedule-board/ScheduleBoardScreen.tsx・INV-12)の簡略な写し。権威側の判定が変わったら追随する。
+ * ★保留(templatePendingDesks)の下段と別の机の上段の重複(docs/spec-template-conflict-v2.md §2-2)は数えない(対象外)。
+ *   ここで見るのは盤面の机に置かれた生徒(lesson.studentSlots)同士だけ。
+ */
 export function summarizeBoard(payload) {
   const duplicates = []
   let makeups = 0
@@ -285,7 +296,16 @@ export function buildBoardHealthReport(input) {
     if (drop > 0 && (drop >= MAKEUP_DROP_MIN || drop / beforeBoard.makeups >= MAKEUP_DROP_RATIO)) {
       warn('makeup-drop', `盤面の振替が減少: ${beforeBoard.makeups} → ${afterBoard.makeups}(-${drop})`)
     }
-    const deskChanges = diffBoardWeeks(before.boardState?.weeks, after?.boardState?.weeks).filter((entry) => entry.scope === 'desk').length
+    // 前後の両方にあるコマ(dateKey#slotNumber)の机の変更だけを数える。保存された weeks は開いた週の分だけ増え、
+    // テンプレだけの週は表示範囲の外で間引かれるので、片方にしか無いコマまで数えると週の範囲のずれだけで反応する
+    // (2026-11-08 の実データ予行で平日ペアが 562/931/254 件)。片方だけのコマは cellsOnlyInOne に数え、所見にはしない。
+    const beforeCellKeys = new Set(iterateCells(before).map(cellKeyOf))
+    const afterCellKeys = new Set(iterateCells(after).map(cellKeyOf))
+    const sharedCellKeys = new Set([...afterCellKeys].filter((key) => beforeCellKeys.has(key)))
+    counts.cellsOnlyInOne = new Set([...beforeCellKeys, ...afterCellKeys]).size - sharedCellKeys.size
+    const deskChanges = diffBoardWeeks(before.boardState?.weeks, after?.boardState?.weeks)
+      .filter((entry) => entry.scope === 'desk' && sharedCellKeys.has(cellKeyOf(entry)))
+      .length
     counts.deskChanges = deskChanges
     if (deskChanges > DESK_CHANGE_BURST) info('desk-change-burst', `机単位の変更が多い: ${deskChanges} 件(目安 ${DESK_CHANGE_BURST})`)
   }

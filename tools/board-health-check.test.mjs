@@ -190,6 +190,17 @@ describe('前日からの減少', () => {
   })
 })
 
+describe('desk-change-burst は前後の両方にあるコマだけ数える', () => {
+  it('前が 1 週、後が「同じ週＋中身のある机 201 個の新しい週」なら desk-change-burst を出さず counts.deskChanges === 0(片方だけのコマは cellsOnlyInOne)', () => {
+    const baseWeek = [makeCell('2026-11-10', 1, [makeDesk('d1', [makeStudentEntry(), null])])]
+    const newWeek = [makeCell('2026-11-17', 1, Array.from({ length: 201 }, (_, index) => makeDesk(`d${index}`, [makeStudentEntry({ id: `e${index}`, managedStudentId: `s${index}` }), null])))]
+    const report = buildBoardHealthReport({ classroomId: ROOM, before: makePayload({ weeks: [baseWeek] }), after: makePayload({ weeks: [baseWeek, newWeek] }), now: NOW })
+    expect(report.counts.deskChanges).toBe(0)
+    expect(report.counts.cellsOnlyInOne).toBe(1)
+    expect(codesOf(report)).not.toContain('desk-change-burst')
+  })
+})
+
 describe('保存記録と利用者報告', () => {
   it('saveAttempts(フィールド status・savedAt は ISO 文字列)に too-large / write-failed / verification-failed / stale / empty-management-data があれば save-failed を warn、24 時間で 0 件なら save-none を info(verified の件数は counts.saves)', () => {
     const saveAttempts = [
