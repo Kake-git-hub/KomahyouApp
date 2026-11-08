@@ -190,7 +190,7 @@ git commit -m "feat: 機能フラグの戻しスクリプトと手順書(全教�
 - Modify: `CHANGELOG.md` 1 行
 
 **Interfaces:**
-- Produces: `buildBoardHealthReport(input: { classroomId: string; before: AppSnapshotPayload | null; after: AppSnapshotPayload; saveAttempts?: Array<{ status: string; savedAt?: string; errorMessage?: string }>; developerReports?: Array<{ reportId: string; kind?: string; createdAt?: string }>; knownIssues?: Array<{ classroomId: string; dateKey: string; slotNumber: number; studentId: string }> }): { findings: Array<{ severity: 'warn' | 'info'; code: string; message: string }>; counts: Record<string, number> }`。`formatBoardHealthText(report, { classroomLabel }): string`(日本語・生徒は ID だけ)。
+- Produces: `buildBoardHealthReport(input: { classroomId: string; before: AppSnapshotPayload | null; after: AppSnapshotPayload; saveAttempts?: Array<{ status: string; savedAt?: string; errorMessage?: string }>; developerReports?: Array<{ reportId: string; category?: string; reportedAt?: string; isVerificationChecklist?: boolean; isTest?: boolean; isAutoErrorReport?: boolean }>; knownIssues?: Array<{ classroomId: string; dateKey: string; slotNumber: number; studentId: string }> }): { findings: Array<{ severity: 'warn' | 'info'; code: string; message: string }>; counts: Record<string, number> }`。`formatBoardHealthText(report, { classroomLabel }): string`(日本語・生徒は ID だけ)。
 - CLI: `node tools/board-health-check.mjs <前のファイル|-> <後のファイル> --classroom <id> [--save-attempts <json>] [--reports <json>] [--known <json>] [--json]`。前のファイルが `-` なら差分の検査を省く。
 - `code` の一覧(export `HEALTH_CODES`): `duplicate-placement`(INV-12)・`pending-count`・`pending-delta`・`whole-day-pair-count`・`origin-mark-count`・`roster-shrink`・`teacher-shrink`・`makeup-drop`・`desk-change-burst`・`save-failed`・`save-none`・`user-report`。
 
@@ -204,8 +204,8 @@ test('WHOLE_DAY_PAIR__ で始まるキーの数と placementOrigin 付き生徒�
 test('名簿の生徒 ID が前より減れば roster-shrink、講師が減れば teacher-shrink を warn', ...)
 test('盤面の振替(lessonType が振替)のコマ数が前より 10 件以上または 10% 以上減れば makeup-drop を warn', ...)
 test('机単位の変更が 200 を超えれば desk-change-burst を info(snapshot-diff の diffBoardWeeks を使う)', ...)
-test('saveAttempts に too-large / write-failed / verification-failed / stale があれば save-failed を warn、24 時間で 0 件なら save-none を info', ...)
-test('developerReports があれば user-report を warn(reportId と kind だけ)', ...)
+test('saveAttempts(フィールド status・savedAt は ISO 文字列)に too-large / write-failed / verification-failed / stale / empty-management-data があれば save-failed を warn、24 時間で 0 件なら save-none を info(verified の件数は counts.saves)', ...)
+test('developerReports(フィールド reportId・category・classroomId・reportedAt・isVerificationChecklist・isTest・isAutoErrorReport)のうち isVerificationChecklist と isTest を除いたものを user-report で warn(reportId・category・isAutoErrorReport だけ。本文は読まない)', ...)
 test('formatBoardHealthText の出力に fixture の生徒名・講師名が 1 文字も含まれない', ...)
 test('findings が無ければ 1 行「異常なし」', ...)
 ```
@@ -215,7 +215,7 @@ test('findings が無ければ 1 行「異常なし」', ...)
 Run: `node --test tools/board-health-check.test.mjs`
 Expected: FAIL(モジュールが無い)
 
-- [ ] **Step 3: 実装** — 盤面の読み方: `payload.board.weeks`(`SlotCell[][]`・`cell.desks[].students[]`)。`WHOLE_DAY_PAIR__` の在りかは `grep -rn WHOLE_DAY_PAIR__ src --include=*.ts | grep -v test` で確認し、その項目のキーを数える。出自の印は `student.placementOrigin`。振替は `lessonType` の振替値(`src/components/schedule-board/types.ts` の `LessonType` で確認)。閾値は定数で export(`MAKEUP_DROP_MIN = 10`・`MAKEUP_DROP_RATIO = 0.1`・`DESK_CHANGE_BURST = 200`)。
+- [ ] **Step 3: 実装** — 盤面の読み方(実データで確認済み 2026-11-08): ファイルは `extractClassroomSnapshot(doc, { classroomId, file })` で取り出し、`result.payload` が `AppSnapshotPayload`(`students`・`teachers`・`specialSessions`・`classroomSettings`・`boardState`)。盤面は **`payload.boardState.weeks`**(`SlotCell[][]`・`cell.dateKey`・`cell.slotNumber`・`cell.desks[].students[]`・生徒は `managedStudentId` と `name`)。保留は `payload.boardState.templatePendingDesks`。教室別バックアップ(`{classroomId}.json.gz`)は教室 1 つだけの `WorkspaceBackupSnapshot` なので `--classroom` で一致確認する。ファイルの読み込み(gzip 判定・JSON)は `snapshot-diff.mjs` の読み込み関数を import する(重複実装しない)。`WHOLE_DAY_PAIR__` の在りかは `grep -rn WHOLE_DAY_PAIR__ src --include=*.ts | grep -v test` で確認し、その項目のキーを数える。出自の印は `student.placementOrigin`。振替は `lessonType` の振替値(`src/components/schedule-board/types.ts` の `LessonType` で確認)。閾値は定数で export(`MAKEUP_DROP_MIN = 10`・`MAKEUP_DROP_RATIO = 0.1`・`DESK_CHANGE_BURST = 200`)。
 - [ ] **Step 4: 通す**
 
 Run: `node --test tools/board-health-check.test.mjs tools/snapshot-diff.test.mjs`
@@ -243,8 +243,8 @@ git commit -m "feat: 教室データの毎朝の健診ツール board-health-che
 - [ ] **Step 1: 手順書を書く**。内容(すべて読み取り):
   1. `export FIRESTORE_ACCESS_TOKEN=$(node tools/prod-readonly-token.mjs)`。
   2. 時点の選び方: 最新 = `workspaces/main/workspaceAutoBackupSummaries` を `:runQuery` で `savedAt desc limit 1`。前日 = 文書 ID `YYYY-MM-DDT03-00`(JST 3:00 の日次アンカー。無ければ `T02-45`・`T03-15` の順に探す)。
-  3. 取得: 要約の `layout` が `per-classroom-v1` なら `workspace-auto-backups/main/15min/{key}/{classroomId}.json.gz` を Storage JSON API `GET https://storage.googleapis.com/storage/v1/b/komahyouapp-prod.firebasestorage.app/o/<URL エンコードしたパス>?alt=media` で落とす(`legacy` なら `{key}.json` 1 本)。置き場はスクラッチ領域。
-  4. 保存記録: `classroomSnapshots/{id}/saveAttempts` を `savedAt >= 24 時間前` で `:runQuery`。利用者報告: `workspaces/main/developerReports` を `createdAt >= 前日 7:40 JST` で `:runQuery`(本文は読まない・件数と種類だけ)。
+  3. 取得: 要約の `layout` が `per-classroom-v1` なら `workspace-auto-backups/main/15min/{key}/{classroomId}.json.gz` を Storage JSON API `GET https://storage.googleapis.com/storage/v1/b/komahyouapp-prod.firebasestorage.app/o/<URL エンコードしたパス>?alt=media` で落とす(`legacy` なら `{key}.json` 1 本)。置き場はスクラッチ領域。(2026-11-08 予行: 日大前 約 0.8MB・緑が丘 約 0.6MB・同じトークンで取れる。)
+  4. 保存記録: `classroomSnapshots/{id}/saveAttempts` を `:runQuery`(`where savedAt >= <24 時間前の ISO 文字列>`・`orderBy savedAt desc`・**値は stringValue**。timestampValue だと 0 件になる・`__name__` の並べ替えは複合索引が要るので使わない)。利用者報告: `workspaces/main/developerReports` を `where reportedAt >= <前日 7:40 JST の ISO 文字列>`(stringValue)・`orderBy reportedAt desc` で `:runQuery` し、`isVerificationChecklist` と `isTest` が true のものは除く(本文 `note`・`recentOperations` は読まない・`reportId`・`category`・`classroomId`・`isAutoErrorReport` だけ)。
   5. 教室 2 校(日大前 `5w5OMueETerSKrSf14HC`・緑が丘 `KzFnOQoTFLsCxwUp1tvh`)で `node tools/board-health-check.mjs <前> <後> --classroom <id> --save-attempts ... --reports ... --known tools/board-health-known-issues.json`。既知ファイルは手順書と同じコミットで作る(緑が丘の生徒 s072・11/18・11/25・5限。実名は書かない)。
   6. GitHub: 利用者報告 Issue(`gh api -X GET search/issues -f q='repo:Kake-git-hub/KomahyouApp label:source:user-report is:open created:>=<前日>'`)と外形監視の最新実行(Actions `uptime-check.yml`)。
   7. 報告の形(日本語・生徒は ID): 見出し「11/10(月) 7:40 の健診」→ 教室ごとに warn → info → 保存回数 → 利用者報告 → 外形監視。異常ゼロなら「異常なし(日大前 保存 n 回・緑が丘 保存 m 回)」の 1 行。実名・保護者名は書かない。
