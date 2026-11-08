@@ -5228,6 +5228,7 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
       buildRecord: (student, desk) => buildMovedSourceStatusEntry({ student, sourceCell: merged, sourceDesk: desk, destinationDateKey: sourceInfo.pair.targetDateKey, destinationSlotNumber: merged.slotNumber }),
       // D の日付の削除記録がある生徒は出さない（D' で消した・格納した・別の日へ動かした＝§4-1-2「消したまま」）。ただし D' に記録（休み・振無休・出席）
       // として残っている生徒は D に「休)」を残す（2026-11-08 確認リスト se-7・INV-06。D' の記録は盤面全体から読む＝buildWholeDayPairTargetRecordLookup）。
+      // D' の中で動かして印が落ちた自分の授業（席・記録）も同じ（2026-11-08 オーナー決定「元の日に揃える」・時限は振替元の表示ラベルから）。
       isExcluded: (student) => sourceInfo.isSuppressed(student) && !(wholeDayPairTargetRecords?.(sourceInfo.pair, merged.slotNumber, student) ?? false),
     })
   })

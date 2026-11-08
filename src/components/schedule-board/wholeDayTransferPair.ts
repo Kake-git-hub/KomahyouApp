@@ -219,6 +219,11 @@ function sameStatusSlots(left: DeskCell['statusSlots'], right: DeskCell['statusS
  * 仕様 §4-1-2「D' で休みにしても D は「休)」のまま」。D' の同じ時限の記録（上段＋保留の下段）のうち、印 wholeDayPairSourceDate が組の D で、
  * 移動元の記録（moved＝別の日・別の時限へ動かした跡）でないものがあれば true。生徒は管理生徒 ID（無ければ名前）で同じ人か見る（削除記録の鍵と同じ）。
  * D と D' は別の週にあるので、盤面全体（再マージ前の盤面＝記録は再マージで変わらない）から作って週ごとの再マージへ渡す。組が無ければ null。
+ * ★2026-11-08（オーナー決定「元の日に揃える」・INV-06）: 付け替えで展開した授業を D' の中で別の机・別の時限へ動かすと、印 wholeDayPairSourceDate が落ちて
+ *   手入力になり D の日付の削除記録を積むため、D の席が空になっていた（作成で D から移した手入力は D に「休)」が残り、出自で割れていた）。
+ *   D' の**席に居る生徒**（上段＋保留の下段）と記録のうち、その生徒自身の D の授業（権威関数 isWholeDayPairSourceOwnEntry＝印・移した印・
+ *   授業 ID が D のテンプレのまま＋振替元 D）も数える（記録の判定も同じ権威関数＝判定を 2 系統に持たない）。D の時限は振替元の表示ラベル
+ *   （makeupSourceLabel の「N限」）から読み、読めなければそのセルの時限。D' に生徒も記録も無い（削除・格納・別の日へ動かした）ときは今どおり数えない。
  */
 export type WholeDayPairTargetRecordLookup = (pair: WholeDayTransferPair, slotNumber: number, student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => boolean
 
@@ -235,12 +240,29 @@ export function buildWholeDayPairTargetRecordLookup(weeks: readonly (readonly Sl
     for (const desk of cell.desks) {
       const pendingRecords = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.statusSlots ?? []
       for (const entry of [...(desk.statusSlots ?? []), ...pendingRecords]) {
-        if (!entry || entry.status === 'moved' || entry.wholeDayPairSourceDate !== sourceDateKey) continue
-        recorded.add(recordKey(sourceDateKey, cell.dateKey, cell.slotNumber, identity(entry)))
+        if (!entry || entry.status === 'moved' || !isWholeDayPairSourceOwnEntry(entry, sourceDateKey)) continue
+        recorded.add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(entry, sourceDateKey, cell.slotNumber), identity(entry)))
+      }
+      const pendingStudents = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []
+      for (const student of [...(desk.lesson?.studentSlots ?? []), ...pendingStudents]) {
+        if (!student || !isWholeDayPairSourceOwnEntry(student, sourceDateKey)) continue
+        recorded.add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(student, sourceDateKey, cell.slotNumber), identity(student)))
       }
     }
   }
   return (pair, slotNumber, student) => recorded.has(recordKey(pair.sourceDateKey, pair.targetDateKey, slotNumber, identity(student)))
+}
+
+/**
+ * D' の席・記録の「D の時限」: 振替元が D なら振替元の表示ラベル（makeupSourceLabel の「N限」）の時限（D' の中で別の時限へ動かしても元の時限）、
+ * 読めなければそのセルの時限（fallback）。読み方は makeupStock の parseOriginSlotNumberFromLabel と同じ（makeupStock がこのファイルを import するので写す）。
+ */
+function resolveWholeDayPairSourceSlotNumber(entry: StudentEntry | StudentStatusEntry, sourceDateKey: string, fallbackSlotNumber: number) {
+  if (entry.makeupSourceDate === sourceDateKey) {
+    const matched = String(entry.makeupSourceLabel ?? '').match(/(\d+)限/)
+    if (matched) return Number(matched[1])
+  }
+  return fallbackSlotNumber
 }
 
 /** 解除・作り直しの前に、D のセルから付け替えの「休)」記録だけを外す。 */

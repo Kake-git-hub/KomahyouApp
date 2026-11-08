@@ -758,11 +758,137 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
         expect(recordIds(weeks, D)[0]?.[0]).toBe('absent:sA')
       }
     })
+
+    // 2026-11-08（オーナー決定「元の日に揃える」・regression-reviewer の残る穴 1 件目・INV-06/INV-03）: 付け替えで展開したテンプレの授業を D' の中で
+    //   別の机・別の時限へ動かす（印 wholeDayPairSourceDate が落ちて手入力になる・D の日付の削除記録を積む）と、D の「休)」の材料から外れ D の席が空になっていた。
+    //   手入力由来（作成で D から移した授業・546 行付近「D' の中で別の机へ移動」）は D に「休)」が残るので出自で割れていた。D' の席・記録に
+    //   その生徒自身の D の授業（isWholeDayPairSourceOwnEntry）が居れば、元の時限（makeupSourceLabel）で D に「休)→D'」を残す。削除・格納（D' に何も無い）は今どおり出さない。
+    const moveExpandedWithinTarget = (to: { slotNumber: number; deskIndex: number; studentIndex: number }) => (weeks: SlotCell[][], suppressed: string[]) => {
+      expect(isWholeDayPairExpandedStudent(studentAt(weeks, D2, 0))).toBe(true)
+      const moved = computeStudentMove({
+        weeks, weekIndex: 1, cells: weeks[1], movingStudentId: studentAt(weeks, D2, 0)!.id, cellId: cellAt(weeks, D2, to.slotNumber).id, deskIndex: to.deskIndex, studentIndex: to.studentIndex,
+        suppressedRegularLessonOccurrences: suppressed, managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
+        sourceSeat: expandedSeat(weeks),
+      })
+      if (moved.status !== 'moved') throw new Error(moved.message)
+      const placed = studentAt(moved.nextWeeks, D2, to.deskIndex, to.studentIndex, to.slotNumber)!
+      expect(placed.wholeDayPairSourceDate).toBeUndefined()
+      expect(placed.origin).toBe('manual')
+      return { weeks: moved.nextWeeks, suppressed: moved.nextSuppressedRegularLessonOccurrences, manual: {} as Record<string, Array<{ dateKey: string; slotNumber?: number }>> }
+    }
+    const markAt = (to: { slotNumber: number; deskIndex: number; studentIndex: number }, status: 'absent' | 'attended' | 'absent-no-makeup') => (weeks: SlotCell[][], suppressed: string[]) => {
+      if (status === 'absent') {
+        const absent = computeStudentAbsentMark({
+          weeks, weekIndex: 1, seat: { cellId: cellAt(weeks, D2, to.slotNumber).id, deskIndex: to.deskIndex, studentIndex: to.studentIndex }, manualMakeupAdjustments: {}, suppressedMakeupOrigins: {}, fallbackMakeupStudents: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackLectureStockStudents: {},
+          suppressedRegularLessonOccurrences: suppressed, ledgerOriginDatesByKey: {}, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: resolveKey, templateOriginRules: true,
+        })!
+        return { weeks: absent.nextWeeks, suppressed: absent.ledgers.suppressedRegularLessonOccurrences, manual: absent.ledgers.manualMakeupAdjustments }
+      }
+      const next = structuredClone(weeks)
+      const cell = cellAt(next, D2, to.slotNumber)
+      const desk = cell.desks[to.deskIndex]
+      const target = desk.lesson!.studentSlots[to.studentIndex]!
+      const record = buildStudentStatusEntry(target, cell, desk, status)
+      removeStudentFromDeskLesson(desk, to.studentIndex)
+      const slots: [StudentStatusEntry | null, StudentStatusEntry | null] = [...(desk.statusSlots ?? [null, null])] as [StudentStatusEntry | null, StudentStatusEntry | null]
+      slots[to.studentIndex] = record
+      desk.statusSlots = slots
+      const keys = resolveSuppressedRegularLessonOccurrenceKeys(target, D2, to.slotNumber, { templateOriginRules: true })
+      return { weeks: next, suppressed: [...suppressed, ...keys.filter((key) => !suppressed.includes(key))], manual: {} as Record<string, Array<{ dateKey: string; slotNumber?: number }>> }
+    }
+    const SAME_SLOT_OTHER_DESK = { slotNumber: SLOT, deskIndex: 1, studentIndex: 1 }
+    const OTHER_SLOT = { slotNumber: 4, deskIndex: 0, studentIndex: 0 }
+    const thenOp = (first: ReturnType<typeof moveExpandedWithinTarget>, second?: (weeks: SlotCell[][], suppressed: string[]) => { weeks: SlotCell[][]; suppressed: string[]; manual: Record<string, Array<{ dateKey: string; slotNumber?: number }>> }) => (weeks: SlotCell[][], suppressed: string[]) => {
+      const before = first(weeks, suppressed)
+      if (!second) return before
+      const after = second(before.weeks, before.suppressed)
+      return { ...after, manual: { ...before.manual, ...after.manual } }
+    }
+    const movedExpandedCases = {
+      '同じ時限の別の机へ動かしただけ': { to: SAME_SLOT_OTHER_DESK, status: null, expected: {}, targetRecord: null },
+      '同じ時限の別の机へ動かしてから休み': { to: SAME_SLOT_OTHER_DESK, status: 'absent', expected: { sA__数: 1 }, targetRecord: 'absent:sA' },
+      '同じ時限の別の机へ動かしてから振無休': { to: SAME_SLOT_OTHER_DESK, status: 'absent-no-makeup', expected: {}, targetRecord: 'absent-no-makeup:sA' },
+      '同じ時限の別の机へ動かしてから出席': { to: SAME_SLOT_OTHER_DESK, status: 'attended', expected: {}, targetRecord: 'attended:sA' },
+      '別の時限（4限）へ動かしてから休み': { to: OTHER_SLOT, status: 'absent', expected: { sA__数: 1 }, targetRecord: 'absent:sA' },
+      '別の時限（4限）へ動かしただけ': { to: OTHER_SLOT, status: null, expected: {}, targetRecord: null },
+    } as const
+    for (const [caseName, testCase] of Object.entries(movedExpandedCases)) {
+      it(`付け替えで展開したテンプレの授業を D' の中で${caseName} → 未消化は${Object.keys(testCase.expected).length} 件・D の元の時限は「休)→D'」（手入力由来と同じ・再マージ・テンプレ保存とも・不動点）`, () => {
+        const paired = pairedOrThrow(pairOf(baseBoard()))
+        const op = thenOp(moveExpandedWithinTarget(testCase.to), testCase.status ? markAt(testCase.to, testCase.status) : undefined)
+        const after = op(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+        expect(after.suppressed).toContain(`sA__数__${D}__${SLOT}`)
+        const remerged = remerge(after.weeks, ROWS, after.suppressed)
+        const saved = save(after.weeks, ROWS, after.suppressed, { manualMakeupAdjustments: after.manual })
+        for (const [label, weeks] of [['再マージ', remerged], ['テンプレ保存', saved.nextWeeks]] as const) {
+          expect(stockWith(weeks, after.manual, {}), label).toEqual(testCase.expected)
+          expect(recordIds(weeks, D2, testCase.to.slotNumber)[testCase.to.deskIndex]?.[testCase.to.studentIndex], label).toBe(testCase.targetRecord)
+          expect(placesOfA(weeks), label).toEqual(testCase.status === null ? [`${D2}:数`] : [])
+          expectSourceRestRecord(weeks, label)
+          // 別の時限へ動かしても D の「休)」は元の時限（5限）にだけ出る。
+          expect(recordIds(weeks, D, 4), label).toEqual([[null, null], [null, null]])
+        }
+        for (const dateKey of [D, D2]) expect(JSON.stringify(cellAt(saved.nextWeeks, dateKey)), dateKey).toBe(JSON.stringify(cellAt(remerged, dateKey)))
+        expect(snapshot(remerge(remerged, ROWS, after.suppressed))).toBe(snapshot(remerged))
+        expect(snapshot(remerge(remerge(remerged, ROWS, after.suppressed), ROWS, after.suppressed))).toBe(snapshot(remerged))
+        expect(snapshot(save(remerged, ROWS, after.suppressed, { manualMakeupAdjustments: after.manual, previousRegularLessons: ROWS }).nextWeeks)).toBe(snapshot(remerged))
+      })
+    }
+
+    for (const to of [SAME_SLOT_OTHER_DESK, OTHER_SLOT]) {
+      it(`対照: 付け替えで展開したテンプレの授業を D' の中で動かして（${to.slotNumber}限）から削除・格納 → D は空のまま（戻さない）・未消化は削除 0 件・格納 1 件`, () => {
+        const paired = pairedOrThrow(pairOf(baseBoard()))
+        const before = moveExpandedWithinTarget(to)(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+        for (const stored of [false, true]) {
+          const next = structuredClone(before.weeks)
+          const target = studentAt(next, D2, to.deskIndex, to.studentIndex, to.slotNumber)!
+          const keys = resolveRemovedLessonOccurrenceKeysFor(target, D2, to.slotNumber, true, before.suppressed)
+          const manual = stored
+            ? computeStoredLessonMakeupLedgers({ student: target, cellDateKey: D2, cellSlotNumber: to.slotNumber, manualMakeupAdjustments: {}, suppressedMakeupOrigins: {}, makeupOriginDatesByKey: {}, resolveStockId: resolveKey }).nextManualMakeupAdjustments
+            : {}
+          removeStudentFromDeskLesson(cellAt(next, D2, to.slotNumber).desks[to.deskIndex], to.studentIndex)
+          const suppressed = [...before.suppressed, ...keys.filter((key) => !before.suppressed.includes(key))]
+          const remerged = remerge(next, ROWS, suppressed)
+          const saved = save(next, ROWS, suppressed, { manualMakeupAdjustments: manual })
+          for (const [label, weeks] of [['再マージ', remerged], ['テンプレ保存', saved.nextWeeks]] as const) {
+            expect(recordIds(weeks, D)[0]?.[0], label).toBeNull()
+            expect(placesOfA(weeks), label).toEqual([])
+            expect(stockWith(weeks, manual, {}), label).toEqual(stored ? { sA__数: 1 } : {})
+          }
+          expect(snapshot(remerge(remerged, ROWS, suppressed))).toBe(snapshot(remerged))
+        }
+      })
+    }
+    // 2026-11-08（regression-reviewer の残る穴 2 件目）: D' の自分の授業の記録・席が保留（緑）の下段にしか無くても、D に「休)」を残す
+    //   （buildWholeDayPairTargetRecordLookup は上段と同じく下段も見る）。下段にも上段にも無いもの（削除・格納）は対照の既存テストで出さない。
+    for (const kind of ['休みの記録', '動かした授業'] as const) {
+      it(`付け替えで展開したテンプレの授業の${kind}が D' の保留の下段だけにある → D は「休)→D'」（再マージ・テンプレ保存とも・不動点）`, () => {
+        const paired = pairedOrThrow(pairOf(baseBoard()))
+        const after = kind === '休みの記録'
+          ? markExpanded('absent')(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+          : moveExpandedWithinTarget(SAME_SLOT_OTHER_DESK)(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+        const weeks = structuredClone(after.weeks)
+        const target = cellAt(weeks, D2)
+        const deskIndex = kind === '休みの記録' ? 0 : SAME_SLOT_OTHER_DESK.deskIndex
+        const seat = kind === '休みの記録' ? 0 : SAME_SLOT_OTHER_DESK.studentIndex
+        const desk = target.desks[deskIndex]
+        const lower = kind === '休みの記録'
+          ? { statusSlots: [desk.statusSlots![seat], null] as [StudentStatusEntry | null, StudentStatusEntry | null] }
+          : { lesson: { id: 'lower', studentSlots: [desk.lesson!.studentSlots[seat], null] as [StudentEntry | null, StudentEntry | null] } }
+        if (kind === '休みの記録') desk.statusSlots = undefined
+        else removeStudentFromDeskLesson(desk, seat)
+        const pending = { [`${target.id}::${desk.id}`]: { lower, effectiveStartDate: D, createdAt: '2026-10-01T10:00:00.000Z' } }
+        const remerged = remerge(weeks, ROWS, after.suppressed, settings(), pending)
+        const saved = save(weeks, ROWS, after.suppressed, { manualMakeupAdjustments: after.manual, templatePendingDesks: pending })
+        for (const [label, result] of [['再マージ', remerged], ['テンプレ保存', saved.nextWeeks]] as const) {
+          expectSourceRestRecord(result, label)
+        }
+        expect(snapshot(remerge(remerged, ROWS, after.suppressed, settings(), pending))).toBe(snapshot(remerged))
+      })
+    }
   })
 
-  // regression-reviewer 指摘(2026-11-08・残る穴・オーナー判断待ち): 同じ操作で出自により答えが割れる形が移動の経路に残る。
-  it.todo('D\' の中で同じ時限の別の机へ動かしてから休みにしたテンプレ由来の授業は D が空のまま(手入力由来は「休)」が残る・振替元 D の未消化が 1 件あるのに D に何も出ない)。テンプレ由来も「休)」を残すか(授業 ID か makeupSourceLabel の時限でも照合)はオーナー判断')
-  it.todo('保留(緑)の下段の記録(wholeDayPairSourceDate=D)だけがある D\' でも D に「休)」が残る(buildWholeDayPairTargetRecordLookup は下段も数える・通しの検査は未)')
+  // regression-reviewer 指摘(2026-11-08・残る穴): 1 件目(D' の中で動かしてから休み)と 2 件目(保留の下段)は上の describe で本物にした。残りは休日設定の経路。
   it.todo('D\' を休日設定したとき(休日化の記録が印を持つか・D の抑止キーを積むか)と D の休日解除で D の「休)」が割れない')
 
   // 2026-11-07（オーナー指示「直して」2 件目・INV-03/INV-06/INV-12）: D' で日付メニューの「生徒を空にする」（handleClearStudentsOnDate）を使うと、

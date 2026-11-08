@@ -1264,7 +1264,7 @@ describe('第126版(2026-11-08・v1.5.708): テスト教室 11/8 の送信(受�
     expect(item.introducedIn).toBe('v1.5.709')
     expect(item.area).toBe('テンプレ作成')
     expect(item.steps.join('\n')).toContain('別の机へ動かして')
-    expect(item.check.join('\n')).toContain('元の日のその生徒は「休)」のまま')
+    expect(item.check!.join('\n')).toContain('元の日のその生徒は「休)」のまま')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('se-10')
   })
 })

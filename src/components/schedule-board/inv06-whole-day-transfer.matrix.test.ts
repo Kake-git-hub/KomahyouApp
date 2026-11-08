@@ -17,6 +17,8 @@ import {
   convertHolidayDeskEntriesToRecords,
   reconcileHolidayDeskStockReturns,
   resolveHolidayReleaseSuppressedOccurrences,
+  computeStudentAbsentMark,
+  computeStudentMove,
   computeWholeDayTransfer,
   disposeDayDeskEntries,
   overlayBoardWeeksOnScheduleCells,
@@ -1119,6 +1121,31 @@ describe('INV-06 マトリクス: 丸ごと振替の付け替え（第 2 版・�
     expect(pairFx.recordIds(withSourceKey, pairFx.D)).toEqual([['moved:sA', null], ['moved:sB', null]])
     expect(pairFx.recordIds(withSourceKey, pairFx.D2)).toEqual([['absent:sA', null], [null, null]])
     expect(pairFx.balances(withSourceKey, pairFx.ROWS)).toEqual({ sA__数: 1 })
+  })
+
+  it('D\' の中で別の机へ動かしてから休み → +1・D は「休)→D\'」（2026-11-08 オーナー決定「元の日に揃える」・手入力由来と同じ）', () => {
+    const result = paired()
+    const byName = new Map(pairFx.students.map((row) => [row.name, row]))
+    const resolveKey = (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => entry.managedStudentId ?? entry.name
+    const d2Cell = pairFx.cellAt(result.nextWeeks, pairFx.D2)
+    const moved = computeStudentMove({
+      weeks: result.nextWeeks, weekIndex: 1, cells: result.nextWeeks[1], movingStudentId: d2Cell.desks[0].lesson!.studentSlots[0]!.id, cellId: d2Cell.id, deskIndex: 1, studentIndex: 1,
+      suppressedRegularLessonOccurrences: result.nextSuppressedRegularLessonOccurrences, managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
+      sourceSeat: { cellId: d2Cell.id, deskIndex: 0, studentIndex: 0 },
+    })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    const absent = computeStudentAbsentMark({
+      weeks: moved.nextWeeks, weekIndex: 1, seat: { cellId: d2Cell.id, deskIndex: 1, studentIndex: 1 }, manualMakeupAdjustments: {}, suppressedMakeupOrigins: {}, fallbackMakeupStudents: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackLectureStockStudents: {},
+      suppressedRegularLessonOccurrences: moved.nextSuppressedRegularLessonOccurrences, ledgerOriginDatesByKey: {}, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: resolveKey, templateOriginRules: true,
+    })!
+    const suppressed = absent.ledgers.suppressedRegularLessonOccurrences
+    expect(suppressed).toContain(`sA__数__${pairFx.D}__${pairFx.SLOT}`)
+    const remerged = pairFx.remerge(absent.nextWeeks, pairFx.ROWS, suppressed)
+    expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([[], ['sB', null]])
+    expect(pairFx.recordIds(remerged, pairFx.D2)).toEqual([[null, null], [null, 'absent:sA']])
+    expect(pairFx.balances(remerged, pairFx.ROWS, absent.ledgers.manualMakeupAdjustments)).toEqual({ sA__数: 1 })
+    expect(pairFx.recordIds(remerged, pairFx.D)).toEqual([['moved:sA', null], ['moved:sB', null]])
+    expect(pairFx.snapshot(pairFx.remerge(remerged, pairFx.ROWS, suppressed))).toBe(pairFx.snapshot(remerged))
   })
 
   it('不動点: 作った直後の盤面は再マージ・2 回目の再マージで変わらない（INV-03）', () => {
