@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 import { isDevelopmentClassroom } from './developmentClassroom'
+import { DEVELOPMENT_STATUS_LEDGER } from './developmentStatusLedger'
 import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, isStagingEnvironment } from './featureRollout'
 
 describe('featureRollout', () => {
@@ -128,7 +129,9 @@ describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバ�
       expect(isFeatureEnabledForClassroom('parentPortalQr', { id }, 'main'), `${id} (${name})`).toBe(true)
     }
     // 教室が無い(null)ときの fail-closed はサーバー側(isParentPortalEnabledForClassroom)が担う。クライアントの all-classrooms は
-    // 識別子に関係なく true(「all-classrooms の機能は教室・会社に関係なく有効のまま」のテストと同じ)。
+    // 識別子に関係なく true(下の「all-classrooms の機能は教室・会社に関係なく有効のまま」と同じ)。
+    expect(isFeatureEnabledForClassroom('parentPortalQr', null, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, '')).toBe(true)
   })
 })
 
@@ -238,8 +241,9 @@ describe('featureRollout: 開発・テスト教室で先行した 4 機能の全
     }
   })
 
-  it('2026-11-08 時点で development-only / staging-environment のフラグは残っていない(残すなら進行中テーマ台帳へ載せる)', () => {
+  it('全教室でないフラグは、進行中テーマ台帳(developmentStatusLedger)の featureKeys に載っている(先行機能の取りこぼし防止・2026-11-08 時点は 0 本)', () => {
+    const covered = new Set(DEVELOPMENT_STATUS_LEDGER.flatMap((entry) => [...(entry.featureKeys ?? [])]))
     const pending = Object.entries(featureRolloutRegistry).filter(([, feature]) => feature.scope !== 'all-classrooms').map(([key]) => key)
-    expect(pending).toEqual([])
+    for (const key of pending) expect(covered.has(key as never), `${key} を台帳へ載せる`).toBe(true)
   })
 })

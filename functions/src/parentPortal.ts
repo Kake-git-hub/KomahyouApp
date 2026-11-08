@@ -110,10 +110,11 @@ export const PARENT_PORTAL_STAGING_PROJECT_ID = 'komahyouapp-staging'
  * 保護者ポータルの基本スコープ。クライアント src/utils/featureRollout.ts の `parentPortalQr.scope` と同じ値にする
  * (featureRollout.test.ts が字面で突合)。開発用教室で先行(v1.5.512〜) → オーナー指示(2026-11-08「開発・テスト教室だけで動いている
  * 機能の 4 件を全教室展開して」)で 'all-classrooms'。
- * 回帰で 'staging-environment' / 'development-only' へ戻さない(戻すと本番教室で配った QR が 403 になり、画面は QR を出すのに
- * API が答えない非対称になる)。会社ごとに止めるのは会社既定 companyFeatureDefaults の 'off'(2 段目)で行う。
+ * 回帰で 'staging-environment' へ戻さない(戻すと本番教室で配った QR が 403 になり、画面は QR を出すのに API が答えない非対称になる)。
+ * 'development-only' は型から外してある(下の述語は staging も通すので、development-only にすると「staging ではサーバーだけ答える」
+ * 非対称になる。必要になったら isFeatureScopeEnabled と同じ分岐を書く)。会社ごとに止めるのは会社既定 companyFeatureDefaults の 'off'(2 段目)で行う。
  */
-export const PARENT_PORTAL_BASE_SCOPE: 'development-only' | 'staging-environment' | 'all-classrooms' = 'all-classrooms'
+export const PARENT_PORTAL_BASE_SCOPE: 'staging-environment' | 'all-classrooms' = 'all-classrooms'
 
 export type ParentPortalClassroomIdentity = {
   /** 会社 = workspace のキー。教室IDは会社ごとに登録台帳で引くので必須(2026-09-16)。 */
