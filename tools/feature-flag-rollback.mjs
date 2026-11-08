@@ -267,21 +267,31 @@ export function parseArgs(argv) {
   return { flagKey, reason, toScope: toScope ?? PREVIOUS_SCOPES[flagKey], dryRun }
 }
 
-/** 変わった範囲だけを -/+ で並べる(先頭と末尾の共通行を省く)。 */
+/** 変わった範囲だけを -/+ で並べる(離れた変更は別の塊。書き換えは数行の置換と挿入だけなので、2 行一致で同期し直す簡易差分で足りる)。 */
 export function summarizeChange(before, after) {
   const a = before.split('\n')
   const b = after.split('\n')
-  let start = 0
-  while (start < a.length && start < b.length && a[start] === b[start]) start += 1
-  let endA = a.length
-  let endB = b.length
-  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA -= 1; endB -= 1 }
   const shorten = (line) => (line.length > 160 ? `${line.slice(0, 160)}…` : line)
-  return [
-    `  @@ ${start + 1} 行目から`,
-    ...a.slice(start, endA).map((line) => `  - ${shorten(line)}`),
-    ...b.slice(start, endB).map((line) => `  + ${shorten(line)}`),
-  ].join('\n')
+  const same = (x, y) => a[x] === b[y] && a[x + 1] === b[y + 1]
+  const out = []
+  let i = 0
+  let j = 0
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { i += 1; j += 1; continue }
+    let next = null
+    for (let d = 1; d <= 200 && !next; d += 1) {
+      for (let x = 0; x <= d; x += 1) {
+        const y = d - x
+        if (i + x <= a.length && j + y <= b.length && (i + x === a.length && j + y === b.length ? true : same(i + x, j + y))) { next = [i + x, j + y]; break }
+      }
+    }
+    if (!next) next = [a.length, b.length]
+    out.push(`  @@ ${i + 1} 行目から`)
+    for (const line of a.slice(i, next[0])) out.push(`  - ${shorten(line)}`)
+    for (const line of b.slice(j, next[1])) out.push(`  + ${shorten(line)}`)
+    ;[i, j] = next
+  }
+  return out.join('\n')
 }
 
 function todayInJst(now = new Date()) {

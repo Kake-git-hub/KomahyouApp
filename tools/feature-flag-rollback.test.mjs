@@ -9,6 +9,7 @@ import {
   PREVIOUS_SCOPES,
   ROLLBACK_FILE_PATHS,
   parseArgs,
+  summarizeChange,
 } from './feature-flag-rollback.mjs'
 
 const FEATURE_ROLLOUT = [
@@ -245,5 +246,16 @@ describe('parseArgs', () => {
     expect(() => parseArgs([])).toThrow(/使い方/u)
     expect(() => parseArgs(['templateDiffApply'])).toThrow(/--reason/u)
     expect(() => parseArgs(['templateDiffApply', '--reason', 'x', '--bogus'])).toThrow(/--bogus/u)
+  })
+})
+
+describe('summarizeChange', () => {
+  it('離れた 2 か所の変更を別の塊で出す(間の行は出さない)', () => {
+    const before = ['a', 'b', 'x', 'c', 'd', 'e', 'f', 'g', 'h'].join('\n')
+    const after = ['a', 'b', 'y', 'c', 'd', 'e', 'f', 'g', 'new', 'h'].join('\n')
+    expect(summarizeChange(before, after)).toBe(['  @@ 3 行目から', '  - x', '  + y', '  @@ 9 行目から', '  + new'].join('\n'))
+  })
+  it('同じなら空', () => {
+    expect(summarizeChange('a\nb', 'a\nb')).toBe('')
   })
 })
