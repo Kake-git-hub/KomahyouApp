@@ -258,7 +258,7 @@ describe('確認リストの項目定義', () => {
     // 同じ第122版: mg-1(見るだけ)は調査を終え、余分な 1 人を消して戻らないことを見る mg-2(開発用教室だけ)に置き換えた。
     // 第123版(2026-11-07・版据え置き): 科目だけ変えた授業の確認 se-1〜se-3 を mg-2 の前に足した(テスト教室にも出す)。
     // 第126版(2026-11-08・v1.5.708): OK の 14 件(tp-72・tp-75・tp-59・tp-70・v2-3・v2-6・se-1〜se-8)を外し、se-9 を mg-2 の前に足した。
-    expect(ids).toEqual(['se-9', 'mg-2'])
+    expect(ids).toEqual(['se-9', 'se-10', 'mg-2'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('se-9')
     expect(ids).not.toContain('mg-1')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('mg-2')
@@ -674,7 +674,7 @@ describe('添付画像(2026-10-14 オーナー要望「確認リストにスク�
 describe('テスト教室(sandbox)に出す項目(2026-10-15 オーナー指示「テスト教室にはテンプレ関係の確認リストだけ・開発用教室はすべて」)', () => {
   it('development は全項目・sandbox は VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS だけ(正本の順)', () => {
     expect(selectVerificationChecklistItems('development')).toBe(VERIFICATION_CHECKLIST.items)
-    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['se-9'])
+    expect(selectVerificationChecklistItems('sandbox').map((item) => item.id)).toEqual(['se-9', 'se-10'])
   })
 
   it('sandbox の項目は存在し、テンプレ作成の分類で、特定教室の生徒名プレースホルダを使わず、開発用教室だけの前提(tp-41)に依らない', () => {
@@ -1240,9 +1240,9 @@ describe('第126版(2026-11-08・v1.5.708): テスト教室 11/8 の送信(受�
   const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
   const REMOVED = ['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6', 'se-7', 'se-8']
 
-  it('版は v1.5.708。項目は se-9 と mg-2 だけ', () => {
+  it('版は v1.5.708。項目は se-9・se-10(第127版で追加)と mg-2 だけ', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.708')
-    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['se-9', 'mg-2'])
+    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['se-9', 'se-10', 'mg-2'])
   })
 
   it('OK の 14 件は外した(テスト教室からも消える)', () => {
@@ -1255,7 +1255,16 @@ describe('第126版(2026-11-08・v1.5.708): テスト教室 11/8 の送信(受�
   it('se-9(丸ごと振替で移した先でテンプレの授業を休みにしても、元の日は「休)」のまま)はテスト教室にも出し、mg-2 は開発用教室だけ', () => {
     expect(byId.get('se-9')!.introducedIn).toBe('v1.5.708')
     expect(byId.get('se-9')!.area).toBe('テンプレ作成')
-    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual(['se-9'])
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual(['se-9', 'se-10'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('mg-2')
+  })
+
+  it('第127版(2026-11-08・v1.5.709・版は据え置き): オーナー決定「元の日に揃える」の確認 se-10 はテスト教室にも出す', () => {
+    const item = byId.get('se-10')!
+    expect(item.introducedIn).toBe('v1.5.709')
+    expect(item.area).toBe('テンプレ作成')
+    expect(item.steps.join('\n')).toContain('別の机へ動かして')
+    expect(item.check.join('\n')).toContain('元の日のその生徒は「休)」のまま')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toContain('se-10')
   })
 })
