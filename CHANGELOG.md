@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- fix: テンプレ差分反映のフラグを OFF に戻しても保留(緑の 2 行)のある教室は第 2 版の経路を使い続け、保留の机と下段の講習の在庫を守る(仕様 N-1・全教室展開週の戻し準備)。保留 0 件の教室だけが旧方式へ戻る。確認リストの項目なし(開発用教室はフラグ ON で確かめられない)。 触れる INV: INV-06・INV-02
+
 ## v1.5.711 (2026-11-08)
 
 - feat: **開発・テスト教室だけで動いていた 4 機能を全教室へ昇格**(オーナー指示 2026-11-08「確認リストがすべてOKとなったので、開発ダッシュボードに今残っている開発・テスト教室だけで動いている機能の 4 件を全教室展開して」・11/8 の送信で se-9・se-10・mg-2 も OK)。`src/utils/featureRollout.ts` の `parentPortalQr`(保護者向けQR・休みの連絡)・`lectureSchedulePublishToggle`(講習の「保護者への公開」)・`teacherOnlySpecialSession`(講師専用の特別講習)・`templateDiffApply`(テンプレ保存の差分反映＝第 2 版の出自の印・2 行・講師の休み・丸ごと振替の付け替え)を `all-classrooms` へ。保護者QRはサーバー `functions/src/parentPortal.ts` に基本スコープ `PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'` を新設して同じ push で昇格(会社キー・教室 ID が空なら OFF の fail-closed・`featureRollout.test.ts` が字面で突合・**Cloud Functions のデプロイが要る**。Hosting が先に出た数分間は本番教室の保護者ページが 403)。既存の講習は公開扱いのまま・**昇格後に新しく作る講習は非公開で始まる**(室長へ案内)。昇格前の必須だった Q33-1(旧版タブのすき間)は版が揃うまでの一時的なものとして反映後のハードリロードで潰し、N-1(フラグを戻したときの保留の保護)は「回帰で戻さない」で封じる(会社既定で OFF にするときだけ先に実装・spec-invariants INV-06)。進行中テーマ台帳から 4 行を消し(`template-conflict-v2` は Claude の片づけ(旧仕様の畳み込み・机の対応付けの一本化)へ・`parent-portal-rate-limit` は文言更新)、確認リスト第128版(v1.5.711・OK 済み 3 件を外し、本番の教室で見るだけの pr-1〜pr-3・テスト教室に出す項目は無し)、仕様書(spec-parent-portal §0/§H・spec-special-session-submission §B-2/§B-3・spec-template-conflict-v2・spec-template-behavior §第 2 段・spec-invariants INV-02/06/13)・使い方の説明(user-manual 2-5 保護者向け QR／3-6 手で置いた授業とテンプレートがぶつかったとき／4-3 講師の休み／6-8 講習の公開／6-9 講師専用・sync-shared)・メモリ 3 件を更新。 触れる INV: INV-02・INV-06・INV-13(フラグの範囲だけ・規則は不変)。本番でも第 2 版の規則が動き始めるので INV-01・INV-03・INV-12 は不変を確かめる INV。

@@ -155,7 +155,8 @@ describe('1-1・1-2: 置く経路の印', () => {
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
     const commit = source.slice(source.indexOf('  const commitWeeks = ('), source.indexOf('    // 操作痕跡(2026-09-04)'))
     expect(commit).toContain('if (templateDiffApplyEnabled) {\n      const stamped = stampPlacementOrigins(nextWeeks, nextTemplatePendingDesks)')
-    expect(source).toContain('createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState, applyTemplateOriginRules: templateDiffApplyEnabled })')
+    // N-1(2026-11-08): 読み込みは保留マップの state より前なので、読み込んだ盤面の保留マップで盤面と同じ判定（resolveTemplateDiffApplyActive）をする。
+    expect(source).toContain('createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState, applyTemplateOriginRules: resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: normalizeTemplatePendingDeskMap(initialBoardState?.templatePendingDesks) }) })')
   })
 })
 

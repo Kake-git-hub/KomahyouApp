@@ -201,7 +201,8 @@ export const featureRolloutRegistry = {
   // ON: テンプレ保存が反映日以降を全消去せず、机ごとに突き合わせる(印の無い机だけ置き換え・印のある机は残す／採用／保留)。
   //     机の講師はテンプレに揃える(QR 自動割振り講師・盤面で削除した講師は例外)。反映日以降の休日・抑止・希望回数補正・
   //     手動振替調整は消さず、在庫台帳も触らない(保存で在庫が動かない＝INV-06 拡張)。確認文は件数入り。
-  // OFF(本番 3 教室を含む): 旧方式(上書き＝handleSaveRegularLessonTemplate の既存経路)のまま。
+  // OFF: 旧方式(上書き＝handleSaveRegularLessonTemplate の既存経路)のまま。ただし保留のある教室は OFF でも第 2 版の経路
+  //     (N-1・2026-11-08・resolveTemplateDiffApplyActive。保留が 0 件になった教室だけ旧方式へ戻る)。
   // ★既に存在する保留データ(templatePendingDesks)の保存・往復・在庫走査は**フラグに依らず常に有効**(Q33-3。
   //   フラグを戻した教室で黙って消さない。transferSourceRestDisplay と同じ流儀)。フラグが切り替えるのは
   //   「保存時に差分反映を使うか」と「保留の解決 UI(第 1 段 B)」だけ。
@@ -209,9 +210,9 @@ export const featureRolloutRegistry = {
   //   第 2 版(docs/spec-template-conflict-v2.md・出自の印と 4 本の規則・講師の休み・丸ごと振替の付け替え)を開発用/テスト教室で
   //   v1.5.689〜v1.5.710 まで試用し、確認リスト(tp-*・v2-*・se-*・mg-*)がすべて OK → オーナー指示(2026-11-08「開発・テスト教室だけで
   //   動いている機能の 4 件を全教室展開して」)で全教室へ昇格。Q33-1 は版が揃うまでの一時的なすき間なので、反映後の
-  //   ハードリロード(室長への案内)で潰す。N-1(フラグを戻したときの保留の保護)は「回帰で戻さない」で封じる
-  //   (会社既定 companyFeatureDefaults で OFF にするときだけ N-1 を先に実装する・spec-template-behavior §第 2 段 7)。
-  //   回帰で development-only へ戻さない(戻すと本番教室のテンプレ保存が上書き方式へ戻り、保留(2 行)の下段が旧方式の保存で捨てられる)。
+  //   ハードリロード(室長への案内)で潰す。N-1(フラグを戻したときの保留の保護)は 2026-11-08 に塞いだ(保留のある教室は
+  //   OFF でも第 2 版の経路＝データで決まる方式)。
+  //   回帰で development-only へ戻さない(戻すと本番教室のテンプレ保存が上書き方式へ戻る。保留の残る教室は解消まで第 2 版のまま)。
   templateDiffApply: {
     scope: 'all-classrooms',
     description: 'Template save applies per-desk diffs (replace unmarked desks, keep/adopt/pend marked desks as 2-row pending) instead of overwriting everything on/after the effective date.',

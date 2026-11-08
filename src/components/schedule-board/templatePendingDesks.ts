@@ -121,6 +121,18 @@ export function hasTemplatePendingDesks(map: TemplatePendingDeskMap | null | und
   return Boolean(map) && Object.keys(map as TemplatePendingDeskMap).length > 0
 }
 
+/**
+ * テンプレ差分反映の第 2 版の経路を使うか（盤面の唯一の判定 templateDiffApplyEnabled の正本・N-1・2026-11-08 オーナー決定）。
+ * フラグ templateDiffApply が ON の教室、または保留（2 行）が 1 件でも残る教室は true。
+ * データで決まる方式（講師専用講習の「隠す」がフラグでなくデータで決まるのと同じ考え方）: フラグを OFF に戻しても、保留の机を
+ * 周辺処理（詰め直し・QR 提出講師の自己修復・並べ替え・退塾の掃除）が空き机として上書きせず、旧方式の上書き保存が下段の講習を
+ * 台帳へ返さずに捨てることも無い（INV-06）。保留が 0 件になった教室は、同じ画面のうちでも旧方式へ戻る（意図どおり）。
+ * ★回帰防止: フラグだけで判定に戻すと N-1（保留の在庫が消える）が再発する。
+ */
+export function resolveTemplateDiffApplyActive(params: { flagEnabled: boolean; pendingDesks: TemplatePendingDeskMap | null | undefined }): boolean {
+  return params.flagEnabled || hasTemplatePendingDesks(params.pendingDesks)
+}
+
 function cloneStudentSlots(slots: [StudentEntry | null, StudentEntry | null]): [StudentEntry | null, StudentEntry | null] {
   return [slots[0] ? { ...slots[0] } : null, slots[1] ? { ...slots[1] } : null]
 }
