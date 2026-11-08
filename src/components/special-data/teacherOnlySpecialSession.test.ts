@@ -18,6 +18,9 @@ import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from
 import { buildParentScheduleView as buildGeneratedParentScheduleView } from '../../../functions/src/generated/parentSchedule'
 import { cloneParentScheduleFixturePayload, PARENT_SCHEDULE_FIXTURE_DEFAULT_RANGE } from '../../utils/parentSchedule.fixture'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
+import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
+import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from '../../utils/classroomSnapshotParts'
+import type { AppSnapshot } from '../../types/appState'
 
 vi.mock('../../integrations/firebase/client', () => ({ getFirebaseFirestoreInstance: () => null }))
 
@@ -75,6 +78,30 @@ describe('機能フラグ teacherOnlySpecialSession', () => {
   // 回帰で staging-environment へ戻さない(戻すと本番教室で「講師専用」チェックが消える。作成済みの講習はデータで隠れ続ける)。
   it('全教室で有効(2026-11-08 昇格)', () => {
     expect(featureRolloutRegistry.teacherOnlySpecialSession.scope).toBe('all-classrooms')
+  })
+})
+
+// 戻し互換(2026-11-08・全教室展開した teacherOnlySpecialSession をすぐ OFF に戻せるようにする準備・INV-06)。
+describe('戻し互換: フラグ OFF の版でも講師専用の講習は生徒側から隠れたまま・項目は保存で消えない(2026-11-08)', () => {
+  it('フラグは作成欄のチェックだけに使い(App で 1 か所)、隠す判定はフラグを受け取らない(データだけで決まる)', () => {
+    const app = readSource('../../App.tsx')
+    expect(app.match(/'teacherOnlySpecialSession'/g)?.length).toBe(1)
+    expect(selectStudentFacingSpecialSessions.length).toBe(1)
+    expect(isTeacherOnlySpecialSession.length).toBe(1)
+  })
+
+  it('JSON の書き出し/読み込み・分割保存の部品の往復・Excel の取り込みで teacherOnly が残り、読み直した後も生徒向けの一覧から外れる', () => {
+    const teacherOnly = createSession({ teacherOnly: true })
+    const normal = createSession({ id: 'ss-winter', label: '2026 冬期講習', startDate: '2026-12-22', endDate: '2027-01-07' })
+    const snapshot = { screen: 'board', classroomSettings: {}, managers: [], teachers: [], students: [], regularLessons: [], groupLessons: [], specialSessions: [teacherOnly, normal], autoAssignRules: [], pairConstraints: [], boardState: null, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot)).specialSessions
+    const split = splitClassroomSnapshotPayload(snapshot)
+    const assembled = (assembleClassroomSnapshotPayload({ core: split.core, board: split.board, weeks: split.weeks.map((week) => week.cells), ui: split.ui, hasBoardState: split.hasBoardState }) as { specialSessions: SpecialSessionRow[] }).specialSessions
+    const reimported = parseSpecialSessionWorkbook(xlsx, buildSpecialSessionWorkbook(xlsx, parsed, [], []), parsed, { schedulePublishToggleEnabled: false })
+    for (const sessions of [parsed, assembled, reimported]) {
+      expect(sessions.find((row) => row.id === 'ss-teacher')?.teacherOnly).toBe(true)
+      expect(selectStudentFacingSpecialSessions(sessions).map((row) => row.id)).toEqual(['ss-winter'])
+    }
   })
 })
 

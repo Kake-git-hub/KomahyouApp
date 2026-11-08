@@ -7,6 +7,7 @@ import {
   buildSchedulePublishedMap,
   isSpecialSessionSchedulePublished,
   resolveNewSpecialSessionScheduleFields,
+  resolveSubmissionSchedulePublished,
   selectSchedulePublishChangedSessionIds,
   setSpecialSessionSchedulePublished,
   type SpecialSessionRow,
@@ -15,6 +16,9 @@ import { featureRolloutRegistry } from '../../utils/featureRollout'
 import { isSubmissionSchedulePublished } from '../submission/submissionScheduleVisibility'
 import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from '../../utils/parentSchedule'
 import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
+import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
+import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from '../../utils/classroomSnapshotParts'
+import type { AppSnapshot } from '../../types/appState'
 
 function createSession(overrides: Partial<SpecialSessionRow> = {}): SpecialSessionRow {
   return {
@@ -154,5 +158,32 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
     // 新規トークンにも既発行トークンにも公開状態を書く。
     expect(APP).toContain('await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers, { schedulePublished })')
     expect(APP.match(/reopenedSlots: (student|teacher)Input\?\.reopenedSlots \?\? \[\], schedulePublished \}\)/g)?.length).toBe(2)
+  })
+})
+
+// 戻し互換(2026-11-08・全教室展開した lectureSchedulePublishToggle をすぐ OFF に戻せるようにする準備・INV-06)。
+describe('戻し互換: フラグ OFF の版でも非公開の講習の項目を消さない(2026-11-08)', () => {
+  it('フラグ OFF の教室では schedulePublished:false の講習も公開として扱うが、項目は保存で消えない(ON に戻せば再び非公開)', () => {
+    const hidden = createSession({ schedulePublished: false })
+    // OFF: 提出用QRは公開扱い(トグルが無いので隠したままにしない)。ON: 非公開。
+    expect(resolveSubmissionSchedulePublished(hidden, false)).toBe(true)
+    expect(resolveSubmissionSchedulePublished(hidden, true)).toBe(false)
+
+    // OFF の版の保存・読み込み(JSON の書き出し/読み込み・分割保存の部品の往復・Excel の取り込み)で項目が残る。
+    const snapshot = { screen: 'board', classroomSettings: {}, managers: [], teachers: [], students: [], regularLessons: [], groupLessons: [], specialSessions: [hidden], autoAssignRules: [], pairConstraints: [], boardState: null, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot)).specialSessions
+    expect(parsed[0]?.schedulePublished).toBe(false)
+    const split = splitClassroomSnapshotPayload(snapshot)
+    const assembled = assembleClassroomSnapshotPayload({ core: split.core, board: split.board, weeks: split.weeks.map((week) => week.cells), ui: split.ui, hasBoardState: split.hasBoardState }) as { specialSessions: SpecialSessionRow[] }
+    expect(assembled.specialSessions[0]?.schedulePublished).toBe(false)
+    const workbook = buildSpecialSessionWorkbook(xlsx, parsed, [], [])
+    const reimported = parseSpecialSessionWorkbook(xlsx, workbook, parsed, { schedulePublishToggleEnabled: false })
+    expect(reimported[0]?.schedulePublished).toBe(false)
+
+    // ON に戻すと、残っていた項目のとおり再び非公開になる。
+    for (const session of [parsed[0]!, assembled.specialSessions[0]!, reimported[0]!]) {
+      expect(isSpecialSessionSchedulePublished(session)).toBe(false)
+      expect(resolveSubmissionSchedulePublished(session, true)).toBe(false)
+    }
   })
 })

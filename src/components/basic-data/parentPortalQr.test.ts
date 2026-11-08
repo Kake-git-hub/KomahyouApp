@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from './basicDataModel'
+import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
+import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from '../../utils/classroomSnapshotParts'
+import type { AppSnapshot, ClassroomSettings } from '../../types/appState'
+import { createInitialBoardSnapshot } from '../schedule-board/ScheduleBoardScreen'
+import { mergeImportedBundle } from './BasicDataScreen'
 import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, buildScheduleSharedGlobalStorageKey, formatParentPortalCardIssuedDate, readParentPortalCardBranding, resolveParentPortalQrRowState, resolveSavedStudentIds } from './parentPortalQr'
 
 const DEV_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
@@ -220,5 +225,50 @@ describe('保護者用QRの名刺サイズ印刷', () => {
     expect(source).toContain("const sharedGlobalStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':global:';")
     expect(source).toContain("storage.getItem(sharedGlobalStoragePrefix + 'logo')")
     expect(source).toContain("if (sharedKey === 'school-info') return sharedGlobalStoragePrefix + sharedKey;")
+  })
+})
+
+// 戻し互換(2026-11-08・全教室展開した parentPortalQr をすぐ OFF に戻せるようにする準備・INV-06)。
+// OFF の版でも生徒データの写しトークン(parentPortalToken と発行元教室タグ parentPortalTokenClassroomId・spec-parent-portal §0/§B)
+// を剥がさない。剥がすと ON に戻したとき配った紙の QR と画面の QR が別のトークンになる(再発行が要る)。
+// サーバー側の OFF(403・トークンは失効させない)は functions/src/parentPortal.test.ts が固定済み。
+describe('戻し互換: フラグ OFF の版でも保護者QRの写しトークンを消さない(2026-11-08)', () => {
+  const issued = createStudent({ parentPortalToken: 'tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA', parentPortalTokenClassroomId: DEV_CLASSROOM_ID })
+  const other = createStudent({ id: 's002', name: '生徒B', displayName: '生徒B' })
+  const settings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2 } as unknown as ClassroomSettings
+  const snapshot = { screen: 'board', classroomSettings: settings, managers: [], teachers: [], students: [issued, other], regularLessons: [], groupLessons: [], specialSessions: [], autoAssignRules: [], pairConstraints: [], boardState: null, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+  const tokenFields = (rows: StudentRow[]) => rows.map((row) => [row.id, row.parentPortalToken ?? null, row.parentPortalTokenClassroomId ?? null])
+  const EXPECTED = [['s001', 'tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA', DEV_CLASSROOM_ID], ['s002', null, null]]
+
+  it('OFF の画面は QR を出さないだけで、行の写しはそのまま。ON に戻すと同じトークンの QR を出す(再発行しない)', () => {
+    const before = structuredClone(issued)
+    expect(resolveParentPortalQrRowState({ ...enabledParams, enabled: false, student: issued })).toBe('hidden')
+    expect(issued).toEqual(before)
+    expect(resolveParentPortalQrRowState({ ...enabledParams, enabled: true, student: issued })).toBe('show')
+  })
+
+  it('JSON の書き出し/読み込み・分割保存の部品の往復・Excel 差分取込で写しが残る', () => {
+    expect(tokenFields(parseAppSnapshot(serializeAppSnapshot(snapshot)).students)).toEqual(EXPECTED)
+    const split = splitClassroomSnapshotPayload(snapshot)
+    const assembled = assembleClassroomSnapshotPayload({ core: split.core, board: split.board, weeks: split.weeks.map((week) => week.cells), ui: split.ui, hasBoardState: split.hasBoardState }) as { students: StudentRow[] }
+    expect(tokenFields(assembled.students)).toEqual(EXPECTED)
+    const imported = { managers: [], teachers: [], students: [createStudent(), { ...other }], classroomSettings: settings }
+    const merged = mergeImportedBundle(imported as never, { managers: [], teachers: [], students: [issued, other], classroomSettings: settings } as never)
+    expect(tokenFields(merged.students)).toEqual(EXPECTED)
+  })
+
+  it('盤面の読み込み(createInitialBoardSnapshot)は名簿の写しに触れない', () => {
+    const students = [structuredClone(issued), structuredClone(other)]
+    createInitialBoardSnapshot({ classroomSettings: settings, teachers: [], students, regularLessons: [], initialBoardState: null })
+    expect(tokenFields(students)).toEqual(EXPECTED)
+  })
+
+  it('App でフラグを見る箇所は写しを剥がさない(剥がすのは開発用教室へのコピーと報告の持ち出しの 2 か所だけで、フラグに依らない)', () => {
+    const app = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+    for (const line of app.split(/\r?\n/).filter((entry) => entry.includes('parentPortalQrEnabled'))) {
+      expect(line).not.toMatch(/strip|delete /)
+    }
+    expect(app.match(/stripParentPortalTokensFromStudents(<\w+>)?\(/g)?.length).toBe(2)
+    expect(app).not.toContain('stripForeignParentPortalToken')
   })
 })
