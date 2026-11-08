@@ -14,6 +14,9 @@
 
 ## 未リリース
 
+- fix: 丸ごと振替の付け替え(機能フラグ templateDiffApply の教室だけ)で、移した先 D' の別の時限へ動かした授業の、元の日 D の「休)」の行き先が D の時限のままだった(生徒日程表・保護者 QR の振替先に生徒の居ない時限が出る・v1.5.709 の regression-reviewer 指摘 中-1)。オーナー決定 2026-11-08「動かした先の時限を指すように」: `buildWholeDayPairTargetRecordLookup` が D' で実際に居る時限を返し、D の「休)」の行き先に使う。本番の教室(フラグ OFF・組なし)は不変。仕様 spec-template-conflict-v2 §3。 触れる INV: INV-03・INV-01。
+- docs: 確認リスト se-10 の確認 3 行目を「別の時限へ動かすと、元の日の「休)」の行き先は動かした先の時限」に(版は v1.5.708 据え置き)。
+
 ## v1.5.709 (2026-11-08)
 
 - fix: 丸ごと振替の付け替え(機能フラグ templateDiffApply の教室だけ)で、移した先 D' の中でテンプレ由来の授業を別の机へ動かすと(動かしただけでも・そのあと休みにしても)元の日 D の席が空になっていた(手入力由来は「休)」が残る・v1.5.708 の regression-reviewer 指摘の残課題)。オーナー決定 2026-11-08「元の日に揃える」: D' に居る・記録になっているその生徒自身の D の授業(権威関数 `isWholeDayPairSourceOwnEntry`)を `buildWholeDayPairTargetRecordLookup` が数え、D に「休)→D'」を残す(振替元は D)。削除・格納は今どおり D に出さない。本番の教室(フラグ OFF・組なし)は不変。仕様 spec-template-conflict-v2 §3。regression-reviewer の残課題は it.todo(オーナー確認待ち): 別の時限へ動かしたとき D の「休)」の行き先が D の時限のまま(生徒日程表・保護者 QR の振替先表示に効く・修正前から同じ形)・D' から別の日へ動かして戻す往復・D' の休日設定。 触れる INV: INV-06・INV-03。

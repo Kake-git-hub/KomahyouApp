@@ -509,7 +509,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       check: [
         '動かしたあとも、休みにしたあとも、元の日のその生徒は「休)」のまま',
         '未消化振替は元の日の振替として 1 件増える',
-        '別の時限へ動かしてから休みにしても、元の日の元の時限に「休)」',
+        '別の時限へ動かすと、元の日の「休)」の行き先は動かした先の時限',
       ],
       introducedIn: 'v1.5.709',
     },
