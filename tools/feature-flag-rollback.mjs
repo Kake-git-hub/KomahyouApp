@@ -3,7 +3,8 @@
 // ★なぜ作ったか(2026-11-08・全教室展開週の戻し準備)
 //   v1.5.711 で 4 つのフラグ(parentPortalQr・lectureSchedulePublishToggle・teacherOnlySpecialSession・templateDiffApply)を
 //   all-classrooms へ昇格した。本番で困りごとが出たとき、戻すには
-//     1) src/utils/featureRollout.ts の scope
+//     1) src/utils/featureRollout.ts の scope と、戻しの記録 FEATURE_ROLLBACKS(昇格を固定するガードテストは
+//        resolveExpectedFeatureScope = 記録を見るので、記録された戻しならテストはそのまま緑。記録の無い変更は事故として落ちる)
 //     2) 保護者QRだけは functions/src/parentPortal.ts の PARENT_PORTAL_BASE_SCOPE(featureRollout.test.ts が字面で突合)
 //     3) 進行中テーマ台帳 src/utils/developmentStatusLedger.ts の行(全教室でないフラグは台帳に載っていないとテストが落ちる)
 //     4) CHANGELOG.md の「## 未リリース」の 1 行
@@ -121,7 +122,7 @@ export function buildLedgerRow({ flagKey, toScope, reason, today }) {
     : `${summaryHead}理由は「くわしく」に書いた。`
   const nextAction = 'Claude が原因を直して確認リストに項目を足し、オーナーが全教室へ戻すかを決める。'
   const notices = (FLAG_ROLLBACK_NOTICES[flagKey] ?? []).join(' ')
-  const notes = `${today} に tools/feature-flag-rollback.mjs で ${flagKey} を all-classrooms から ${toScope} へ戻した(v1.5.711 の全教室昇格の戻し)。理由: ${oneLineReason}。手順と事前・事後の確認は docs/runbooks/feature-flag-rollback.md。${notices}`
+  const notes = `${today} に tools/feature-flag-rollback.mjs で ${flagKey} を all-classrooms から ${toScope} へ戻した(v1.5.711 の全教室昇格の戻し)。理由: ${oneLineReason}。戻しは src/utils/featureRollout.ts の FEATURE_ROLLBACKS に記録した(ON へ戻すときは scope を all-classrooms に戻し、この記録とこの行を消す)。手順と事前・事後の確認は docs/runbooks/feature-flag-rollback.md。${notices}`
   const references = ['docs/runbooks/feature-flag-rollback.md', FEATURE_ROLLOUT_PATH]
   if (flagKey === 'parentPortalQr') references.push(PARENT_PORTAL_PATH)
   const lines = [
@@ -153,6 +154,26 @@ function replaceFlagScope(source, flagKey, toScope) {
   return source.replace(pattern, `$1'${toScope}'`)
 }
 
+/** FEATURE_ROLLBACKS の 1 項目(1 行)。 */
+export function rollbackRecordLine({ flagKey, toScope, reason, today }) {
+  return `  ${flagKey}: { from: 'all-classrooms', to: ${toTsString(toScope)}, date: ${toTsString(today)}, reason: ${toTsString(toSingleLine(reason))} },`
+}
+
+/** featureRollout.ts の FEATURE_ROLLBACKS の波括弧の中だけに 1 項目足す(既にそのフラグの項目があれば変えない)。 */
+function insertRollbackRecord(source, input) {
+  const opening = /export const FEATURE_ROLLBACKS: [^=\n]*= \{/u.exec(source)
+  if (!opening) throw new Error(`${FEATURE_ROLLOUT_PATH} に FEATURE_ROLLBACKS が見つからない(戻しの記録の置き場)`)
+  const bodyStart = opening.index + opening[0].length
+  if (source.startsWith('}', bodyStart)) {
+    return `${source.slice(0, bodyStart)}\n${rollbackRecordLine(input)}\n${source.slice(bodyStart)}`
+  }
+  const closeIndex = source.indexOf('\n}', bodyStart)
+  if (closeIndex < 0) throw new Error(`${FEATURE_ROLLOUT_PATH} の FEATURE_ROLLBACKS の閉じ括弧が見つからない`)
+  const body = source.slice(bodyStart, closeIndex)
+  if (new RegExp(`\\n  ${escapeRegExp(input.flagKey)}: \\{`, 'u').test(body)) return source
+  return `${source.slice(0, closeIndex)}\n${rollbackRecordLine(input)}${source.slice(closeIndex)}`
+}
+
 function replaceParentPortalBaseScope(source, toScope) {
   const pattern = /(export const PARENT_PORTAL_BASE_SCOPE: [^=\n]*= )'([a-z-]+)'/u
   const match = pattern.exec(source)
@@ -177,14 +198,17 @@ function insertLedgerRow(source, flagKey, row) {
   return `${source.slice(0, index)}${row}${source.slice(index)}`
 }
 
+/** 「## 未リリース」節の末尾(次の `## ` 見出しの直前)へ 1 行足す(このファイルの慣例どおり末尾追記)。 */
 function insertChangelogLine(source, line) {
   if (source.split(/\r?\n/u).includes(line)) return source
-  const heading = /^## 未リリース\r?\n(?:\r?\n)?/mu.exec(source)
+  const heading = /^## 未リリース[^\n]*\n/mu.exec(source)
   if (!heading) throw new Error(`${CHANGELOG_PATH} に「## 未リリース」の見出しが見つからない`)
-  const index = heading.index + heading[0].length
-  const rest = source.slice(index)
-  const separator = rest.startsWith('- ') || rest === '' ? '' : '\n'
-  return `${source.slice(0, index)}${line}\n${separator}${rest}`
+  const sectionStart = heading.index + heading[0].length
+  const nextHeading = /^## /mu.exec(source.slice(sectionStart))
+  const sectionEnd = nextHeading ? sectionStart + nextHeading.index : source.length
+  const body = source.slice(sectionStart, sectionEnd).replace(/\s+$/u, '')
+  const head = `${source.slice(0, sectionStart)}${body === '' ? '\n' : `${body}\n`}${line}\n`
+  return nextHeading ? `${head}\n${source.slice(sectionEnd)}` : head
 }
 
 /**
@@ -211,7 +235,7 @@ export function applyFeatureFlagRollback({ files, flagKey, toScope, reason, toda
 
   const ledgerRow = buildLedgerRow({ flagKey, toScope, reason, today })
   const next = { ...files }
-  next[FEATURE_ROLLOUT_PATH] = replaceFlagScope(files[FEATURE_ROLLOUT_PATH], flagKey, toScope)
+  next[FEATURE_ROLLOUT_PATH] = insertRollbackRecord(replaceFlagScope(files[FEATURE_ROLLOUT_PATH], flagKey, toScope), { flagKey, toScope, reason, today })
   if (flagKey === 'parentPortalQr') {
     next[PARENT_PORTAL_PATH] = replaceParentPortalBaseScope(files[PARENT_PORTAL_PATH], toScope)
   }

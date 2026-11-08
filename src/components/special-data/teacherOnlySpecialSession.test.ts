@@ -11,7 +11,7 @@ import {
   selectStudentFacingSpecialSessions,
   type SpecialSessionRow,
 } from './specialSessionModel'
-import { featureRolloutRegistry } from '../../utils/featureRollout'
+import { featureRolloutRegistry, resolveExpectedFeatureScope } from '../../utils/featureRollout'
 import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
 import { buildLectureStockEntries } from '../schedule-board/lectureStock'
 import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from '../../utils/parentSchedule'
@@ -76,8 +76,9 @@ describe('resolveNewSpecialSessionTeacherOnlyFields(作成時だけ付ける)', 
 describe('機能フラグ teacherOnlySpecialSession', () => {
   // 開発用・テスト教室と staging で先行(v1.5.685・確認リスト to-1/to-2 OK) → オーナー指示(2026-11-08)で全教室へ昇格。
   // 回帰で staging-environment へ戻さない(戻すと本番教室で「講師専用」チェックが消える。作成済みの講習はデータで隠れ続ける)。
-  it('全教室で有効(2026-11-08 昇格)', () => {
-    expect(featureRolloutRegistry.teacherOnlySpecialSession.scope).toBe('all-classrooms')
+  // 戻すのは戻しの記録 FEATURE_ROLLBACKS に載せた意図的な戻しだけ(記録の無い変更は落ちる)。
+  it('全教室で有効(2026-11-08 昇格・記録された戻しがあればその範囲)', () => {
+    expect(featureRolloutRegistry.teacherOnlySpecialSession.scope).toBe(resolveExpectedFeatureScope('teacherOnlySpecialSession'))
   })
 })
 

@@ -35,6 +35,11 @@ const FEATURE_ROLLOUT = [
   '  },',
   '}',
   '',
+  'export const FEATURE_ROLLBACKS: Partial<Record<FeatureRolloutKey, FeatureRollbackRecord>> = {}',
+  '',
+  '// 波括弧の外の似た字面(書き換えない)',
+  "const decoy = { templateDiffApply: { from: 'all-classrooms', to: 'x' } }",
+  '',
 ].join('\n')
 
 const PARENT_PORTAL = [
@@ -77,6 +82,10 @@ function scopeOf(source, key) {
   return match?.[1]
 }
 
+function rollbacksBlockOf(source) {
+  return /export const FEATURE_ROLLBACKS: [^=\n]*= \{([\s\S]*?)\n?\}\n/u.exec(source)?.[1] ?? null
+}
+
 // 台帳に足した行(TS のオブジェクトリテラル)を取り出して評価する(架空データ・自前で書いた文字列だけ)。
 function parseLedgerRow(rowText) {
   return new Function(`return (${rowText.trim().replace(/,\s*$/u, '')})`)()
@@ -102,7 +111,12 @@ describe('applyFeatureFlagRollback', () => {
     expect(scopeOf(rollout, 'otherFlag')).toBe('all-classrooms')
     expect(scopeOf(rollout, 'parentPortalQr')).toBe('all-classrooms')
     expect(scopeOf(rollout, 'lectureSchedulePublishToggle')).toBe('all-classrooms')
-    expect(rollout.replace("templateDiffApply: {\n    scope: 'development-only'", "templateDiffApply: {\n    scope: 'all-classrooms'")).toBe(FEATURE_ROLLOUT)
+    // scope の 1 行と FEATURE_ROLLBACKS の中身だけが変わる(戻すと元の文字列と完全一致)
+    expect(
+      rollout
+        .replace("templateDiffApply: {\n    scope: 'development-only'", "templateDiffApply: {\n    scope: 'all-classrooms'")
+        .replace(/(export const FEATURE_ROLLBACKS: [^=\n]*= )\{[\s\S]*?\n\}\n/u, '$1{}\n'),
+    ).toBe(FEATURE_ROLLOUT)
     expect(result.files['functions/src/parentPortal.ts']).toBe(PARENT_PORTAL)
     expect(result.changedPaths).toEqual(['src/utils/featureRollout.ts', 'src/utils/developmentStatusLedger.ts', 'CHANGELOG.md'])
   })
@@ -118,6 +132,28 @@ describe('applyFeatureFlagRollback', () => {
     expect(server).toContain("PARENT_PORTAL_BASE_SCOPE: 'staging-environment' | 'all-classrooms' = 'staging-environment'")
     expect(server.replace("= 'staging-environment'\n", "= 'all-classrooms'\n")).toBe(PARENT_PORTAL)
     expect(result.changedPaths).toEqual(['src/utils/featureRollout.ts', 'functions/src/parentPortal.ts', 'src/utils/developmentStatusLedger.ts', 'CHANGELOG.md'])
+  })
+
+  it('FEATURE_ROLLBACKS の波括弧の中へ { from, to, date, reason } を 1 項目足す(外の似た字面は書き換えない)', () => {
+    const first = run({ reason: "講師の机が 'A' に" })
+    const rollout = first.files['src/utils/featureRollout.ts']
+    expect(rollbacksBlockOf(rollout)).toBe("\n  templateDiffApply: { from: 'all-classrooms', to: 'development-only', date: '2026-11-08', reason: '講師の机が \\'A\\' に' },")
+    expect(rollout).toContain("const decoy = { templateDiffApply: { from: 'all-classrooms', to: 'x' } }")
+    // 2 本目は同じ波括弧の末尾へ足す
+    const second = applyFeatureFlagRollback({ files: first.files, flagKey: 'parentPortalQr', toScope: 'staging-environment', reason: '予行', today: '2026-11-09' })
+    const block = rollbacksBlockOf(second.files['src/utils/featureRollout.ts'])
+    expect(block.split('\n').filter(Boolean)).toEqual([
+      "  templateDiffApply: { from: 'all-classrooms', to: 'development-only', date: '2026-11-08', reason: '講師の机が \\'A\\' に' },",
+      "  parentPortalQr: { from: 'all-classrooms', to: 'staging-environment', date: '2026-11-09', reason: '予行' },",
+    ])
+    // 記録を TS として評価すると型どおりの値になる
+    const evaluated = new Function(`return {${block}}`)()
+    expect(evaluated.templateDiffApply).toEqual({ from: 'all-classrooms', to: 'development-only', date: '2026-11-08', reason: "講師の机が 'A' に" })
+  })
+
+  it('FEATURE_ROLLBACKS が無い featureRollout.ts はエラー(何も書かない)', () => {
+    const files = { ...makeFiles(), 'src/utils/featureRollout.ts': FEATURE_ROLLOUT.replace(/export const FEATURE_ROLLBACKS[^\n]*\n/u, '') }
+    expect(() => applyFeatureFlagRollback({ files, flagKey: 'templateDiffApply', toScope: 'development-only', reason: 'x', today: '2026-11-08' })).toThrow(/FEATURE_ROLLBACKS/u)
   })
 
   it('parentPortalQr を development-only へは戻せない(サーバーの型と述語が staging も通すため・何も書かない)', () => {
@@ -160,10 +196,15 @@ describe('applyFeatureFlagRollback', () => {
     expect(row.notes).toContain("室長の 'A' が\\困った 2 行目")
   })
 
-  it('CHANGELOG の「## 未リリース」直下に "- fix: 機能フラグ <key> を全教室から <scope> へ戻す(理由: <reason>・戻し手順書)" を 1 行入れる', () => {
+  it('CHANGELOG の「## 未リリース」節の末尾(次の見出しの直前)に "- fix: 機能フラグ <key> を全教室から <scope> へ戻す(理由: <reason>・戻し手順書)" を 1 行入れる', () => {
     const result = run({ reason: '講師の机が消えた' })
     const expectedLine = '- fix: 機能フラグ templateDiffApply を全教室から development-only へ戻す(理由: 講師の机が消えた・戻し手順書)'
-    expect(result.files['CHANGELOG.md']).toBe(['# 更新リスト', '', '## 未リリース', '', expectedLine, '- fix: 既存の行', '', '## v1.0.0 (2026-01-01)', ''].join('\n'))
+    expect(result.files['CHANGELOG.md']).toBe(['# 更新リスト', '', '## 未リリース', '', '- fix: 既存の行', expectedLine, '', '## v1.0.0 (2026-01-01)', ''].join('\n'))
+    // 節が空のとき・後ろに見出しが無いとき
+    const empty = run({ files: { ...makeFiles(), 'CHANGELOG.md': '## 未リリース\n\n## v1.0.0\n' } }).files['CHANGELOG.md']
+    expect(empty).toBe(`## 未リリース\n\n${expectedLine.replace('講師の机が消えた', '予行')}\n\n## v1.0.0\n`)
+    const last = run({ files: { ...makeFiles(), 'CHANGELOG.md': '## 未リリース\n\n- a\n' } }).files['CHANGELOG.md']
+    expect(last).toBe(`## 未リリース\n\n- a\n${expectedLine.replace('講師の机が消えた', '予行')}\n`)
   })
 
   it('未知のキー・all-classrooms でないフラグ・reason 空はエラー(何も書かない)', () => {

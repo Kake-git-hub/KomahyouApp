@@ -49,7 +49,7 @@ import {
   clearReworkedVerificationChecklistEntries,
   resolveVerificationChecklistItemSendState,
 } from './verificationChecklist'
-import { featureRolloutRegistry } from './featureRollout'
+import { featureRolloutRegistry, resolveExpectedFeatureScope } from './featureRollout'
 
 // 書式・進捗のテストは版ごとに変わる実項目に依存させない(第4版で項目が p-2/p-3 だけになり壊れたため固定の項目一覧を使う)。
 const FIXTURE_ITEMS: VerificationChecklistItem[] = [
@@ -1278,9 +1278,10 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
     expect(byId.get('pr-3')!.check!.join('\n')).toContain('「休み」')
   })
 
-  it('pr-1〜pr-3 は、昇格した 4 本の機能フラグが all-classrooms であることの画面側の確認(フラグを戻したら項目も見直す)', () => {
+  // 戻しの記録 FEATURE_ROLLBACKS に載せた戻しはその範囲を期待する(記録の無い変更は落ちる)。戻したら pr-1〜pr-3 の項目は手順書どおり見直す。
+  it('pr-1〜pr-3 は、昇格した 4 本の機能フラグが all-classrooms であることの画面側の確認(記録された戻しがあればその範囲・項目も見直す)', () => {
     for (const key of ['parentPortalQr', 'lectureSchedulePublishToggle', 'teacherOnlySpecialSession', 'templateDiffApply'] as const) {
-      expect(featureRolloutRegistry[key].scope, key).toBe('all-classrooms')
+      expect(featureRolloutRegistry[key].scope, key).toBe(resolveExpectedFeatureScope(key))
     }
   })
 })

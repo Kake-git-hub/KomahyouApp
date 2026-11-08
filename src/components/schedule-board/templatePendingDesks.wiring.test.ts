@@ -14,7 +14,7 @@ import type { SlotCell } from './types'
 import { applyHistoryEntry, createInitialBoardSnapshot, type HistoryEntry } from './ScheduleBoardScreen'
 import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
 import { trimBoardWeeksForMemory } from './boardWeekTrim'
-import { featureRolloutRegistry, isFeatureScopeEnabled } from '../../utils/featureRollout'
+import { featureRolloutRegistry, isFeatureScopeEnabled, resolveExpectedFeatureScope } from '../../utils/featureRollout'
 import {
   buildTemplatePendingDeskKey,
   buildTemplatePendingDesksPayload,
@@ -313,10 +313,12 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
   // 開発用教室で先行（v1.5.572〜・development-only）→ 第 2 版の試用（v1.5.689〜v1.5.710）で確認リスト全 OK →
   // オーナー指示（2026-11-08「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」）で all-classrooms。
   // 回帰で development-only へ戻さない（戻すと本番教室のテンプレ保存が上書き方式へ戻り、保留（2 行）の下段が旧方式の保存で捨てられる＝N-1）。
-  it('scope は all-classrooms（2026-11-08 昇格・本番教室でも差分反映）', () => {
-    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('all-classrooms')
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(true)
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
+  // 戻すのは戻しの記録 FEATURE_ROLLBACKS に載せた意図的な戻しだけ(期待値は resolveExpectedFeatureScope から導く・記録の無い変更は落ちる)。
+  it('scope は all-classrooms（2026-11-08 昇格・本番教室でも差分反映・記録された戻しがあればその範囲）', () => {
+    const expected = resolveExpectedFeatureScope('templateDiffApply')
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe(expected)
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(expected === 'all-classrooms')
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(expected !== 'development-only')
     expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
   })
 

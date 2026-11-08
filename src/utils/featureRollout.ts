@@ -261,6 +261,22 @@ export const featureRolloutRegistry = {
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
 
+/** 全教室から戻したときの記録 1 件(tools/feature-flag-rollback.mjs が書く・docs/runbooks/feature-flag-rollback.md)。 */
+export type FeatureRollbackRecord = { from: 'all-classrooms'; to: FeatureRolloutScope; date: string; reason: string }
+
+// ★戻しの記録(2026-11-08・全教室展開週の戻し準備)
+//   意図した戻しだけがここに載る。昇格を固定するガードテストは scope を直接 'all-classrooms' と比べず、
+//   resolveExpectedFeatureScope(key)(= 記録があればその戻し先・無ければ 'all-classrooms')と比べる。
+//   うっかり scope を変えた事故は記録が無いのでガードテストが落ちる(事故検出の目的は保つ)。
+//   ON へ戻すときは scope を all-classrooms に戻し、この記録を消す(保護者QRはサーバー側 PARENT_PORTAL_BASE_SCOPE も)。
+//   書き換えは tools/feature-flag-rollback.mjs が行う(1 行 1 フラグ・この波括弧の中だけ)。
+export const FEATURE_ROLLBACKS: Partial<Record<FeatureRolloutKey, FeatureRollbackRecord>> = {}
+
+/** ガードテストが期待する scope の権威関数。戻しの記録があればその戻し先、無ければ全教室。 */
+export function resolveExpectedFeatureScope(key: FeatureRolloutKey): FeatureRolloutScope {
+  return FEATURE_ROLLBACKS[key]?.to ?? 'all-classrooms'
+}
+
 // 純粋なスコープ判定(テスト用に環境を引数で受ける)。staging-environment は staging プロジェクトで
 // 全教室有効、それ以外の環境では開発用教室のみ(ローカル/開発用教室での動作検証を可能にするため。
 // 本番3教室では無効のまま)。

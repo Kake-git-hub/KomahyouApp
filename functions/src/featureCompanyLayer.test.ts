@@ -11,6 +11,7 @@ vi.mock('./generated/companyFeatureDefaults', async (importOriginal) => {
 
 import { resolveCompanyFeatureDefault } from './generated/companyFeatureDefaults'
 import { isParentPortalEnabledForClassroom } from './parentPortal'
+import { resolveExpectedFeatureScope } from '../../src/utils/featureRollout'
 import { isQuestionAiAnswerEnabledForClassroom, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 
 const PROD = 'komahyouapp-prod'
@@ -20,10 +21,10 @@ describe('サーバー側述語の会社既定(2 段目)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReset()
   })
 
-  it('保護者ポータル: 台帳は (workspaceKey, "parentPortalQr") で引かれ、行なしなら基本スコープ(全教室・2026-11-08 昇格)のとおり', () => {
+  it('保護者ポータル: 台帳は (workspaceKey, "parentPortalQr") で引かれ、行なしなら基本スコープ(全教室・2026-11-08 昇格・記録された戻しがあればその範囲)のとおり', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: PROD })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(true)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(resolveExpectedFeatureScope('parentPortalQr') === 'all-classrooms')
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'parentPortalQr')
   })
 

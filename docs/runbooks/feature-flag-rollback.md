@@ -30,33 +30,31 @@ Hosting の版を丸ごと戻す（[rollback.md](rollback.md) の A-1）より�
    （= `node tools/feature-flag-rollback.mjs <フラグ> --reason "<理由>" [--to development-only|staging-environment] --dry-run`）。
    書き換える範囲と注意が出る。何も書かない。
 3. 本番: 同じコマンドを `--dry-run` なしで実行する。次の 4 ファイルだけが変わる（2 回実行しても 2 回目は何も変えない）。
-   - `src/utils/featureRollout.ts` の `scope`（そのフラグの行だけ）
+   - `src/utils/featureRollout.ts` の `scope`（そのフラグの行だけ）と、戻しの記録 `FEATURE_ROLLBACKS` の 1 項目（`{ from: 'all-classrooms', to, date, reason }`）
    - 保護者QRだけ `functions/src/parentPortal.ts` の `PARENT_PORTAL_BASE_SCOPE`（両側同時。片側だけだと `featureRollout.test.ts` の字面の突合が落ちる）
    - `src/utils/developmentStatusLedger.ts` に「〜を戻した」の行（全教室でないフラグは台帳に載っていないとテストが落ちる）
    - `CHANGELOG.md` の `## 未リリース` に `- fix: 機能フラグ <key> を全教室から <scope> へ戻す(理由: …・戻し手順書)`
-4. **昇格を固定しているテストを手で直す**（スクリプトは触らない。下の表）。どれも「回帰で戻さない」ための意図的なガードなので、
-   消さずに「<日付> に <理由> で <scope> へ戻した」とコメントを添えて期待値を戻し先へ書き換える（オーナー判断の戻しであることを残す）。
+4. テストは直さなくてよい。昇格を固定しているガードテストは期待値を `resolveExpectedFeatureScope(key)`（`FEATURE_ROLLBACKS` に記録があればその戻し先・無ければ `all-classrooms`）から導くので、**記録された戻しならそのまま緑**（下の「記録された戻しとガードテスト」）。
 5. `npm run lint && npm run test:unit && npm run build`（保護者QRは `npm --prefix functions test` も）。
 6. `git diff` を通読する（上の 4 ファイル＋直したテスト＋確認リスト以外が変わっていないか）。
 7. commit → main マージ（CI が Hosting を出す）。保護者QRは `functions/**` が変わるので「Deploy Cloud Functions」も自動で走る。**緑まで確かめる**。
 8. `https://komahyouapp-prod.web.app/version.json` の版が上がったのを確かめ、室長へ**ハードリロード（Ctrl+Shift+R）**を案内する。
 9. 確認リスト（`src/utils/verificationChecklist.ts`）: 全教室展開を本番で見る項目 pr-1〜pr-3 は、戻したフラグについて見直す
-   （`verificationChecklist.test.ts` が「4 本が all-classrooms」を確かめているので、戻すと落ちる）。開発用教室で戻した後の見え方を確かめる項目を足す。
+   （`verificationChecklist.test.ts` は記録を見るので落ちないが、項目の文は「全教室で動く」前提のまま）。開発用教室で戻した後の見え方を確かめる項目を足す。
 
-### 戻すと落ちるテスト（2026-11-08 の予行で実測・手で直す）
+### 記録された戻しとガードテスト
 
-| フラグ | 落ちるテスト |
-|---|---|
-| 共通 | `src/utils/featureRollout.test.ts`「<フラグ> は全教室で有効」／`src/utils/verificationChecklist.test.ts`「pr-1〜pr-3 は…all-classrooms であることの画面側の確認」 |
-| `templateDiffApply` | `src/components/schedule-board/templatePendingDesks.wiring.test.ts`「scope は all-classrooms」／`src/utils/featureRollout.companyLayer.test.ts` の 2 件（会社既定なしは基本スコープのとおり・台帳は (workspaceKey, featureKey) で引かれる） |
-| `parentPortalQr` | `src/utils/featureRollout.test.ts` の保護者QRの 4 件（サーバーとの突合の先頭で all-classrooms を固定・本番教室でも有効・staging でも有効・別会社でも有効）／`functions/src/parentPortal.test.ts` の 3 件／`functions/src/featureCompanyLayer.test.ts` の 1 件／`src/components/special-data/schedulePublish.test.ts`「保護者QRと同じ範囲」 |
-| `lectureSchedulePublishToggle` | `src/components/special-data/schedulePublish.test.ts`「このフラグは保護者QR(parentPortalQr)と同じ範囲」 |
-| `teacherOnlySpecialSession` | `src/components/special-data/teacherOnlySpecialSession.test.ts`「全教室で有効」 |
+- 4 機能の昇格を固定しているガードテスト（`featureRollout.test.ts` の「全教室で有効」と保護者QRの 4 件・`verificationChecklist.test.ts` の pr-1〜pr-3・
+  `templatePendingDesks.wiring.test.ts`・`featureRollout.companyLayer.test.ts`・`teacherOnlySpecialSession.test.ts`・`functions/src/parentPortal.test.ts`・
+  `functions/src/featureCompanyLayer.test.ts`）は、scope を `'all-classrooms'` と直接比べず `resolveExpectedFeatureScope(key)` と比べる。
+- **スクリプトで戻した（= `FEATURE_ROLLBACKS` に記録がある）ならテストはそのまま緑。** 記録が無いまま scope を変えた（うっかり書き換えた事故）は、今までどおりガードが落ちる。
+- 保護者QRのサーバー側の突合（`featureRollout.test.ts`）は「`PARENT_PORTAL_BASE_SCOPE` がクライアントの scope と同じ値」だけを見る。スクリプトが両側を同時に書くので通る。
+- `schedulePublish.test.ts` の「講習の公開と保護者QRは同じ範囲」は、どちらかに戻しの記録があるときだけ「同じ値」を求めない（下の向きの注意に従う）。
 
-> ⚠️ **講習の公開と保護者QRは同じ範囲にそろえる決まり**（`schedulePublish.test.ts`）。どちらか片方だけを戻すとこのテストが落ちる。
-> 「保護者QRだけ広いと、隠す手段の無いまま講習が保護者に出る」ための決まりなので、**講習の公開だけを戻すのはこの決まりを破る**。
-> 講習の公開だけを止めたいときは、保護者QRも一緒に戻すか、決まりを外すかを**オーナーが決めてから**進める（テストの期待値を黙って書き換えない）。
-> 保護者QRだけを戻すのは決まりの向き（講習の公開の方が広い）としては害が無いが、テストは「同じ値」を見るので同じく直しが要る。
+> ⚠️ **向きの注意: 講習の公開と保護者QRは同じ範囲にそろえる決まり**（`schedulePublish.test.ts`）。
+> 「保護者QRだけ広いと、隠す手段の無いまま講習が保護者に出る」ための決まりなので、**講習の公開だけを戻すとこの向きになる**（記録があればテストは通るが、害は残る）。
+> 講習の公開だけを止めたいときは、保護者QRも一緒に戻すかを**オーナーが決めてから**進める。
+> 保護者QRだけを戻すのは向きとしては害が無い（講習の公開の方が広い）。
 
 ---
 
@@ -134,10 +132,15 @@ node -e "const d=JSON.parse(require('zlib').gunzipSync(require('fs').readFileSyn
 
 ---
 
-## 4. もう一度全教室へ出すとき
+## 4. ON へ戻す（もう一度全教室へ出す）とき
 
-原因を直したら、台帳の「〜を戻した」の行を消し、`featureRollout.ts`（保護者QRは `parentPortal.ts` も）を `all-classrooms` に戻し、
-2 節で直したテストの期待値も戻す。確認リストで開発用教室の確認を通してから、オーナーの判断で main へ。
-保護者QRは 3-3 の事後確認（OFF の間に削除した生徒の QR の失効）を忘れない。
+原因を直し、確認リストで開発用教室の確認を通してから、オーナーの判断で次を 1 つの変更で行う。
+
+1. `src/utils/featureRollout.ts` のそのフラグの `scope` を `'all-classrooms'` に戻す。
+2. 同じファイルの `FEATURE_ROLLBACKS` からそのフラグの項目を消す（全部消えたら `{}` に戻す）。記録を残したまま scope だけ戻すと、ガードテストが「記録の戻し先と違う」で落ちる。
+3. 保護者QRは `functions/src/parentPortal.ts` の `PARENT_PORTAL_BASE_SCOPE` も `'all-classrooms'` に戻す（両側同時・main マージ後に Functions デプロイの緑を確かめる）。
+4. 進行中テーマ台帳の「〜を戻した」の行（id `rollback-…`）を消す。CHANGELOG に「全教室へ戻す」の 1 行。
+5. `npm run lint && npm run test:unit && npm run build` → `git diff` → commit → main マージ → `version.json` → 室長へハードリロードの案内。
+6. 保護者QRは 3-3 の事後確認（OFF の間に削除した生徒の QR の失効）を忘れない。
 
 関連: [rollback.md](rollback.md)（D 節）・`tools/feature-flag-rollback.mjs`・`docs/plan-2026-11-08-rollback-readiness-week.md`。
