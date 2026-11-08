@@ -4,7 +4,7 @@
   `src/components/parent-portal/ParentPortalPage.tsx`（公開ページ）/ `functions/src/parentPortal.ts`（`parentPortalApi`・
   `issueStudentPortalToken` / `revokeStudentPortalToken` / `markParentMessagesNotified`）/ `firebase/firestore.rules` /
   `firebase.json`（rewrite）。段階計画は `docs/plan-2026-09-11-five-requests.md` §7-6（K-1〜K-6）。
-- 起案日: 2026-09-11（オーナー要望）。仕様初版: 2026-09-12。**第1段を実装済み（2026-09-13・開発用教室限定）**: §0 の推奨案をそのまま既定値として採用し、実装で確定した差分を §0 に併記する。
+- 起案日: 2026-09-11（オーナー要望）。仕様初版: 2026-09-12。**第1段を実装済み（2026-09-13・開発用教室限定）→ 2026-11-08 全教室へ昇格（v1.5.711・2026-11-08 オーナー指示「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」・クライアント `parentPortalQr` とサーバー `PARENT_PORTAL_BASE_SCOPE` を同じ push で `all-classrooms`）**: §0 の推奨案をそのまま既定値として採用し、実装で確定した差分を §0 に併記する。
 - 背景: 保護者から「次はいつ授業か」「休んだ分の振替はいつか」の問い合わせが室長に集中する。生徒登録時に
   **生徒ごとの固定QR**を配り、保護者が自分で日程を確認し、室長へ一方向で連絡できるようにする。
 
@@ -39,7 +39,7 @@
 | 失効 callable の引数 | `{ classroomId, token }`（§B-2） | `{ classroomId, studentId, reason }` | 画面はトークン文字列を権威として扱わない（写しがずれても失効できる） |
 | 発行タイミング | 生徒追加時に自動発行（§B-2） | **「QR」ボタンの初回押下時に getOrIssue**（生徒追加時の自動発行はしない） | 生徒 ID は追加処理の内部で決まるため同期的に取れず、また未使用の生徒に配布前トークンを増やさない |
 | 検証順序 | フラグ確認は 5 番目（§G-2） | **フラグ確認はスナップショット読み取りの前**（400 → 410 → 403 → 410） | OFF の教室で教室データを読まない（無駄な読み取りとコストを避ける） |
-| フラグ | `parentPortalQr`（O-1 の教室別オプション基盤で制御・§H） | O-1 は保留中のため **`featureRollout` の `development-only`**（クライアント）＋**サーバー側の同判定**（`isParentPortalEnabledForClassroom`: 開発用教室／テスト教室／staging プロジェクト）。**昇格は両側同時**（片方だけ変えると画面に出ないのに API が答える／その逆になる） | O-1 未着手 |
+| フラグ | `parentPortalQr`（O-1 の教室別オプション基盤で制御・§H） | O-1 は保留中のため **`featureRollout` の `development-only`**（クライアント）＋**サーバー側の同判定**（`isParentPortalEnabledForClassroom`: 開発用教室／テスト教室／staging プロジェクト）。**昇格は両側同時**（片方だけ変えると画面に出ないのに API が答える／その逆になる）。**2026-11-08 全教室へ昇格**: クライアント `all-classrooms`・サーバー `PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'`（会社キー・教室 ID が空なら OFF の fail-closed）。会社ごとに止めるのは会社既定 `companyFeatureDefaults` の `'off'` | O-1 未着手（会社既定で代替） |
 | 発行の権限 | 室長（`requireClassroomAccessMember`）（§B-2） | 同じ。加えて**サーバー側でフラグと「名簿に生徒が実在するか」を確認**し、無効なら `failed-precondition` / `not-found` | クライアントのフラグだけに依存しない。存在しない生徒のトークン文書を作らない |
 | フラグを見る callable | 記載なし | **発行だけ**フラグを見る。失効・既読化は**フラグ OFF でも動く** | OFF に戻した教室でも「配布済みQRを失効させる」「届いた連絡を既読にする」はできないと困る（安全側） |
 | 表示倍率 | 「初回ペイント前に `applySubmissionViewport()` を適用」（§C） | **呼ばない**。`width=device-width` のまま通常のモバイル CSS で組む | 提出ページの倍率調整は「width=520 ＋ CSS zoom 0.7」の対で成立しており、片方だけ真似ると極小文字になる（`parentPortal.wiring.test.ts` が呼ばないことを固定） |
@@ -539,9 +539,14 @@ QR 提出通知と同じ構造を流用する（購読 → 選別 → モーダ�
 - フラグ名 **`parentPortalQr`**。O-1（`classrooms/{id}.featureOverrides`）は保留中のため、第1段は
   `featureRollout` の `development-only`（クライアント）＋サーバー側の同判定 `isParentPortalEnabledForClassroom`
   （開発用教室／テスト教室／staging プロジェクト）で制御する。**昇格は必ず両側同時**（§0-2）。
+- **2026-11-08 全教室へ昇格（v1.5.711）**: 2026-11-08 オーナー指示「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」（確認リスト q-1〜q-7・pq-1・pc-1・lp-*・to-* すべて OK）。
+  クライアント `parentPortalQr = 'all-classrooms'`・サーバー `PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'`（`featureRollout.test.ts` が字面で突合）。
+  公開順の「staging 実機 → 本番 1 教室」の段はオーナー判断で省いた。全体 1 分 30 件の回数制限（P-4）は未実装のまま出した（進行中テーマ台帳 `parent-portal-rate-limit`）。
+  **回帰で `staging-environment` / `development-only` へ戻さない**（戻すと配った QR が 403 になる。会社ごとに止めるのは会社既定 `companyFeatureDefaults` の `'off'`）。
+  Hosting と Functions のデプロイは並行なので、Hosting が先に出た数分間は本番教室の保護者ページが 403 になりうる（Functions 緑で解消）。
 - OFF の教室では: 基本データ画面にQR表示・印刷・発行ボタンを出さない／`parentPortalApi` は GET・POST とも **403**
   （「このリンクは現在ご利用いただけません。教室へお問い合わせください。」・410 と同文・§0-6）。**トークン自体は失効させない**（ON に戻せば同じQRで復帰。P-11）。
-- 公開順: 開発用教室 → staging 実機 → 本番 1 教室（オーナー指定）→ 全教室。
+- 公開順: 開発用教室 → staging 実機 → 本番 1 教室（オーナー指定）→ 全教室（実際は 2026-11-08 に開発用/テスト教室から直接 全教室へ・上記）。
 - フラグの評価は**サーバー側でも**行う（クライアントで隠すだけにしない）。
 
 ## I. 受け入れ条件（実装 Issue に載せるテスト可能な条件）

@@ -20,19 +20,19 @@ describe('サーバー側述語の会社既定(2 段目)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReset()
   })
 
-  it('保護者ポータル: 台帳は (workspaceKey, "parentPortalQr") で引かれ、行なしなら基本スコープのとおり', () => {
+  it('保護者ポータル: 台帳は (workspaceKey, "parentPortalQr") で引かれ、行なしなら基本スコープ(全教室・2026-11-08 昇格)のとおり', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: PROD })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(true)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'parentPortalQr')
   })
 
-  it("保護者ポータル: 会社既定 'on' で本番教室も有効・'off' で開発用教室も無効", () => {
-    vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('on')
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(true)
+  it("保護者ポータル: 会社既定 'off' で本番教室も開発用教室も無効(会社ごとに止める唯一の経路)", () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('off')
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: PROD })).toBe(false)
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: PROD })).toBe(false)
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'any', projectId: 'komahyouapp-staging' })).toBe(false)
+    expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'parentPortalQr')
   })
 
   it('質問 AI: 台帳は (workspaceKey, "questionAiAnswer") で引かれ、行なしなら基本スコープ(全教室・2026-10-30 昇格)のとおり', () => {

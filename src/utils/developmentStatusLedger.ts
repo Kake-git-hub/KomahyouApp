@@ -81,28 +81,20 @@ export type DevelopmentStatusEntry = {
 
 export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   // ── 開発・テスト教室だけで動いている機能 ───────────────────────────────────
-  {
-    id: 'template-diff-apply',
-    title: 'テンプレ保存で「変えたコマだけ」盤面に反映する',
-    stage: 'development-only',
-    who: 'owner',
-    summary: 'テンプレを保存すると変えたコマだけを盤面に反映し、手で組んだ授業とぶつかる所は 2 行(緑)で残して室長が選べるようにする。開発用・テスト教室で試用中。',
-    nextAction: '11/5 に「根本から作り直す」と決まったので、11/5 の 4 件の修正は作業ブランチに止めて本番へ出さない。新仕様が固まったら作り直す。',
-    notes: '機能フラグ templateDiffApply。全教室へ出す前の条件: 旧版のタブで保存すると保留が落ちるすき間(§H Q33-1)の塞ぎ方を決めて実装 → regression-reviewer の INV 監査 → オーナー判断。2026-11-01 のオーナー決定(決定記録 51〜55): 満席は上がテンプレ・下が手入力／手置き講師の衝突は常に緑 2 段／テンプレ保存後は元に戻すを空にする(v1.5.670)。2026-11-05 のオーナー決定(決定記録 63〜・v1.5.689): 同日移動の写しは手入力として残さずテンプレ通りに戻す(11/1 の決定 53 を取り消し・例外は記録のある日と戻せない写し)／講師だけのテンプレ机では手で置いた生徒を席に残し講師だけ緑／満席の押し出しは手動追加の振替も対象(「通常」=テンプレ由来)／手置き講師がテンプレで同じコマの別の机に入るときは手置きの机を講師の保留に。確認リスト第109版(tp-59/70/71/72/73/75・mn-1)。オーナー判断待ち: A-10(同じ生徒が別の机に居るときテンプレの生徒を下の行へ置く案)の再説明・A-14(外した生徒の振替)の整理・休日解除と時限変更の追従(Q42 (b)-2/(b)-3)にも残る「下の行＝テンプレ由来」の逆転・collided の写しを「テンプレ授業を採用」で捨てた後にテンプレの位置へ戻らない件。残課題: 生徒を足すだけの保存は盤面の机がずれているとテンプレの机番号の机へ入る(仕様判断待ち)・休日解除で戻した生徒がメモの席に重なる・一括採用と孤児キーの整合チェックは未着手。開発用教室からの報告 #80(保留を解消したのに講師に保留が残る)もこの機能。決定記録は docs/spec-template-behavior.md §H と docs/plan-2026-10-25-conflict-placement.md、2026-10-30 までの詳しい経過はこのファイルの git 履歴(v1.5.666 時点の summary / nextAction)。 2026-11-07 追記(INV-12 の修正 v1.5.704・確認リスト mg-1): フラグ OFF の教室は、科目だけ編集したテンプレの授業の抑止キーを今の科目とテンプレの科目の 2 本積むようにした(resolveSuppressedRegularLessonOccurrenceKeys)。全教室へ出す前に確かめること: (1) OFF の間に 2 本のキーを持った授業を ON のテンプレ反映が元の位置へ戻すとき消えないか → 済み(写しを外すときも両方の科目のキーを外す・inv12 マトリクスの昇格互換テストで固定)。(2) ON でも科目を編集した授業を外したらテンプレの元の科目は戻らない → 2026-11-07 オーナー決定で OFF に揃えた(v1.5.705・spec-template-conflict-v2 §4-1-2)。(3) 科目編集→休日設定で未消化が 2 件 → v1.5.705 で 1 件に。付け替えの移した先で移したその生徒自身の授業を削除・格納したら戻さない(2026-11-07 オーナー選択)・付け替えを作るだけで未消化 +1 になる穴 → v1.5.706 で直した。残り: 付け替えの移した先から別の週へ動かした場合は暗黙の抑止キーが週単位なので未確認。',
-    featureKeys: ['templateDiffApply'],
-    references: ['Issue #72', 'Issue #75', 'docs/spec-template-behavior.md §H', 'docs/plan-2026-10-14-template-slot-change-and-transfer-follow.md', 'docs/plan-2026-10-25-conflict-placement.md', 'src/components/schedule-board/templateDiffApply.ts'],
-    updatedOn: '2026-11-07',
-  },
+  // 2026-11-08: 確認リストが全部 OK になり、オーナー指示「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」で
+  // テンプレ差分反映(templateDiffApply)・保護者向けQR(parentPortalQr)・講習の日程公開(lectureSchedulePublishToggle)・
+  // 講師専用の特別講習(teacherOnlySpecialSession)を全教室へ昇格(v1.5.711・サーバーの PARENT_PORTAL_BASE_SCOPE も同じ push)。
+  // この欄は今は空(消した 4 行は git 履歴の v1.5.710 時点を参照)。次の先行機能はここへ足す。
   {
     id: 'template-conflict-v2',
-    title: 'テンプレ反映と手入力のぶつかりを、出自の印で単純に作り直す',
-    stage: 'in-progress',
+    title: 'テンプレ反映の古い説明を畳み、机の対応付けを 1 か所にまとめる',
+    stage: 'planned',
     who: 'claude',
-    summary: '反映先に手入力があれば 2 行、同じ生徒なら手入力が勝つ、休みは常に勝つ、手入力は青字、丸ごと振替は同じ曜日だけで日付の付け替えとして残す、という短い規則に作り直す。講師の休みボタンも足す。',
-    nextAction: '確認リスト第112版(講師欄の緑・並び替えの案 A)をオーナーが見る。既存の保留の作り直しは確認リストの手順で進める。',
-    notes: '2026-11-05 オーナー決定: 今の §H(Q21〜Q42・決定記録 66 本)は場合分けが多すぎるので置き換える。実運用で別の曜日への丸ごと振替は無い。手入力の生徒とテンプレの同じ生徒が同じコマで 2 か所になったら手入力が勝つ。生徒・講師とも休みはテンプレより勝つ(講師は休みボタンを新設・グレー表示・他の講師で上書き可)。検討点(出自の印・講師の一意性・移動先に同じ曜日のテンプレがある件・会計 3 規則・Functions のパリティ・既存データの凍結か作り直しか)は仕様の「オーナー確認」に載せる。2026-11-05 午後: 段 1・段 2 を実装(placementOrigin.ts・templateConflictRules.ts。再マージはフラグ ON の教室だけ同じ規則を当てる＝抑止キーを新しく積まない。丸ごと振替の追従 Q40 は段 4 まで今のまま)。同日夕方: 段 3 講師の休みを実装(teacherRest.ts・DeskCell.teacherRest・差分反映と再マージが同じ述語を通す・確認リスト v2-2)。同日夜: 段 4 丸ごと振替の付け替えを実装(wholeDayTransferPair.ts・組は抑止キーに相乗り・管理セルの準備で振替元のテンプレを振替先へ展開・確認リスト v2-4)。以前の形の丸ごと振替は段 5 まで今のまま。11/5 深夜の送信(v1.5.689): v2-2(講師の休み)・v2-4(付け替え)は OK。tp-64「講師が 1 行で緑・ぶつかっていなければ緑にしない」→ 講師欄の緑は講師の 2 行だけに(旧ずらし印の緑も廃止)。v2-1「並び替えはテンプレの並びを捨てて」→ 固定を外すだけだと次のテンプレ保存で手入力の机が緑 2 行になり講師も変わる(監査で再現)ので 3 案を提示(v1.5.691)→ 2026-11-06 オーナーが案 A を選択: 並び替えは全部動かし(保留だけ固定)、テンプレ保存の直前にテンプレ由来の机を元の番号へ戻し手入力の机は空いた番号へ(templateDeskOrderRestore.ts・再マージの講師規則は授業 ID の対応で引く・v1.5.692・確認は v2-1)。監査(2026-11-06)の中期課題: 管理机↔盤面の机の対応付けが mergeManagedWeek・resolveBoardDeskIndexForManagedDesk・resolveAnchorCandidates(templateDeskOrderRestore)の 3 か所に分かれたので、1 つの権威関数へまとめる(6793374 型の食い違いを防ぐ)。',
-    references: ['docs/spec-template-conflict-v2.md', 'docs/spec-template-behavior.md §H(旧仕様)', 'src/components/schedule-board/templateDiffApply.ts'],
-    updatedOn: '2026-11-06',
+    summary: 'テンプレ反映の新しい規則(出自の印・2 行・講師の休み・丸ごと振替の付け替え)は 11/8 に全教室へ出した。残りは、置き換えた古い説明を「旧仕様」として畳むことと、管理データと盤面の机の対応付けが 3 か所に分かれているのを 1 つにまとめる内部の整理。',
+    nextAction: 'Claude が古い説明を畳む。机の対応付けは、次にテンプレ周りを直すときに 1 か所へまとめる(急がない)。',
+    notes: '2026-11-05 オーナー決定で §H(Q21〜Q42・決定記録 66 本)を docs/spec-template-conflict-v2.md に置き換え、段 1〜段 5 を v1.5.689〜v1.5.710 で開発用/テスト教室に出した(確認リスト v2-1〜v2-6・se-1〜se-10・mg-1/mg-2 OK)。2026-11-08 オーナー指示で templateDiffApply を all-classrooms へ(全教室昇格前の必須だった Q33-1=旧版タブのすき間は版が揃うまでの一時的なもの＝反映後のハードリロードで潰す・N-1=フラグを戻したときの保留の保護は「回帰で戻さない」で封じ、会社既定 companyFeatureDefaults で OFF にするときだけ先に実装する・既知の穴=同名講師の不動点は it.todo のまま)。残り: (1) spec-template-behavior.md §H を「旧仕様(2026-11-05 まで)」として畳み spec-template-conflict-v2.md を正本にする(§H の冒頭に注記は済み・本文の畳み込みは未)。(2) 監査(2026-11-06)の中期課題: 管理机↔盤面の机の対応付けが mergeManagedWeek・resolveBoardDeskIndexForManagedDesk・resolveAnchorCandidates(templateDeskOrderRestore)の 3 か所に分かれているので 1 つの権威関数へまとめる(6793374 型の食い違いを防ぐ)。(3) it.todo: 付け替えの移した先 D\' の休日設定・別の日へ動かして戻す往復・移した先から別の週へ動かした場合の暗黙の抑止キー。',
+    references: ['docs/spec-template-conflict-v2.md', 'docs/spec-template-behavior.md §H(旧仕様)', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templateDeskOrderRestore.ts'],
+    updatedOn: '2026-11-08',
   },
   // ── オーナー判断待ち ───────────────────────────────────────────────────────
   {
@@ -115,42 +107,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     notes: 'フリーメモ 20261105-190026128・20261105-190336460(v1.5.689)。2026-11-06 オーナー選択: 案 C(段階導入)。計画 docs/plan-2026-11-06-checklist-auto-prep.md・仕様 spec-developer-report §E-2-4。第 1 段(v1.5.692): v2-1・tp-64 に autoPrep。純関数 checklistPrep.ts(置き場・操作・結果文)、一過性リクエスト checklistPrepRequest(App → ScheduleBoardScreen・Issue #46 同型・10 秒の保険タイマー・教室切り替えで取りやめ)、commitWeeks を 1 回通す(保存は手動)。会計中立(体験・メモ・手置き講師だけ・INV-06)。本番 3 校にはパネルも処理も出ない(isActingDevelopmentClassroom の二重ガード)。第 2 段(v1.5.694): tp-64 の準備がテンプレ登録と保存まで進み、後片づけ(ap-3)を足した。関数は checklistPrepTemplate.ts の ensureChecklistPrepStudents・assignChecklistPrepTemplateStudents・cleanupChecklistPrepBoard・removeChecklistPrepTemplateStudents、App の checklistPrepRequest(kind prep/cleanup)。次の段の候補: tp-71(同じ日の別の時限へ動かす)・v2-6(振替＝休み→在庫から配置・会計を伴う)・v2-3。v1.5.692 の確認(受付 20261105-234703564)で ap-1 OK・メモ「やることも手順ごとに準備と同じように自動化して」「準備ボタンは項目の左側に」→ ボタンの位置は v1.5.693 で直した(ap-2)。やることの自動化は懸案(確かめたい操作そのものを機械が行うと画面の不具合を見逃す・テンプレ保存の自動化は重い・項目ごとに専用の処理が要る)を示し、2026-11-06 オーナー選択: データ作りだけ自動化・テンプレ保存まで自動(確認画面と保存前 PDF は出さず詳細は結果の文へ)・確認用の生徒を名簿に作る・後片づけボタン・まず tp-64 だけ(仕様 spec-developer-report §E-2-4-2)。v2-1 は OK で確認リストから外したが準備の処理は残す。第 3 段(v1.5.696・2026-11-07 オーナー指示「他のテンプレにも準備するを適用して」): tp-59・tp-69・tp-70 に新しい置き方(テンプレの空き机へ講師も登録・印 checklistPrepTeacherId)、mn-1・tp-66 は tp-64 と同じ置き方。tp-64 は OK で外したが処理は残す。後片づけを各項目の準備の行にも出した(ap-3)。計画 docs/plan-2026-11-07-checklist-auto-prep-stage3.md・仕様 §E-2-4-3。第 4 段(v1.5.697・オーナー回答 2026-11-07): tp-71・tp-72・tp-75・v2-3・v2-6。確認用の生徒に限り休み・振替・移動を準備で行う(checklistPrepSequence.ts)。v2-5 は付けない。第119版(2026-11-07 オーナー指示「など細かい事象説明は不要。今のシンプルにした文に、いつの誰を追記して」): 成功の結果の文を 2 行にし、facts を項目の文の {{prep:キー}} へ差し込む(仕様 §E-2-4-4・確認リスト ap-4)。',
     references: ['docs/plan-2026-11-06-checklist-auto-prep.md', 'docs/spec-developer-report.md §E-2-4', 'src/components/schedule-board/checklistPrep.ts', 'src/components/developer-report/VerificationChecklistPanel.tsx'],
     updatedOn: '2026-11-07',
-  },
-  {
-    id: 'lecture-schedule-publish',
-    title: '講習の日程公開(コマ組みが終わるまで隠す)',
-    stage: 'development-only',
-    who: 'owner',
-    summary: '講習ごとに「公開」を押すまで、提出用QRと保護者QRに講習の日程を出さない。公開すると保護者QRから講習の休み連絡もできる。開発用・テスト教室と検証環境だけで動作中。',
-    nextAction: 'オーナーが確認リストで見る。全教室に出すときは、先に室長へ「公開を押すまで日程は見えない」と知らせる。',
-    notes: '機能フラグ lectureSchedulePublishToggle(scope staging-environment・保護者QR parentPortalQr と同じ)。SpecialSessionRow.schedulePublished(未設定=公開・新規作成はフラグ ON のとき false)。提出用QRは App.tsx ensureScheduleSubmissionTokens → buildSubmissionOccupiedSlotMaps で非公開の講習コマを文書へ書かず、提出後の画面は resolveSubmittedViewOccupiedSlots で組まれたコマを隠す(functions の GET が schedulePublished を返す・Functions のデプロイが要る)。保護者QRは parentSchedule.ts(kind lecture・公開した講習の期間の日だけ・終了月まで「次の月」)と盤面の休み連絡(講習は 休み/振無休/何もしない)。保護者QRを全教室へ出すときはこのフラグも同じ push で広げる。オーナー確定 2026-11-03(仕様 spec-special-session-submission §B-2・spec-parent-portal §0-8)。',
-    featureKeys: ['lectureSchedulePublishToggle'],
-    references: ['docs/spec-special-session-submission.md §B-2', 'docs/spec-parent-portal.md §0-8', 'src/utils/submissionOccupiedSlots.ts', 'src/utils/parentSchedule.ts'],
-    updatedOn: '2026-11-03',
-  },
-  {
-    id: 'teacher-only-special-session',
-    title: '講師だけが予定を出す特別講習',
-    stage: 'development-only',
-    who: 'owner',
-    summary: '特別講習を「講師専用」で作ると、生徒日程表・生徒のQR・保護者QR・講習回数には出ず、講師日程表と講師のQRだけに出る。開発用・テスト教室と検証環境だけで動作中。',
-    nextAction: 'オーナーが確認リストで見る。問題なければ、全教室に出すかオーナーが決める。',
-    notes: '機能フラグ teacherOnlySpecialSession(scope staging-environment・作成欄のチェックを出すかだけ)。隠す処理はデータ SpecialSessionRow.teacherOnly で決まりフラグに依らない(isTeacherOnlySpecialSession / selectStudentFacingSpecialSessions)。オーナー確定 2026-11-03: 生徒側から全部隠す・期間はほかの講習と重ねない(今どおり)・印は作成時だけ(あとから付け外ししない)・講師専用では保護者への公開トグルを出さない。隠す場所は生徒日程表と印刷用生徒日程表(toStudentFacingScheduleParams)・生徒の提出用QRの発行(App.tsx ensureScheduleSubmissionTokens と ensureSubmissionTokens)・盤面の講習の選択(addableSpecialSessions)・未消化講習(buildLectureStockEntries)・保護者QR(parentSchedule.ts readLectureSessions と functions の写し)・Excel 取り込み。確認リストのフリーメモ 20261103-105053536-c0f31680(対応済み)。保護者QRの写しを変えたので Functions のデプロイが要る。',
-    featureKeys: ['teacherOnlySpecialSession'],
-    references: ['docs/spec-special-session-submission.md §B-3', 'docs/spec-parent-portal.md §0-8', 'docs/plan-2026-11-03-teacher-only-special-session-handoff.md'],
-    updatedOn: '2026-11-03',
-  },
-  {
-    id: 'parent-portal-qr',
-    title: '保護者向けQR(休みの連絡)',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '生徒ごとの QR を保護者がスマホで読むと、日程の確認と休みの連絡ができる。開発用・テスト教室と検証環境で動作中で、確認はすべて OK。',
-    nextAction: 'どの教室から本番で使い始めるかをオーナーが決める(決まれば 検証環境 → 1 教室 → 全教室 の順に広げる)。',
-    notes: '機能フラグ parentPortalQr(scope staging-environment)。サーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom と同じ判定なので、昇格は両側を同じ push で。2026-10-24 確認リスト q-1〜q-7・tp-15 OK(受付 20261024-062027562-37618588)。同じ受付のメモで今月の「次の月」ボタンを出さないように。使いすぎ防止(1 分 30 件)の要否も昇格時に決める(parent-portal-rate-limit)。',
-    featureKeys: ['parentPortalQr'],
-    references: ['docs/spec-parent-portal.md §0-5/§0-7/§H', 'functions/src/parentPortal.ts'],
-    updatedOn: '2026-10-30',
   },
 
   // ── やること(オーナー) ──────────────────────────────────────────────────────
@@ -247,13 +203,14 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
   {
     id: 'parent-portal-rate-limit',
-    title: '保護者ページの使いすぎ防止(1 分 30 件まで)',
+    title: '保護者ページの使いすぎ防止(全体で 1 分 30 件まで)',
     stage: 'planned',
     who: 'owner',
-    summary: '保護者ページへのアクセス回数の上限はまだ作っていない(今はサーバーの台数の上限で代わりにしている)。',
-    nextAction: '保護者向け QR を本番に出すときに、今のままでよいかをオーナーと決める。',
+    summary: '保護者向け QR は 11/8 に全教室へ出した。1 人の QR あたり 1 日 10 件・教室あたり 1 時間 60 件・読み取りは 10 分 60 回の上限はあるが、全体で 1 分 30 件までの上限はまだ作っていない(今はサーバーの台数の上限で代わりにしている)。',
+    nextAction: '本番で使われ始めて不審なアクセスや費用の増えが見えたら、作るかをオーナーと決める(急がない)。',
+    notes: 'docs/spec-parent-portal.md §0 P-4(トークンあたり 1 日 10 件・教室あたり 1 時間 60 件)・§0-2(GET はトークンあたり 10 分 60 回のインスタンス内スロットル)・§G。全体 1 分 30 件は maxInstances: 10 で代替。2026-11-08 の全教室昇格時はこのままで出した(オーナー指示は 4 件の展開のみ)。',
     references: ['functions/src/parentPortal.ts', 'docs/spec-parent-portal.md §G'],
-    updatedOn: '2026-10-30',
+    updatedOn: '2026-11-08',
   },
   {
     id: 'multi-company-phase2-3',

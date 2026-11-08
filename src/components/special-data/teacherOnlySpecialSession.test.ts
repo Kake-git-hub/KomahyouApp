@@ -71,8 +71,10 @@ describe('resolveNewSpecialSessionTeacherOnlyFields(作成時だけ付ける)', 
 })
 
 describe('機能フラグ teacherOnlySpecialSession', () => {
-  it('開発用・テスト教室と staging だけ(staging-environment)', () => {
-    expect(featureRolloutRegistry.teacherOnlySpecialSession.scope).toBe('staging-environment')
+  // 開発用・テスト教室と staging で先行(v1.5.685・確認リスト to-1/to-2 OK) → オーナー指示(2026-11-08)で全教室へ昇格。
+  // 回帰で staging-environment へ戻さない(戻すと本番教室で「講師専用」チェックが消える。作成済みの講習はデータで隠れ続ける)。
+  it('全教室で有効(2026-11-08 昇格)', () => {
+    expect(featureRolloutRegistry.teacherOnlySpecialSession.scope).toBe('all-classrooms')
   })
 })
 
