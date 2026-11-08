@@ -8,8 +8,8 @@ vi.mock('./companyFeatureDefaults', async (importOriginal) => {
   return { ...original, resolveCompanyFeatureDefault: vi.fn(original.resolveCompanyFeatureDefault) }
 })
 
-import { resolveCompanyFeatureDefault } from './companyFeatureDefaults'
-import { featureRolloutRegistry, isFeatureEnabledForClassroom } from './featureRollout'
+import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './companyFeatureDefaults'
+import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled } from './featureRollout'
 
 const DEV_CLASSROOM = { id: 'v8OZ7zH8vONNHjjYVcR1' }
 const PROD_CLASSROOM = { id: '5w5OMueETerSKrSf14HC' }
@@ -19,16 +19,21 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReset()
   })
 
+  // ★2026-11-08: テンプレ差分反映(templateDiffApply)も全教室へ昇格し、development-only の実例が無くなった。
+  //   台帳の引き方は all-classrooms の機能でも同じ(会社既定 'off' で止められる)ので、templateDiffApply のまま固定する。
   it('台帳は (workspaceKey, featureKey) で引かれる(会社の壁: 接続先 workspace のキーをそのまま渡す)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
-    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('development-only')
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(false)
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('all-classrooms')
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'templateDiffApply')
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'company-b')).toBe(false)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'company-b')).toBe(true)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('company-b', 'templateDiffApply')
   })
 
-  it("会社既定 'on' は development-only の機能を本番教室でも有効にする(会社の全教室へ出す)", () => {
+  it("会社既定 'on' は基本スコープで無効な機能を本番教室でも有効にする(会社の全教室へ出す)", () => {
+    // development-only の実例が無いので(2026-11-08)、2 段目の向きは純関数で固定する。
+    expect(isFeatureScopeEnabled('development-only', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
+    expect(resolveFeatureEnabledByLayers({ scopeEnabled: false, companyDefault: 'on' })).toBe(true)
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue('on')
     expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
@@ -44,7 +49,8 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
   it('会社既定なし(null)は基本スコープのとおり(従来の挙動)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', PROD_CLASSROOM, 'main')).toBe(true)
+    expect(resolveFeatureEnabledByLayers({ scopeEnabled: false, companyDefault: null })).toBe(false)
   })
 })

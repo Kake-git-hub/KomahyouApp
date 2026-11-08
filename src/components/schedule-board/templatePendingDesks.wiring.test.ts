@@ -278,10 +278,13 @@ describe('配線の字面固定（描画テスト環境が無い経路）', () =
 })
 
 describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
-  it('scope は development-only（開発用教室だけ・本番 3 教室は OFF）', () => {
-    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('development-only')
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(false)
+  // 開発用教室で先行（v1.5.572〜・development-only）→ 第 2 版の試用（v1.5.689〜v1.5.710）で確認リスト全 OK →
+  // オーナー指示（2026-11-08「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」）で all-classrooms。
+  // 回帰で development-only へ戻さない（戻すと本番教室のテンプレ保存が上書き方式へ戻り、保留（2 行）の下段が旧方式の保存で捨てられる＝N-1）。
+  it('scope は all-classrooms（2026-11-08 昇格・本番教室でも差分反映）', () => {
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('all-classrooms')
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(true)
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
     expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
   })
 

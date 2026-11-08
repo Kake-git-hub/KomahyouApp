@@ -28,6 +28,7 @@ import {
   incrementRateLimitCounterDoc,
   isAlreadyExistsError,
   isParentPortalEnabledForClassroom,
+  PARENT_PORTAL_BASE_SCOPE,
   isStudentPortalTokenActive,
   isValidParentPortalToken,
   normalizeIssueRequest,
@@ -183,31 +184,39 @@ describe('トークンの形(§B-1)', () => {
   })
 })
 
-describe('機能フラグ(§H・第1段 = 開発用教室限定)', () => {
-  // 【2026-09-16】判定は登録台帳の (workspaceKey, 教室ID)。教室名は引数から外した
+describe('機能フラグ(§H・2026-11-08 全教室へ昇格)', () => {
+  // 【2026-09-16】開発用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名は引数から外した
   // (他社が「開発用教室」という名前の教室を作っただけで保護者QR API が答えてしまうため)。
-  it('登録済みの開発用教室・テスト教室で有効(判定はクライアントの staging-environment スコープと同一)', () => {
+  // 【2026-11-08】オーナー指示で全教室へ昇格: 基本スコープ PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'
+  // (クライアント src/utils/featureRollout.ts の parentPortalQr と同じ値・featureRollout.test.ts が字面で突合)。
+  it('基本スコープは all-classrooms(クライアントの parentPortalQr と同じ値)', () => {
+    expect(PARENT_PORTAL_BASE_SCOPE).toBe('all-classrooms')
+  })
+
+  it('登録済みの開発用教室・テスト教室で有効(昇格前から変わらない)', () => {
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(true)
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'test_classroom_20260507_dai', projectId: 'komahyouapp-prod' })).toBe(true)
   })
 
-  // ★回帰防止: 名前や曖昧IDでは通らない/別会社では通らない(台帳＝両側同じ 1 か所で決まる)。
-  it('未登録の教室・別会社の同名教室では無効(名前判定は廃止・2026-09-16)', () => {
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'xxx', projectId: 'komahyouapp-prod' })).toBe(false)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'development', projectId: 'komahyouapp-prod' })).toBe(false)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'company-b', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(false)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: '', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(false)
-  })
-
-  it('本番教室(日大前/緑が丘/薬円台)は無効(昇格はクライアント側フラグと同時に行う)', () => {
-    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
-      expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id, projectId: 'komahyouapp-prod' }), id).toBe(false)
+  it('本番教室(日大前/緑が丘)も有効(2026-11-08・クライアント側フラグと同じ push で昇格)', () => {
+    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh']) {
+      expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id, projectId: 'komahyouapp-prod' }), id).toBe(true)
     }
+    // 別会社の教室も基本スコープは同じ(会社ごとに止めるのは会社既定 companyFeatureDefaults・featureCompanyLayer.test.ts)。
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'company-b', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(true)
   })
 
-  it('staging プロジェクトでは全教室で有効', () => {
+  // ★回帰防止(fail-closed): 会社キーや教室 ID が空の呼び出しは全教室でも OFF(questionAiAnswer と同じ形)。
+  it('会社キー・教室 ID が空なら無効(fail-closed)', () => {
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: '', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '', projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: null, id: null, projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '  ', projectId: 'komahyouapp-staging' })).toBe(false)
+  })
+
+  it('staging プロジェクトでも有効(先行検証の経路は残す)', () => {
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: 'komahyouapp-staging' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: undefined })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: undefined })).toBe(true)
   })
 })
 
@@ -547,9 +556,11 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
   })
 
   it('フラグ OFF の教室は 403 でスナップショットを読まない(トークンは失効させない = P-11)', async () => {
+    // 2026-11-08 の全教室昇格で本番教室も ON になったので、OFF は会社既定 'off' の教室(isEnabled が false)で表す。
     const deps = createDeps({
       loadToken: async () => ({ ...activeTokenDoc, classroomId: '5w5OMueETerSKrSf14HC' }),
       loadClassroom: async () => ({ name: 'スクールIE 日大前校' }),
+      isEnabled: () => false,
     })
     const result = await handleParentPortalGet({ token: TOKEN }, deps)
     expect(result).toEqual({ status: 403, body: { error: PARENT_PORTAL_ERROR_DISABLED } })
@@ -638,7 +649,7 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     await handleParentPortalGet({ token: 'short' }, invalid)
     const gone = createDeps({ loadToken: async () => null })
     await handleParentPortalGet({ token: TOKEN }, gone)
-    const off = createDeps({ loadToken: async () => ({ ...activeTokenDoc, classroomId: '5w5OMueETerSKrSf14HC' }), loadClassroom: async () => ({ name: '本番校' }) })
+    const off = createDeps({ loadToken: async () => ({ ...activeTokenDoc, classroomId: '5w5OMueETerSKrSf14HC' }), loadClassroom: async () => ({ name: '本番校' }), isEnabled: () => false })
     await handleParentPortalGet({ token: TOKEN }, off)
     for (const deps of [invalid, gone, off]) {
       expect(deps.loadAbsenceNotices).not.toHaveBeenCalled()
@@ -685,7 +696,7 @@ describe('handleParentPortalPost: 休み連絡の検証順(400 → 409 → 429 �
     expect((await handleParentPortalPost({ token: 'bad', rawBody: ABSENCE_BODY }, invalid)).status).toBe(400)
     const gone = createDeps({ loadToken: async () => null })
     expect((await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, gone)).status).toBe(410)
-    const off = createDeps({ loadClassroom: async () => ({ name: '本番校' }), loadToken: async () => ({ ...activeTokenDoc, classroomId: 'prod' }) })
+    const off = createDeps({ loadClassroom: async () => ({ name: '本番校' }), loadToken: async () => ({ ...activeTokenDoc, classroomId: 'prod' }), isEnabled: () => false })
     expect((await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, off)).status).toBe(403)
     for (const deps of [invalid, gone, off]) {
       expect(deps.hasAbsenceNotice).not.toHaveBeenCalled()

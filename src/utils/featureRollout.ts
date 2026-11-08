@@ -4,8 +4,9 @@ import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './c
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 
 // staging 検証環境(komahyouapp-staging)の判定。staging 先行機能は教室IDではなく環境(プロジェクトID)で
-// 有効化する(stagingテスト教室は開発用教室IDではないため)。現在 staging-environment スコープを使う
-// 機能は無いが、将来の staging 先行機能のために判定基盤は残す。
+// 有効化する(stagingテスト教室は開発用教室IDではないため)。2026-11-08 の全教室昇格(保護者QR・講習の日程公開・
+// 講師専用講習・テンプレ差分反映)で development-only / staging-environment のフラグは一旦ゼロになったが、
+// 次の先行機能のために判定基盤は残す(featureRollout.test.ts が「先行中のフラグは台帳に載せる」を固定)。
 export const STAGING_PROJECT_ID = 'komahyouapp-staging'
 
 export function isStagingEnvironment(projectId?: string): boolean {
@@ -123,11 +124,14 @@ export const featureRolloutRegistry = {
   // (OFF の教室では parentPortalApi が 403)。昇格するときは**両側を同時に**変える(片方だけ広げると、QR は出るのに
   // ページが開けない/ページは開けるのに QR が出ない、の非対称になる)。昇格はオーナー確認後。
   // ★検証用教室の判定は登録台帳(workspaceKey + 教室ID)。2026-09-16 までの「教室名が開発用教室」は廃止。
-  // ★scope は `staging-environment`(= staging プロジェクト全教室 ＋ どの環境でも開発用/テスト教室)。
+  // ★先行中の scope は `staging-environment`(= staging プロジェクト全教室 ＋ どの環境でも開発用/テスト教室)だった。
   //   `development-only` だと staging の一般教室でボタンが出ず、サーバーだけ許可する非対称になって
   //   §H の「staging 実機で確認」が実行できない(レビュー指摘 2026-09-13)。
+  // 開発用教室で先行(v1.5.512〜・確認リスト q-1〜q-7・pq-1・pc-1 OK) → オーナー指示(2026-11-08「開発・テスト教室だけで動いている
+  // 機能の 4 件を全教室展開して」)で全教室へ昇格。サーバーの PARENT_PORTAL_BASE_SCOPE も同じ push で 'all-classrooms'
+  // (featureRollout.test.ts が字面で突合)。回帰で staging-environment / development-only へ戻さない(戻すと配った QR が 403 になる)。
   parentPortalQr: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Basic-data screen: per-student parent portal QR (issue/show/print/reissue) and the parent message notification modal.',
   },
   // 質問への AI 即時回答(docs/spec-developer-report.md §G-7・オーナー指示 2026-09-14「開発用教室にだけ実装」)。
@@ -201,10 +205,15 @@ export const featureRolloutRegistry = {
   // ★既に存在する保留データ(templatePendingDesks)の保存・往復・在庫走査は**フラグに依らず常に有効**(Q33-3。
   //   フラグを戻した教室で黙って消さない。transferSourceRestDisplay と同じ流儀)。フラグが切り替えるのは
   //   「保存時に差分反映を使うか」と「保留の解決 UI(第 1 段 B)」だけ。
-  // ★全教室への昇格条件(すべて満たしたうえでオーナーが判断・自動では昇格しない・Q33-2): 開発用教室の確認リストで本機能の
-  //   項目が全部 OK／旧版タブが保留を落とすすき間(Q33-1)の塞ぎ方が決まり実装済み／regression-reviewer の INV 監査を通過。
+  // ★全教室への昇格条件(Q33-2)は「確認リスト全 OK／旧版タブが保留を落とすすき間(Q33-1)／regression-reviewer の INV 監査」だった。
+  //   第 2 版(docs/spec-template-conflict-v2.md・出自の印と 4 本の規則・講師の休み・丸ごと振替の付け替え)を開発用/テスト教室で
+  //   v1.5.689〜v1.5.710 まで試用し、確認リスト(tp-*・v2-*・se-*・mg-*)がすべて OK → オーナー指示(2026-11-08「開発・テスト教室だけで
+  //   動いている機能の 4 件を全教室展開して」)で全教室へ昇格。Q33-1 は版が揃うまでの一時的なすき間なので、反映後の
+  //   ハードリロード(室長への案内)で潰す。N-1(フラグを戻したときの保留の保護)は「回帰で戻さない」で封じる
+  //   (会社既定 companyFeatureDefaults で OFF にするときだけ N-1 を先に実装する・spec-template-behavior §第 2 段 7)。
+  //   回帰で development-only へ戻さない(戻すと本番教室のテンプレ保存が上書き方式へ戻り、保留(2 行)の下段が旧方式の保存で捨てられる)。
   templateDiffApply: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Template save applies per-desk diffs (replace unmarked desks, keep/adopt/pend marked desks as 2-row pending) instead of overwriting everything on/after the effective date.',
   },
   // 週単位の分割保存(docs/spec-save-restore.md §9・段階 B 2026-10-28): サーバーが教室データを目次＋部品(core/board/週)に分けて書く。
@@ -224,10 +233,13 @@ export const featureRolloutRegistry = {
   //   非公開の間は提出用QRに講習コマを載せず(提出前・提出後とも)、提出後の画面では組まれたコマを隠す。
   //   保護者QRは公開中の講習の講習コマだけを出す(サーバーはスナップショットの schedulePublished を読む)。
   // OFF: トグルを出さず、すべての講習を公開として扱う(従来どおり)。
-  // ★保護者QR(parentPortalQr)と同じ scope にそろえる(staging の一般教室でもトグルを押せないと、保護者QRの講習表示を確かめられない)。
-  //   全教室へ出すときは、提出用QRの見え方が本番の全教室で変わるので、先に室長へ案内する(公開を押すまで日程が見えない)。
+  // ★保護者QR(parentPortalQr)と同じ scope にそろえる(staging の一般教室でもトグルを押せないと、保護者QRの講習表示を確かめられない。
+  //   schedulePublish.test.ts が突合)。開発用教室で先行(v1.5.681〜・確認リスト lp-1〜lp-6 OK) → オーナー指示(2026-11-08)で
+  //   保護者QRと同じ push で全教室へ昇格。既存の講習(項目なし)は公開扱いのままで、新しく作る講習だけ非公開で始まる。
+  //   室長には「新しい講習は『保護者への公開』を押すまで提出用QR・保護者QRに日程が出ない」と案内する。
+  //   回帰で staging-environment へ戻さない(戻すとトグルが消え、非公開のまま作った講習を公開に戻せなくなる)。
   lectureSchedulePublishToggle: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Special-session data: per-session schedule publish toggle (hide lecture lessons from submission QR / parent portal until published).',
   },
   // 講師専用の特別講習(docs/spec-special-session-submission.md §B-3・オーナー確定 2026-11-03「生徒側から全部隠す」)。
@@ -236,8 +248,10 @@ export const featureRolloutRegistry = {
   // OFF: チェックを出さない(項目も付けない)。★隠す処理はデータ(SpecialSessionRow.teacherOnly)だけで決まり、フラグに依らない
   //   (フラグを戻した教室でも、講師専用で作った講習が生徒側へ急に出てこないようにする)。
   // サーバー側(保護者QR)はスナップショットの teacherOnly を読むだけで、フラグの判定は持たない。
+  // 開発用教室で先行(v1.5.685・確認リスト to-1/to-2 OK) → オーナー指示(2026-11-08)で全教室へ昇格。
+  // 回帰で staging-environment へ戻さない(戻すと作成欄のチェックが消える。作成済みの講師専用講習はデータで隠れ続ける)。
   teacherOnlySpecialSession: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Special-session data: "teacher only" checkbox at creation (hide the session from student schedule, student QR, parent portal and lecture counts).',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>

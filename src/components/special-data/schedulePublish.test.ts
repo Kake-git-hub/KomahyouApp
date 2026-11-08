@@ -116,6 +116,8 @@ describe('「false のときだけ非公開」の判定がそろっている(レ
 
   it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る)', () => {
     expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(featureRolloutRegistry.parentPortalQr.scope)
+    // 2026-11-08 オーナー指示で保護者QRと同じ push で全教室へ昇格。回帰で staging-environment へ戻さない。
+    expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe('all-classrooms')
   })
 })
 

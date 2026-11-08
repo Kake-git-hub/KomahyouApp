@@ -99,11 +99,21 @@ export function isStudentPortalTokenActive(doc: StudentPortalTokenDoc | null | u
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// 機能フラグ(§H)。クライアント src/utils/featureRollout.ts の parentPortalQr = 'development-only' の鏡像。
+// 機能フラグ(§H)。クライアント src/utils/featureRollout.ts の parentPortalQr の鏡像
+// (開発用教室で先行 'development-only' → 'staging-environment' → 2026-11-08 オーナー指示で 'all-classrooms')。
 // ───────────────────────────────────────────────────────────────────────────
 
 /** staging プロジェクトでは全教室で有効(実機検証用。本番教室のトークンは staging に存在しない)。 */
 export const PARENT_PORTAL_STAGING_PROJECT_ID = 'komahyouapp-staging'
+
+/**
+ * 保護者ポータルの基本スコープ。クライアント src/utils/featureRollout.ts の `parentPortalQr.scope` と同じ値にする
+ * (featureRollout.test.ts が字面で突合)。開発用教室で先行(v1.5.512〜) → オーナー指示(2026-11-08「開発・テスト教室だけで動いている
+ * 機能の 4 件を全教室展開して」)で 'all-classrooms'。
+ * 回帰で 'staging-environment' / 'development-only' へ戻さない(戻すと本番教室で配った QR が 403 になり、画面は QR を出すのに
+ * API が答えない非対称になる)。会社ごとに止めるのは会社既定 companyFeatureDefaults の 'off'(2 段目)で行う。
+ */
+export const PARENT_PORTAL_BASE_SCOPE: 'development-only' | 'staging-environment' | 'all-classrooms' = 'all-classrooms'
 
 export type ParentPortalClassroomIdentity = {
   /** 会社 = workspace のキー。教室IDは会社ごとに登録台帳で引くので必須(2026-09-16)。 */
@@ -113,23 +123,27 @@ export type ParentPortalClassroomIdentity = {
 }
 
 /**
- * 保護者ポータルがその教室で有効か(第 1 段 = 開発用教室限定・spec §H / k_contract §0)。
- * ⚠️ 昇格するときはクライアント側 `featureRolloutRegistry.parentPortalQr` と**同時に**変える
+ * 保護者ポータルがその教室で有効か(サーバー側の権威・spec §H / k_contract §0)。
+ * ⚠️ scope を変えるときはクライアント側 `featureRolloutRegistry.parentPortalQr` と**同時に**変える
  *   (サーバーだけ ON にしてもボタンが出ず、クライアントだけ ON にしても API が 403 を返す)。
- * ⚠️ 述語はクライアントの `staging-environment` スコープ
- *   (`isStagingEnvironment() || isDevelopmentClassroom({ id }, workspaceKey)`)と**同一**にしてある。
- *   判定の権威は登録台帳 `src/utils/developmentClassroomRegistry.ts`(の複製)1 か所だけで、
+ * ⚠️ 述語はクライアントの scope 判定(`isFeatureScopeEnabled(scope, { isStaging, isDevelopmentClassroom })`)と**同一**にしてある:
+ *   all-classrooms なら全教室、それ以外は staging プロジェクト or 登録台帳の開発用/テスト教室。
+ *   開発用教室の判定の権威は登録台帳 `src/utils/developmentClassroomRegistry.ts`(の複製)1 か所だけで、
  *   ここに教室ID の直書きを足さない: 片側だけ広いと「QR は出ないのに API は答える」(またはその逆)の
- *   非対称になる。台帳から外せば両側同時に無効化される(fail-closed)。
+ *   非対称になる。会社キーや教室 ID が空なら全教室でも OFF(fail-closed)。
  *   ★2026-09-16 以前は教室名「開発用教室」でも有効だったが、他社が同名教室を作ると誤って有効になるため廃止。
  */
 export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroomIdentity): boolean {
-  // 2 段解決(2026-09-18・Phase 1 T1-2): 基本スコープ(下の 2 項)→ 会社既定(コア台帳 companyFeatureDefaults の複製)。
+  const workspaceKey = (identity.workspaceKey ?? '').trim()
+  const classroomId = (identity.id ?? '').trim()
+  if (!workspaceKey || !classroomId) return false
+  // 2 段解決(2026-09-18・Phase 1 T1-2): 基本スコープ(PARENT_PORTAL_BASE_SCOPE)→ 会社既定(コア台帳 companyFeatureDefaults の複製)。
   // 段の順序・台帳はクライアント `isFeatureEnabledForClassroom('parentPortalQr', …)` と同一(パリティテストで固定)。
   return resolveFeatureEnabledByLayers({
-    scopeEnabled: isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })
+    scopeEnabled: PARENT_PORTAL_BASE_SCOPE === 'all-classrooms'
+      || isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
       || (identity.projectId ?? '').trim() === PARENT_PORTAL_STAGING_PROJECT_ID,
-    companyDefault: resolveCompanyFeatureDefault(identity.workspaceKey, 'parentPortalQr'),
+    companyDefault: resolveCompanyFeatureDefault(workspaceKey, 'parentPortalQr'),
   })
 }
 

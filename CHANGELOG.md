@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.711 (2026-11-08)
+
+- feat: **開発・テスト教室だけで動いていた 4 機能を全教室へ昇格**(オーナー指示 2026-11-08「確認リストがすべてOKとなったので、開発ダッシュボードに今残っている開発・テスト教室だけで動いている機能の 4 件を全教室展開して」・11/8 の送信で se-9・se-10・mg-2 も OK)。`src/utils/featureRollout.ts` の `parentPortalQr`(保護者向けQR・休みの連絡)・`lectureSchedulePublishToggle`(講習の「保護者への公開」)・`teacherOnlySpecialSession`(講師専用の特別講習)・`templateDiffApply`(テンプレ保存の差分反映＝第 2 版の出自の印・2 行・講師の休み・丸ごと振替の付け替え)を `all-classrooms` へ。保護者QRはサーバー `functions/src/parentPortal.ts` に基本スコープ `PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'` を新設して同じ push で昇格(会社キー・教室 ID が空なら OFF の fail-closed・`featureRollout.test.ts` が字面で突合・**Cloud Functions のデプロイが要る**。Hosting が先に出た数分間は本番教室の保護者ページが 403)。既存の講習は公開扱いのまま・**昇格後に新しく作る講習は非公開で始まる**(室長へ案内)。昇格前の必須だった Q33-1(旧版タブのすき間)は版が揃うまでの一時的なものとして反映後のハードリロードで潰し、N-1(フラグを戻したときの保留の保護)は「回帰で戻さない」で封じる(会社既定で OFF にするときだけ先に実装・spec-invariants INV-06)。進行中テーマ台帳から 4 行を消し(`template-conflict-v2` は Claude の片づけ(旧仕様の畳み込み・机の対応付けの一本化)へ・`parent-portal-rate-limit` は文言更新)、確認リスト第128版(v1.5.711・OK 済み 3 件を外し、本番の教室で見るだけの pr-1〜pr-3・テスト教室に出す項目は無し)、仕様書(spec-parent-portal §0/§H・spec-special-session-submission §B-2/§B-3・spec-template-conflict-v2・spec-template-behavior §第 2 段・spec-invariants INV-02/06/13)・使い方の説明(user-manual 2-5 保護者向け QR／3-6 手で置いた授業とテンプレートがぶつかったとき／4-3 講師の休み／6-8 講習の公開／6-9 講師専用・sync-shared)・メモリ 3 件を更新。 触れる INV: INV-02・INV-06・INV-13(フラグの範囲だけ・規則は不変)。
+
 ## v1.5.710 (2026-11-08)
 
 - fix: 丸ごと振替の付け替え(機能フラグ templateDiffApply の教室だけ)で、移した先 D' の別の時限へ動かした授業の、元の日 D の「休)」の行き先が D の時限のままだった(生徒日程表の振替欄で「休み」にしたときだけ生徒の居ない時限が出ていた・保護者 QR は読まないので影響なし・v1.5.709 の regression-reviewer 指摘 中-1)。オーナー決定 2026-11-08「動かした先の時限を指すように」: `buildWholeDayPairTargetRecordLookup` が D' で実際に居る時限(席を記録より優先・D の時限を優先・それでも複数なら小さい時限＝決定的)を返し、D の「休)」(手入力由来も D のテンプレの席から毎回作り直す派生記録)の行き先に使う。同じ時限の別の机なら今までどおり。本番の教室(フラグ OFF・組なし)は不変。仕様 spec-template-conflict-v2 §3。残課題 it.todo: D' の休日設定・別の日へ動かして戻す往復。 触れる INV: INV-06・INV-03。

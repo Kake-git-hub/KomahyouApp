@@ -1,6 +1,6 @@
 ---
 name: komahyou-parent-portal-qr
-description: "保護者向け固定QR(生徒別トークン→/p/{token}で通常+振替の日程閲覧・室長へ一方向連絡)の第1段実装(v1.5.512)。開発用教室+staging限定・オンデマンド関数型・parentMessages は classroomSnapshots 配下・写しトークンは他教室コピーで剥がす・日程計算は自己完結純関数を functions へ複製(パリティテストが門番)・レビュー指摘5件を同一pushで修正"
+description: "保護者向け固定QR(生徒別トークン→/p/{token}で通常+振替の日程閲覧・室長へ一方向連絡)の第1段実装(v1.5.512)。**2026-11-08 v1.5.711 で全教室へ昇格(両側同時)**・それまで開発用教室+staging限定・オンデマンド関数型・parentMessages は classroomSnapshots 配下・写しトークンは他教室コピーで剥がす・日程計算は自己完結純関数を functions へ複製(パリティテストが門番)・レビュー指摘5件を同一pushで修正"
 metadata: 
   node_type: memory
   type: project
@@ -9,6 +9,8 @@ metadata:
 ---
 
 # 保護者向け固定QR（第1段・2026-09-13・v1.5.512 で本番反映・開発用教室限定）
+
+> **2026-11-08 全教室へ昇格(v1.5.711)**: オーナー指示「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」。クライアント `parentPortalQr = 'all-classrooms'`＋サーバー `PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'`(functions/src/parentPortal.ts・会社キー/教室 ID が空なら OFF の fail-closed・featureRollout.test.ts が字面で突合)。staging→本番 1 教室の段は省略。全体 1 分 30 件の回数制限は未実装のまま(台帳 parent-portal-rate-limit)。回帰で戻さない(戻すと配った QR が 403)。Hosting が先に出た数分間は本番の保護者ページが 403 になりうる(Functions 緑で解消)。
 
 **きっかけ**: オーナー指示「保護者からのQR読み込みによる室長連絡機能を開発用教室のみで実装して」。
 仕様正本 `docs/spec-parent-portal.md`（§0 に採用した既定値 P-1〜P-12、**§0-2 に実装で確定した差分**、§0-3 にデプロイ順）。

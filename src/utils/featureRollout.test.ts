@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import { isDevelopmentClassroom } from './developmentClassroom'
 import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, isStagingEnvironment } from './featureRollout'
 
 describe('featureRollout', () => {
@@ -94,54 +95,40 @@ describe('featureRollout: boardPrintSelection（盤面PDFのコマ選択）', ()
 
 describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバーとの左右対称）', () => {
   it('判定式はサーバー側 functions/src/parentPortal.ts と同じ形を保つ(片側だけ昇格させない)', () => {
-    // クライアント: scope 'staging-environment' = isStagingEnvironment() || isDevelopmentClassroom({ id }, workspaceKey)
-    expect(featureRolloutRegistry.parentPortalQr.scope).toBe('staging-environment')
-    // サーバー: isDevelopmentClassroomIdentity(workspaceKey, id) || projectId === 'komahyouapp-staging'
-    // → 述語が一致していることを字面で固定する(両方を同時に変えないと落ちる)。
-    // ★2026-09-16: 両側とも登録台帳 src/utils/developmentClassroomRegistry.ts の (workspaceKey, 教室ID) で判定する。
+    // クライアント: 開発用教室で先行(v1.5.512・staging-environment) → オーナー指示(2026-11-08「開発・テスト教室だけで動いている機能を全教室展開して」)で
+    // 全教室へ昇格。回帰で staging-environment / development-only へ戻さない(戻すと配った QR が 403 になる)。
+    expect(featureRolloutRegistry.parentPortalQr.scope).toBe('all-classrooms')
+    // サーバー: PARENT_PORTAL_BASE_SCOPE(クライアントの scope と同じ値) → 会社既定、の 2 段解決。
+    // → 基本スコープの値と述語の形を字面で固定する(両方を同時に変えないと落ちる)。
+    // ★2026-09-16: 開発用教室の判定は両側とも登録台帳 src/utils/developmentClassroomRegistry.ts の (workspaceKey, 教室ID)。
     const serverSource = readFileSync(fileURLToPath(new URL('../../functions/src/parentPortal.ts', import.meta.url)), 'utf8')
+    const baseScope = /export const PARENT_PORTAL_BASE_SCOPE[^=]*= '([a-z-]+)'/u.exec(serverSource)
+    expect(baseScope?.[1], 'サーバーの基本スコープ PARENT_PORTAL_BASE_SCOPE').toBe(featureRolloutRegistry.parentPortalQr.scope)
     const start = serverSource.indexOf('export function isParentPortalEnabledForClassroom')
     expect(start).toBeGreaterThan(-1)
-    const body = serverSource.slice(start, start + 800)
-    expect(body).toContain('isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })')
+    const body = serverSource.slice(start, start + 1000)
+    expect(body).toContain("PARENT_PORTAL_BASE_SCOPE === 'all-classrooms'")
+    expect(body).toContain('isDevelopmentClassroomIdentity({ workspaceKey, classroomId })')
     expect(body).toContain('PARENT_PORTAL_STAGING_PROJECT_ID')
     // ★2026-09-18(Phase 1 T1-2): 2 段解決(基本スコープ → 会社既定)もクライアントと同じ関数・同じ台帳キーで行う。
     expect(body).toContain('resolveFeatureEnabledByLayers({')
-    expect(body).toContain("resolveCompanyFeatureDefault(identity.workspaceKey, 'parentPortalQr')")
+    expect(body).toContain("resolveCompanyFeatureDefault(workspaceKey, 'parentPortalQr')")
+    // 会社や教室 ID が空なら OFF(fail-closed・questionAiAnswer と同じ形)。
+    expect(body).toContain('if (!workspaceKey || !classroomId) return false')
     // 本番教室 ID の直接許可(片側だけ広い形)を復活させていないこと。
     expect(body).not.toContain('v8OZ7zH8vONNHjjYVcR1')
     // 教室名による判定を復活させていないこと(他社の同名教室で誤って有効になる)。
     expect(body).not.toContain('identity.name')
   })
 
-  it('本番3教室では無効・開発用/テスト教室では有効', () => {
+  it('本番教室でも開発用/テスト教室でも有効(2026-11-08 全教室昇格)・教室が無ければ無効', () => {
     expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
-    for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校'], ['6xnnbSTbwgGrBLy0EJKb', 'スクールIE 薬円台校']]) {
-      expect(isFeatureEnabledForClassroom('parentPortalQr', { id }, 'main'), `${id} (${name})`).toBe(false)
+    for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校']]) {
+      expect(isFeatureEnabledForClassroom('parentPortalQr', { id }, 'main'), `${id} (${name})`).toBe(true)
     }
-    expect(isFeatureEnabledForClassroom('parentPortalQr', null, 'main')).toBe(false)
-  })
-})
-
-// 【2026-09-16 回帰防止】検証用教室の判定が教室名から【教室ID】へ変わったので、呼び出し側は必ず id を渡す。
-// 「名前だけ渡す」形が残っていると、開発用教室で development-only の機能が丸ごと無効になる
-// (講習履歴ボタンが消える・盤面ベース予定数が旧方式に戻る・AI 即答の表示が出ない)。
-describe('featureRollout: 教室の識別は ID（名前だけでは判定しない）', () => {
-  it('名前だけを渡すと development-only 機能は無効・ID を渡せば有効', () => {
-    // ★`{ name: ... }` だけを渡す旧形は **型エラー**(DevelopmentClassroomIdentity に name は無い・2026-09-16)。
-    //   (下の) `@ts-expect-error` は「エラーが出なくなったら tsc が落ちる」ので、型に name を戻す回帰をここで検出する。
-    //   実行時の意味(名前一致では有効にならない)も同じ行で担保する。
-    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
-    expect(isFeatureEnabledForClassroom('templateDiffApply', { name: '開発用教室' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('templateDiffApply', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-  })
-
-  it('all-classrooms の機能は教室・会社に関係なく有効のまま(昇格済みを巻き戻さない)', () => {
-    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止・all-classrooms は識別子に関係なく true)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { name: 'スクールIE 日大前校' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: '5w5OMueETerSKrSf14HC' }, 'company-b')).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', null, '')).toBe(true)
+    // 教室が無い(null)ときの fail-closed はサーバー側(isParentPortalEnabledForClassroom)が担う。クライアントの all-classrooms は
+    // 識別子に関係なく true(「all-classrooms の機能は教室・会社に関係なく有効のまま」のテストと同じ)。
   })
 })
 
@@ -153,12 +140,18 @@ describe('featureRollout: テスト教室(sandbox)は development-only 機能の
   //   盤面ベース予定数・講習履歴が偶然 OFF だった(regression-reviewer 所見 B-1)。台帳化で ON になり、
   //   オーナー確定によりこれが正となった。**この期待値を kind で絞る方向へ黙って反転させない。**
   // ★2026-10-13: 盤面ベース予定数(boardBasedPlannedCount)は全教室へ昇格したので、まだ development-only の
-  //   講習履歴・テンプレ差分反映で同じ保証を固定する(AI 即答は 2026-10-30 に全教室へ昇格)。
-  it('テスト教室でも development-only 機能(テンプレ差分反映)が有効', () => {
+  //   講習履歴・テンプレ差分反映で同じ保証を固定していた(AI 即答は 2026-10-30 に全教室へ昇格)。
+  // ★2026-11-08: テンプレ差分反映・保護者QR・講習の日程公開・講師専用講習も全教室へ昇格し、development-only /
+  //   staging-environment のフラグが 1 本も無くなった。保証そのもの(テスト教室＝開発用教室と同じ扱い)は
+  //   scope の判定関数と登録台帳の組み合わせで固定し続ける(次に先行機能を足したとき、ここへそのキーを足す)。
+  it('テスト教室でも development-only / staging-environment の機能が有効になる(登録台帳 × scope 判定)', () => {
     const sandbox = { id: 'test_classroom_20260507_dai' }
-    expect(isFeatureEnabledForClassroom('templateDiffApply', sandbox, 'main')).toBe(true)
+    expect(isDevelopmentClassroom(sandbox, 'main')).toBe(true)
+    expect(isFeatureScopeEnabled('development-only', { isStaging: false, isDevelopmentClassroom: isDevelopmentClassroom(sandbox, 'main') })).toBe(true)
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: isDevelopmentClassroom(sandbox, 'main') })).toBe(true)
     // 別会社(workspaceKey 違い)では同じ ID でも無効(会社の壁)。
-    expect(isFeatureEnabledForClassroom('templateDiffApply', sandbox, 'other-company')).toBe(false)
+    expect(isDevelopmentClassroom(sandbox, 'other-company')).toBe(false)
+    expect(isFeatureScopeEnabled('development-only', { isStaging: false, isDevelopmentClassroom: isDevelopmentClassroom(sandbox, 'other-company') })).toBe(false)
   })
 })
 
@@ -209,25 +202,44 @@ describe('featureRollout: 開発用教室で先行した 3 機能の全教室昇
   })
 })
 
-describe('featureRollout: parentPortalQr（開発用教室・staging での有効範囲）', () => {
-  it('開発用/テスト教室では有効・本番3教室では無効(台帳から外せば両側同時に無効になる)', () => {
-    // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番1教室 → 全教室。
-    // 昇格はサーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom と同時に、オーナー確認後に行う。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
-    // ★2026-09-16 仕様変更: 判定は【教室ID】。教室名を変えても有効のまま(逆に、名前だけ合わせても有効にならない)。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    // ★他社(別 workspace)の同じ教室ID・同じ名前では有効にならない(会社の壁)。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'classroom-9' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', null, 'main')).toBe(false)
+describe('featureRollout: parentPortalQr（有効範囲・2026-11-08 全教室昇格）', () => {
+  it('本番教室・開発用/テスト教室・別会社でも有効(会社ごとに止めるのは会社既定 companyFeatureDefaults)', () => {
+    // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番 1 教室 → 全教室 だったが、確認リスト全 OK を受けた
+    // オーナー指示(2026-11-08)で staging・本番 1 教室の段を省いて全教室へ。昇格はサーバー側 functions/src/parentPortal.ts の
+    // PARENT_PORTAL_BASE_SCOPE と同じ push で行った(上の describe が字面で突合)。
+    for (const id of ['v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai', 'classroom-9', '5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh']) {
+      expect(isFeatureEnabledForClassroom('parentPortalQr', { id }, 'main'), id).toBe(true)
+    }
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(true)
   })
 
-  it('staging プロジェクトでは一般教室でも有効(§H の staging 実機確認ができる)', () => {
+  it('staging プロジェクトでも有効のまま(先行検証の経路を残す)', () => {
     expect(isFeatureScopeEnabled(featureRolloutRegistry.parentPortalQr.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.parentPortalQr.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.parentPortalQr.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(true)
+  })
+})
+
+describe('featureRollout: 開発・テスト教室で先行した 4 機能の全教室昇格(オーナー指示 2026-11-08)', () => {
+  // 確認リストがすべて OK になったのを受けて、オーナー指示(2026-11-08「開発ダッシュボードに今残っている開発・テスト教室だけで
+  // 動いている機能の 4 件を全教室展開して」)で次を all-classrooms にした。
+  //  - parentPortalQr(保護者向けQR・休みの連絡)… サーバー functions/src/parentPortal.ts の PARENT_PORTAL_BASE_SCOPE と同じ push で昇格
+  //  - lectureSchedulePublishToggle(講習の「保護者への公開」)… 保護者QRと同じ範囲(schedulePublish.test.ts が突合)
+  //  - teacherOnlySpecialSession(講師専用の特別講習)
+  //  - templateDiffApply(テンプレ保存の差分反映＝第 2 版の出自の印と 4 本の規則・講師の休み・丸ごと振替の付け替え)
+  // 回帰防止: development-only / staging-environment へ戻すと、本番教室で配った保護者QRが 403 になり、講習の公開トグル・講師専用チェック・
+  // 講師の休みボタンが消え、テンプレ保存が上書き方式へ戻る。戻すのはオーナー指示があるときだけ。
+  const PROMOTED = ['parentPortalQr', 'lectureSchedulePublishToggle', 'teacherOnlySpecialSession', 'templateDiffApply'] as const
+  const PRODUCTION_CLASSROOM_IDS = ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh'] as const
+
+  it.each(PROMOTED)('%s は全教室で有効(本番教室・開発用/テスト教室)', (key) => {
+    expect(featureRolloutRegistry[key].scope).toBe('all-classrooms')
+    for (const id of [...PRODUCTION_CLASSROOM_IDS, 'v8OZ7zH8vONNHjjYVcR1', 'test_classroom_20260507_dai']) {
+      expect(isFeatureEnabledForClassroom(key, { id }, 'main'), `${key} / ${id}`).toBe(true)
+    }
+  })
+
+  it('2026-11-08 時点で development-only / staging-environment のフラグは残っていない(残すなら進行中テーマ台帳へ載せる)', () => {
+    const pending = Object.entries(featureRolloutRegistry).filter(([, feature]) => feature.scope !== 'all-classrooms').map(([key]) => key)
+    expect(pending).toEqual([])
   })
 })
