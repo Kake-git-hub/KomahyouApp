@@ -95,20 +95,20 @@ node -e "const d=JSON.parse(require('zlib').gunzipSync(require('fs').readFileSyn
 
 ### 3-2. 講習の公開（`lectureSchedulePublishToggle`）
 
-**事前確認（必須・飛ばさない）**: 戻すと画面のトグルは消えるが、保護者QR側（`src/utils/parentSchedule.ts` と functions の写し）は
-`schedulePublished: false` の講習を**隠し続ける**。トグルが無いので**室長は公開に戻せなくなる**。
+**事前確認（必須・飛ばさない）**: v1.5.712 から「未設定＝非公開」（公開は `schedulePublished === true` のときだけ・保護者QRも同じ規則）。
+**保護者QRの範囲 ≦ 講習の公開の範囲**の門番があるため、この旗を戻すときは保護者QRも先に（または同時に）戻すことになり、
+**本番教室の保護者ページは 403 になる**。実際に目に見えて変わるのは**提出用QR**で、全講習を公開扱いにして講習の授業を出すようになる。
+戻すかどうかはオーナーが決める。室長へ「公開にしてください」と頼む必要はない（11/8 のオーナー指示で全講習は非公開のまま）。
 
-1. 非公開の講習を一覧にする（件数と講習 ID・期間だけ。講習名は室長に伝えるときだけ画面で見る）:
+1. 非公開の講習（公開にしていない講習・講師専用は除く）を一覧にする（件数と講習 ID・期間だけ。講習名は室長に伝えるときだけ画面で見る）:
 
    ```bash
-   node -e "const d=JSON.parse(require('zlib').gunzipSync(require('fs').readFileSync(process.argv[1]))).classrooms[0].data; const s=(d.specialSessions??[]).filter(x=>x.schedulePublished===false); console.log('非公開の講習', s.length); for (const x of s) console.log(x.id, x.startDate, x.endDate)" <落としたファイル>
+   node -e "const d=JSON.parse(require('zlib').gunzipSync(require('fs').readFileSync(process.argv[1]))).classrooms[0].data; const s=(d.specialSessions??[]).filter(x=>x.schedulePublished!==true&&x.teacherOnly!==true); console.log('非公開の講習', s.length); for (const x of s) console.log(x.id, x.startDate, x.endDate)" <落としたファイル>
    ```
-2. 1 件以上あれば、室長へ「戻す前に、非公開の講習を全部『保護者への公開』で公開へ戻して保存してください」と頼む。
-   戻すと、それまで非公開だった講習は**提出用QR・保護者QRに出る**ことも先に伝える。
-3. 次の 15 分ごとの時点を落として数え直し、**2 校とも 0 件**になってから共通手順へ進む。
-4. 上の「同じ範囲にそろえる決まり」（2 節の ⚠️）をオーナーと決めてから進める。
+2. 件数を確認し、戻すと提出用QRにその講習の授業が出るようになることをオーナーに伝える。
+3. 上の「同じ範囲にそろえる決まり」（2 節の ⚠️）をオーナーと決めてから共通手順へ進む。
 
-**戻した後の見え方**: 講習の作成・編集画面から「保護者への公開」が消える。新しく作る講習は公開で始まる（非公開の項目を付けない）。
+**戻した後の見え方**: 講習の作成・編集画面から「保護者への公開」が消える。新しく作る講習も未設定のまま（＝非公開扱い）だが、フラグが OFF の間は提出用QRは全講習を公開扱いにする。
 既存の講習の値は消えない（ON に戻せば元どおり）。
 
 ### 3-3. 保護者向けQR（`parentPortalQr`）

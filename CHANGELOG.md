@@ -18,7 +18,7 @@
 
 - fix: テンプレ差分反映のフラグを OFF に戻しても保留(緑の 2 行)のある教室は第 2 版の経路を使い続け、保留の机と下段の講習の在庫を守る(仕様 N-1・全教室展開週の戻し準備)。保留 0 件の教室だけが旧方式へ戻る。確認リストの項目なし(開発用教室はフラグ ON で確かめられない)。 触れる INV: INV-06・INV-02・INV-13(不変を確かめる)
 - test: 全教室展開した 4 機能のフラグを OFF に戻しても、ON の間に書かれたデータ(出自の印・非公開の講習・講師専用の講習・保護者QRの写しトークン)が消えず ON に戻せば元どおり動くことを回帰防止テストで固定(戻し準備)。
-- feat: 機能フラグを 1 本ずつ全教室から戻すスクリプト tools/feature-flag-rollback.mjs(scope・保護者QRのサーバー側・進行中テーマ台帳・CHANGELOG を一度に書き換える・テストつき)と手順書 docs/runbooks/feature-flag-rollback.md(全教室展開週の戻し準備)。戻しは src/utils/featureRollout.ts の FEATURE_ROLLBACKS に記録し、昇格を固定するテストは記録を見る(resolveExpectedFeatureScope・記録の無い scope 変更は今までどおり落ちる)。
+- feat: 機能フラグを 1 本ずつ全教室から戻すスクリプト tools/feature-flag-rollback.mjs(scope・保護者QRのサーバー側・進行中テーマ台帳・CHANGELOG を一度に書き換える・テストつき)と手順書 docs/runbooks/feature-flag-rollback.md(全教室展開週の戻し準備)。戻しは src/utils/featureRollout.ts の FEATURE_ROLLBACKS に記録し、昇格を固定するテストは記録を見る(resolveExpectedFeatureScope・記録の無い scope 変更は今までどおり落ちる)。(講習の公開の事前確認は v1.5.712 の「未設定＝非公開」に合わせて `schedulePublished !== true` を数える)
 - feat: 2 時点の教室データと保存記録から異変(同じコマに同じ生徒 2 か所・保留と組と出自の印の件数・名簿と講師の減少・振替の急減・保存失敗・利用者報告)を日本語で列挙する読み取り専用ツール tools/board-health-check.mjs(生徒は ID だけ・既知の 2 か所は除外・テストつき)。全教室展開週の毎朝の健診に使う。
 - docs: 毎朝の健診の手順書 docs/runbooks/morning-health-check.md(読み取り専用・11/9〜11/15 の全教室展開週・7:40 JST のスケジュール実行が従う)と既知の 2 か所の除外リスト tools/board-health-known-issues.json(緑が丘の生徒 s072・11/18・11/25・5 限)。monitoring.md に §8 として案内。11/8 に本番 2 校で予行済み(日曜のペアは所見なし・平日のペアで机の変更が数百件なので目安を 2000 件に)。
 

@@ -13,7 +13,7 @@ type: project
 **決まったこと・作ったもの**
 - **N-1 を塞いだ**: 保留(緑の 2 行)が 1 件でもある教室は `templateDiffApply` が OFF でも第 2 版の経路を使う(`resolveTemplateDiffApplyActive`・講師専用講習と同じ「データで決まる」方式)。保留 0 件になると同じ画面内で旧方式へ戻り、そのとき講師の休みの机にテンプレの講師が戻る(印は残る)。Hosting を v1.5.711 以前へ戻すとこの保護は無い(A-2 で出し直す)。
 - **記録された戻し**: `featureRollout.ts` の `FEATURE_ROLLBACKS` に戻しを記録。昇格を固定するガードテスト(client/functions)は `resolveExpectedFeatureScope` から期待値を導くので、`tools/feature-flag-rollback.mjs <flag> --reason "…"` 1 本＋main マージ 1 回で止められ CI は緑。記録の無い scope 変更(事故)は今までどおり落ちる。**保護者QRの範囲 ≦ 講習の公開の範囲**は無条件の門番(講習の公開だけを戻すとテストが止める。保護者QRを先に戻す)。
-- 戻し手順書 `docs/runbooks/feature-flag-rollback.md`: 講習の公開は戻す前に非公開の講習 0 件を読み取りで確認(OFF では保護者QRが非公開を隠し続けトグルも消えるため)・保護者QRは ON に戻した後に OFF の間に削除した生徒の QR を失効(App.tsx の revoke はフラグで条件づけ)。
+- 戻し手順書 `docs/runbooks/feature-flag-rollback.md`: 講習の公開は戻す前に非公開の講習(`schedulePublished !== true`・講師専用除く)の件数を読み取りで確認(v1.5.712 で未設定=非公開・0 件にする必要はない。戻すと門番で保護者QRも戻り保護者ページは 403・見える変化は提出用QRが全講習を公開扱いにすること・戻すかはオーナー判断)・保護者QRは ON に戻した後に OFF の間に削除した生徒の QR を失効(App.tsx の revoke はフラグで条件づけ)。
 - **健診**: `tools/board-health-check.mjs`(純関数・名前を出さない)＋`docs/runbooks/morning-health-check.md`。Claude のスケジュール実行(新セッション・7:40 JST・11/9〜11/15・プッシュ通知)。saveAttempts/developerReports の時刻は ISO 文字列(timestampValue で引くと 0 件)。
 - 全操作の記録は既にある(端末内 1000 件・保存に同梱 300 件・90 日)。非現実的なのは常時送信と逆再生。
 
