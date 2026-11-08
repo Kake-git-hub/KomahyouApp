@@ -48,10 +48,10 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', DEV_CLASSROOM, 'main')).toBe(false)
   })
 
-  it('会社既定なし(null)は基本スコープのとおり(従来の挙動)', () => {
+  it('会社既定なし(null)は基本スコープのとおり(従来の挙動・templateDiffApply は記録された戻しがあればその範囲)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(resolveExpectedFeatureScope('templateDiffApply') === 'all-classrooms')
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', PROD_CLASSROOM, 'main')).toBe(true)
     expect(resolveFeatureEnabledByLayers({ scopeEnabled: false, companyDefault: null })).toBe(false)
   })
