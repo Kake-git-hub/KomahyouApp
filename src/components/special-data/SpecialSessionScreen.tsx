@@ -415,7 +415,7 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
         studentInputs: existing?.studentInputs ?? {},
         createdAt: normalizeTimestampText(row['作成日時']) || existing?.createdAt || timestamp,
         updatedAt: normalizeTimestampText(row['更新日時']) || timestamp,
-        // 日程公開(2026-11-03)は Excel に列を持たない。取り込みで既存講習の公開状態を落とさない(落とすと未設定=公開に化ける)。
+        // 日程公開(2026-11-03)は Excel に列を持たない。取り込みで既存講習の公開状態を落とさない(落とすと公開にした講習が未設定=非公開に戻る・2026-11-08〜)。
         // 新しく増えた講習(同じ講習名が無い)は画面から作ったときと同じ初期値(フラグ ON なら非公開)。
         ...(existing
           ? (existing.schedulePublished !== undefined ? { schedulePublished: existing.schedulePublished } : {})

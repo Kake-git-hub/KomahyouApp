@@ -238,7 +238,8 @@ export const featureRolloutRegistry = {
   // OFF: トグルを出さず、すべての講習を公開として扱う(従来どおり)。
   // ★保護者QR(parentPortalQr)と同じ scope にそろえる(staging の一般教室でもトグルを押せないと、保護者QRの講習表示を確かめられない。
   //   schedulePublish.test.ts が突合)。開発用教室で先行(v1.5.681〜・確認リスト lp-1〜lp-6 OK) → オーナー指示(2026-11-08)で
-  //   保護者QRと同じ push で全教室へ昇格。既存の講習(項目なし)は公開扱いのままで、新しく作る講習だけ非公開で始まる。
+  //   保護者QRと同じ push で全教室へ昇格。新しく作る講習は非公開で始まる。既存の講習(項目なし)も 2026-11-08 オーナー指示
+  //   「本番教室のすでに作成済みの特別講習をすべて非公開にして」で非公開扱いへ改めた(isSpecialSessionSchedulePublished)。
   //   室長には「新しい講習は『保護者への公開』を押すまで提出用QR・保護者QRに日程が出ない」と案内する。
   //   回帰で staging-environment へ戻さない(戻すとトグルが消え、非公開のまま作った講習を公開に戻せなくなる)。
   lectureSchedulePublishToggle: {

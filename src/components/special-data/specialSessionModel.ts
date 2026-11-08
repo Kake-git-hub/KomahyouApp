@@ -189,10 +189,12 @@ export type SpecialSessionRow = {
   updatedAt: string
   /**
    * 講習の日程(盤面で組んだ講習コマ)を保護者へ見せてよいか(オーナー確定 2026-11-03・機能フラグ lectureSchedulePublishToggle)。
-   * - false … 非公開(フラグ ON の教室で新しく作った講習の初期値)。提出用QRに講習コマを載せず、提出後は組まれたコマを隠す。
-   *   保護者QRにも講習コマを出さない。
-   * - true / 未設定 … 公開。★未設定はこの項目ができる前に作った講習で「公開」扱い(オーナー確定: 既存の講習は終わっているので公開でよい)。
-   * 判定は必ず isSpecialSessionSchedulePublished を通す(`=== true` で読むと既存講習が非公開に化ける)。
+   * - false / 未設定 … 非公開(false はフラグ ON の教室で新しく作った講習の初期値)。提出用QRに講習コマを載せず、
+   *   提出後は組まれたコマを隠す。保護者QRにも講習コマを出さない。
+   *   ★未設定はこの項目ができる前に作った講習。2026-11-03 は「公開」扱いだったが、2026-11-08 オーナー指示
+   *   「本番教室のすでに作成済みの特別講習をすべて非公開にして」で非公開へ改めた(本番 2 校の講習 10 件はすべて未設定だった)。
+   * - true … 公開(室長が「保護者への公開」を押したときだけ)。
+   * 判定は必ず isSpecialSessionSchedulePublished を通す(各所で比較を散らさない。提出用QR・保護者QR・提出 API の GET も同じ答え)。
    */
   schedulePublished?: boolean
   /**
@@ -235,15 +237,15 @@ export function resolveNewSpecialSessionTeacherOnlyFields(featureEnabled: boolea
   return featureEnabled && checked ? { teacherOnly: true } : {}
 }
 
-/** 講習の日程を保護者へ見せてよいか。未設定(既存の講習)は公開扱い。false のときだけ非公開。 */
+/** 講習の日程を保護者へ見せてよいか。true のときだけ公開。未設定(既存の講習)も非公開(オーナー指示 2026-11-08)。 */
 export function isSpecialSessionSchedulePublished(session: Pick<SpecialSessionRow, 'schedulePublished'> | null | undefined): boolean {
-  return session?.schedulePublished !== false
+  return session?.schedulePublished === true
 }
 
 /**
  * 講習を新しく作るときの日程公開の初期値。トグルが使える教室(機能フラグ ON)では非公開(false)で始める。
- * フラグ OFF の教室では項目を付けない(=公開扱いのまま。後でフラグを広げたとき、それまでに作った講習が
- * いきなり非公開に化けないようにする・オーナー確定 2026-11-03「既存の講習は公開でよい」)。
+ * フラグ OFF の教室では項目を付けない(提出用QRは resolveSubmissionSchedulePublished がフラグ OFF を常に公開にする)。
+ * ★2026-11-08 から未設定も非公開扱い(isSpecialSessionSchedulePublished)。2026-11-08 時点で全教室フラグ ON。
  */
 export function resolveNewSpecialSessionScheduleFields(toggleEnabled: boolean): Pick<SpecialSessionRow, 'schedulePublished'> {
   return toggleEnabled ? { schedulePublished: false } : {}
