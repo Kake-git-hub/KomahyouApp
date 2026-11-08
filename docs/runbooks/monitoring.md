@@ -102,6 +102,11 @@ GitHub 側の通知設定は不要（Issue はあくまで課題管理の記録�
 - 費用は PITR 分のデータ容量に対する Firestore のストレージ課金（数百 MB 〜 数 GB の見込み・月 100〜300 円程度）。翌月の請求で実額を確認し、見合わなければ `--no-enable-pitr` で戻す。
 - 読み方は Admin SDK／REST の `readTime` 指定（Claude が読み取り専用トークンで行う）。復元に使うときは従来どおり「開いている教室へ読み込み → 保存」の経路だけ（直接書かない）。
 
+### 8. 毎朝の健診（期間限定・2026-11-09〜11-15・読み取り専用）
+- 11/8 に 4 機能を全教室へ出した翌週だけ、Claude のスケジュール実行が毎朝 7:40(JST)に本番 2 校を**読むだけ**で点検し、日本語で 1 通報告する。
+- 手順書 `docs/runbooks/morning-health-check.md`。見るもの: 前日 3:00 と最新の 15 分時点の差(同じコマに同じ生徒 2 か所・保留/組/出自の印の件数・名簿と講師の減少・振替の急減・机の変更の急増)、直近 24 時間の保存の失敗、利用者報告、外形監視。
+- 道具 `tools/board-health-check.mjs`(純関数・生徒は ID だけ・既知の 2 か所は `tools/board-health-known-issues.json` で除外)。異常は**報告だけ**で直さない。止め方は `docs/runbooks/feature-flag-rollback.md`。
+
 ## アラートが来たら（対応フロー）
 1. 自動起票された `incident:uptime` Issue とワークフローのログ（report）を見る。
 2. 実際に `https://komahyouapp-prod.web.app` を開いて症状を確認（誤検知の切り分け）。
