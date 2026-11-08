@@ -8,13 +8,56 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DeveloperReportSubmitResult } from '../../utils/developerReport'
-import { VERIFICATION_CHECKLIST, VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY } from '../../utils/verificationChecklist'
+import { VERIFICATION_CHECKLIST, VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY, type VerificationChecklistItem } from '../../utils/verificationChecklist'
 import { VerificationChecklistPanel, type VerificationChecklistPanelProps } from './VerificationChecklistPanel'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+// 第126版(2026-11-08): 「準備する」付きの項目は全部 OK で確認リストから外れた(準備の処理は残してある)。ボタンの描画の検査は、外す前の
+// tp-70・tp-75 と同じ形の項目をここに持ち、パネルが選ぶ項目の一覧へ足して続ける(正本の確認リストは変えない)。
+const PREP_FIXTURE_ITEMS = vi.hoisted((): VerificationChecklistItem[] => [
+  {
+    id: 'tp-70',
+    area: 'テンプレ作成',
+    title: '講師だけのテンプレ机と重なると、手で置いた生徒は席に残り、講師欄だけ緑になる',
+    autoPrep: true,
+    steps: [
+      '「準備する」を押して「保存」',
+      '{{prep:slot}} {{prep:deskA}} の下の行の講師名({{prep:X}}) →「下段(手入力)の講師を採用する」',
+      'もう一度「準備する」→ 新しく出た {{prep:slot}} {{prep:deskA}} で「上段(テンプレ)の講師を採用する」',
+    ],
+    check: [
+      '{{prep:trial}}は席に 1 行のまま、講師欄だけ上={{prep:Y}}・下={{prep:X}}(緑)',
+      '手入力を採用 → {{prep:X}}＋{{prep:trial}} の 1 行',
+      'テンプレを採用 → {{prep:Y}}＋{{prep:trial}} の 1 行',
+    ],
+    introducedIn: 'v1.5.696',
+  },
+  {
+    id: 'tp-75',
+    area: 'テンプレ作成',
+    title: '同じコマに手で置いた振替がある生徒は、テンプレの机に入らない',
+    autoPrep: true,
+    steps: ['「準備する」を押して「保存」', 'テンプレを何も変えずにもう一度保存し、{{prep:slot}} を見る'],
+    check: [
+      '振替の机({{prep:deskM}})は{{prep:A}}の 1 行のまま(青字・緑にならない)',
+      'テンプレの机({{prep:deskT}})に{{prep:A}}は入らない',
+      '{{prep:A}}の予定数は 1 減り、2 回目の保存ではそれ以上減らない',
+    ],
+    introducedIn: 'v1.5.697',
+  },
+])
+
+vi.mock('../../utils/verificationChecklist', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/verificationChecklist')>()
+  return {
+    ...actual,
+    selectVerificationChecklistItems: (...args: Parameters<typeof actual.selectVerificationChecklistItems>) => [...PREP_FIXTURE_ITEMS, ...actual.selectVerificationChecklistItems(...args)],
+  }
+})
+
 const classroomId = 'v8OZ7zH8vONNHjjYVcR1'
-const autoPrepIds = VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep).map((item) => item.id)
+const autoPrepIds = PREP_FIXTURE_ITEMS.filter((item) => item.autoPrep).map((item) => item.id)
 const plainItem = VERIFICATION_CHECKLIST.items.find((item) => !item.autoPrep)!
 // 押して確かめる autoPrep の項目(確認リストに残っているもの)。
 // 第122版(2026-11-07): tp-69 は OK で外したので tp-70 を使う。
@@ -48,8 +91,10 @@ describe('VerificationChecklistPanel の「準備する」', () => {
 
   // 第113版(2026-11-06): v2-1 は OK で確認リストから外した。第116版(2026-11-07・v1.5.696): tp-64 も OK で外し、tp-59・tp-69・tp-70・mn-1・tp-66 に広げた。
   // 第122版(2026-11-07): tp-69・mn-1・tp-66・tp-71 も OK で外した(残るのは tp-59・tp-70・tp-72・tp-75・v2-3・v2-6)。
-  it('autoPrep の項目(tp-59・tp-70・tp-72・tp-75・v2-3・v2-6)だけに出す', () => {
-    expect([...autoPrepIds].sort()).toEqual(['tp-59', 'tp-70', 'tp-72', 'tp-75', 'v2-3', 'v2-6'])
+  // 第126版(2026-11-08): tp-59・tp-72・v2-3・v2-6・tp-70・tp-75 も OK で外した(確認リストに autoPrep は無い)。ここは外す前と同じ形の項目(PREP_FIXTURE_ITEMS)で見る。
+  it('autoPrep の項目(PREP_FIXTURE_ITEMS の tp-70・tp-75)だけに出す。正本の確認リストには今 autoPrep が無い', () => {
+    expect(VERIFICATION_CHECKLIST.items.filter((item) => item.autoPrep)).toEqual([])
+    expect([...autoPrepIds].sort()).toEqual(['tp-70', 'tp-75'])
     render({ onPrepare: vi.fn(async () => ({ ok: true, message: '' })) })
     for (const id of autoPrepIds) expect(button(id), id).not.toBeNull()
     expect(button(plainItem.id)).toBeNull()
@@ -84,7 +129,7 @@ describe('VerificationChecklistPanel の「準備する」', () => {
       expect(card.querySelector('.verification-checklist-prep:not(.verification-checklist-prep-button):not(.verification-checklist-prep-result):not(.verification-checklist-prep-row)'), card.dataset.testid).toBeNull()
     }
     for (const id of autoPrepIds) {
-      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!
+      const item = PREP_FIXTURE_ITEMS.find((entry) => entry.id === id)!
       const stepItems = [...button(id)!.closest('.verification-checklist-steps')!.children]
       const owner = button(id)!.closest('li')!
       expect(stepItems.indexOf(owner), id).toBe(0)
@@ -159,8 +204,8 @@ describe('VerificationChecklistPanel の「準備する」', () => {
     expect(card).not.toContain('講師 X')
     expect(container.textContent).not.toContain('{{prep:')
     // ほかの項目はその項目の準備結果だけを使う(押していない項目は既定の言葉のまま)。
-    expect(itemCard('tp-59').textContent).toContain('講師 X')
-    expect(itemCard('tp-59').textContent).not.toContain('講師A')
+    expect(itemCard('tp-75').textContent).toContain('生徒 A')
+    expect(itemCard('tp-75').textContent).not.toContain('講師A')
     // facts の無い結果(失敗)は既定の言葉に戻す(前の準備の名前を残さない)。
     const failing = vi.fn(async () => ({ ok: false, message: '準備できる席が見つかりませんでした。' }))
     render({ onPrepare: failing })

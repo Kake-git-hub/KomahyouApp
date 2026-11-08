@@ -588,6 +588,9 @@ describe('第119版: 項目の文の {{prep:キー}} は、その項目の準備
     'tp-69': ['A', 'X', 'Y', 'deskA', 'slot'],
     'mn-1': ['A', 'X', 'desk1', 'slot', 'trial'],
     'tp-66': ['A', 'X', 'Y', 'desk1', 'slot', 'trial'],
+    // 第126版(2026-11-08): tp-59・tp-70 も OK で外した。
+    'tp-59': ['A', 'X', 'deskA', 'deskB', 'slot', 'trial'],
+    'tp-70': ['X', 'Y', 'deskA', 'slot', 'trial'],
   }
   for (const itemId of ['tp-59', 'tp-70', 'tp-69', 'mn-1', 'tp-66']) {
     it(`${itemId}: 文に使うキーが全部埋まる`, () => {

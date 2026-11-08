@@ -211,6 +211,38 @@ function sameStatusSlots(left: DeskCell['statusSlots'], right: DeskCell['statusS
   return [0, 1].every((index) => JSON.stringify(a[index] ?? null) === JSON.stringify(b[index] ?? null))
 }
 
+/**
+ * D' に「その生徒の付け替えの授業の記録」が残っているか（D の「休)」記録の材料から外すかどうかの判定・2026-11-08 確認リスト se-7・INV-06）。
+ * D' で付け替えの授業を休み・振無休・出席にすると、D' に展開し直さないため D の日付の削除記録を積む（resolveSuppressedRegularLessonOccurrenceKey）。
+ * その削除記録は「D' で消した・格納した・別の日へ動かした（D' に記録が無い）」ときと同じ形なので、削除記録だけで材料から外すと、記録にした生徒の
+ * D の「休)」まで消えていた（作成で D から移した手入力・授業 ID が D のテンプレのままの授業は D に「休)」が残り、出自で答えが割れていた）。
+ * 仕様 §4-1-2「D' で休みにしても D は「休)」のまま」。D' の同じ時限の記録（上段＋保留の下段）のうち、印 wholeDayPairSourceDate が組の D で、
+ * 移動元の記録（moved＝別の日・別の時限へ動かした跡）でないものがあれば true。生徒は管理生徒 ID（無ければ名前）で同じ人か見る（削除記録の鍵と同じ）。
+ * D と D' は別の週にあるので、盤面全体（再マージ前の盤面＝記録は再マージで変わらない）から作って週ごとの再マージへ渡す。組が無ければ null。
+ */
+export type WholeDayPairTargetRecordLookup = (pair: WholeDayTransferPair, slotNumber: number, student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => boolean
+
+export function buildWholeDayPairTargetRecordLookup(weeks: readonly (readonly SlotCell[])[], keys: readonly string[] = [], pendingDesks?: TemplatePendingDeskMap | null): WholeDayPairTargetRecordLookup | null {
+  const pairs = parseWholeDayTransferPairs(keys)
+  if (pairs.length === 0) return null
+  const sourceByTarget = new Map(pairs.map((pair) => [pair.targetDateKey, pair.sourceDateKey] as const))
+  const recorded = new Set<string>()
+  const identity = (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => entry.managedStudentId ?? entry.name
+  const recordKey = (sourceDateKey: string, targetDateKey: string, slotNumber: number, studentKey: string) => `${sourceDateKey}__${targetDateKey}__${slotNumber}__${studentKey}`
+  for (const week of weeks) for (const cell of week) {
+    const sourceDateKey = sourceByTarget.get(cell.dateKey)
+    if (!sourceDateKey) continue
+    for (const desk of cell.desks) {
+      const pendingRecords = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.statusSlots ?? []
+      for (const entry of [...(desk.statusSlots ?? []), ...pendingRecords]) {
+        if (!entry || entry.status === 'moved' || entry.wholeDayPairSourceDate !== sourceDateKey) continue
+        recorded.add(recordKey(sourceDateKey, cell.dateKey, cell.slotNumber, identity(entry)))
+      }
+    }
+  }
+  return (pair, slotNumber, student) => recorded.has(recordKey(pair.sourceDateKey, pair.targetDateKey, slotNumber, identity(student)))
+}
+
 /** 解除・作り直しの前に、D のセルから付け替えの「休)」記録だけを外す。 */
 export function stripWholeDayPairDerivedRecords(cell: SlotCell): SlotCell {
   let changed = false

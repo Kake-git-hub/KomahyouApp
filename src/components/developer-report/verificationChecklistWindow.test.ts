@@ -347,6 +347,8 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
   // 2026-11-03 オーナー指示「送信をまとめてではなく一件ごとに」。
   it('送信は項目ごと: 押した項目だけを 1 通で送り、他の項目は送らない。送った後に変えると「変更を送信」になる', async () => {
     const [first, second] = VERIFICATION_CHECKLIST.items
+    // 未確認の項目は送れない(第126版: 項目が 2 つになったので、何も触る前の 2 つ目で見る)。
+    expect(container.querySelector<HTMLButtonElement>(`[data-testid="verification-checklist-send-${second.id}"]`)!.disabled).toBe(true)
     act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="ok"]`)!.click())
     act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${second.id}"][value="needs-fix"]`)!.click())
     expect(container.querySelector('[data-testid="verification-checklist-submit"]')).toBeNull()
@@ -365,9 +367,6 @@ describe('VerificationChecklistPanel の別タブ表示', () => {
     act(() => container.querySelector<HTMLInputElement>(`input[name="verification-checklist-${first.id}"][value="needs-fix"]`)!.click())
     expect(sendButton(first.id).textContent).toBe('変更を送信')
     expect(sendButton(first.id).disabled).toBe(false)
-    // 未確認の項目は送れない。
-    const third = VERIFICATION_CHECKLIST.items[2]
-    expect(sendButton(third.id).disabled).toBe(true)
   })
 
   it('送れなかったときは理由をその項目に出し、未送信のまま', async () => {

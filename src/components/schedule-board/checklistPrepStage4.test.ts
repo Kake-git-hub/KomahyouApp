@@ -614,7 +614,14 @@ describe('第119版: 段を続ける項目の facts（項目の文に差し込�
     it(`${itemId}: 文に使うキーが全部埋まり、結果の文は 2 行だけ`, () => {
       const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === itemId)
       // 第122版(2026-11-07): tp-71 は OK で確認リストから外れた(準備の処理は残してある)。外す前の文が使っていたキーで同じ検査を続ける。
-      const RETIRED_ITEM_KEYS: Record<string, string[]> = { 'tp-71': ['A', 'B', 'deskT', 'slot'] }
+      const RETIRED_ITEM_KEYS: Record<string, string[]> = {
+        'tp-71': ['A', 'B', 'deskT', 'slot'],
+        // 第126版(2026-11-08): tp-72・tp-75・v2-3・v2-6 も OK で外した。
+        'tp-72': ['A', 'C', 'deskA', 'deskC', 'slot'],
+        'tp-75': ['A', 'deskM', 'deskT', 'slot'],
+        'v2-3': ['A', 'R', 'W', 'X', 'deskA', 'deskK', 'deskP', 'rFrom', 'slot'],
+        'v2-6': ['C', 'dayA', 'dayB', 'trial'],
+      }
       if (item) expect(item.autoPrep).toBe(true)
       else expect(RETIRED_ITEM_KEYS[itemId], `${itemId} は外した項目なのでキーの一覧が要る`).toBeDefined()
       const run = runPrep(itemId, initialStage())

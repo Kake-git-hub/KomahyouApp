@@ -1113,6 +1113,12 @@ describe('INV-06 マトリクス: 丸ごと振替の付け替え（第 2 版・�
     expect(pairFx.seatIds(remerged, pairFx.D2)).toEqual([[], ['sB', null]])
     expect(pairFx.recordIds(remerged, pairFx.D2)).toEqual([['absent:sA', null], [null, null]])
     expect(pairFx.balances(remerged, pairFx.ROWS)).toEqual({ sA__数: 1 })
+    // §4-1-2（2026-11-08・確認リスト se-7）: D は「休)→D'」のまま。画面の休み（computeStudentAbsentMark）が積む D の日付の削除記録があっても同じ。
+    expect(pairFx.recordIds(remerged, pairFx.D)).toEqual([['moved:sA', null], ['moved:sB', null]])
+    const withSourceKey = pairFx.remerge(absent, pairFx.ROWS, [...result.nextSuppressedRegularLessonOccurrences, `sA__数__${pairFx.D}__${pairFx.SLOT}`])
+    expect(pairFx.recordIds(withSourceKey, pairFx.D)).toEqual([['moved:sA', null], ['moved:sB', null]])
+    expect(pairFx.recordIds(withSourceKey, pairFx.D2)).toEqual([['absent:sA', null], [null, null]])
+    expect(pairFx.balances(withSourceKey, pairFx.ROWS)).toEqual({ sA__数: 1 })
   })
 
   it('不動点: 作った直後の盤面は再マージ・2 回目の再マージで変わらない（INV-03）', () => {

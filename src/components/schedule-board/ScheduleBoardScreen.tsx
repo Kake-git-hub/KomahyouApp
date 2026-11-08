@@ -81,7 +81,7 @@ import { buildChecklistPrepCleanupMessage, buildChecklistPrepDoneMessage, buildC
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
-import { appendWholeDayTransferPair, applyWholeDayTransferPairToManagedCell, isWholeDayPairSourceOwnEntry, settleWholeDayPairBlockedRecords, stripWholeDayPairOwnEntries, type WholeDayPairTargetBlockResolver, cellsHaveNonDerivedStatusEntries, deriveWholeDayPairSourceRecords, findWholeDayTransferPairForDate, isWholeDayPairExpandedStudent, parseWholeDayTransferPairs, removeWholeDayTransferPair, resolveWholeDayTransferPairWeekdayBlock, stripWholeDayPairDerivedRecords, type WholeDayTransferPair } from './wholeDayTransferPair'
+import { appendWholeDayTransferPair, applyWholeDayTransferPairToManagedCell, buildWholeDayPairTargetRecordLookup, type WholeDayPairTargetRecordLookup, isWholeDayPairSourceOwnEntry, settleWholeDayPairBlockedRecords, stripWholeDayPairOwnEntries, type WholeDayPairTargetBlockResolver, cellsHaveNonDerivedStatusEntries, deriveWholeDayPairSourceRecords, findWholeDayTransferPairForDate, isWholeDayPairExpandedStudent, parseWholeDayTransferPairs, removeWholeDayTransferPair, resolveWholeDayTransferPairWeekdayBlock, stripWholeDayPairDerivedRecords, type WholeDayTransferPair } from './wholeDayTransferPair'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -2814,8 +2814,12 @@ export function buildAppliedManagedPostFreezeCells(week: SlotCell[], params: {
   }
 }
 
-/** 段 4: 付け替えの移動元 D のセルに添える「D のテンプレの机」（D に「休)」記録を作り直す材料）。 */
-export type WholeDayPairSourceInfo = { pair: WholeDayTransferPair; templateDesks: DeskCell[] }
+/**
+ * 段 4: 付け替えの移動元 D のセルに添える「D のテンプレの机」（D に「休)」記録を作り直す材料）。
+ * templateDesks は D の日付の削除記録を当てる**前**の机。削除記録に当たる生徒は isSuppressed で示し、外すかどうかは記録を作る側
+ * （overlayPreparedManagedCells）が D' の記録と合わせて決める（2026-11-08 確認リスト se-7: D' で記録にした生徒は D に「休)」を残す・§4-1-2）。
+ */
+export type WholeDayPairSourceInfo = { pair: WholeDayTransferPair; templateDesks: DeskCell[]; isSuppressed: (student: StudentEntry) => boolean }
 
 // 段 4: 管理セル（createBoardWeek の結果）に丸ごと振替の組を当てる。D' のセルは D のテンプレ（D を開けた形で作る＝D を休日設定にしても追従する・4-2）
 // の同じ時限・同じ机番号へ差し替え、D のセルは空にする（applyWholeDayTransferPairToManagedCell）。組の無い週は参照ごと返す。
@@ -2852,14 +2856,13 @@ function applyWholeDayTransferPairsToManagedWeek(managedWeek: SlotCell[], params
     const role = pair.sourceDateKey === cell.dateKey ? 'source' : 'target'
     const sourceCellsBySlot = sourceCellsFor(pair)
     if (role === 'source') {
-      // 「休)」記録の材料: D のテンプレの机から、付け替えに出さない生徒（D の日付の削除記録＝D' で消した・動かした・記録にした）を外したもの。
+      // 「休)」記録の材料: D のテンプレの机と、付け替えに出さない生徒（D の日付の削除記録＝D' で消した・動かした・記録にした）の判定。
+      // ★2026-11-08（確認リスト se-7・INV-06）: 削除記録に当たる生徒をここで机から外すと、D' で休み・振無休・出席にした（記録が D' に残る）生徒の
+      //   「休)」まで消える（§4-1-2 は「D は休)のまま」）。机は外さずに渡し、D' の記録を見て外すかを overlayPreparedManagedCells が決める。
       const sourceCell = sourceCellsBySlot.get(cell.slotNumber)
       const onSource = isSuppressedOn(pair.sourceDateKey)
-      const templateDesks = (sourceCell?.desks ?? []).map((desk): DeskCell => (!desk.lesson ? desk : {
-        ...desk,
-        lesson: { ...desk.lesson, studentSlots: desk.lesson.studentSlots.map((student) => (student && !onSource(student, cell.slotNumber) ? student : null)) as [StudentEntry | null, StudentEntry | null] },
-      }))
-      sourceInfoByCellId.set(cell.id, { pair, templateDesks })
+      const slotNumber = cell.slotNumber
+      sourceInfoByCellId.set(cell.id, { pair, templateDesks: sourceCell?.desks ?? [], isSuppressed: (student) => onSource(student, slotNumber) })
     } else {
       targetSourceDateByCellId.set(cell.id, pair.sourceDateKey)
     }
@@ -2890,6 +2893,8 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
   suppressedRegularLessonOccurrences: string[]
   todayKey: string
   templateOriginRules?: TemplateOriginRemergeRules | null
+  /** 段 4: 丸ごと振替の D' の記録（盤面全体から作る・buildWholeDayPairTargetRecordLookup）。D の「休)」記録を残すかの判定に使う。 */
+  wholeDayPairTargetRecords?: WholeDayPairTargetRecordLookup | null
 }): SlotCell[] {
   const week = stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)
   const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
@@ -2900,11 +2905,11 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
   // 管理セルの準備（createBoardWeek → 固定日で分離 → 抑止 → 足場講師 strip）はテンプレ差分反映と共有する（R-5）。
   const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate })
   if (!freezeDate) {
-    return overlayPreparedManagedCells(managedCells, [week], buildTeacherAliasResolver(params.teachers), params.templateOriginRules)
+    return overlayPreparedManagedCells(managedCells, [week], buildTeacherAliasResolver(params.teachers), params.templateOriginRules, params.wholeDayPairTargetRecords)
   }
   // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
   const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
-  const postFreezeOverlaid = overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers), params.templateOriginRules)
+  const postFreezeOverlaid = overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers), params.templateOriginRules, params.wholeDayPairTargetRecords)
   return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
     if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
     return a.slotNumber - b.slotNumber
@@ -2918,7 +2923,7 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
 //   掃除の commit が再マージ結果(例: 別の生徒の改名反映)を**明示値で上書きして落とす**。
 //   経路ごとに weeks.map(...) を書き写すとその同一性が静かに壊れるので、複製を作らずここを通すこと
 //   (studentWithdrawSweep.test.ts / studentWithdrawDateExclusive.test.ts が呼び出し箇所を字面で固定している)。
-export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], params: {
+export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], inputParams: {
   classroomSettings: ClassroomSettings
   teachers: TeacherRow[]
   students: StudentRow[]
@@ -2929,6 +2934,9 @@ export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], params: {
   templateOriginRules?: TemplateOriginRemergeRules | null
 }): SlotCell[][] {
   // 段 4 §9-21: D' に同じ生徒の手入力があって付け替えに置かなかった D の生徒の記録を「休み」に（D と D' は別の週なので盤面全体で当てる）。
+  // 段 4（2026-11-08 確認リスト se-7）: D' の記録は D と別の週にあるので、盤面全体から 1 回だけ読んで各週の再マージへ渡す（記録は再マージで変わらない）。
+  // 週単位の呼び出しは下の 1 か所だけ（studentWithdrawDateExclusive.test.ts が字面で固定）。
+  const params = { ...inputParams, wholeDayPairTargetRecords: buildWholeDayPairTargetRecordLookup(weeks, inputParams.suppressedRegularLessonOccurrences, inputParams.templateOriginRules?.pendingDesks) }
   return settleWholeDayPairBlockedRecords(
     normalizeWeeksDeskCount(weeks.map((week) => remergeBoardWeekWithManagedData(week, params)), params.classroomSettings.deskCount),
     params.suppressedRegularLessonOccurrences, buildWholeDayPairTargetBlockResolver(params.templateOriginRules?.pendingDesks),
@@ -3139,8 +3147,9 @@ export function computeTemplateDiffApplyForBoard(input: {
   // その置き直しを差分反映に書き写さず（机をまたぐ計算なので写すと必ずずれる）、保存と同じ抑止（保存前－Q36 で外した分＋Q21-11 で足した分）で
   // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
   // 第 2 版: 再マージは §2-2・§2-3・§2-4 を盤面の今の状態（上段＋保留の下段）から毎回当てる（templateOriginRules）。保存結果の保留マップを渡す。
+  const wholeDayPairTargetRecords = buildWholeDayPairTargetRecordLookup(slotFollow.weeks, settledSuppressed, slotFollow.nextPendingDesks)
   const nextWeeks = settleWholeDayPairBlockedRecords(
-    slotFollow.weeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed, templateOriginRules: { pendingDesks: slotFollow.nextPendingDesks } })),
+    slotFollow.weeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, slotFilter: settleSlotFilter, suppressedRegularLessonOccurrences: settledSuppressed, templateOriginRules: { pendingDesks: slotFollow.nextPendingDesks }, wholeDayPairTargetRecords })),
     settledSuppressed, buildWholeDayPairTargetBlockResolver(slotFollow.nextPendingDesks),
   )
   // §4-2 規則 1・§2-2: 置かなかったテンプレの授業の予定数は**積まずに盤面の状態から導く**（templateConflictRules の collectManualFirstBlockedLessons・
@@ -3332,11 +3341,13 @@ function settleTemplateDiffWeekWithRemerge(week: SlotCell[], params: {
   slotFilter?: TemplateDiffSlotFilter | null
   /** 第 2 版（§2-2・§2-3・§2-4）の再マージの規則（保存結果の保留マップ）。 */
   templateOriginRules?: TemplateOriginRemergeRules | null
+  /** 段 4: 丸ごと振替の D' の記録（盤面全体から作る・remergeBoardWeeksWithManagedData と同じ判定＝不動点）。 */
+  wholeDayPairTargetRecords?: WholeDayPairTargetRecordLookup | null
 }): SlotCell[] {
   const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
   if (lastDateKey < params.effectiveStartDate) return week
   const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
-  const settledByDateSlot = new Map(overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers), params.templateOriginRules).map((cell) => [buildCellDateSlotKey(cell), cell]))
+  const settledByDateSlot = new Map(overlayPreparedManagedCells(managedCells, [postFreezeBoard], buildTeacherAliasResolver(params.teachers), params.templateOriginRules, params.wholeDayPairTargetRecords).map((cell) => [buildCellDateSlotKey(cell), cell]))
   return week.map((cell) => {
     if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell
     return cell.dateKey < params.effectiveStartDate ? cell : (settledByDateSlot.get(buildCellDateSlotKey(cell)) ?? cell)
@@ -5183,7 +5194,7 @@ function stripNonPairTemplateRegulars(cell: SlotCell): SlotCell {
   return changed ? { ...cell, desks } : cell
 }
 
-function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell; wholeDayPairSource?: WholeDayPairSourceInfo; wholeDayPairTargetSource?: string }>, boardWeeks: SlotCell[][], teacherAliases?: TeacherAliasResolver, templateOriginRules?: TemplateOriginRemergeRules | null) {
+function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell; wholeDayPairSource?: WholeDayPairSourceInfo; wholeDayPairTargetSource?: string }>, boardWeeks: SlotCell[][], teacherAliases?: TeacherAliasResolver, templateOriginRules?: TemplateOriginRemergeRules | null, wholeDayPairTargetRecords?: WholeDayPairTargetRecordLookup | null) {
   const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
   const managedCellIds = new Set(preparedCells.map(({ raw }) => raw.id))
   // 第 2 版（フラグ ON の教室だけ）: 同じ日の中で動かしたテンプレの授業（写し）の元の時限には、テンプレの同じ授業を置き直さない（移動の抑止キーの代わり・§1-1 #2）。
@@ -5210,11 +5221,14 @@ function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; appli
     // 段 4（spec-template-conflict-v2 §3）: 丸ごと振替の移動元 D は、D のテンプレの生徒の席へ表示専用の「休)」記録を毎回作り直す
     // （D の新テンプレに追従・会計を持たない・決定的に作る＝不動点）。盤面に D のセルが無い（週を外した）ときは作らない。
     if (!prepared.wholeDayPairSource || !findMatchingBoardCell(prepared.raw, boardCellMaps)) return merged
+    const sourceInfo = prepared.wholeDayPairSource
     return deriveWholeDayPairSourceRecords(merged, {
-      pair: prepared.wholeDayPairSource.pair,
-      templateDesks: prepared.wholeDayPairSource.templateDesks,
-      buildRecord: (student, desk) => buildMovedSourceStatusEntry({ student, sourceCell: merged, sourceDesk: desk, destinationDateKey: prepared.wholeDayPairSource!.pair.targetDateKey, destinationSlotNumber: merged.slotNumber }),
-      isExcluded: () => false,
+      pair: sourceInfo.pair,
+      templateDesks: sourceInfo.templateDesks,
+      buildRecord: (student, desk) => buildMovedSourceStatusEntry({ student, sourceCell: merged, sourceDesk: desk, destinationDateKey: sourceInfo.pair.targetDateKey, destinationSlotNumber: merged.slotNumber }),
+      // D の日付の削除記録がある生徒は出さない（D' で消した・格納した・別の日へ動かした＝§4-1-2「消したまま」）。ただし D' に記録（休み・振無休・出席）
+      // として残っている生徒は D に「休)」を残す（2026-11-08 確認リスト se-7・INV-06。D' の記録は盤面全体から読む＝buildWholeDayPairTargetRecordLookup）。
+      isExcluded: (student) => sourceInfo.isSuppressed(student) && !(wholeDayPairTargetRecords?.(sourceInfo.pair, merged.slotNumber, student) ?? false),
     })
   })
   function overlayPreparedManagedCell({ raw: managedCell, applied: adjustedManagedCell }: { raw: SlotCell; applied: SlotCell }) {
@@ -8869,8 +8883,9 @@ function settleWholeDayTransferPairDates(params: Omit<WholeDayTransferPairParams
   })
   const suppressed = [...params.suppressedRegularLessonOccurrences, ...diff.addedSuppressedRegularLessonOccurrences.filter((key) => !params.suppressedRegularLessonOccurrences.includes(key))]
   const slotFilter: TemplateDiffSlotFilter = { slotKeys: new Set(), fullDates: dates }
+  const wholeDayPairTargetRecords = buildWholeDayPairTargetRecordLookup(diff.nextWeeks, suppressed, diff.nextPendingDesks)
   const nextWeeks = settleWholeDayPairBlockedRecords(diff.nextWeeks.map((week) => (week.some((cell) => dates.has(cell.dateKey))
-    ? settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: suppressed, effectiveStartDate, slotFilter, templateOriginRules: { pendingDesks: diff.nextPendingDesks } })
+    ? settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: suppressed, effectiveStartDate, slotFilter, templateOriginRules: { pendingDesks: diff.nextPendingDesks }, wholeDayPairTargetRecords })
     : week)), suppressed, buildWholeDayPairTargetBlockResolver(diff.nextPendingDesks))
   return { nextWeeks, nextPendingDesks: diff.nextPendingDesks, suppressed }
 }
