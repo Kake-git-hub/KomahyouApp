@@ -179,6 +179,17 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
 
   // ── やること(Claude) ────────────────────────────────────────────────────────
   {
+    id: 'rollout-week-rollback-readiness',
+    title: '全教室展開週の戻し準備と毎朝の健診',
+    stage: 'in-progress',
+    who: 'claude',
+    summary: '11/8 に全教室へ出した 4 機能を、トラブルのときは 1 本ずつすぐ止められるようにした。11/15 まで毎朝 7:40 に本番 2 校を読み取りだけで点検して報告する。',
+    nextAction: '11/16 に健診を止め、この行を消す。',
+    notes: '2026-11-08 オーナー採用: 案 1(フラグを即 OFF に戻せる準備)＋案 4(毎朝の自動健診)。見送り: 15 分バックアップの間引き停止・版履歴から復元 JSON を出すツール・元に戻すの永続化。N-1 は「保留のある教室はフラグ OFF でも第 2 版の経路」で塞いだ(resolveTemplateDiffApplyActive)。戻しは FEATURE_ROLLBACKS に記録し tools/feature-flag-rollback.mjs 1 本＋main マージ 1 回(昇格を固定するテストは記録を見る・保護者QRの範囲 ≦ 講習の公開の範囲は無条件の門番)。健診は tools/board-health-check.mjs と docs/runbooks/morning-health-check.md、Claude のスケジュール実行(新セッション・7:40 JST・11/9〜11/15・プッシュ通知)。計画 docs/plan-2026-11-08-rollback-readiness-week.md。',
+    references: ['docs/plan-2026-11-08-rollback-readiness-week.md', 'docs/runbooks/feature-flag-rollback.md', 'docs/runbooks/morning-health-check.md'],
+    updatedOn: '2026-11-08',
+  },
+  {
     id: 'auto-backup-per-classroom',
     title: '自動バックアップの取り残しを自動で消すか決める',
     stage: 'awaiting-owner',
