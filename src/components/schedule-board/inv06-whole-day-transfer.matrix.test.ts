@@ -1148,6 +1148,34 @@ describe('INV-06 マトリクス: 丸ごと振替の付け替え（第 2 版・�
     expect(pairFx.snapshot(pairFx.remerge(remerged, pairFx.ROWS, suppressed))).toBe(pairFx.snapshot(remerged))
   })
 
+  it('D\' の中で別の時限（4限）へ動かしてから休み → +1・D は「休)→D\'」で行き先は動かした先の 4限（2026-11-08 オーナー決定「動かした先の時限を指すように」）', () => {
+    const result = paired()
+    const byName = new Map(pairFx.students.map((row) => [row.name, row]))
+    const resolveKey = (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => entry.managedStudentId ?? entry.name
+    const d2Cell = pairFx.cellAt(result.nextWeeks, pairFx.D2)
+    const toCell = pairFx.cellAt(result.nextWeeks, pairFx.D2, 4)
+    const moved = computeStudentMove({
+      weeks: result.nextWeeks, weekIndex: 1, cells: result.nextWeeks[1], movingStudentId: d2Cell.desks[0].lesson!.studentSlots[0]!.id, cellId: toCell.id, deskIndex: 0, studentIndex: 0,
+      suppressedRegularLessonOccurrences: result.nextSuppressedRegularLessonOccurrences, managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
+      sourceSeat: { cellId: d2Cell.id, deskIndex: 0, studentIndex: 0 },
+    })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    const absent = computeStudentAbsentMark({
+      weeks: moved.nextWeeks, weekIndex: 1, seat: { cellId: toCell.id, deskIndex: 0, studentIndex: 0 }, manualMakeupAdjustments: {}, suppressedMakeupOrigins: {}, fallbackMakeupStudents: {}, manualLectureStockCounts: {}, manualLectureStockOrigins: {}, fallbackLectureStockStudents: {},
+      suppressedRegularLessonOccurrences: moved.nextSuppressedRegularLessonOccurrences, ledgerOriginDatesByKey: {}, managedStudentByAnyName: byName, resolveDisplayName: (name: string) => name, resolveStockId: resolveKey, templateOriginRules: true,
+    })!
+    const suppressed = absent.ledgers.suppressedRegularLessonOccurrences
+    const remerged = pairFx.remerge(absent.nextWeeks, pairFx.ROWS, suppressed)
+    expect(pairFx.recordIds(remerged, pairFx.D2, 4)[0]?.[0]).toBe('absent:sA')
+    expect(pairFx.balances(remerged, pairFx.ROWS, absent.ledgers.manualMakeupAdjustments)).toEqual({ sA__数: 1 })
+    expect(pairFx.recordIds(remerged, pairFx.D)).toEqual([['moved:sA', null], ['moved:sB', null]])
+    const sourceDesks = pairFx.cellAt(remerged, pairFx.D).desks
+    expect(sourceDesks[0].statusSlots![0]).toMatchObject({ moveDestinationDateKey: pairFx.D2, moveDestinationSlotNumber: 4 })
+    // 動かしていない生徒 B は D の時限のまま。
+    expect(sourceDesks[1].statusSlots![0]).toMatchObject({ moveDestinationDateKey: pairFx.D2, moveDestinationSlotNumber: pairFx.SLOT })
+    expect(pairFx.snapshot(pairFx.remerge(remerged, pairFx.ROWS, suppressed))).toBe(pairFx.snapshot(remerged))
+  })
+
   it('不動点: 作った直後の盤面は再マージ・2 回目の再マージで変わらない（INV-03）', () => {
     const result = paired()
     const once = pairFx.remerge(result.nextWeeks, pairFx.ROWS, result.nextSuppressedRegularLessonOccurrences)

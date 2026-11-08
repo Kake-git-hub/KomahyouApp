@@ -166,6 +166,11 @@ export function isWholeDayPairDerivedRecord(entry: StudentStatusEntry | null | u
  * D のセルの「休)」記録を作り直す（純関数・入力は変えない）。前回作った記録（wholeDayPairDerived）を外し、D のテンプレの生徒の席が
  * 空いていて記録も無ければ、表示専用の移動元記録（moved・移動先＝D' の同じ時限）を置く。記録は会計を持たない（moved と同じ）。
  * recordedAt・ID は決定的に作る（再マージのたびに変わると不動点にならない＝INV-03）。
+ * ★2026-11-08（オーナー決定「動かした先の時限を指すように」・regression-reviewer 中-1・INV-06）: 行き先の時限は resolveDestinationSlotNumber
+ *   （D' でその生徒が実際に居る・記録がある時限＝buildWholeDayPairTargetRecordLookup）を使い、無ければ今どおり D の時限。D' の中で別の時限へ動かした
+ *   授業の振替先に、生徒の居ない D' の元の時限を出さない（生徒日程表の画面版・別タブ版の compactMakeupDestination がリンクの引けないとき＝D' で休みに
+ *   したときに読む）。ID は D の時限のまま（変えない）。削除記録の無い生徒にも同じ lookup を当てる（作成で D から移した手入力を D' の別の時限へ
+ *   動かしたときも同じ答え＝出自で割れない）。D の席・記録には触らない（§4-2 規則 3: 毎回作り直す派生記録の行き先だけが盤面の D' に追従する）。
  */
 export function deriveWholeDayPairSourceRecords(cell: SlotCell, params: {
   pair: WholeDayTransferPair
@@ -173,6 +178,8 @@ export function deriveWholeDayPairSourceRecords(cell: SlotCell, params: {
   buildRecord: (student: StudentEntry, desk: DeskCell) => StudentStatusEntry
   /** 付け替えに出さない生徒（D' で削除した・D で削除した）には記録を作らない。 */
   isExcluded: (student: StudentEntry) => boolean
+  /** D' でその生徒が居る時限（無ければ null → D の時限）。 */
+  resolveDestinationSlotNumber?: (student: StudentEntry) => number | null
 }): SlotCell {
   let changed = false
   const desks = cell.desks.map((desk, deskIndex) => {
@@ -190,7 +197,7 @@ export function deriveWholeDayPairSourceRecords(cell: SlotCell, params: {
         recordedAt: `${params.pair.sourceDateKey}T00:00:00.000Z`,
         sourceLessonId: templateDesk.lesson?.id ?? `wholedaypair_${params.pair.sourceDateKey}_${cell.slotNumber}_${deskIndex}`,
         moveDestinationDateKey: params.pair.targetDateKey,
-        moveDestinationSlotNumber: cell.slotNumber,
+        moveDestinationSlotNumber: params.resolveDestinationSlotNumber?.(student) ?? cell.slotNumber,
         wholeDayPairDerived: true,
         wholeDayPairTargetDate: params.pair.targetDateKey,
       }
@@ -224,14 +231,24 @@ function sameStatusSlots(left: DeskCell['statusSlots'], right: DeskCell['statusS
  *   D' の**席に居る生徒**（上段＋保留の下段）と記録のうち、その生徒自身の D の授業（権威関数 isWholeDayPairSourceOwnEntry＝印・移した印・
  *   授業 ID が D のテンプレのまま＋振替元 D）も数える（記録の判定も同じ権威関数＝判定を 2 系統に持たない）。D の時限は振替元の表示ラベル
  *   （makeupSourceLabel の「N限」）から読み、読めなければそのセルの時限。D' に生徒も記録も無い（削除・格納・別の日へ動かした）ときは今どおり数えない。
+ * ★2026-11-08（オーナー決定「動かした先の時限を指すように」・regression-reviewer 中-1・INV-06/INV-03）: 戻りは有無ではなく
+ *   「D' でその生徒が居る（記録がある）時限」（無ければ null）。D の「休)」の行き先（moveDestinationSlotNumber）に使う。
+ *   同じ生徒が D' に複数あるときの規則（決定的・盤面の並び順に依らない＝不動点）: 席に居る方を記録より優先 → 同じ種類なら D の時限そのもの
+ *   （動かしていない）を優先 → それでも複数なら小さい時限。
  */
-export type WholeDayPairTargetRecordLookup = (pair: WholeDayTransferPair, slotNumber: number, student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => boolean
+export type WholeDayPairTargetRecordLookup = (pair: WholeDayTransferPair, slotNumber: number, student: Pick<StudentEntry, 'managedStudentId' | 'name'>) => number | null
 
 export function buildWholeDayPairTargetRecordLookup(weeks: readonly (readonly SlotCell[])[], keys: readonly string[] = [], pendingDesks?: TemplatePendingDeskMap | null): WholeDayPairTargetRecordLookup | null {
   const pairs = parseWholeDayTransferPairs(keys)
   if (pairs.length === 0) return null
   const sourceByTarget = new Map(pairs.map((pair) => [pair.targetDateKey, pair.sourceDateKey] as const))
-  const recorded = new Set<string>()
+  // 鍵 → { 席に居る時限, 記録の時限 }（D' の時限の集合）。
+  const recorded = new Map<string, { seated: Set<number>; records: Set<number> }>()
+  const add = (key: string, kind: 'seated' | 'records', targetSlotNumber: number) => {
+    const found = recorded.get(key) ?? { seated: new Set<number>(), records: new Set<number>() }
+    found[kind].add(targetSlotNumber)
+    recorded.set(key, found)
+  }
   const identity = (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => entry.managedStudentId ?? entry.name
   const recordKey = (sourceDateKey: string, targetDateKey: string, slotNumber: number, studentKey: string) => `${sourceDateKey}__${targetDateKey}__${slotNumber}__${studentKey}`
   for (const week of weeks) for (const cell of week) {
@@ -241,16 +258,22 @@ export function buildWholeDayPairTargetRecordLookup(weeks: readonly (readonly Sl
       const pendingRecords = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.statusSlots ?? []
       for (const entry of [...(desk.statusSlots ?? []), ...pendingRecords]) {
         if (!entry || entry.status === 'moved' || !isWholeDayPairSourceOwnEntry(entry, sourceDateKey)) continue
-        recorded.add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(entry, sourceDateKey, cell.slotNumber), identity(entry)))
+        add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(entry, sourceDateKey, cell.slotNumber), identity(entry)), 'records', cell.slotNumber)
       }
       const pendingStudents = pendingDesks?.[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []
       for (const student of [...(desk.lesson?.studentSlots ?? []), ...pendingStudents]) {
         if (!student || !isWholeDayPairSourceOwnEntry(student, sourceDateKey)) continue
-        recorded.add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(student, sourceDateKey, cell.slotNumber), identity(student)))
+        add(recordKey(sourceDateKey, cell.dateKey, resolveWholeDayPairSourceSlotNumber(student, sourceDateKey, cell.slotNumber), identity(student)), 'seated', cell.slotNumber)
       }
     }
   }
-  return (pair, slotNumber, student) => recorded.has(recordKey(pair.sourceDateKey, pair.targetDateKey, slotNumber, identity(student)))
+  return (pair, slotNumber, student) => {
+    const found = recorded.get(recordKey(pair.sourceDateKey, pair.targetDateKey, slotNumber, identity(student)))
+    if (!found) return null
+    const candidates = found.seated.size > 0 ? found.seated : found.records
+    if (candidates.has(slotNumber)) return slotNumber
+    return Math.min(...candidates)
+  }
 }
 
 /**

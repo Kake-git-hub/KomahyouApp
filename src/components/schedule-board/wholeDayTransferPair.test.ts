@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import {
   appendWholeDayTransferPair,
+  buildWholeDayPairTargetRecordLookup,
   collectWholeDayPairTargetDates,
   buildWholeDayTransferPairKey,
   convertToWholeDayPairStudent,
@@ -532,18 +533,20 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
       return { weeks: next, suppressed: absent.suppressed.filter((key) => !removedKeys.includes(key)), manual: absent.manual }
     }
     // D' の中で別の机へ動かすと、移した印（wholeDayPairMovedFrom）は prepareStudentForMove が外す（記録を通ったときと同じ）。
-    const moveWithinTarget = (weeks: SlotCell[][], suppressed: string[]) => {
+    const moveWithinTargetTo = (to: { slotNumber: number; deskIndex: number; studentIndex: number }) => (weeks: SlotCell[][], suppressed: string[]) => {
       const seat = movedSeat(weeks)
       const moved = computeStudentMove({
-        weeks, weekIndex: 1, cells: weeks[1], movingStudentId: seat.student.id, cellId: seat.cellId, deskIndex: 1, studentIndex: 1,
+        weeks, weekIndex: 1, cells: weeks[1], movingStudentId: seat.student.id, cellId: cellAt(weeks, D2, to.slotNumber).id, deskIndex: to.deskIndex, studentIndex: to.studentIndex,
         suppressedRegularLessonOccurrences: suppressed, managedStudentByAnyName: byName, resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true,
         sourceSeat: { cellId: seat.cellId, deskIndex: seat.deskIndex, studentIndex: seat.studentIndex },
       })
       if (moved.status !== 'moved') throw new Error(moved.message)
-      expect(studentAt(moved.nextWeeks, D2, 1, 1)?.wholeDayPairMovedFrom).toBeUndefined()
+      expect(studentAt(moved.nextWeeks, D2, to.deskIndex, to.studentIndex, to.slotNumber)?.wholeDayPairMovedFrom).toBeUndefined()
       return { weeks: moved.nextWeeks, suppressed: moved.nextSuppressedRegularLessonOccurrences, manual: {} as Record<string, Array<{ dateKey: string; slotNumber?: number }>> }
     }
-    const recordOps = { 休み: ops.休み, 振無休: markRecord('absent-no-makeup'), 出席: markRecord('attended'), 休み解除: absentThenClear, 'D\' の中で別の机へ移動': moveWithinTarget }
+    const moveWithinTarget = moveWithinTargetTo({ slotNumber: SLOT, deskIndex: 1, studentIndex: 1 })
+    // 2026-11-08 オーナー決定「動かした先の時限を指すように」（regression-reviewer 中-1 の手入力由来の兄弟）: D' の別の時限（4限）へ動かすと D の「休)」の行き先も 4限。
+    const recordOps = { 休み: ops.休み, 振無休: markRecord('absent-no-makeup'), 出席: markRecord('attended'), 休み解除: absentThenClear, 'D\' の中で別の机へ移動': moveWithinTarget, 'D\' の中で別の時限（4限）へ移動': moveWithinTargetTo({ slotNumber: 4, deskIndex: 1, studentIndex: 0 }) }
     const subjectChanged = setups.科目を変えたテンプレの授業
     const dataKinds = {
       '古いデータ（編集で抑止を積んでいない）': { setup: subjectChanged, suppressedOrigins: {} },
@@ -562,6 +565,7 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
           for (const [label, weeks] of [['再マージ', remerged], ['テンプレ保存', saved.nextWeeks]] as const) {
             expect(stockWith(weeks, after.manual, kind.suppressedOrigins), label).toEqual(expected)
             expect(recordIds(weeks, D)[0]?.[0], label).toBe('moved:sA')
+            expect(cellAt(weeks, D).desks[0].statusSlots![0], label).toMatchObject({ moveDestinationDateKey: D2, moveDestinationSlotNumber: opName.includes('4限') ? 4 : SLOT })
             // INV-12: A は D' の 1 か所だけ（休み解除で戻した・D' の中で動かした授業）か、どこにも居ない（記録にした）。
             const places = weeks.flat().flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((student) => student?.managedStudentId === 'sA').map((student) => `${cell.dateKey}:${student!.subject}`)))
             expect(places, label).toEqual(opName === '休み解除' || opName.includes('移動') ? [`${D2}:${subject}`] : [])
@@ -668,9 +672,14 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
       const keys = resolveSuppressedRegularLessonOccurrenceKeys(target, D2, SLOT, { templateOriginRules: true })
       return { weeks: next, suppressed: [...suppressed, ...keys.filter((key) => !suppressed.includes(key))], manual: {} as Record<string, Array<{ dateKey: string; slotNumber?: number }>> }
     }
-    const expectSourceRestRecord = (weeks: SlotCell[][], label: string) => {
+    // 行き先の時限（destinationSlotNumber）: 2026-11-08 オーナー決定「動かした先の時限を指すように」（regression-reviewer 中-1）で、D' の中で別の時限へ
+    //   動かした授業は D の「休)」の行き先を動かした先の時限にする（生徒日程表・保護者 QR の振替先が生徒の居ない D' の元の時限を出さない）。
+    //   それ以外（D' の同じ時限に居る・記録がある）は今どおり D の時限（SLOT）。期待値の変更はこの決定による 1 点だけ。
+    const expectSourceRestRecord = (weeks: SlotCell[][], label: string, destinationSlotNumber: number = SLOT) => {
       expect(recordIds(weeks, D), label).toEqual([['moved:sA', null], ['moved:sB', null]])
-      expect(cellAt(weeks, D).desks[0].statusSlots![0], label).toMatchObject({ status: 'moved', managedStudentId: 'sA', subject: '数', moveDestinationDateKey: D2, moveDestinationSlotNumber: SLOT, wholeDayPairDerived: true, wholeDayPairTargetDate: D2 })
+      expect(cellAt(weeks, D).desks[0].statusSlots![0], label).toMatchObject({ status: 'moved', managedStudentId: 'sA', subject: '数', moveDestinationDateKey: D2, moveDestinationSlotNumber: destinationSlotNumber, wholeDayPairDerived: true, wholeDayPairTargetDate: D2 })
+      // 生徒 B（動かしていない）は D の時限のまま。
+      expect(cellAt(weeks, D).desks[1].statusSlots![0], label).toMatchObject({ moveDestinationDateKey: D2, moveDestinationSlotNumber: SLOT })
     }
     const expandedRecordOps = { 休み: markExpanded('absent'), 振無休: markExpanded('absent-no-makeup'), 出席: markExpanded('attended') }
     for (const [opName, op] of Object.entries(expandedRecordOps)) {
@@ -824,7 +833,8 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
           expect(stockWith(weeks, after.manual, {}), label).toEqual(testCase.expected)
           expect(recordIds(weeks, D2, testCase.to.slotNumber)[testCase.to.deskIndex]?.[testCase.to.studentIndex], label).toBe(testCase.targetRecord)
           expect(placesOfA(weeks), label).toEqual(testCase.status === null ? [`${D2}:数`] : [])
-          expectSourceRestRecord(weeks, label)
+          // 行き先は動かした先の時限（同じ時限の別の机なら 5限のまま・別の時限なら 4限・2026-11-08 オーナー決定）。
+          expectSourceRestRecord(weeks, label, testCase.to.slotNumber)
           // 別の時限へ動かしても D の「休)」は元の時限（5限）にだけ出る。
           expect(recordIds(weeks, D, 4), label).toEqual([[null, null], [null, null]])
         }
@@ -834,6 +844,55 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
         expect(snapshot(save(remerged, ROWS, after.suppressed, { manualMakeupAdjustments: after.manual, previousRegularLessons: ROWS }).nextWeeks)).toBe(snapshot(remerged))
       })
     }
+
+    // 2026-11-08 オーナー決定「動かした先の時限を指すように」（regression-reviewer 中-1・INV-06）: 生徒日程表の振替欄（元コマ起点）の行き先。
+    //   席に居る（出席・振無休も）間はリンク（buildLinkedLessonDestinationMap）が D' 4限を引くので修正前から 4限。休みにすると D' の記録はリンク先に
+    //   ならず、D の「休)」が持つ行き先（moveDestinationSlotNumber）へ落ちるため、修正前は生徒の居ない D' 5限を出していた（保護者 QR の parentSchedule は moveDestination を読まない）。
+    for (const status of [null, 'absent'] as const) {
+      it(`D' の別の時限（4限）へ動かした授業${status ? 'を休みにしても' : 'は'}、生徒日程表の振替欄で「D 5限 → D' 4限」と出る`, () => {
+        const paired = pairedOrThrow(pairOf(baseBoard()))
+        const after = thenOp(moveExpandedWithinTarget(OTHER_SLOT), status ? markAt(OTHER_SLOT, status) : undefined)(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+        const remerged = remerge(after.weeks, ROWS, after.suppressed)
+        const payload = buildStudentPayload({
+          cells: remerged.flat(), defaultStartDate: '2026-10-01', defaultEndDate: '2026-10-31', titleLabel: '段4', classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [] },
+          students, teachers, regularLessons: ROWS, boardBasedPlannedCountEnabled: true,
+        })
+        expect(payload.transferSourceRestDisplayEnabled).toBe(true)
+        const vm = buildStudentSheetViewModel(payload, { startDate: '2026-10-01', endDate: '2026-10-31', studentId: 'sA', todayKey: '2026-10-01' })!
+        const [, dMonth, dDay] = D.split('-').map(Number)
+        const [, tMonth, tDay] = D2.split('-').map(Number)
+        expect(vm.makeupNotes).toContain(`数 ${dMonth}/${dDay} ${SLOT}限 → ${tMonth}/${tDay} 4限`)
+        expect(vm.makeupNotes.filter((note) => note.startsWith(`数 ${dMonth}/${dDay} ${SLOT}限`))).toHaveLength(1)
+      })
+    }
+
+    // 行き先の時限を引く規則（buildWholeDayPairTargetRecordLookup・決定的＝INV-03）: 席に居る方を記録より優先 → D の時限そのものを優先 → 小さい時限。
+    it('行き先の時限の規則: D\' に居なければ null・席は記録より優先・D の時限そのものを優先・それ以外は小さい時限', () => {
+      const paired = pairedOrThrow(pairOf(baseBoard()))
+      const pair = { sourceDateKey: D, targetDateKey: D2 }
+      const lookupOf = (weeks: SlotCell[][], suppressed: string[]) => buildWholeDayPairTargetRecordLookup(weeks, suppressed)!
+      const sA = { managedStudentId: 'sA', name: '青木' }
+      // 展開したまま（D' 5限の席）→ 5。
+      expect(lookupOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)(pair, SLOT, sA)).toBe(SLOT)
+      // 別の生徒・別の D の時限 → null。
+      expect(lookupOf(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)(pair, 4, sA)).toBeNull()
+      // 4限へ動かした（席）→ 4。4限で休み（記録）→ 4。
+      const moved = moveExpandedWithinTarget(OTHER_SLOT)(paired.nextWeeks, paired.nextSuppressedRegularLessonOccurrences)
+      expect(lookupOf(moved.weeks, moved.suppressed)(pair, SLOT, sA)).toBe(4)
+      const absent = markAt(OTHER_SLOT, 'absent')(moved.weeks, moved.suppressed)
+      expect(lookupOf(absent.weeks, absent.suppressed)(pair, SLOT, sA)).toBe(4)
+      // 4限の記録と 3限の席 → 席の 3。
+      const withSeat = structuredClone(absent.weeks)
+      const seated = { ...cellAt(moved.weeks, D2, 4).desks[0].lesson!.studentSlots[0]! }
+      cellAt(withSeat, D2, 3).desks[1].lesson = { id: 'l3', studentSlots: [seated, null] }
+      expect(lookupOf(withSeat, absent.suppressed)(pair, SLOT, sA)).toBe(3)
+      // 3限と 4限の席 → 小さい 3。5限（D の時限そのもの）にも居れば 5。
+      const twoSeats = structuredClone(moved.weeks)
+      cellAt(twoSeats, D2, 3).desks[1].lesson = { id: 'l3', studentSlots: [seated, null] }
+      expect(lookupOf(twoSeats, moved.suppressed)(pair, SLOT, sA)).toBe(3)
+      cellAt(twoSeats, D2, SLOT).desks[1].lesson = { id: 'l5', studentSlots: [null, seated] }
+      expect(lookupOf(twoSeats, moved.suppressed)(pair, SLOT, sA)).toBe(SLOT)
+    })
 
     for (const to of [SAME_SLOT_OTHER_DESK, OTHER_SLOT]) {
       it(`対照: 付け替えで展開したテンプレの授業を D' の中で動かして（${to.slotNumber}限）から削除・格納 → D は空のまま（戻さない）・未消化は削除 0 件・格納 1 件`, () => {
@@ -890,9 +949,8 @@ describe('INV-03: D から D\' へ移した手入力を D\' で外した盤面�
 
   // regression-reviewer 指摘(2026-11-08・残る穴): 1 件目(D' の中で動かしてから休み)と 2 件目(保留の下段)は上の describe で本物にした。残りは休日設定の経路。
   it.todo('D\' を休日設定したとき(休日化の記録が印を持つか・D の抑止キーを積むか)と D の休日解除で D の「休)」が割れない')
-  // regression-reviewer 指摘(2026-11-08・中-1・オーナー確認待ち): 別の時限へ動かしたとき、D の「休)」の行き先は D の時限のまま(moveDestinationSlotNumber=D の時限)。
-  //   生徒日程表・保護者 QR(compactMakeupDestination)は生徒の居ない D' の元の時限を振替先に出す。手入力由来を別の時限へ動かした場合も修正前から同じ形。
-  it.todo('D\' の別の時限へ動かしたとき、D の「休)」の行き先(moveDestinationSlotNumber)を動かした先の時限にするか元の時限のままにするか(オーナー確認→仕様 §3 へ)')
+  // regression-reviewer 指摘(2026-11-08・中-1): 別の時限へ動かしたときの D の「休)」の行き先は、オーナー決定(2026-11-08)「動かした先の時限を指すように」で
+  //   上の describe の本物のテスト(展開した授業の movedExpandedCases・手入力由来の「D' の中で別の時限（4限）へ移動」・生徒日程表の振替欄・時限の規則)にした。
   it.todo('D\' から別の日 X へ動かして D\' へ戻すと D に「休)」が戻り、X に置いたままなら D は空(規則の往復・推定どおりかの検査)')
 
   // 2026-11-07（オーナー指示「直して」2 件目・INV-03/INV-06/INV-12）: D' で日付メニューの「生徒を空にする」（handleClearStudentsOnDate）を使うと、
