@@ -4722,8 +4722,8 @@ export const lectureSubmissionApi = onRequest({
       regularOnly: data.regularOnly ?? false,
       occupiedSlots: data.occupiedSlots ?? {},
       groupClassSlots: data.groupClassSlots ?? {},
-      // 日程公開(2026-11-03)。未設定(旧文書)は公開扱い。false のときだけ提出後の画面で組まれたコマを隠す。
-      schedulePublished: data.schedulePublished !== false,
+      // 日程公開(2026-11-03)。true のときだけ公開。未設定(旧文書)も非公開(2026-11-08 オーナー指示「作成済みの特別講習をすべて非公開に」)。
+      schedulePublished: data.schedulePublished === true,
     })
     return
   }

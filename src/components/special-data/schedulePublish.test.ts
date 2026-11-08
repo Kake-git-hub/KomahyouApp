@@ -31,11 +31,11 @@ function createSession(overrides: Partial<SpecialSessionRow> = {}): SpecialSessi
 }
 
 describe('isSpecialSessionSchedulePublished', () => {
-  it('false のときだけ非公開。未設定(この項目ができる前に作った講習)は公開として扱う', () => {
+  it('true のときだけ公開。未設定(この項目ができる前に作った講習)も非公開として扱う(オーナー指示 2026-11-08「作成済みの特別講習をすべて非公開に」)', () => {
     expect(isSpecialSessionSchedulePublished(createSession({ schedulePublished: false }))).toBe(false)
     expect(isSpecialSessionSchedulePublished(createSession({ schedulePublished: true }))).toBe(true)
-    expect(isSpecialSessionSchedulePublished(createSession())).toBe(true)
-    expect(isSpecialSessionSchedulePublished(null)).toBe(true)
+    expect(isSpecialSessionSchedulePublished(createSession())).toBe(false)
+    expect(isSpecialSessionSchedulePublished(null)).toBe(false)
   })
 })
 
@@ -95,17 +95,17 @@ describe('selectSchedulePublishChangedSessionIds(切り替えた講習の提出�
     const previous = buildSchedulePublishedMap(before)
     expect(selectSchedulePublishChangedSessionIds(previous, before)).toEqual([])
     const after = [createSession({ schedulePublished: true }), createSession({ id: 'ss2', schedulePublished: true }), createSession({ id: 'ss3', schedulePublished: false })]
-    // ss2 は未設定(公開)→ true(公開)で変化なし。ss3 は前回に無い。
-    expect(selectSchedulePublishChangedSessionIds(previous, after)).toEqual(['ss1'])
+    // ss2 は未設定(非公開・2026-11-08〜)→ true(公開)で変化あり。ss3 は前回に無い。
+    expect(selectSchedulePublishChangedSessionIds(previous, after)).toEqual(['ss1', 'ss2'])
   })
 })
 
-describe('「false のときだけ非公開」の判定がそろっている(レビュー指摘 L2)', () => {
+describe('「true のときだけ公開」の判定がそろっている(レビュー指摘 L2・2026-11-08 に未設定=非公開へ)', () => {
   const cases = [false, true, undefined] as const
   it('講習データ・提出用QR・保護者QRの 3 か所が同じ答えを返す', () => {
     for (const value of cases) {
       const session = createSession(value === undefined ? {} : { schedulePublished: value })
-      const expected = value !== false
+      const expected = value === true
       expect(isSpecialSessionSchedulePublished(session), String(value)).toBe(expected)
       expect(isSubmissionSchedulePublished({ schedulePublished: value }), String(value)).toBe(expected)
       // 保護者QR: 公開中ならまだ終わっていない講習の終了日が延長の日付として返る。
