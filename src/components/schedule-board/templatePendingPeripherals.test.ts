@@ -35,6 +35,7 @@ import {
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import { buildTemplatePendingDeskKey, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
+import { resolveTemplateReportMode } from './templateDiffApply'
 import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget } from './parentAbsenceTarget'
 
@@ -600,9 +601,11 @@ describe('保存前レポートの見出し（Q32-3）', () => {
     expect(resolveTemplateOverwriteReportLabels('diff').fileNamePrefix).toBe('テンプレ保存前の盤面')
   })
 
-  it('盤面はフラグ templateDiffApply ON のときだけ diff を渡す（字面）', () => {
+  it('盤面は第 2 版の経路（フラグ templateDiffApply ON または保留あり・N-1）のときだけ diff を渡す（字面）', () => {
     const confirm = sliceBody(BOARD_TSX, 'const handleTemplateSaveConfirm = async () => {', 900)
-    expect(confirm).toContain("const templateReportMode = templateDiffApplyEnabled ? 'diff' as const : 'overwrite' as const")
+    expect(confirm).toContain('const templateReportMode = resolveTemplateReportMode(templateDiffApplyEnabled)')
+    expect(resolveTemplateReportMode(true)).toBe('diff')
+    expect(resolveTemplateReportMode(false)).toBe('overwrite')
     expect(confirm).toContain('mode: templateReportMode,')
   })
 })

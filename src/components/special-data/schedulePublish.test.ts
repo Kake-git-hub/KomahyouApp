@@ -7,14 +7,18 @@ import {
   buildSchedulePublishedMap,
   isSpecialSessionSchedulePublished,
   resolveNewSpecialSessionScheduleFields,
+  resolveSubmissionSchedulePublished,
   selectSchedulePublishChangedSessionIds,
   setSpecialSessionSchedulePublished,
   type SpecialSessionRow,
 } from './specialSessionModel'
-import { featureRolloutRegistry } from '../../utils/featureRollout'
+import { compareFeatureRolloutScope, FEATURE_ROLLBACKS, featureRolloutRegistry, resolveExpectedFeatureScope } from '../../utils/featureRollout'
 import { isSubmissionSchedulePublished } from '../submission/submissionScheduleVisibility'
 import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from '../../utils/parentSchedule'
 import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
+import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
+import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from '../../utils/classroomSnapshotParts'
+import type { AppSnapshot } from '../../types/appState'
 
 function createSession(overrides: Partial<SpecialSessionRow> = {}): SpecialSessionRow {
   return {
@@ -114,10 +118,19 @@ describe('「true のときだけ公開」の判定がそろっている(レビ�
     expect(buildParentScheduleView({}, 's001', { from: '2026-12-01', to: '2026-12-31' })).toBeNull()
   })
 
-  it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る)', () => {
-    expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(featureRolloutRegistry.parentPortalQr.scope)
-    // 2026-11-08 オーナー指示で保護者QRと同じ push で全教室へ昇格。回帰で staging-environment へ戻さない。
-    expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe('all-classrooms')
+  // 戻すとき(FEATURE_ROLLBACKS にどちらかの記録がある)は同じ値でなくてよいが、「保護者QRの範囲 ≦ 講習の公開の範囲」の向きは
+  // 記録があっても無条件で守る(講習の公開だけを戻すと、隠す手段の無いまま講習が保護者に出る。手順書 docs/runbooks/feature-flag-rollback.md の向きの注意)。
+  it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る・記録された戻しのときも保護者QRの範囲 ≦ 講習の公開の範囲)', () => {
+    const portal = featureRolloutRegistry.parentPortalQr.scope
+    const toggle = featureRolloutRegistry.lectureSchedulePublishToggle.scope
+    expect(compareFeatureRolloutScope(portal, toggle), `保護者QR(${portal}) が講習の公開(${toggle}) より広い`).toBeLessThanOrEqual(0)
+    const rolledBack = Boolean(FEATURE_ROLLBACKS.lectureSchedulePublishToggle || FEATURE_ROLLBACKS.parentPortalQr)
+    if (!rolledBack) {
+      expect(toggle).toBe(portal)
+    }
+    // 2026-11-08 オーナー指示で保護者QRと同じ push で全教室へ昇格。回帰で staging-environment へ戻さない(戻すのは記録した戻しだけ)。
+    expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(resolveExpectedFeatureScope('lectureSchedulePublishToggle'))
+    expect(featureRolloutRegistry.parentPortalQr.scope).toBe(resolveExpectedFeatureScope('parentPortalQr'))
   })
 })
 
@@ -154,5 +167,32 @@ describe('日程公開の配線(SpecialSessionScreen / App)', () => {
     // 新規トークンにも既発行トークンにも公開状態を書く。
     expect(APP).toContain('await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers, { schedulePublished })')
     expect(APP.match(/reopenedSlots: (student|teacher)Input\?\.reopenedSlots \?\? \[\], schedulePublished \}\)/g)?.length).toBe(2)
+  })
+})
+
+// 戻し互換(2026-11-08・全教室展開した lectureSchedulePublishToggle をすぐ OFF に戻せるようにする準備・INV-06)。
+describe('戻し互換: フラグ OFF の版でも非公開の講習の項目を消さない(2026-11-08)', () => {
+  it('フラグ OFF の教室では schedulePublished:false の講習も公開として扱うが、項目は保存で消えない(ON に戻せば再び非公開)', () => {
+    const hidden = createSession({ schedulePublished: false })
+    // OFF: 提出用QRは公開扱い(トグルが無いので隠したままにしない)。ON: 非公開。
+    expect(resolveSubmissionSchedulePublished(hidden, false)).toBe(true)
+    expect(resolveSubmissionSchedulePublished(hidden, true)).toBe(false)
+
+    // OFF の版の保存・読み込み(JSON の書き出し/読み込み・分割保存の部品の往復・Excel の取り込み)で項目が残る。
+    const snapshot = { screen: 'board', classroomSettings: {}, managers: [], teachers: [], students: [], regularLessons: [], groupLessons: [], specialSessions: [hidden], autoAssignRules: [], pairConstraints: [], boardState: null, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot)).specialSessions
+    expect(parsed[0]?.schedulePublished).toBe(false)
+    const split = splitClassroomSnapshotPayload(snapshot)
+    const assembled = assembleClassroomSnapshotPayload({ core: split.core, board: split.board, weeks: split.weeks.map((week) => week.cells), ui: split.ui, hasBoardState: split.hasBoardState }) as { specialSessions: SpecialSessionRow[] }
+    expect(assembled.specialSessions[0]?.schedulePublished).toBe(false)
+    const workbook = buildSpecialSessionWorkbook(xlsx, parsed, [], [])
+    const reimported = parseSpecialSessionWorkbook(xlsx, workbook, parsed, { schedulePublishToggleEnabled: false })
+    expect(reimported[0]?.schedulePublished).toBe(false)
+
+    // ON に戻すと、残っていた項目のとおり再び非公開になる。
+    for (const session of [parsed[0]!, assembled.specialSessions[0]!, reimported[0]!]) {
+      expect(isSpecialSessionSchedulePublished(session)).toBe(false)
+      expect(resolveSubmissionSchedulePublished(session, true)).toBe(false)
+    }
   })
 })

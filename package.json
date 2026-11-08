@@ -13,6 +13,7 @@
     "hosting:retention:enforce": "node tools/firebase-hosting-retention.mjs --count 5",
     "verify:firebase:live": "node tools/verify-firebase-hosting.mjs",
     "lint": "eslint .",
+    "flag:rollback": "node tools/feature-flag-rollback.mjs",
     "preview": "vite preview",
     "deploy:firebase": "node tools/deploy-firebase.mjs",
     "deploy:firebase:with-functions": "node tools/deploy-firebase.mjs --with-functions",

@@ -8,9 +8,11 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { ClassroomSettings } from '../../types/appState'
+import type { AppSnapshot, ClassroomSettings, PersistedBoardState } from '../../types/appState'
 import type { SlotCell, StudentEntry } from './types'
-import { buildManagedScheduleCellsForRange, collectSameDayMovedTemplateOccurrenceKeys, computeStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, collectSameDayMovedTemplateOccurrenceKeys, computeStudentMove, computeTemplateDiffApplyForBoard, createInitialBoardSnapshot, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
+import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from '../../utils/classroomSnapshotParts'
 import { applyTemplateOriginRulesToManagedCell, collectTemplateBlockersInCell, findManualTeacherDeskElsewhere, isTemplateBlockingRecordStatus, collectManualFirstBlockedLessons, resolveTemplateStudentBlock } from './templateConflictRules'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 
@@ -154,5 +156,76 @@ describe('同日移動（フラグ ON）: 抑止キーを積まず、写しの�
     const copy = student({ id: 'c', sameDayMoveSourceDate: DATE, origin: 'template' })
     const week = [[cellWith([{ id: 'd1', teacher: '', lesson: { id: 'm', studentSlots: [copy, null] } }])]]
     expect([...collectSameDayMovedTemplateOccurrenceKeys({ weeks: week, templatePendingDesks: {}, suppressedRegularLessonOccurrences: [`sA__数__${DATE}__3`], effectiveStartDate: DATE })]).toEqual([])
+  })
+})
+
+// ============================================================================
+// 戻し互換（2026-11-08・全教室展開した templateDiffApply をすぐ OFF に戻せるようにする準備・INV-06）
+//   ON の間に盤面の生徒へ付いた出自の印（StudentEntry.origin）を、OFF の版の読み書き（JSON の書き出し/読み込み・
+//   分割保存の部品の往復・読み込み createInitialBoardSnapshot の applyTemplateOriginRules: false）が消さないこと、
+//   そして ON に戻した読み込みで ON のときと同じ印になることを固定する。保留の往復は Task 1（templatePendingDesks）が固定済み。
+// ============================================================================
+describe('戻し互換: フラグ OFF の版でも出自の印を消さない(2026-11-08)', () => {
+  const students: StudentRow[] = [
+    { id: 'sA', name: '生徒A', displayName: '生徒A', email: '', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+    { id: 'sB', name: '生徒B', displayName: '生徒B', email: '', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+    { id: 'sM', name: '生徒M', displayName: '生徒M', email: '', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+  ]
+  const teachers: TeacherRow[] = [{ id: 't1', name: '講師A', email: '', entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }] }]
+  const rows: RegularLessonRow[] = [{ id: 'r0', schoolYear: 2026, teacherId: 't1', student1Id: 'sA', subject1: '数', startDate: '', endDate: '', student2Id: 'sB', subject2: '数', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5 }]
+  const classroomSettings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2, templateFreezeBeforeDate: DATE } as unknown as ClassroomSettings
+  const managedWeek = buildManagedScheduleCellsForRange({ range: { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '', personId: '' }, fallbackStartDate: '2026-10-05', fallbackEndDate: '2026-10-11', classroomSettings, teachers, students, regularLessons: rows, boardWeeks: [] })
+  const studentA = (overrides: Partial<StudentEntry> = {}) => student({ id: 'a', name: '生徒A', managedStudentId: 'sA', ...overrides })
+  const studentB = (overrides: Partial<StudentEntry> = {}) => student({ id: 'b', name: '生徒B', managedStudentId: 'sB', ...overrides })
+  const studentM = (overrides: Partial<StudentEntry> = {}) => student({ id: 'm', name: '生徒M', managedStudentId: 'sM', ...overrides })
+
+  // ON の間に保存された盤面: テンプレの机の 生徒A＝template、同じ机で科目を編集した 生徒B＝manual（§9-11）、
+  // 机 2 に在庫から置いた振替の 生徒M＝manual。
+  const onWeek = managedWeek.map((cell) => (cell.id !== CELL_ID ? cell : {
+    ...cell,
+    desks: cell.desks.map((desk, index) => {
+      if (index === 0 && desk.lesson) return { ...desk, lesson: { ...desk.lesson, studentSlots: [studentA({ ...desk.lesson.studentSlots[0], origin: 'template' }), studentB({ ...desk.lesson.studentSlots[1], subject: '英', origin: 'manual' })] as [StudentEntry | null, StudentEntry | null] } }
+      if (index === 1) return { ...desk, lesson: { id: 'hand', studentSlots: [studentM({ lessonType: 'makeup', makeupSourceDate: '2026-09-30', origin: 'manual' }), null] as [StudentEntry | null, StudentEntry | null] } }
+      return desk
+    }),
+  }))
+  const onState = { weeks: [onWeek], suppressedRegularLessonOccurrences: [] } as unknown as PersistedBoardState
+  const originsAt = (weeks: SlotCell[][]) => {
+    const desks = weeks.flat().find((cell) => cell.id === CELL_ID)!.desks
+    return desks.map((desk) => (desk.lesson?.studentSlots ?? []).map((entry) => (entry ? `${entry.managedStudentId}:${entry.subject}:${entry.origin ?? '-'}` : null)))
+  }
+  const EXPECTED = [['sA:数:template', 'sB:英:manual'], ['sM:数:manual', null]]
+
+  it('前提: ON の盤面の印はこの形', () => {
+    expect(originsAt(onState.weeks)).toEqual(EXPECTED)
+  })
+
+  it('JSON の書き出し/読み込み（serializeAppSnapshot → parseAppSnapshot）で印が同じ値で残る', () => {
+    const snapshot = { screen: 'board', classroomSettings, managers: [], teachers, students, regularLessons: rows, groupLessons: [], specialSessions: [], autoAssignRules: [], pairConstraints: [], boardState: onState, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot
+    const parsed = parseAppSnapshot(serializeAppSnapshot(snapshot))
+    expect(originsAt(parsed.boardState!.weeks)).toEqual(EXPECTED)
+    expect(parsed.boardState!.weeks).toEqual(onState.weeks)
+  })
+
+  it('分割保存の部品の往復（splitClassroomSnapshotPayload → assembleClassroomSnapshotPayload）でも印が残る', () => {
+    const split = splitClassroomSnapshotPayload({ screen: 'board', students, boardState: onState })
+    const assembled = assembleClassroomSnapshotPayload({ core: split.core, board: split.board, weeks: split.weeks.map((week) => week.cells), ui: split.ui, hasBoardState: split.hasBoardState }) as { boardState: PersistedBoardState }
+    expect(originsAt(assembled.boardState.weeks)).toEqual(EXPECTED)
+  })
+
+  it('OFF の版の読み込み（applyTemplateOriginRules: false）は印を消さない。もう一度 OFF で読んでも同じ', () => {
+    const off = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: rows, initialBoardState: onState, applyTemplateOriginRules: false })
+    expect(originsAt(off.weeks)).toEqual(EXPECTED)
+    const offAgain = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: rows, initialBoardState: { ...onState, weeks: off.weeks }, applyTemplateOriginRules: false })
+    expect(originsAt(offAgain.weeks)).toEqual(EXPECTED)
+  })
+
+  it('OFF で読んで保存した盤面を ON に戻して読むと、ON のまま読んだときと同じ印になる', () => {
+    const onDirect = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: rows, initialBoardState: onState, applyTemplateOriginRules: true })
+    const off = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: rows, initialBoardState: onState, applyTemplateOriginRules: false })
+    const savedByOff = parseAppSnapshot(serializeAppSnapshot({ screen: 'board', classroomSettings, managers: [], teachers, students, regularLessons: rows, groupLessons: [], specialSessions: [], autoAssignRules: [], pairConstraints: [], boardState: { ...onState, weeks: off.weeks }, schemaVersion: 1, savedAt: 'x' } as unknown as AppSnapshot))
+    const backOn = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: rows, initialBoardState: savedByOff.boardState, applyTemplateOriginRules: true })
+    expect(originsAt(onDirect.weeks)).toEqual(EXPECTED)
+    expect(originsAt(backOn.weeks)).toEqual(originsAt(onDirect.weeks))
   })
 })

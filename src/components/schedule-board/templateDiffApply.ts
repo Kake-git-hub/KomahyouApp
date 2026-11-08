@@ -40,6 +40,14 @@ type MemoPair = [string | null, string | null]
 // 共通の小道具
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * テンプレ保存の分岐（spec-template-behavior Q32-3・§H）: 第 2 版の経路（resolveTemplateDiffApplyActive が true）なら差分反映、
+ * それ以外は旧方式の上書き。保存前の盤面 PDF の見出しと保存本体の呼び分けに使う。
+ */
+export function resolveTemplateReportMode(active: boolean): 'diff' | 'overwrite' {
+  return active ? 'diff' : 'overwrite'
+}
+
 // ScheduleBoardScreen の isManagedLesson と同じ判定（parity テストで固定）。
 export function isTemplateManagedLesson(lesson?: DeskLesson) {
   return Boolean(lesson && (lesson.note === '管理データ反映' || lesson.id.startsWith('managed_')))

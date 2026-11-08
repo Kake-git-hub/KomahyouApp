@@ -2,6 +2,7 @@
 // k_contract §1 の検証順を固定する。index.ts は import しない(initializeApp が走る)。配線は文字列走査で検査する。
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { resolveExpectedFeatureScope } from '../../src/utils/featureRollout'
 import { isParentStudentActiveOnDate } from './generated/parentSchedule'
 
 import {
@@ -189,8 +190,10 @@ describe('機能フラグ(§H・2026-11-08 全教室へ昇格)', () => {
   // (他社が「開発用教室」という名前の教室を作っただけで保護者QR API が答えてしまうため)。
   // 【2026-11-08】オーナー指示で全教室へ昇格: 基本スコープ PARENT_PORTAL_BASE_SCOPE = 'all-classrooms'
   // (クライアント src/utils/featureRollout.ts の parentPortalQr と同じ値・featureRollout.test.ts が字面で突合)。
-  it('基本スコープは all-classrooms(クライアントの parentPortalQr と同じ値)', () => {
-    expect(PARENT_PORTAL_BASE_SCOPE).toBe('all-classrooms')
+  // 期待値はクライアントの戻しの記録 FEATURE_ROLLBACKS から導く(src/utils/featureRollout.ts の resolveExpectedFeatureScope)。
+  // 記録された戻し(tools/feature-flag-rollback.mjs が両側を同時に書く)ならそのまま緑・記録の無い変更は落ちる。
+  it('基本スコープは all-classrooms(クライアントの parentPortalQr と同じ値・記録された戻しがあればその範囲)', () => {
+    expect(PARENT_PORTAL_BASE_SCOPE).toBe(resolveExpectedFeatureScope('parentPortalQr'))
   })
 
   it('登録済みの開発用教室・テスト教室で有効(昇格前から変わらない)', () => {
@@ -198,12 +201,13 @@ describe('機能フラグ(§H・2026-11-08 全教室へ昇格)', () => {
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'test_classroom_20260507_dai', projectId: 'komahyouapp-prod' })).toBe(true)
   })
 
-  it('本番教室(日大前/緑が丘)も有効(2026-11-08・クライアント側フラグと同じ push で昇格)', () => {
+  it('本番教室(日大前/緑が丘)も有効(2026-11-08・クライアント側フラグと同じ push で昇格・記録された戻しがあれば無効)', () => {
+    const allClassrooms = resolveExpectedFeatureScope('parentPortalQr') === 'all-classrooms'
     for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh']) {
-      expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id, projectId: 'komahyouapp-prod' }), id).toBe(true)
+      expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id, projectId: 'komahyouapp-prod' }), id).toBe(allClassrooms)
     }
     // 別会社の教室も基本スコープは同じ(会社ごとに止めるのは会社既定 companyFeatureDefaults・featureCompanyLayer.test.ts)。
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'company-b', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(true)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'company-b', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(allClassrooms)
   })
 
   // ★回帰防止(fail-closed): 会社キーや教室 ID が空の呼び出しは全教室でも OFF(questionAiAnswer と同じ形)。
@@ -216,7 +220,7 @@ describe('機能フラグ(§H・2026-11-08 全教室へ昇格)', () => {
 
   it('staging プロジェクトでも有効(先行検証の経路は残す)', () => {
     expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: 'komahyouapp-staging' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: undefined })).toBe(true)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: undefined })).toBe(resolveExpectedFeatureScope('parentPortalQr') === 'all-classrooms')
   })
 })
 

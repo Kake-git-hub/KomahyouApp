@@ -40,7 +40,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveMovedTemplateLessonSubjectFromId, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveMovedTemplateLessonSubjectFromId, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, resolveTemplateReportMode, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -79,7 +79,7 @@ import type { ChecklistPrepFacts } from '../../utils/verificationChecklist'
 import { buildChecklistPrepSequenceFailedMessage, buildChecklistPrepSequenceMessage, isChecklistPrepSequenceComplete, planChecklistPrepSequenceStep, recordChecklistPrepSequenceTemplateSaved, resolveChecklistPrepSequenceStartBlock, summarizeChecklistPrepSequenceProgress, type ChecklistPrepBoardOperations, type ChecklistPrepSequenceState } from './checklistPrepSequence'
 import { buildChecklistPrepCleanupMessage, buildChecklistPrepDoneMessage, buildChecklistPrepTemplateFailedMessage, completeChecklistPrepFacts, isChecklistPrepStudent, planChecklistPrepCleanup, prepareChecklistPrepTemplateSave, resolveChecklistPrepCleanupBlock, resolveChecklistPrepCleanupEffectiveStartDate, resolveChecklistPrepTemplatePhaseBlock, resolveChecklistPrepTemplatePhaseTiming, CHECKLIST_PREP_CLEANUP_NOTHING_MESSAGE, type ChecklistPrepTemplatePhase, type ChecklistPrepTemplateSaveResult } from './checklistPrepTemplate'
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
-import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, placeIntoPendingLower, pruneTemplatePendingDesksOnOrAfter, resolveTemplateDiffApplyActive, type TemplatePendingDesk, type TemplatePendingDeskMap, type TemplatePendingLower, collectTemplatePendingLowerTeacherNames, isTemplateFollowDisplacedOrigin } from './templatePendingDesks'
 import { buildTemplatePendingList, type TemplatePendingListRow } from './templatePendingList'
 import { appendWholeDayTransferPair, applyWholeDayTransferPairToManagedCell, buildWholeDayPairTargetRecordLookup, type WholeDayPairTargetRecordLookup, isWholeDayPairSourceOwnEntry, settleWholeDayPairBlockedRecords, stripWholeDayPairOwnEntries, type WholeDayPairTargetBlockResolver, cellsHaveNonDerivedStatusEntries, deriveWholeDayPairSourceRecords, findWholeDayTransferPairForDate, isWholeDayPairExpandedStudent, parseWholeDayTransferPairs, removeWholeDayTransferPair, resolveWholeDayTransferPairWeekdayBlock, stripWholeDayPairDerivedRecords, type WholeDayTransferPair } from './wholeDayTransferPair'
 import { extractWholeDayTransferDisplacedMemos, extractWholeDayTransferDisplacedStudents, placeWholeDayTransferDisplacedMemos, placeWholeDayTransferDisplacedStudents, summarizeWholeDayTransferDisplaced, type WholeDayTransferDisplacedMemo, type WholeDayTransferDisplacedMemoOutcome, type WholeDayTransferDisplacedStudent } from './wholeDayTransferDisplaced'
@@ -9329,9 +9329,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // フラグに依らず全教室で有効(確認モーダルの本文だけ App→BasicDataScreen 側でフラグに応じて出し分ける)。
   const studentWithdrawAutoSweepEnabled = isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: classroomStorageKey })
   // テンプレ保存の差分反映＋保留(Issue #72・spec-template-behavior §H・オーナー確定 2026-09-29・開発用教室のみ)。
-  // ON の教室だけテンプレ保存が handleSaveRegularLessonTemplateByDiff を通る。OFF の教室(本番 3 教室)は旧方式(上書き)のまま。
+  // ON の教室だけテンプレ保存が handleSaveRegularLessonTemplateByDiff を通る。OFF の教室は旧方式(上書き)のまま(保留のある教室を除く・N-1)。
   // ★保留マップ(templatePendingDesks)の保存・往復・在庫走査はフラグに依らず常に有効(Q33-3)。
-  const templateDiffApplyEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })
+  // N-1(2026-11-08): ここはフラグの値だけ。盤面の判定 templateDiffApplyEnabled は保留マップの state の後ろで
+  // resolveTemplateDiffApplyActive から求める(保留が 1 件でも残る教室はフラグ OFF でも第 2 版の経路)。
+  const templateDiffApplyFlagEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -9343,7 +9345,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
   if (!initialBoardSnapshotRef.current) {
     // 第 2 版（spec-template-conflict-v2 §2・§7）: 機能フラグ templateDiffApply の教室だけ、再マージに規則を当て、印の無い旧データに印を 1 回だけ付ける。
-    initialBoardSnapshotRef.current = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState, applyTemplateOriginRules: templateDiffApplyEnabled })
+    // N-1(2026-11-08): 保留マップの state はまだ無いので、読み込んだ盤面の保留マップで同じ判定をする。
+    initialBoardSnapshotRef.current = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState, applyTemplateOriginRules: resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: normalizeTemplatePendingDeskMap(initialBoardState?.templatePendingDesks) }) })
   }
   const initialBoardSnapshot = initialBoardSnapshotRef.current
   const [weeks, setWeeks] = useState<SlotCell[][]>(() => initialBoardSnapshot.weeks)
@@ -9452,6 +9455,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // spec-template-behavior §H Q24（Issue #72）: テンプレ差分反映の保留（2 行表示）の下段。フラグ templateDiffApply に依らず
   // 全 publish 経路で再送出する（Q33-3。フラグを戻した教室で黙って消さない）。下段は盤面画面専用（INV-13）。
   const [templatePendingDesks, setTemplatePendingDesks] = useState<TemplatePendingDeskMap>(initialBoardSnapshot.templatePendingDesks ?? {})
+  // テンプレ差分反映の第 2 版の経路を使うか(盤面の唯一の判定・spec-template-behavior §H Q33 N-1・2026-11-08 オーナー決定)。
+  // フラグ ON の教室、または保留が 1 件でも残る教室は true(データで決まる方式)。保留が 0 件になれば同じ画面のうちでも旧方式へ戻る。
+  // ★回帰防止: フラグだけで判定に戻すと N-1(保留の在庫が消える)が再発する。
+  const templateDiffApplyEnabled = resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: templatePendingDesks })
   // 再マージ effect が保留の下段を規則の材料に読むための写し（第 2 版・deps に入れない）。
   const templatePendingDesksRef = useRef(templatePendingDesks)
   templatePendingDesksRef.current = templatePendingDesks
@@ -12965,7 +12972,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleTemplateSaveConfirm = async () => {
     if (!templateSaveConfirm) return
     // spec-template-behavior Q32-3: 差分反映の教室（機能フラグ templateDiffApply）は見出しを「テンプレ保存前の盤面」にする（OFF は従来の文言）。
-    const templateReportMode = templateDiffApplyEnabled ? 'diff' as const : 'overwrite' as const
+    const templateReportMode = resolveTemplateReportMode(templateDiffApplyEnabled)
     setBusyOverlayMessage(resolveTemplateOverwriteReportLabels(templateReportMode).busyMessage)
     try {
       await exportTemplateOverwriteReport({

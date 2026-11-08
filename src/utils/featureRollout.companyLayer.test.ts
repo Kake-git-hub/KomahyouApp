@@ -9,7 +9,7 @@ vi.mock('./companyFeatureDefaults', async (importOriginal) => {
 })
 
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './companyFeatureDefaults'
-import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled } from './featureRollout'
+import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, resolveExpectedFeatureScope } from './featureRollout'
 
 const DEV_CLASSROOM = { id: 'v8OZ7zH8vONNHjjYVcR1' }
 const PROD_CLASSROOM = { id: '5w5OMueETerSKrSf14HC' }
@@ -23,10 +23,12 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
   //   台帳の引き方は all-classrooms の機能でも同じ(会社既定 'off' で止められる)ので、templateDiffApply のまま固定する。
   it('台帳は (workspaceKey, featureKey) で引かれる(会社の壁: 接続先 workspace のキーをそのまま渡す)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
-    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
+    // 期待値は戻しの記録(FEATURE_ROLLBACKS)から導く。記録された戻しなら本番教室は無効、記録が無ければ全教室で有効。
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe(resolveExpectedFeatureScope('templateDiffApply'))
+    const expectedOnProduction = resolveExpectedFeatureScope('templateDiffApply') === 'all-classrooms'
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(expectedOnProduction)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('main', 'templateDiffApply')
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'company-b')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'company-b')).toBe(expectedOnProduction)
     expect(resolveCompanyFeatureDefault).toHaveBeenCalledWith('company-b', 'templateDiffApply')
   })
 
@@ -46,10 +48,10 @@ describe('isFeatureEnabledForClassroom: 会社既定(2 段目)', () => {
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', DEV_CLASSROOM, 'main')).toBe(false)
   })
 
-  it('会社既定なし(null)は基本スコープのとおり(従来の挙動)', () => {
+  it('会社既定なし(null)は基本スコープのとおり(従来の挙動・templateDiffApply は記録された戻しがあればその範囲)', () => {
     vi.mocked(resolveCompanyFeatureDefault).mockReturnValue(null)
     expect(isFeatureEnabledForClassroom('templateDiffApply', DEV_CLASSROOM, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('templateDiffApply', PROD_CLASSROOM, 'main')).toBe(resolveExpectedFeatureScope('templateDiffApply') === 'all-classrooms')
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', PROD_CLASSROOM, 'main')).toBe(true)
     expect(resolveFeatureEnabledByLayers({ scopeEnabled: false, companyDefault: null })).toBe(false)
   })

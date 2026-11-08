@@ -516,15 +516,15 @@ describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分�
   })
 })
 
-describe('フラグ OFF では従来どおり（条件 26）', () => {
-  it('盤面の 2 行表示・解決 UI の入口は activeTemplatePendingDesks（フラグ ON かつ保留あり）だけから出る', () => {
+describe('フラグ OFF かつ保留なしでは従来どおり（条件 26）', () => {
+  it('盤面の 2 行表示・解決 UI の入口は activeTemplatePendingDesks（第 2 版の経路〔フラグ ON または保留あり・N-1〕かつ保留あり）だけから出る', () => {
     expect(BOARD_TSX).toContain('const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null')
     expect(BOARD_TSX).toContain('templatePendingDesks={isTemplateMode ? undefined : (activeTemplatePendingDesks ?? undefined)}')
     const resolveAt = sliceBody(BOARD_TSX, 'const resolveTemplatePendingDeskAt = (', 'const templatePendingDeskMenuContext')
     expect(resolveAt).toContain('if (!activeTemplatePendingDesks) return null')
   })
 
-  it('commitWeeks の 1 行戻し（Q28）はフラグ ON かつ保留ありのときだけ走る', () => {
+  it('commitWeeks の 1 行戻し（Q28）は第 2 版の経路（フラグ ON または保留あり・N-1）かつ保留ありのときだけ走る', () => {
     const commit = sliceBody(BOARD_TSX, 'const commitWeeks = (', 'const handleSelectDesk = (')
     expect(commit).toContain('if (templateDiffApplyEnabled && hasTemplatePendingDesks(nextTemplatePendingDesks)) {')
     expect(commit).toContain('settleTemplatePendingDesksAfterCommit({')

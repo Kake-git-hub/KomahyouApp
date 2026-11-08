@@ -14,7 +14,7 @@ import type { SlotCell } from './types'
 import { applyHistoryEntry, createInitialBoardSnapshot, type HistoryEntry } from './ScheduleBoardScreen'
 import { parseAppSnapshot, serializeAppSnapshot } from '../../data/appSnapshotRepository'
 import { trimBoardWeeksForMemory } from './boardWeekTrim'
-import { featureRolloutRegistry, isFeatureScopeEnabled } from '../../utils/featureRollout'
+import { featureRolloutRegistry, isFeatureScopeEnabled, resolveExpectedFeatureScope } from '../../utils/featureRollout'
 import {
   buildTemplatePendingDeskKey,
   buildTemplatePendingDesksPayload,
@@ -23,6 +23,7 @@ import {
   collectTemplatePendingCellIds,
   normalizeTemplatePendingDeskMap,
   pruneTemplatePendingDesksOnOrAfter,
+  resolveTemplateDiffApplyActive,
   templatePendingDesksForSignature,
   type TemplatePendingDeskMap,
 } from './templatePendingDesks'
@@ -277,19 +278,54 @@ describe('配線の字面固定（描画テスト環境が無い経路）', () =
   })
 })
 
+describe('N-1: 保留のある教室はフラグ OFF でも第 2 版の経路(2026-11-08)', () => {
+  // spec-template-behavior §H Q33 N-1: フラグを OFF に戻しても、保留(2 行)が 1 件でも残る教室は第 2 版の経路のまま。
+  // フラグだけで判定すると、周辺処理が上段を空き机として上書きし、旧方式の保存が下段の講習を台帳へ返さず捨てる(INV-06)。
+  it('フラグ ON なら保留の有無に関わらず true', () => {
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: true, pendingDesks: undefined })).toBe(true)
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: true, pendingDesks: {} })).toBe(true)
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: true, pendingDesks: PENDING })).toBe(true)
+  })
+  it('フラグ OFF でも保留が 1 件でもあれば true(保留の机を周辺処理が壊さない・INV-06)', () => {
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: false, pendingDesks: { 'c1::d1': { lower: { students: [] } } as never } })).toBe(true)
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: false, pendingDesks: PENDING })).toBe(true)
+  })
+  it('フラグ OFF で保留なし(未設定・空)は false(従来どおり)', () => {
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: false, pendingDesks: undefined })).toBe(false)
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: false, pendingDesks: null })).toBe(false)
+    expect(resolveTemplateDiffApplyActive({ flagEnabled: false, pendingDesks: {} })).toBe(false)
+  })
+  it('盤面の唯一の判定 templateDiffApplyEnabled は resolveTemplateDiffApplyActive から求め、フラグはその材料として 1 か所でだけ読む', () => {
+    expect(BOARD_TSX).toContain('const templateDiffApplyEnabled = resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: templatePendingDesks })')
+    expect(BOARD_TSX.match(/isFeatureEnabledForClassroom\('templateDiffApply'/g)).toHaveLength(1)
+    expect(BOARD_TSX).toContain("const templateDiffApplyFlagEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })")
+    // 判定は保留マップの state を読むので、state の宣言より後ろに置く(先に置くと保留が見えない)。
+    expect(BOARD_TSX.indexOf('const templateDiffApplyEnabled = resolveTemplateDiffApplyActive(')).toBeGreaterThan(BOARD_TSX.indexOf('const [templatePendingDesks, setTemplatePendingDesks] = useState<TemplatePendingDeskMap>('))
+    // 初期スナップショット(state より前)は、読み込んだ盤面の保留マップで同じ判定をする(保留のある教室は読込の再マージも第 2 版)。
+    expect(BOARD_TSX).toContain('applyTemplateOriginRules: resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: normalizeTemplatePendingDeskMap(initialBoardState?.templatePendingDesks) })')
+    // フラグだけを直接見る分岐を作らない(作ると N-1 が再発する)。
+    expect(BOARD_TSX).not.toMatch(/templateDiffApplyFlagEnabled\s*(\?|&&|\|\|)/)
+    expect(BOARD_TSX.match(/templateDiffApplyFlagEnabled/g)).toHaveLength(3)
+  })
+})
+
 describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
   // 開発用教室で先行（v1.5.572〜・development-only）→ 第 2 版の試用（v1.5.689〜v1.5.710）で確認リスト全 OK →
   // オーナー指示（2026-11-08「開発・テスト教室だけで動いている機能の 4 件を全教室展開して」）で all-classrooms。
   // 回帰で development-only へ戻さない（戻すと本番教室のテンプレ保存が上書き方式へ戻り、保留（2 行）の下段が旧方式の保存で捨てられる＝N-1）。
-  it('scope は all-classrooms（2026-11-08 昇格・本番教室でも差分反映）', () => {
-    expect(featureRolloutRegistry.templateDiffApply.scope).toBe('all-classrooms')
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(true)
-    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
+  // 戻すのは戻しの記録 FEATURE_ROLLBACKS に載せた意図的な戻しだけ(期待値は resolveExpectedFeatureScope から導く・記録の無い変更は落ちる)。
+  it('scope は all-classrooms（2026-11-08 昇格・本番教室でも差分反映・記録された戻しがあればその範囲）', () => {
+    const expected = resolveExpectedFeatureScope('templateDiffApply')
+    expect(featureRolloutRegistry.templateDiffApply.scope).toBe(expected)
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(expected === 'all-classrooms')
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(expected !== 'development-only')
     expect(isFeatureScopeEnabled(featureRolloutRegistry.templateDiffApply.scope, { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
   })
 
-  it('フラグ ON だけ差分反映へ分岐し、OFF は旧方式（handleSaveRegularLessonTemplate の上書き）を呼ぶ', () => {
-    expect(BOARD_TSX).toContain("const templateDiffApplyEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })")
+  it('フラグ ON（または保留あり）だけ差分反映へ分岐し、フラグ OFF かつ保留なしは旧方式（handleSaveRegularLessonTemplate の上書き）を呼ぶ', () => {
+    // N-1(2026-11-08): フラグは templateDiffApplyFlagEnabled で読み、判定 templateDiffApplyEnabled は保留の有無と合わせて決める(上の N-1 の describe)。
+    expect(BOARD_TSX).toContain("const templateDiffApplyFlagEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })")
+    expect(BOARD_TSX).toContain('const templateDiffApplyEnabled = resolveTemplateDiffApplyActive({ flagEnabled: templateDiffApplyFlagEnabled, pendingDesks: templatePendingDesks })')
     const confirm = sliceBody(BOARD_TSX, 'const handleTemplateSaveConfirm = async () => {', 'const handleTemplateClear = () => {')
     // Q39（2026-10-14）: 差分反映には確認モーダルで決めた絞り込み（slotFilter）と範囲の説明を渡す。旧方式の呼び出しは不変。
     expect(confirm).toMatch(/if \(templateDiffApplyEnabled\) \{\n\s+handleSaveRegularLessonTemplateByDiff\(templateSaveConfirm\.template, \{ applyScope: templateSaveConfirm\.applyScope \}\)\n\s+return\n\s+\}\n\s+handleSaveRegularLessonTemplate\(templateSaveConfirm\.template, true\)/)

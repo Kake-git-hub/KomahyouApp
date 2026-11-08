@@ -92,7 +92,7 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     who: 'claude',
     summary: 'テンプレ反映の新しい規則(出自の印・2 行・講師の休み・丸ごと振替の付け替え)は 11/8 に全教室へ出した。残りは、置き換えた古い説明を「旧仕様」として畳むことと、管理データと盤面の机の対応付けが 3 か所に分かれているのを 1 つにまとめる内部の整理。',
     nextAction: 'Claude が古い説明を畳む。机の対応付けは、次にテンプレ周りを直すときに 1 か所へまとめる(急がない)。',
-    notes: '2026-11-05 オーナー決定で §H(Q21〜Q42・決定記録 66 本)を docs/spec-template-conflict-v2.md に置き換え、段 1〜段 5 を v1.5.689〜v1.5.710 で開発用/テスト教室に出した(確認リスト v2-1〜v2-6・se-1〜se-10・mg-1/mg-2 OK)。2026-11-08 オーナー指示で templateDiffApply を all-classrooms へ(全教室昇格前の必須だった Q33-1=旧版タブのすき間は版が揃うまでの一時的なもの＝反映後のハードリロードで潰す・N-1=フラグを戻したときの保留の保護は「回帰で戻さない」で封じ、会社既定 companyFeatureDefaults で OFF にするときだけ先に実装する・既知の穴=同名講師の不動点は it.todo のまま)。残り: (1) spec-template-behavior.md §H を「旧仕様(2026-11-05 まで)」として畳み spec-template-conflict-v2.md を正本にする(§H の冒頭に注記は済み・本文の畳み込みは未)。(2) 監査(2026-11-06)の中期課題: 管理机↔盤面の机の対応付けが mergeManagedWeek・resolveBoardDeskIndexForManagedDesk・resolveAnchorCandidates(templateDeskOrderRestore)の 3 か所に分かれているので 1 つの権威関数へまとめる(6793374 型の食い違いを防ぐ)。(3) it.todo: 付け替えの移した先 D\' の休日設定・別の日へ動かして戻す往復・移した先から別の週へ動かした場合の暗黙の抑止キー。',
+    notes: '2026-11-05 オーナー決定で §H(Q21〜Q42・決定記録 66 本)を docs/spec-template-conflict-v2.md に置き換え、段 1〜段 5 を v1.5.689〜v1.5.710 で開発用/テスト教室に出した(確認リスト v2-1〜v2-6・se-1〜se-10・mg-1/mg-2 OK)。2026-11-08 オーナー指示で templateDiffApply を all-classrooms へ(全教室昇格前の必須だった Q33-1=旧版タブのすき間は版が揃うまでの一時的なもの＝反映後のハードリロードで潰す・N-1=フラグを戻したときの保留の保護は 2026-11-08 に塞いだ(保留のある教室は OFF でも第 2 版・resolveTemplateDiffApplyActive)・既知の穴=同名講師の不動点は it.todo のまま)。残り: (1) spec-template-behavior.md §H を「旧仕様(2026-11-05 まで)」として畳み spec-template-conflict-v2.md を正本にする(§H の冒頭に注記は済み・本文の畳み込みは未)。(2) 監査(2026-11-06)の中期課題: 管理机↔盤面の机の対応付けが mergeManagedWeek・resolveBoardDeskIndexForManagedDesk・resolveAnchorCandidates(templateDeskOrderRestore)の 3 か所に分かれているので 1 つの権威関数へまとめる(6793374 型の食い違いを防ぐ)。(3) it.todo: 付け替えの移した先 D\' の休日設定・別の日へ動かして戻す往復・移した先から別の週へ動かした場合の暗黙の抑止キー。',
     references: ['docs/spec-template-conflict-v2.md', 'docs/spec-template-behavior.md §H(旧仕様)', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templateDeskOrderRestore.ts'],
     updatedOn: '2026-11-08',
   },
@@ -178,6 +178,17 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── やること(Claude) ────────────────────────────────────────────────────────
+  {
+    id: 'rollout-week-rollback-readiness',
+    title: '全教室展開週の戻し準備と毎朝の健診',
+    stage: 'in-progress',
+    who: 'claude',
+    summary: '11/8 に全教室へ出した 4 機能を、トラブルのときは 1 本ずつすぐ止められるようにした。11/15 まで毎朝 7:40 に本番 2 校を読み取りだけで点検して報告する。',
+    nextAction: '11/16 に健診を止め、この行を消す。',
+    notes: '2026-11-08 オーナー採用: 案 1(フラグを即 OFF に戻せる準備)＋案 4(毎朝の自動健診)。見送り: 15 分バックアップの間引き停止・版履歴から復元 JSON を出すツール・元に戻すの永続化。N-1 は「保留のある教室はフラグ OFF でも第 2 版の経路」で塞いだ(resolveTemplateDiffApplyActive)。戻しは FEATURE_ROLLBACKS に記録し tools/feature-flag-rollback.mjs 1 本＋main マージ 1 回(昇格を固定するテストは記録を見る・保護者QRの範囲 ≦ 講習の公開の範囲は無条件の門番)。健診は tools/board-health-check.mjs と docs/runbooks/morning-health-check.md、Claude のスケジュール実行(新セッション・7:40 JST・11/9〜11/15・プッシュ通知)。計画 docs/plan-2026-11-08-rollback-readiness-week.md。',
+    references: ['docs/plan-2026-11-08-rollback-readiness-week.md', 'docs/runbooks/feature-flag-rollback.md', 'docs/runbooks/morning-health-check.md'],
+    updatedOn: '2026-11-08',
+  },
   {
     id: 'auto-backup-per-classroom',
     title: '自動バックアップの取り残しを自動で消すか決める',
