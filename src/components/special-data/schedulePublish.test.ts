@@ -12,7 +12,7 @@ import {
   setSpecialSessionSchedulePublished,
   type SpecialSessionRow,
 } from './specialSessionModel'
-import { FEATURE_ROLLBACKS, featureRolloutRegistry, resolveExpectedFeatureScope } from '../../utils/featureRollout'
+import { compareFeatureRolloutScope, FEATURE_ROLLBACKS, featureRolloutRegistry, resolveExpectedFeatureScope } from '../../utils/featureRollout'
 import { isSubmissionSchedulePublished } from '../submission/submissionScheduleVisibility'
 import { buildParentScheduleView, resolveParentPublishedLectureEndDateKey } from '../../utils/parentSchedule'
 import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
@@ -118,12 +118,15 @@ describe('「false のときだけ非公開」の判定がそろっている(レ
     expect(buildParentScheduleView({}, 's001', { from: '2026-12-01', to: '2026-12-31' })).toBeNull()
   })
 
-  // 戻すとき(FEATURE_ROLLBACKS にどちらかの記録がある)は同じ値でなくてよい。そのときは手順書 docs/runbooks/feature-flag-rollback.md の
-  // 「向きの注意」(講習の公開だけを戻すと隠す手段の無いまま講習が保護者に出る)に従い、オーナーが決めてから戻す。
-  it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る・記録された戻しのときは手順書の向きの注意に従う)', () => {
+  // 戻すとき(FEATURE_ROLLBACKS にどちらかの記録がある)は同じ値でなくてよいが、「保護者QRの範囲 ≦ 講習の公開の範囲」の向きは
+  // 記録があっても無条件で守る(講習の公開だけを戻すと、隠す手段の無いまま講習が保護者に出る。手順書 docs/runbooks/feature-flag-rollback.md の向きの注意)。
+  it('このフラグは保護者QR(parentPortalQr)と同じ範囲(保護者QRだけ先に広げると、隠す手段のないまま講習が出る・記録された戻しのときも保護者QRの範囲 ≦ 講習の公開の範囲)', () => {
+    const portal = featureRolloutRegistry.parentPortalQr.scope
+    const toggle = featureRolloutRegistry.lectureSchedulePublishToggle.scope
+    expect(compareFeatureRolloutScope(portal, toggle), `保護者QR(${portal}) が講習の公開(${toggle}) より広い`).toBeLessThanOrEqual(0)
     const rolledBack = Boolean(FEATURE_ROLLBACKS.lectureSchedulePublishToggle || FEATURE_ROLLBACKS.parentPortalQr)
     if (!rolledBack) {
-      expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(featureRolloutRegistry.parentPortalQr.scope)
+      expect(toggle).toBe(portal)
     }
     // 2026-11-08 オーナー指示で保護者QRと同じ push で全教室へ昇格。回帰で staging-environment へ戻さない(戻すのは記録した戻しだけ)。
     expect(featureRolloutRegistry.lectureSchedulePublishToggle.scope).toBe(resolveExpectedFeatureScope('lectureSchedulePublishToggle'))

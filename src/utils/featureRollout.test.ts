@@ -6,7 +6,9 @@ import { isDevelopmentClassroom } from './developmentClassroom'
 import { DEVELOPMENT_STATUS_LEDGER } from './developmentStatusLedger'
 import {
   featureRolloutRegistry,
+  compareFeatureRolloutScope,
   FEATURE_ROLLBACKS,
+  FEATURE_ROLLOUT_SCOPE_ORDER,
   isFeatureEnabledForClassroom,
   isFeatureScopeEnabled,
   isStagingEnvironment,
@@ -292,5 +294,31 @@ describe('featureRollout: 開発・テスト教室で先行した 4 機能の全
     const covered = new Set(DEVELOPMENT_STATUS_LEDGER.flatMap((entry) => [...(entry.featureKeys ?? [])]))
     const pending = Object.entries(featureRolloutRegistry).filter(([, feature]) => feature.scope !== 'all-classrooms').map(([key]) => key)
     for (const key of pending) expect(covered.has(key as never), `${key} を台帳へ載せる`).toBe(true)
+  })
+})
+
+describe('compareFeatureRolloutScope(範囲の広さの順序・2026-11-08 戻し準備)', () => {
+  it('development-only < staging-environment < all-classrooms', () => {
+    expect(FEATURE_ROLLOUT_SCOPE_ORDER).toEqual(['development-only', 'staging-environment', 'all-classrooms'])
+    expect(compareFeatureRolloutScope('development-only', 'staging-environment')).toBeLessThan(0)
+    expect(compareFeatureRolloutScope('staging-environment', 'all-classrooms')).toBeLessThan(0)
+    expect(compareFeatureRolloutScope('development-only', 'all-classrooms')).toBeLessThan(0)
+    expect(compareFeatureRolloutScope('all-classrooms', 'staging-environment')).toBeGreaterThan(0)
+    for (const scope of FEATURE_ROLLOUT_SCOPE_ORDER) expect(compareFeatureRolloutScope(scope, scope)).toBe(0)
+  })
+
+  it('範囲は広いほど有効な場所が増える(狭い範囲で有効なら広い範囲でも有効)', () => {
+    for (const isStaging of [false, true]) {
+      for (const isDevelopmentClassroom of [false, true]) {
+        const context = { isStaging, isDevelopmentClassroom }
+        for (const narrow of FEATURE_ROLLOUT_SCOPE_ORDER) {
+          for (const wide of FEATURE_ROLLOUT_SCOPE_ORDER) {
+            if (compareFeatureRolloutScope(narrow, wide) <= 0 && isFeatureScopeEnabled(narrow, context)) {
+              expect(isFeatureScopeEnabled(wide, context), `${narrow} → ${wide}`).toBe(true)
+            }
+          }
+        }
+      }
+    }
   })
 })

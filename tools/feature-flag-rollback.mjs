@@ -67,6 +67,7 @@ export const FLAG_ROLLBACK_NOTICES = Object.freeze({
   ],
   lectureSchedulePublishToggle: [
     '事前確認(必須): 戻すと画面のトグルは消えるが、保護者QR側は schedulePublished:false の講習を隠し続け、室長は公開へ戻せなくなる。先に室長へ「非公開の講習を全部公開へ戻して」と頼み、読み取り専用で非公開の講習が 0 件であることを確かめる(手順書の「講習の公開」)。',
+    '向きの注意: 保護者QRの範囲 ≦ 講習の公開の範囲 を schedulePublish.test.ts が止める。講習の公開だけを戻すとテストが落ちるので、オーナーが決めたうえで先に(または同じ変更で)保護者QRも戻す。',
   ],
   teacherOnlySpecialSession: [
     '講師専用かどうかはデータで決まるので、作成済みの講習の見え方は変わらない。作成画面のチェックが出なくなるだけ。',
@@ -170,7 +171,14 @@ function insertRollbackRecord(source, input) {
   const closeIndex = source.indexOf('\n}', bodyStart)
   if (closeIndex < 0) throw new Error(`${FEATURE_ROLLOUT_PATH} の FEATURE_ROLLBACKS の閉じ括弧が見つからない`)
   const body = source.slice(bodyStart, closeIndex)
-  if (new RegExp(`\\n  ${escapeRegExp(input.flagKey)}: \\{`, 'u').test(body)) return source
+  const existing = new RegExp(`\\n  ${escapeRegExp(input.flagKey)}: \\{[^\\n]*\\bto: '([a-z-]+)'`, 'u').exec(body)
+  if (existing) {
+    if (existing[1] === input.toScope) return source
+    throw new Error(`${input.flagKey} の戻しの記録(FEATURE_ROLLBACKS)は既に to: '${existing[1]}'。戻し先 '${input.toScope}' と違うので止めた(scope と記録が食い違う)。記録を確かめて手で直してください。`)
+  }
+  if (new RegExp(`\\n  ${escapeRegExp(input.flagKey)}: \\{`, 'u').test(body)) {
+    throw new Error(`${input.flagKey} の戻しの記録(FEATURE_ROLLBACKS)の形が読めない。手で確かめてください。`)
+  }
   return `${source.slice(0, closeIndex)}\n${rollbackRecordLine(input)}${source.slice(closeIndex)}`
 }
 

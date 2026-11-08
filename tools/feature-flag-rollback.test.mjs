@@ -152,6 +152,19 @@ describe('applyFeatureFlagRollback', () => {
     expect(evaluated.templateDiffApply).toEqual({ from: 'all-classrooms', to: 'development-only', date: '2026-11-08', reason: "講師の机が 'A' に" })
   })
 
+  it('同じキーの記録が既にあり戻し先が違うときはエラー(scope は新しい値・記録は古い値の半端な状態を作らない)', () => {
+    const files = makeFiles()
+    files['src/utils/featureRollout.ts'] = FEATURE_ROLLOUT.replace(
+      'export const FEATURE_ROLLBACKS: Partial<Record<FeatureRolloutKey, FeatureRollbackRecord>> = {}',
+      "export const FEATURE_ROLLBACKS: Partial<Record<FeatureRolloutKey, FeatureRollbackRecord>> = {\n  lectureSchedulePublishToggle: { from: 'all-classrooms', to: 'development-only', date: '2026-11-08', reason: '前回' },\n}",
+    )
+    expect(() => applyFeatureFlagRollback({ files, flagKey: 'lectureSchedulePublishToggle', toScope: 'staging-environment', reason: 'x', today: '2026-11-09' })).toThrow(/記録/u)
+    // 同じ戻し先なら記録はそのまま(scope だけ戻し先へ)
+    const same = applyFeatureFlagRollback({ files, flagKey: 'lectureSchedulePublishToggle', toScope: 'development-only', reason: 'x', today: '2026-11-09' })
+    expect(same.files['src/utils/featureRollout.ts']).toContain("reason: '前回' },")
+    expect(same.files['src/utils/featureRollout.ts'].match(/lectureSchedulePublishToggle: \{ from/gu)).toHaveLength(1)
+  })
+
   it('FEATURE_ROLLBACKS が無い featureRollout.ts はエラー(何も書かない)', () => {
     const files = { ...makeFiles(), 'src/utils/featureRollout.ts': FEATURE_ROLLOUT.replace(/export const FEATURE_ROLLBACKS[^\n]*\n/u, '') }
     expect(() => applyFeatureFlagRollback({ files, flagKey: 'templateDiffApply', toScope: 'development-only', reason: 'x', today: '2026-11-08' })).toThrow(/FEATURE_ROLLBACKS/u)

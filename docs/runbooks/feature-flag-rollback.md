@@ -35,8 +35,8 @@ Hosting の版を丸ごと戻す（[rollback.md](rollback.md) の A-1）より�
    - `src/utils/developmentStatusLedger.ts` に「〜を戻した」の行（全教室でないフラグは台帳に載っていないとテストが落ちる）
    - `CHANGELOG.md` の `## 未リリース` に `- fix: 機能フラグ <key> を全教室から <scope> へ戻す(理由: …・戻し手順書)`
 4. テストは直さなくてよい。昇格を固定しているガードテストは期待値を `resolveExpectedFeatureScope(key)`（`FEATURE_ROLLBACKS` に記録があればその戻し先・無ければ `all-classrooms`）から導くので、**記録された戻しならそのまま緑**（下の「記録された戻しとガードテスト」）。
-5. `npm run lint && npm run test:unit && npm run build`（保護者QRは `npm --prefix functions test` も）。
-6. `git diff` を通読する（上の 4 ファイル＋直したテスト＋確認リスト以外が変わっていないか）。
+5. `npm run lint && npm run test:unit && npm run build`（functions のテストもルートの `npm run test:unit` に含まれる・`vitest.config.ts`）。
+6. `git diff` を通読する（上の 4 ファイル以外が変わっていないか。確認リストを見直したときはそのファイルも）。
 7. commit → main マージ（CI が Hosting を出す）。保護者QRは `functions/**` が変わるので「Deploy Cloud Functions」も自動で走る。**緑まで確かめる**。
 8. `https://komahyouapp-prod.web.app/version.json` の版が上がったのを確かめ、室長へ**ハードリロード（Ctrl+Shift+R）**を案内する。
 9. 確認リスト（`src/utils/verificationChecklist.ts`）: 全教室展開を本番で見る項目 pr-1〜pr-3 は、戻したフラグについて見直す
@@ -49,11 +49,11 @@ Hosting の版を丸ごと戻す（[rollback.md](rollback.md) の A-1）より�
   `functions/src/featureCompanyLayer.test.ts`）は、scope を `'all-classrooms'` と直接比べず `resolveExpectedFeatureScope(key)` と比べる。
 - **スクリプトで戻した（= `FEATURE_ROLLBACKS` に記録がある）ならテストはそのまま緑。** 記録が無いまま scope を変えた（うっかり書き換えた事故）は、今までどおりガードが落ちる。
 - 保護者QRのサーバー側の突合（`featureRollout.test.ts`）は「`PARENT_PORTAL_BASE_SCOPE` がクライアントの scope と同じ値」だけを見る。スクリプトが両側を同時に書くので通る。
-- `schedulePublish.test.ts` の「講習の公開と保護者QRは同じ範囲」は、どちらかに戻しの記録があるときだけ「同じ値」を求めない（下の向きの注意に従う）。
+- `schedulePublish.test.ts` の「講習の公開と保護者QRは同じ範囲」は、どちらかに戻しの記録があるときだけ「同じ値」を求めない。ただし「保護者QRの範囲 ≦ 講習の公開の範囲」（`compareFeatureRolloutScope`・development-only < staging-environment < all-classrooms）は記録があっても必ず確かめる（下の向きの注意）。
 
 > ⚠️ **向きの注意: 講習の公開と保護者QRは同じ範囲にそろえる決まり**（`schedulePublish.test.ts`）。
-> 「保護者QRだけ広いと、隠す手段の無いまま講習が保護者に出る」ための決まりなので、**講習の公開だけを戻すとこの向きになる**（記録があればテストは通るが、害は残る）。
-> 講習の公開だけを止めたいときは、保護者QRも一緒に戻すかを**オーナーが決めてから**進める。
+> 「保護者QRだけ広いと、隠す手段の無いまま講習が保護者に出る」ための決まりなので、**講習の公開だけを戻すとこの向きになり、テストが止める**（記録があっても落ちる）。
+> 講習の公開を止めたいときは、**オーナーが決めたうえで**保護者QRを先に（または同じ変更で）戻す（`npm run flag:rollback -- parentPortalQr …` → `… lectureSchedulePublishToggle …`）。
 > 保護者QRだけを戻すのは向きとしては害が無い（講習の公開の方が広い）。
 
 ---

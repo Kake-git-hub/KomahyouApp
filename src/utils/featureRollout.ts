@@ -272,6 +272,14 @@ export type FeatureRollbackRecord = { from: 'all-classrooms'; to: FeatureRollout
 //   書き換えは tools/feature-flag-rollback.mjs が行う(1 行 1 フラグ・この波括弧の中だけ)。
 export const FEATURE_ROLLBACKS: Partial<Record<FeatureRolloutKey, FeatureRollbackRecord>> = {}
 
+/** 範囲の広さの順(狭い → 広い)。development-only ⊂ staging-environment ⊂ all-classrooms(isFeatureScopeEnabled と同じ包含)。 */
+export const FEATURE_ROLLOUT_SCOPE_ORDER: readonly FeatureRolloutScope[] = ['development-only', 'staging-environment', 'all-classrooms']
+
+/** 範囲の広さを比べる。a が狭ければ負・同じなら 0・広ければ正(例: 保護者QRの範囲 ≦ 講習の公開の範囲 を確かめる)。 */
+export function compareFeatureRolloutScope(a: FeatureRolloutScope, b: FeatureRolloutScope): number {
+  return FEATURE_ROLLOUT_SCOPE_ORDER.indexOf(a) - FEATURE_ROLLOUT_SCOPE_ORDER.indexOf(b)
+}
+
 /** ガードテストが期待する scope の権威関数。戻しの記録があればその戻し先、無ければ全教室。 */
 export function resolveExpectedFeatureScope(key: FeatureRolloutKey): FeatureRolloutScope {
   return FEATURE_ROLLBACKS[key]?.to ?? 'all-classrooms'
