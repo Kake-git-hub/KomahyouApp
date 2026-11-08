@@ -14,7 +14,10 @@
 
 ## 未リリース
 
-- fix: **作成済みの特別講習をすべて非公開に**(オーナー指示 2026-11-08「本番教室のすでに作成済みの特別講習をすべて非公開にして」)。本番 2 校の講習 10 件(冬期講習を含む)は「保護者への公開」の項目 `schedulePublished` が未設定で、v1.5.711 までは未設定＝公開扱いだった。本番データへは書かず、判定を「`true` のときだけ公開・未設定は非公開」へ改めた(`isSpecialSessionSchedulePublished`・保護者QR `readLectureSessions`(functions の写しも)・提出用QRの `isSubmissionSchedulePublished`・提出 API の GET `schedulePublished === true`)。講師専用の講習は従来どおり提出用QRでは公開、フラグ OFF の教室の提出用QRも従来どおり公開。発行済みの提出用QRの文書は、その講習の期間を日程表で開く／最新表示のときに非公開へ書き直される。確認リスト pr-2 の文言を直し pr-4 を追加(版は v1.5.711 据え置き)。仕様 spec-special-session-submission §B-2・spec-parent-portal を更新。
+## v1.5.712 (2026-11-08)
+
+- fix: **作成済みの特別講習をすべて非公開に**(オーナー指示 2026-11-08「本番教室のすでに作成済みの特別講習をすべて非公開にして」)。本番 2 校の講習 10 件(冬期講習を含む)は「保護者への公開」の項目 `schedulePublished` が未設定で、v1.5.711 までは未設定＝公開扱いだった。本番データへは書かず、判定を「`true` のときだけ公開・未設定は非公開」へ改めた(`isSpecialSessionSchedulePublished`・保護者QR `readLectureSessions`(functions の写しも)・提出用QRの `isSubmissionSchedulePublished`・提出 API の GET `schedulePublished === true`)。講師専用の講習は従来どおり提出用QRでは公開、フラグ OFF の教室の提出用QRも従来どおり公開。発行済みの提出用QRの文書は、その講習の期間を日程表で開く／最新表示のときに非公開へ書き直される。確認リスト pr-2 の文言を直し pr-4 を追加(版は v1.5.711 据え置き)。仕様 spec-special-session-submission §B-2・spec-parent-portal・使い方の説明 6-8(質問への自動回答の写し userManual.ts も)を更新。触れる INV: なし(仕様変更・INV-07/INV-08 の守りは不変)。
+- docs: regression-reviewer の指摘で、確認リスト pr-4 に「冬期講習の期間ごとに生徒日程表で最新表示→提出用QRに講習コマが出ない」を入れた(発行済みの提出用QR文書は日程表で開いたときに書き直されるため)。古いコメント(未設定=公開)も直した。
 
 ## v1.5.711 (2026-11-08)
 
