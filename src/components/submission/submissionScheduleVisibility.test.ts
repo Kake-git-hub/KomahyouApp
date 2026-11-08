@@ -12,11 +12,12 @@ describe('resolveSubmittedViewOccupiedSlots', () => {
     expect(isSubmissionSchedulePublished({ schedulePublished: false })).toBe(false)
   })
 
-  it('公開(true)と未設定(この項目ができる前の文書・旧 functions の応答)は今までどおり出す', () => {
+  it('公開(true)のときだけ組まれたコマを出す。未設定(この項目ができる前の文書)は非公開(オーナー指示 2026-11-08)', () => {
     expect(resolveSubmittedViewOccupiedSlots({ schedulePublished: true, occupiedSlots })).toEqual(occupiedSlots)
-    expect(resolveSubmittedViewOccupiedSlots({ occupiedSlots })).toEqual(occupiedSlots)
-    expect(resolveSubmittedViewOccupiedSlots({ schedulePublished: null, occupiedSlots: null })).toEqual({})
-    expect(isSubmissionSchedulePublished({})).toBe(true)
+    expect(resolveSubmittedViewOccupiedSlots({ occupiedSlots })).toEqual({})
+    expect(resolveSubmittedViewOccupiedSlots({ schedulePublished: null, occupiedSlots })).toEqual({})
+    expect(resolveSubmittedViewOccupiedSlots({ schedulePublished: true, occupiedSlots: null })).toEqual({})
+    expect(isSubmissionSchedulePublished({})).toBe(false)
   })
 
   it('案内文は内部語を含まない', () => {
@@ -44,7 +45,7 @@ describe('SubmissionPage の配線', () => {
 describe('提出用QRの GET 応答(functions/src/index.ts)', () => {
   const FUNCTIONS_INDEX = readFileSync(fileURLToPath(new URL('../../../functions/src/index.ts', import.meta.url)), 'utf8')
 
-  it('schedulePublished を返す(未設定は公開)', () => {
-    expect(FUNCTIONS_INDEX).toContain('schedulePublished: data.schedulePublished !== false,')
+  it('schedulePublished を返す(true のときだけ公開・未設定は非公開 2026-11-08)', () => {
+    expect(FUNCTIONS_INDEX).toContain('schedulePublished: data.schedulePublished === true,')
   })
 })

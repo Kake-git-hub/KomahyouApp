@@ -1073,9 +1073,10 @@ describe('buildParentScheduleView 日程公開(講習コマ)', () => {
     expect(summarize(dayOf(view, '2026-10-01'))).toEqual(['3:英:regular', '3:数:absent'])
   })
 
-  it('schedulePublished が無い講習(この項目ができる前に作った講習)は公開として扱う', () => {
+  it('schedulePublished が無い講習(この項目ができる前に作った講習)も非公開として扱う(オーナー指示 2026-11-08)', () => {
     const view = buildView('s001', DEFAULT_RANGE, withSessionPublished(undefined))
-    expect(summarize(dayOf(view, '2026-10-02'))).toEqual(['1:数:lecture'])
+    expect(summarizeOn(view, '2026-10-02')).toEqual([])
+    expect(view?.hasLectureLessons).toBe(true)
   })
 
   it('講習コマの出欠記録(休み・振無休・出席)は kind=状態 に isLecture を付けて出し、振替先は付けない', () => {
@@ -1148,11 +1149,12 @@ describe('resolveParentPublishedLectureEndDateKey / 範囲の延長(2026-11-03 �
 
   it('公開中でまだ終わっていない講習の最も遅い終了日を返す。非公開・終わった講習は数えない', () => {
     expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07', schedulePublished: true }]), '2026-12-03')).toBe('2027-01-07')
-    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07' }]), '2026-12-03')).toBe('2027-01-07')
+    // 未設定は非公開(2026-11-08 オーナー指示「作成済みの特別講習をすべて非公開に」)。
+    expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07' }]), '2026-12-03')).toBe('')
     expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-12-22', endDate: '2027-01-07', schedulePublished: false }]), '2026-12-03')).toBe('')
     expect(resolveParentPublishedLectureEndDateKey(payloadWith([{ startDate: '2026-07-21', endDate: '2026-08-28' }]), '2026-12-03')).toBe('')
     expect(resolveParentPublishedLectureEndDateKey(payloadWith([
-      { startDate: '2026-12-22', endDate: '2027-01-07' },
+      { startDate: '2026-12-22', endDate: '2027-01-07', schedulePublished: true },
       { startDate: '2027-03-20', endDate: '2027-04-07', schedulePublished: false },
     ]), '2026-12-03')).toBe('2027-01-07')
     expect(resolveParentPublishedLectureEndDateKey(null, '2026-12-03')).toBe('')

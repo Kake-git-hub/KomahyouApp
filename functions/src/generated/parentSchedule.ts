@@ -165,7 +165,7 @@ type ParentClassroomSettings = {
   templateFreezeBeforeDate: string
 }
 
-// 講習期間(specialSessions の写し・日程公開の判定に要る項目だけ)。published は schedulePublished !== false(未設定=公開)。
+// 講習期間(specialSessions の写し・日程公開の判定に要る項目だけ)。published は schedulePublished === true(未設定=非公開・2026-11-08)。
 type ParentLectureSession = { id: string; startDate: string; endDate: string; published: boolean }
 
 type ParentPayload = {
@@ -580,15 +580,16 @@ function readWeeks(value: unknown): ParentBoardCell[][] {
 // ★講師専用の講習(teacherOnly === true・src/components/special-data/specialSessionModel.ts isTeacherOnlySpecialSession の写し・2026-11-03)は
 //   非公開(published: false)として残す。講習期間の判定・「次の月」の上限延長・コマ自身の講習の判定がすべて「出さない」になる
 //   (捨てると、この講習の ID を持つコマを公開中の別の講習の期間に置いたとき ID が見つからず出てしまう・レビュー指摘 L-2)。
-// ★published は SpecialSessionRow.schedulePublished の `!== false`(src/components/special-data/specialSessionModel.ts
-//   isSpecialSessionSchedulePublished の写し)。未設定=この項目ができる前に作った講習で、公開扱い(オーナー確定 2026-11-03)。
+// ★published は SpecialSessionRow.schedulePublished の `=== true`(src/components/special-data/specialSessionModel.ts
+//   isSpecialSessionSchedulePublished の写し)。未設定=この項目ができる前に作った講習も非公開(2026-11-08 オーナー指示
+//   「本番教室のすでに作成済みの特別講習をすべて非公開にして」。それまでは公開扱い＝オーナー確定 2026-11-03)。
 function readLectureSessions(value: unknown): ParentLectureSession[] {
   return readArray(value).flatMap((raw) => {
     if (!isRecord(raw)) return []
     const startDate = readString(raw.startDate)
     const endDate = readString(raw.endDate)
     if (!isValidDateKey(startDate) || !isValidDateKey(endDate) || endDate < startDate) return []
-    return [{ id: readString(raw.id), startDate, endDate, published: raw.teacherOnly !== true && raw.schedulePublished !== false }]
+    return [{ id: readString(raw.id), startDate, endDate, published: raw.teacherOnly !== true && raw.schedulePublished === true }]
   })
 }
 

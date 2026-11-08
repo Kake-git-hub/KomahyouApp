@@ -257,7 +257,10 @@ describe('講師専用の講習は提出用QRで常に公開扱い(指摘 M-2: �
     expect(resolveSubmissionSchedulePublished(createSession({ teacherOnly: true, schedulePublished: false }), true)).toBe(true)
     expect(resolveSubmissionSchedulePublished(createSession({ schedulePublished: false }), true)).toBe(false)
     expect(resolveSubmissionSchedulePublished(createSession({ schedulePublished: false }), false)).toBe(true)
-    expect(resolveSubmissionSchedulePublished(createSession(), true)).toBe(true)
+    // 未設定の生徒向け講習は非公開(2026-11-08 オーナー指示)。講師専用は未設定でも公開。
+    expect(resolveSubmissionSchedulePublished(createSession(), true)).toBe(false)
+    expect(resolveSubmissionSchedulePublished(createSession({ teacherOnly: true }), true)).toBe(true)
+    expect(resolveSubmissionSchedulePublished(createSession(), false)).toBe(true)
   })
 
   it('講師専用で作るときは非公開の項目を付けない。App はこの関数で公開を決める', () => {

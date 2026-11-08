@@ -55,7 +55,7 @@ export type LectureSubmissionDoc = {
   /**
    * 講習の日程を見せてよいか(オーナー確定 2026-11-03・SpecialSessionRow.schedulePublished の写し。フラグ OFF の教室は常に true)。
    * false の間は occupiedSlots に講習コマが入らず(App 側で落とす)、提出後の画面は組まれたコマを出さない。
-   * 未設定(この項目ができる前の文書)は公開扱い。後方互換のため optional。
+   * 未設定(この項目ができる前の文書)は非公開扱い(2026-11-08〜・提出 API の GET が === true で返す)。後方互換のため optional。
    */
   schedulePublished?: boolean
   submittedAt: string | null

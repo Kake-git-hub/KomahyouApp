@@ -33,7 +33,7 @@ type SubmissionData = {
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。
   groupClassSlots?: Record<string, string>
-  // 講習の日程を見せてよいか(2026-11-03)。false の間は提出後の画面で組まれたコマを出さない。未設定=公開(旧応答)。
+  // 講習の日程を見せてよいか(2026-11-03)。false の間は提出後の画面で組まれたコマを出さない。true のときだけ公開(未設定=非公開・2026-11-08〜)。
   schedulePublished?: boolean
 }
 
