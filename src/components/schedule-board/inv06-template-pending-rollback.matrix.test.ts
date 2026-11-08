@@ -19,7 +19,9 @@ import { describe, expect, it } from 'vitest'
 import type { LectureStockCountMap } from '../../types/appState'
 import type { SlotCell, StudentEntry } from './types'
 import { buildLectureStockKey } from './lectureStock'
-import { remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { computeStudentMove, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { stampPlacementOrigins } from './placementOrigin'
+import { computeToggleDeskTeacherRest } from './teacherRest'
 import {
   buildTemplatePendingDeskKey,
   buildTemplatePendingLowerScanWeeks,
@@ -95,8 +97,8 @@ function saveTemplate(state: RollbackState, active: boolean): RollbackState {
 }
 
 /** 旧経路の再マージ（フラグ OFF かつ保留なしの教室＝第 2 版の規則を当てない・templateOriginRules: null）。 */
-function remergeWithoutRules(weeks: SlotCell[][]) {
-  return remergeBoardWeeksWithManagedData(weeks, { classroomSettings: FX.settings(), teachers: FX.teachers, students: FX.students, regularLessons: FX.OLD_ROWS, suppressedRegularLessonOccurrences: [], todayKey: '2026-09-29', templateOriginRules: null })
+function remergeWithoutRules(weeks: SlotCell[][], rows = FX.OLD_ROWS, suppressed: string[] = []) {
+  return remergeBoardWeeksWithManagedData(weeks, { classroomSettings: FX.settings(), teachers: FX.teachers, students: FX.students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29', templateOriginRules: null })
 }
 
 function projectDesks(weeks: SlotCell[][]) {
@@ -132,6 +134,8 @@ describe('INV-06 × N-1: 保留のある教室はフラグ OFF でもテンプ�
     expect(lectureTotal(after) - lectureTotal(before)).toBe(0)
     expect(after.pendingDesks).toEqual(before.pendingDesks)
     // 対照（N-1 の穴そのもの）: フラグだけで判定すると旧方式の上書きへ入り、下段の講習が台帳へ戻らず消える。
+    // ★旧経路の −1 は穴の説明（saveTemplate の模型から必ず出る値）であって本体の検証ではない。回帰を止めるのは
+    //   templatePendingDesks.wiring.test.ts の字面テスト（templateDiffApplyEnabled = resolveTemplateDiffApplyActive(…)）と下の字面テスト。
     const flagOnly = saveTemplate(prepare(), false)
     expect(lectureTotal(flagOnly) - lectureTotal(before)).toBe(-1)
   })
@@ -148,11 +152,53 @@ describe('INV-06 × N-1: 保留のある教室はフラグ OFF でもテンプ�
     expect(lectureTotal({ ...resolved, weeks: plainRemerged })).toBe(lectureTotal(resolved))
   })
 
+  // 保留 0 件で旧経路へ戻ると、第 2 版の規則（講師の休み §2-4・同じ日の移動 §1-1 #2）は再マージで当たらなくなる（2026-11-08 レビュー Important-1）。
+  // いまの挙動をそのまま固定する（rollback.md A-1・featureRollout.ts の templateDiffApply のコメントに明記）。
+  it('C-a: 講師の休みの机は、旧経路の再マージでテンプレの講師が机に戻る（休みの印は残り、第 2 版へ戻せばまた休みになる）', () => {
+    const weeks = FX.remerge([FX.buildWeek(FX.OLD_ROWS)], FX.OLD_ROWS, [])
+    const rested = computeToggleDeskTeacherRest({ weeks, weekIndex: 0, cellId: FX.WED_CELL, deskIndex: 0, resolveTeacherId: (name) => (name === '田中' ? 't1' : undefined) })
+    if (rested.status === 'blocked') throw new Error('講師の休みにできない')
+    const desk0 = (board: SlotCell[][]) => { const desk = FX.cellOf(board, FX.WED_CELL).desks[0]; return { teacher: desk.teacher, rest: desk.teacherRest?.teacher ?? null, students: (desk.lesson?.studentSlots ?? []).map((item) => item?.managedStudentId ?? null) } }
+    expect(desk0(rested.nextWeeks)).toEqual({ teacher: '', rest: '田中', students: ['sA', null] })
+    // 第 2 版の再マージでは休みのまま（対照）
+    expect(desk0(FX.remerge(rested.nextWeeks, FX.OLD_ROWS, []))).toEqual({ teacher: '', rest: '田中', students: ['sA', null] })
+    // 旧経路の再マージ: 講師欄にテンプレの田中が戻る。休みの印・生徒・隣の机はそのまま。
+    const plain = remergeWithoutRules(rested.nextWeeks)
+    expect(desk0(plain)).toEqual({ teacher: '田中', rest: '田中', students: ['sA', null] })
+    expect(FX.cellOf(plain, FX.WED_CELL).desks[1].teacher).toBe('鈴木')
+    // 第 2 版の経路へ戻れば、残った休みの印でまた講師なしに戻る（印は失われていない）。
+    expect(desk0(FX.remerge(plain, FX.OLD_ROWS, []))).toEqual({ teacher: '', rest: '田中', students: ['sA', null] })
+  })
+
+  it('C-b: 印つきで同じ日に動かしたテンプレの授業は、旧経路の再マージでも元の時限に重ねて置かれない（INV-12）', () => {
+    // 水 5限 机 0＝生徒 A・机 1＝生徒 B、水 4限 机 0＝生徒 C。生徒 A を同じ日の 4限 机 1 へ移す（第 2 版の移動＝抑止キーを積まない）。
+    const rows = [...FX.OLD_ROWS, FX.row('r9', 't3', 'sC', '', 3, { slotNumber: 4 })]
+    const week = FX.buildWeek(rows)
+    const moving = FX.cellOf([week], `${FX.WED}_5`).desks[0].lesson!.studentSlots[0]!
+    const moved = computeStudentMove({ weeks: [week], weekIndex: 0, cells: week, movingStudentId: moving.id, cellId: `${FX.WED}_4`, deskIndex: 1, studentIndex: 0, suppressedRegularLessonOccurrences: [], managedStudentByAnyName: new Map(FX.students.map((item) => [item.name, item])), resolveBoardStudentDisplayName: (name: string) => name, templateOriginRules: true })
+    if (moved.status !== 'moved') throw new Error(moved.message)
+    expect(moved.nextSuppressedRegularLessonOccurrences).toEqual([])
+    // 盤面の確定（commitWeeks）と同じく出自の印を付ける
+    const stamped = stampPlacementOrigins(moved.nextWeeks, {}).weeks
+    const slotsOfA = (board: SlotCell[][]) => board.flat().filter((cell) => cell.dateKey === FX.WED)
+      .flatMap((cell) => cell.desks.flatMap((desk) => (desk.lesson?.studentSlots ?? []).filter((item) => item?.managedStudentId === 'sA').map(() => cell.slotNumber)))
+    const movedA = FX.cellOf(stamped, `${FX.WED}_4`).desks[1].lesson?.studentSlots[0]
+    expect(movedA?.managedStudentId).toBe('sA')
+    expect(movedA?.origin).toBeTruthy()
+    expect(slotsOfA(stamped)).toEqual([4])
+    expect(slotsOfA(FX.remerge(stamped, rows, []))).toEqual([4])
+    // 旧経路の再マージでも 4限の 1 か所だけ（5限にテンプレの A が生き返らない）
+    const plain = remergeWithoutRules(stamped, rows, [])
+    expect(slotsOfA(plain)).toEqual([4])
+    expect(projectDesks(remergeWithoutRules(plain, rows, []))).toEqual(projectDesks(plain))
+  })
+
   it('字面: 旧方式の上書きの在庫返却は上段（weeks）だけを走査する（下段を返さない＝第 2 版の経路を保つ理由）', () => {
     const start = BOARD_TSX.indexOf('const handleSaveRegularLessonTemplate = useCallback(')
     const overwrite = BOARD_TSX.slice(start, BOARD_TSX.indexOf('useEffect(() => {', start))
     expect(overwrite).toContain('for (const week of weeks) {')
     expect(overwrite).toContain('pruneTemplatePendingDesksOnOrAfter(templatePendingDesks, weeks, effectiveStart)')
+    // 上書き経路で下段も台帳へ返す完全版（N-1 の (2)）を入れると落ちる。落ちたら N-1 の記述（spec-template-behavior 第 2 段 7・rollback.md A-1）を見直す。
     expect(overwrite).not.toContain('buildTemplatePendingLowerScanWeeks')
     // テンプレ保存の分岐は resolveTemplateReportMode(templateDiffApplyEnabled) から
     expect(BOARD_TSX).toContain('const templateReportMode = resolveTemplateReportMode(templateDiffApplyEnabled)')

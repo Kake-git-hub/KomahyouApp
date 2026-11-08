@@ -203,6 +203,8 @@ export const featureRolloutRegistry = {
   //     手動振替調整は消さず、在庫台帳も触らない(保存で在庫が動かない＝INV-06 拡張)。確認文は件数入り。
   // OFF: 旧方式(上書き＝handleSaveRegularLessonTemplate の既存経路)のまま。ただし保留のある教室は OFF でも第 2 版の経路
   //     (N-1・2026-11-08・resolveTemplateDiffApplyActive。保留が 0 件になった教室だけ旧方式へ戻る)。
+  //     旧方式へ戻ると講師の休みと同じ日の移動の印は効かなくなる(休みの机にテンプレの講師が戻る・印は残る。
+  //     同じ日に動かした授業は元の時限に重ねて置かれない。inv06-template-pending-rollback.matrix.test.ts C-a・C-b)。
   // ★既に存在する保留データ(templatePendingDesks)の保存・往復・在庫走査は**フラグに依らず常に有効**(Q33-3。
   //   フラグを戻した教室で黙って消さない。transferSourceRestDisplay と同じ流儀)。フラグが切り替えるのは
   //   「保存時に差分反映を使うか」と「保留の解決 UI(第 1 段 B)」だけ。
