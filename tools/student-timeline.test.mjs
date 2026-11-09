@@ -195,7 +195,7 @@ describe('版の差からその生徒の机だけ残す', () => {
   })
 })
 
-describe('保存ごとの版の選び方(変化日とその前日の最初と最後だけ)', () => {
+describe('保存ごとの版の選び方(変化日の最初と最後＋その直前の版だけ)', () => {
   const objects = [
     // 11/3(JST) の 3 本
     'v00000100-2026-11-02T23-10-00-000Z.json.gz',
@@ -208,6 +208,8 @@ describe('保存ごとの版の選び方(変化日とその前日の最初と最
     // 11/9(JST)
     'v00000110-2026-11-09T01-00-00-000Z.json.gz',
   ].map((base) => ({ name: `classroom-save-history/main/cls1/${base}`, size: '100' }))
+  const short = (plan) => plan.downloads.map((name) => name.split('/').pop().slice(0, 9))
+  const toObjects = (bases) => bases.map((base) => ({ name: `classroom-save-history/main/cls1/${base}` }))
 
   it('ファイル名から版数と保存時刻と JST の日付を読む', () => {
     expect(parseSaveHistoryObjectName(objects[0].name)).toEqual({
@@ -219,17 +221,104 @@ describe('保存ごとの版の選び方(変化日とその前日の最初と最
     expect(parseSaveHistoryObjectName('classroom-save-history/main/cls1/latest.json')).toBeNull()
   })
 
-  it('変化日 11/4 なら 11/3 と 11/4 の最初と最後の 4 本だけ落とす(真ん中の版は落とさない)', () => {
+  it('変化日 11/4 なら 直前の版(11/3 の最後)と 11/4 の最初と最後の 3 本だけ落とす(真ん中の版は落とさない)', () => {
     const plan = planVersionDownloads(objects, ['2026-11-04'])
-    expect(plan.downloads.map((name) => name.split('/').pop().slice(0, 9))).toEqual(['v00000100', 'v00000102', 'v00000103', 'v00000105'])
+    expect(short(plan)).toEqual(['v00000102', 'v00000103', 'v00000105'])
     expect(plan.dayNotes).toEqual([])
     expect(plan.groups).toHaveLength(1)
   })
 
-  it('版の無い日は印を付ける(前日 11/8 に版が無い)', () => {
-    const plan = planVersionDownloads(objects, ['2026-11-09'])
+  it('暦の前日に版が無くても(日曜休みの翌月曜など)、直前の版と比べる: 版が 11/1 と 11/4 だけ', () => {
+    const plan = planVersionDownloads(toObjects([
+      'v00000050-2026-11-01T01-00-00-000Z.json.gz',
+      'v00000051-2026-11-01T08-00-00-000Z.json.gz',
+      'v00000060-2026-11-04T01-00-00-000Z.json.gz',
+      'v00000061-2026-11-04T05-00-00-000Z.json.gz',
+    ]), ['2026-11-04'])
+    expect(short(plan)).toEqual(['v00000051', 'v00000060', 'v00000061'])
+    expect(plan.dayNotes).toEqual([])
+  })
+
+  it('変化日の版が 1 本だけでも、直前の版との差を比べる', () => {
+    const plan = planVersionDownloads(toObjects([
+      'v00000050-2026-11-01T01-00-00-000Z.json.gz',
+      'v00000051-2026-11-01T08-00-00-000Z.json.gz',
+      'v00000060-2026-11-04T01-00-00-000Z.json.gz',
+    ]), ['2026-11-04'])
+    expect(short(plan)).toEqual(['v00000051', 'v00000060'])
+    expect(plan.dayNotes).toEqual([])
+  })
+
+  it('続いた変化日は直前の版を重ねて落とさない(11/3 と 11/4)', () => {
+    const plan = planVersionDownloads(objects, ['2026-11-03', '2026-11-04'])
+    expect(short(plan)).toEqual(['v00000100', 'v00000102', 'v00000103', 'v00000105'])
+    expect(plan.dayNotes).toContainEqual({ dateKey: '2026-11-03', note: 'no-earlier-version' })
+  })
+
+  it('変化日に版が無ければ印を付ける', () => {
+    const plan = planVersionDownloads(objects, ['2026-11-08'])
     expect(plan.dayNotes).toContainEqual({ dateKey: '2026-11-08', note: 'no-versions' })
-    expect(plan.downloads).toHaveLength(1)
+    expect(plan.downloads).toHaveLength(0)
+  })
+})
+
+describe('修正ラウンド 2(レビュー指摘)', () => {
+  it('出欠で上書きされた側(displacedStudentName)の生徒の操作ログも残し、印を付ける', () => {
+    const events = [
+      { id: 'e1', at: '2026-11-04T01:00:00.000Z', kind: 'status-mark', detail: { action: 'absent', studentName: '生徒B', managedStudentId: 's002', displacedStudentName: '生徒A', displacedStatus: 'absent', dateKey: '2026-11-05' } },
+    ]
+    expect(filterStudentEvents(events, 's001', { studentNames: ['生徒A', 'Aさん'] }).map((event) => event.id)).toEqual(['e1'])
+    const timeline = buildStudentTimeline({ studentId: 's001', roster: ROSTER, ledgerDays: [], events, traces: [], versionDiffs: [] })
+    expect(timeline).toHaveLength(1)
+    expect(timeline[0].text).toContain('上書きされた側')
+    expect(timeline[0].text).not.toContain('生徒A')
+  })
+
+  it('盤面の生徒に managedStudentId が無い(名前#エントリID)机も名前で拾い、「名前で一致」と印を付ける', () => {
+    const desks = [{ scope: 'desk', dateKey: '2026-11-05', slotNumber: 4, deskNumber: 1, before: '講師A: 生徒A#e123(通常 数学) / 空', after: '講師A: 空 / 空' }]
+    expect(filterStudentDesks(desks, 's001', { studentNames: ['生徒A'] })).toHaveLength(1)
+    const timeline = buildStudentTimeline({
+      studentId: 's001', roster: ROSTER, ledgerDays: [], events: [], traces: [],
+      versionDiffs: [{ dateKey: '2026-11-04', fromSavedAt: '2026-11-04T00:00:00.000Z', toSavedAt: '2026-11-04T01:00:00.000Z', fromVersion: 1, toVersion: 2, desks }],
+    })
+    expect(timeline).toHaveLength(1)
+    expect(timeline[0].text).toContain('名前で一致')
+    expect(timeline[0].text).not.toContain('この生徒の机の変化なし')
+    expect(timeline[0].text).not.toContain('生徒A')
+  })
+
+  it('痕跡も「名前#エントリID」を名前で拾う(別人の名前の一部には当てない)', () => {
+    const traces = [{ snapshotVersion: 3, entries: [
+      { at: '2026-11-04T01:00:00.000Z', kind: 'board-commit', summary: '2026-11-05 4限 机1: 講師A: 生徒A#e123(regular 数学) / 空 → 講師A: 空 / 空' },
+      { at: '2026-11-04T01:01:00.000Z', kind: 'board-commit', summary: '2026-11-05 5限 机1: 講師A: 別の生徒A#e9(regular 数学) / 空 → 講師A: 空 / 空' },
+    ] }]
+    const kept = filterStudentTraceEntries(traces, 's001', { studentNames: ['生徒A'] })
+    expect(kept).toHaveLength(1)
+    expect(kept[0].matchedByName).toBe(true)
+  })
+
+  it('机のメモ・注と痕跡のメモは既定で伏せ、痕跡の名簿外の講師名も伏せる', () => {
+    const timeline = buildStudentTimeline({
+      studentId: 's001', roster: ROSTER, ledgerDays: [], events: [],
+      traces: [{ snapshotVersion: 3, entries: [
+        { at: '2026-11-04T01:00:00.000Z', kind: 'board-commit', summary: '2026-11-05 4限 机1: 辞めた講師: 生徒A#s001(regular 数学) / メモ:名簿外の保護者さん → 講師なし: 空 / 空 | 2026-11-05 5限 机2: 講師A: 空 / 空 → 別の辞めた講師: 生徒A#s001(regular 英語) / 空' },
+      ] }],
+      versionDiffs: [{
+        dateKey: '2026-11-04', fromSavedAt: '2026-11-04T00:00:00.000Z', toSavedAt: '2026-11-04T01:00:00.000Z', fromVersion: 1, toVersion: 2,
+        desks: [{ scope: 'desk', dateKey: '2026-11-05', slotNumber: 4, deskNumber: 1, before: '講師A: 生徒A#s001(通常 数学) / メモ:名簿外の兄弟くん 注:名簿外の先生へ連絡', after: '講師A: 空 / 空' }],
+      }],
+    })
+    const text = JSON.stringify(timeline)
+    for (const leaked of ['名簿外の保護者さん', '名簿外の兄弟くん', '名簿外の先生へ連絡', '辞めた講師', '別の辞めた講師']) expect(text).not.toContain(leaked)
+    expect(text).toContain('メモ:(伏せた)')
+    expect(text).toContain('注:(伏せた)')
+    expect(text).toContain('(名簿に無い講師)')
+    expect(text).not.toContain('s001#s001')
+    const shown = JSON.stringify(buildStudentTimeline({
+      studentId: 's001', roster: ROSTER, ledgerDays: [], events: [], versionDiffs: [], showNames: true,
+      traces: [{ entries: [{ at: '2026-11-04T01:00:00.000Z', kind: 'board-commit', summary: '机1: 講師A: 生徒A#s001(regular 数学) / メモ:名簿外の保護者さん' }] }],
+    }))
+    expect(shown).toContain('名簿外の保護者さん')
   })
 })
 

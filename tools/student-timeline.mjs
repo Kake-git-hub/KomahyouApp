@@ -10,8 +10,9 @@
 //      その生徒の科目ごとの未消化・実績を日ごとに並べ、前の台帳の日から変わった日を「変化日」とする。
 //   2. 操作ログ operationEvents と操作痕跡 operationTraces を recordedAt(ISO 文字列)の範囲で :runQuery。
 //      その生徒(ID・痕跡の要約は「名前#ID」)の行だけ残す。
-//   3. 保存ごとの版 classroom-save-history/{ws}/{id}/ を Storage の一覧(GET)で引き、変化日とその前日の
-//      最初と最後の版だけを落として比べ(tools/snapshot-diff.mjs の diffBoardWeeks)、その生徒の机だけ残す。
+//   3. 保存ごとの版 classroom-save-history/{ws}/{id}/ を Storage の一覧(GET)で引き、変化日の最初と最後の版と
+//      その直前の版(一覧で 1 つ前・前の台帳日の最後の保存にあたる)だけを落として比べ(tools/snapshot-diff.mjs の
+//      diffBoardWeeks)、その生徒の机(ID か「名前#」で一致)だけ残す。
 //      名簿(名前を ID に置き換える用)は一覧の最新の版から読む。
 //   4. 4 つを時刻順に 1 本へ(tools/studentTimeline.lib.mjs)。既定は名前を ID に置き換える。
 //   どれかの元が取れなくても止めずに「取得できず: 理由」と出して残りを出す。
@@ -262,7 +263,7 @@ export async function collectStudentTimeline(options, http) {
     sourceErrors.push({ source: 'trace', reason: errorText(error) })
   }
 
-  // 3. 保存ごとの版(変化日とその前日の最初と最後だけ落とす)
+  // 3. 保存ごとの版(変化日の最初と最後＋その直前の版だけ落とす)
   const versionDiffs = []
   const downloaded = []
   try {

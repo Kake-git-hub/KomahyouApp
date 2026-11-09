@@ -6,7 +6,7 @@
 //     - 生徒授業台帳(lessonLedgerDays)… 日ごとの未消化・実績。前の台帳の日から変わった日を「変化日」とする。
 //     - 操作ログ(operationEvents)     … 在庫が減る・記録が消える操作(誰がいつ)。
 //     - 操作痕跡(operationTraces)     … 保存に同梱された盤面の確定の要約(「名前#ID」を含む)。
-//     - 保存ごとの版(classroom-save-history)… 変化日とその前日の最初と最後の版だけを比べた、その生徒の机の変化。
+//     - 保存ごとの版(classroom-save-history)… 変化日の最初と最後の版とその直前の版だけを比べた、その生徒の机の変化。
 //
 // ★名前は既定で ID に置き換える(公開リポジトリ・本番データ保護ルール)。痕跡の要約には他の生徒の名前も入るので、
 //   名簿の全員(生徒・講師)を置き換え、名簿に無い「名前#ID」も #ID の前を伏せる。名前を出すのは showNames のときだけ。
@@ -154,6 +154,7 @@ export function maskNames(text, roster, options = {}) {
   result = result.replace(new RegExp(`(?:(${JAPANESE_WORD})([ 　]))?([^${NAME_STOP_CHARS}]+)#([${ID_CHARS}]+)`, 'gu'), (match, word, space, prefix, id, offset, whole) => {
     if (/^[\d./-]+$/.test(prefix)) return match
     if (except && id === except) return match
+    if (PERSON_ID_PATTERN.test(prefix) || rosterIds.has(prefix)) return match
     const lead = word && KEEP_LEADING_WORDS.has(word) ? `${word}${space}` : ''
     if (isPersonId(id)) return `${lead}${id}`
     const after = whole.slice(offset + match.length)
@@ -328,18 +329,41 @@ export function filterStudentEvents(events, studentId, options = {}) {
     if (detail.managedStudentId === studentId) return true
     if (Object.values(detail).some((value) => typeof value === 'string' && containsStudentRef(value, studentId))) return true
     if (!detail.managedStudentId && typeof detail.studentName === 'string' && names.has(detail.studentName.trim())) return true
+    // 出欠で上書きされた側の生徒は displacedStudentName にだけ残る(ScheduleBoardScreen の buildStatusMarkDetail・修正ラウンド 2)。
+    if (isDisplacedStudentEvent(event, studentId, names)) return true
     if (DATE_WIDE_EVENT_KINDS.has(event.kind)) return DATE_DETAIL_KEYS.some((key) => typeof detail[key] === 'string' && dates.has(detail[key]))
     return false
   })
 }
 
-/** 操作痕跡の文書(entries[])から、要約に「#ID」を含む行だけを取り出す。 */
-export function filterStudentTraceEntries(traces, studentId) {
+/** その生徒が出欠で上書きされた側(displacedStudentName)として載っている操作ログか。 */
+function isDisplacedStudentEvent(event, studentId, names) {
+  const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {}
+  return detail.managedStudentId !== studentId && typeof detail.displacedStudentName === 'string' && names.has(detail.displacedStudentName.trim())
+}
+
+/**
+ * 文に生徒の名前の直後に # が来る形(「名前#盤面のエントリID」)があるか。盤面の生徒に managedStudentId が無いと
+ * 机と痕跡は「名前#エントリID」になり ID では拾えないため、名前でも照合する(修正ラウンド 2)。前の境目を確かめる。
+ */
+export function containsStudentNameRef(text, studentNames) {
+  const value = String(text ?? '')
+  return (studentNames ?? []).flatMap(nameVariants).some((variant) => new RegExp(`${WORD_BEFORE}${escapeRegExp(variant)}#`, 'u').test(value))
+}
+
+/**
+ * 操作痕跡の文書(entries[])から、要約に「#ID」(または options.studentNames の「名前#」)を含む行だけを取り出す。
+ * 名前でだけ当たった行は matchedByName: true。
+ */
+export function filterStudentTraceEntries(traces, studentId, options = {}) {
   const result = []
   for (const trace of asArray(traces)) {
     for (const entry of asArray(trace?.entries)) {
-      if (typeof entry?.summary !== 'string' || !containsStudentRef(entry.summary, studentId)) continue
-      result.push({ at: String(entry.at ?? ''), kind: String(entry.kind ?? ''), summary: entry.summary, snapshotVersion: trace.snapshotVersion ?? null, saveId: trace.saveId ?? '' })
+      if (typeof entry?.summary !== 'string') continue
+      const byId = containsStudentRef(entry.summary, studentId)
+      const byName = !byId && containsStudentNameRef(entry.summary, options.studentNames)
+      if (!byId && !byName) continue
+      result.push({ at: String(entry.at ?? ''), kind: String(entry.kind ?? ''), summary: entry.summary, snapshotVersion: trace.snapshotVersion ?? null, saveId: trace.saveId ?? '', matchedByName: byName })
     }
   }
   return result
@@ -349,10 +373,19 @@ export function filterStudentTraceEntries(traces, studentId) {
 // 保存ごとの版
 // ---------------------------------------------------------------------------
 
-/** 机単位の差(snapshot-diff の diffBoardWeeks)からその生徒(#ID)のいる机だけを残す。 */
-export function filterStudentDesks(desks, studentId) {
-  return asArray(desks).filter((entry) => entry?.scope === 'desk'
-    && (containsStudentRef(entry.before, studentId) || containsStudentRef(entry.after, studentId)))
+/**
+ * 机単位の差(snapshot-diff の diffBoardWeeks)からその生徒(#ID・または options.studentNames の「名前#」)のいる机だけを残す。
+ * 名前でだけ当たった机は matchedByName: true。
+ */
+export function filterStudentDesks(desks, studentId, options = {}) {
+  const result = []
+  for (const entry of asArray(desks)) {
+    if (entry?.scope !== 'desk') continue
+    const byId = containsStudentRef(entry.before, studentId) || containsStudentRef(entry.after, studentId)
+    const byName = !byId && (containsStudentNameRef(entry.before, options.studentNames) || containsStudentNameRef(entry.after, options.studentNames))
+    if (byId || byName) result.push({ ...entry, matchedByName: byName })
+  }
+  return result
 }
 
 const SAVE_HISTORY_NAME_PATTERN = /(?:^|\/)v(\d{8})-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.json\.gz$/
@@ -372,49 +405,61 @@ function compareVersions(left, right) {
 }
 
 /**
- * 落とす版を決める。変化日とその前日の、それぞれ最初と最後の版だけ(全部の版は落とさない・1 日 60 本ある教室がある)。
- * 続いた日(前日→変化日)は 1 つの組にして、組の中の版を古い順に隣どうし比べる(前日の最後→変化日の最初も比べる)。
+ * 落とす版を決める。変化日の最初と最後の版と、**変化日の最初の版の直前の版**(一覧で 1 つ前)だけ
+ * (全部の版は落とさない・1 日 60 本ある教室がある)。組の中の版を古い順に隣どうし比べる。
+ *
+ * ★直前の版を使う理由(2026-11-09 修正ラウンド 2・レビュー指摘): 台帳はその日の最初の保存で必ず送られ、サーバーは
+ *   保存ごとにその日の文書を上書きする(src/utils/studentLessonLedger.ts shouldSendStudentLessonLedger・
+ *   functions/src/index.ts の台帳の書き込み)。つまり前の台帳日と変化日の間に保存(=版)は無い。暦の前日を見る方式だと
+ *   日曜休みの翌月曜などで「前の台帳日の最後 → 変化日の最初」が比べられず、変化日の最初の保存の変化が抜けた。
+ * 直前の版が前の組の最後の版と同じなら、組をつなげて同じ版を 2 回落とさない。
  * @param {Array<{ name: string }>} objects Storage の一覧
  * @param {string[]} changeDays 変化日
  * @returns {{ groups: Array<{ days: string[], versions: Array<ReturnType<typeof parseSaveHistoryObjectName>> }>,
- *   dayNotes: Array<{ dateKey: string, note: 'no-versions'|'single-version' }>, downloads: string[] }}
+ *   dayNotes: Array<{ dateKey: string, note: 'no-versions'|'single-version'|'no-earlier-version' }>, downloads: string[] }}
  */
 export function planVersionDownloads(objects, changeDays) {
+  const all = asArray(objects).map((object) => parseSaveHistoryObjectName(object?.name)).filter(Boolean).sort(compareVersions)
   const byDay = new Map()
-  for (const object of asArray(objects)) {
-    const parsed = parseSaveHistoryObjectName(object?.name)
-    if (!parsed) continue
+  for (const parsed of all) {
     if (!byDay.has(parsed.dateKey)) byDay.set(parsed.dateKey, [])
     byDay.get(parsed.dateKey).push(parsed)
   }
-  const days = [...new Set(asArray(changeDays).flatMap((day) => [addDays(day, -1), day]))].sort()
+  const days = [...new Set(asArray(changeDays))].sort()
   const groups = []
   const dayNotes = []
   let current = null
   for (const day of days) {
-    if (!current || addDays(current.days[current.days.length - 1], 1) !== day) {
-      current = { days: [], versions: [] }
-      groups.push(current)
-    }
-    current.days.push(day)
-    const versions = [...(byDay.get(day) ?? [])].sort(compareVersions)
+    const versions = byDay.get(day) ?? []
     if (versions.length === 0) {
       dayNotes.push({ dateKey: day, note: 'no-versions' })
       continue
     }
     const first = versions[0]
     const last = versions[versions.length - 1]
+    const firstIndex = all.indexOf(first)
+    const anchor = firstIndex > 0 ? all[firstIndex - 1] : null
+    if (current && anchor && current.versions[current.versions.length - 1] === anchor) {
+      current.days.push(day)
+    } else {
+      current = { days: [day], versions: anchor ? [anchor] : [] }
+      groups.push(current)
+      if (!anchor) dayNotes.push({ dateKey: day, note: 'no-earlier-version' })
+    }
     current.versions.push(first)
     if (last !== first) current.versions.push(last)
   }
   for (const group of groups) {
-    if (group.versions.length === 1) dayNotes.push({ dateKey: group.versions[0].dateKey, note: 'single-version' })
+    if (group.versions.length === 1) {
+      const index = dayNotes.findIndex((note) => note.dateKey === group.days[0] && note.note === 'no-earlier-version')
+      if (index >= 0) dayNotes.splice(index, 1)
+      dayNotes.push({ dateKey: group.days[0], note: 'single-version' })
+    }
   }
-  const nonEmptyGroups = groups.filter((group) => group.versions.length > 0)
   return {
-    groups: nonEmptyGroups,
+    groups,
     dayNotes,
-    downloads: nonEmptyGroups.flatMap((group) => group.versions.map((version) => version.name)),
+    downloads: groups.flatMap((group) => group.versions.map((version) => version.name)),
   }
 }
 
@@ -446,6 +491,19 @@ function maskDeskTeacher(text, roster) {
   if (teacher === '講師なし' || teacher === '(机なし)') return value
   const masked = maskNames(teacher, roster)
   return `${masked === teacher ? '(名簿に無い講師)' : masked}${value.slice(separator)}`
+}
+
+/** 机のメモ・注(自由記述)の中身を伏せる(名簿に無い名前が素通しになるため・修正ラウンド 2)。 */
+export function maskFreeText(text) {
+  return String(text ?? '').replace(/(?<![\p{L}\p{N}])(メモ|注):(.+?)(?= \/ | \+ | → | \| | 注:|$)/gu, '$1:(伏せた)')
+}
+
+/** 痕跡の要約(「机N: 講師: 枠 / 枠 → 講師: 枠 / 枠 | …」)の各机の講師名を、名簿に無ければ伏せる。 */
+function maskTraceTeachers(summary, roster) {
+  return String(summary ?? '').replace(/(机\d+: |→ )([^:|]+?)(?=: )/g, (_match, lead, teacher) => {
+    const masked = maskDeskTeacher(`${teacher}: `, roster)
+    return `${lead}${masked.slice(0, -2)}`
+  })
 }
 
 function formatVersionLabel(version, savedAt) {
@@ -485,17 +543,30 @@ export function buildStudentTimeline(input) {
   }
 
   const studentNames = roster.filter((person) => person.id === studentId).flatMap((person) => [person.name, person.displayName]).filter(Boolean)
+  const nameVariantsOfStudent = [...new Set(studentNames.flatMap(nameVariants))].sort((left, right) => right.length - left.length)
+  // 名前でだけ当たった行(「名前#エントリID」)は、伏せる前にその生徒の ID を付け直す(名簿外と取り違えない)。
+  // 「名前#生徒ID」はそのまま(伏せる処理が ID にする)。
+  const rosterIds = new Set(roster.map((person) => person.id))
+  const retagByName = (text) => (showNames ? text : nameVariantsOfStudent.reduce((value, variant) => value.replace(
+    new RegExp(`${WORD_BEFORE}${escapeRegExp(variant)}#([${ID_CHARS}]+)`, 'gu'),
+    (match, id) => (PERSON_ID_PATTERN.test(id) || rosterIds.has(id) ? match : `${studentId}#${id}`),
+  ), text))
+  const nameMark = (matchedByName) => (matchedByName ? ' (名前で一致)' : '')
+  const hideFree = (text) => (showNames ? text : maskFreeText(text))
   const studentDates = collectStudentLedgerDates(input.ledgerDays, studentId)
   for (const event of filterStudentEvents(input.events, studentId, { studentNames, studentDates })) {
     const label = EVENT_KIND_LABELS[event.kind] ?? event.kind
-    const dateWide = DATE_WIDE_EVENT_KINDS.has(event.kind) && event.detail?.managedStudentId !== studentId ? '(日付全体)' : ''
-    entries.push({ at: String(event.at || event.recordedAt || ''), source: 'event', text: `操作ログ ${label}${dateWide}: ${formatEventDetail(event.detail, !showNames, roster)}` })
+    const displaced = isDisplacedStudentEvent(event, studentId, new Set(nameVariantsOfStudent)) ? '(上書きされた側)' : ''
+    const dateWide = !displaced && DATE_WIDE_EVENT_KINDS.has(event.kind) && event.detail?.managedStudentId !== studentId ? '(日付全体)' : ''
+    entries.push({ at: String(event.at || event.recordedAt || ''), source: 'event', text: `操作ログ ${label}${displaced}${dateWide}: ${formatEventDetail(event.detail, !showNames, roster)}` })
   }
 
-  for (const entry of filterStudentTraceEntries(input.traces, studentId)) {
+  for (const entry of filterStudentTraceEntries(input.traces, studentId, { studentNames })) {
     const version = typeof entry.snapshotVersion === 'number' ? ` (保存 v${entry.snapshotVersion})` : ''
-    const summary = input.hideTraceSummaries && !showNames ? '(名簿が取れないため要約は伏せた・--show-names で見る)' : entry.summary
-    entries.push({ at: entry.at, source: 'trace', text: `痕跡 ${entry.kind}: ${summary}${version}` })
+    const summary = input.hideTraceSummaries && !showNames
+      ? '(名簿が取れないため要約は伏せた・--show-names で見る)'
+      : (showNames ? entry.summary : maskTraceTeachers(hideFree(retagByName(entry.summary)), roster))
+    entries.push({ at: entry.at, source: 'trace', text: `痕跡 ${entry.kind}: ${summary}${version}${nameMark(entry.matchedByName)}` })
   }
 
   for (const diff of asArray(input.versionDiffs)) {
@@ -507,20 +578,25 @@ export function buildStudentTimeline(input) {
       entries.push({ at: jstDayStartIso(diff.dateKey), source: 'version', text: `版 ${diff.dateKey}: この日の保存の版は無い` })
       continue
     }
+    if (diff.note === 'no-earlier-version') {
+      entries.push({ at: jstDayStartIso(diff.dateKey), source: 'version', text: `版 ${diff.dateKey}: この日より前の保存の版が無い(この日の最初の保存の変化は比べられない)` })
+      continue
+    }
     if (diff.note === 'single-version') {
       entries.push({ at: diff.toSavedAt || jstDayStartIso(diff.dateKey), source: 'version', text: `版 ${diff.dateKey}: この日の保存の版は 1 本だけ(比べる相手の版が無い)` })
       continue
     }
     const pair = `${formatVersionLabel(diff.fromVersion, diff.fromSavedAt)} → ${formatVersionLabel(diff.toVersion, diff.toSavedAt)}`
-    const desks = filterStudentDesks(diff.desks, studentId)
+    const desks = filterStudentDesks(diff.desks, studentId, { studentNames })
     const at = diff.toSavedAt || jstDayStartIso(diff.dateKey)
     if (desks.length === 0) {
       entries.push({ at, source: 'version', text: `版 ${pair}: この生徒の机の変化なし` })
       continue
     }
     for (const desk of desks) {
-      const shown = showNames ? desk : { ...desk, before: maskDeskTeacher(desk.before, roster), after: maskDeskTeacher(desk.after, roster) }
-      entries.push({ at, source: 'version', text: `版 ${pair}: ${formatDeskEntry(shown)}` })
+      const hide = (text) => maskDeskTeacher(hideFree(retagByName(text)), roster)
+      const shown = showNames ? desk : { ...desk, before: hide(desk.before), after: hide(desk.after) }
+      entries.push({ at, source: 'version', text: `版 ${pair}: ${formatDeskEntry(shown)}${nameMark(desk.matchedByName)}` })
     }
   }
 
