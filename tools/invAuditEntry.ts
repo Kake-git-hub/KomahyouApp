@@ -25,7 +25,7 @@ import type { SpecialSessionRow } from '../src/components/special-data/specialSe
 import type { AppSnapshotPayload, ClassroomSettings } from '../src/types/appState'
 import { isParentPortalTokenOwnedByClassroom, isSubmissionTokenOwnedByClassroom } from '../src/utils/developmentClassroom'
 import { buildTeacherPayload } from '../src/utils/scheduleHtml'
-import { buildTeacherAssignments, collectTeacherAssignmentEntries, type TeacherScheduleEntry } from '../src/utils/scheduleViewData'
+import { buildTeacherAssignments, collectTeacherAssignmentEntries, isVisibleInRange, type TeacherScheduleEntry } from '../src/utils/scheduleViewData'
 
 /** 出力の並び順もこの順(今日以降 → 今日より前、の中でこの順)。 */
 export const INV_AUDIT_RULES = ['INV-12', 'INV-06', 'HOLIDAY', 'INV-01', 'INV-13', 'INV-08', 'INV-14'] as const
@@ -42,17 +42,31 @@ export type InvAuditFinding = {
   slotNumber?: number
   /** 机の番号(0 始まり。メッセージでは「机1」から数える)。 */
   deskIndex?: number
-  /** future＝今日以降の日付(日付の無い所見＝今の教室データの状態も含む)／past＝今日より前の日付。 */
+  /** 科目(在庫・振替・休日の授業の所見)。既知の突き合わせに使える。 */
+  subject?: string
+  /** 講習 ID(未消化講習の所見)。既知の突き合わせに使える。 */
+  sessionId?: string
+  /**
+   * future＝今日以降の日付(日付の無い所見＝今の教室データの状態も含む)／past＝今日より前の日付。
+   * 未消化講習の所見は講習の終わりの日(session.endDate)で決める(終わった講習の台帳だけの跡は past)。
+   */
   period: 'future' | 'past'
   /** 日本語の 1 行。生徒・講師は ID だけ。 */
   message: string
 }
 
-export type KnownIssue = { rule?: string; classroomId?: string; dateKey?: string; slotNumber?: number; studentId?: string; note?: string }
+/**
+ * 既知の除外。rule・classroomId・studentId・dateKey・slotNumber は一致が必要(dateKey・slotNumber は無い所見なら書かない)。
+ * kind・subject・sessionId は書いたときだけ一致を要求する(日付の無い所見＝在庫・トークンを 1 件に絞るため)。
+ */
+export type KnownIssue = { rule?: string; kind?: string; classroomId?: string; dateKey?: string; slotNumber?: number; studentId?: string; subject?: string; sessionId?: string; note?: string }
 
 export type InvAuditResult = {
   findings: InvAuditFinding[]
-  /** `<rule>`・`<rule>.future`・`<rule>.past`(全ルール 0 を含む)と total・bug・check・known(既知で除いた数)。 */
+  /**
+   * `<rule>`・`<rule>.future`・`<rule>.past`(bug と check の合計)、`<rule>.bug`・`<rule>.bug.future`・`<rule>.check`・`<rule>.check.future`
+   * (全ルール 0 を含む)と total・bug・check・known(既知で除いた数)。**違反は bug だけ**(check は要確認)。
+   */
   counts: Record<string, number>
   /** 調べられなかったルールとその理由など。 */
   notes: string[]
@@ -144,8 +158,9 @@ export function auditClassroomSnapshot(input: {
 
   const findings: InvAuditFinding[] = []
   const notes: string[] = []
-  const push = (finding: Omit<InvAuditFinding, 'period'>) => {
-    findings.push({ ...finding, period: finding.dateKey && finding.dateKey < today ? 'past' : 'future' })
+  /** periodDateKey: 期間を決める日付(省略時は dateKey)。 */
+  const push = (finding: Omit<InvAuditFinding, 'period'>, periodDateKey: string | undefined = finding.dateKey) => {
+    findings.push({ ...finding, period: periodDateKey && periodDateKey < today ? 'past' : 'future' })
   }
   const desk = (deskIndex: number) => `机${deskIndex + 1}`
   const sid = (studentId: string | null | undefined) => studentId || NO_STUDENT_ID
@@ -186,7 +201,7 @@ export function auditClassroomSnapshot(input: {
   // 今の作りでは出ない。振替元の根拠が無い振替(＝実質の過剰消化)は下の collectOrphanedMakeups で見る。
   for (const entry of makeupEntries) {
     if (entry.balance >= 0) continue
-    push({ rule: 'INV-06', severity: 'bug', kind: 'makeup-negative', studentId: entry.studentId, message: `未消化振替の残が負: ${sid(entry.studentId)} ${entry.subject} 残 ${entry.balance}` })
+    push({ rule: 'INV-06', severity: 'bug', kind: 'makeup-negative', studentId: entry.studentId, subject: entry.subject, message: `未消化振替の残が負: ${sid(entry.studentId)} ${entry.subject} 残 ${entry.balance}` })
   }
   // 講習の残は「提出の希望数 − 台帳の消化」。アプリは 0 で止めて表示する(buildLecturePendingItemsByEntryKey)ので、止める前の値で見る。
   const requestedByStockKey = new Map<string, number>()
@@ -202,10 +217,13 @@ export function auditClassroomSnapshot(input: {
     if (remaining >= 0) continue
     const { studentKey, subject, sessionId } = parseLectureStockKey(stockKey)
     const studentId = /^(name|manual):/.test(studentKey) ? null : studentKey
+    // 日付は講習の終わりの日で決める(終わった講習の台帳だけの跡を「今日以降」に数えない)。講習が無い・見つからないなら今の状態＝今日以降。
+    const sessionEndDate = sessionId ? specialSessions.find((session) => session?.id === sessionId)?.endDate : undefined
     push({
-      rule: 'INV-06', severity: 'check', kind: 'lecture-overconsumed', studentId,
-      message: `未消化講習の消化が提出の希望数を超えている: ${sid(studentId)} ${subject} 講習 ${sessionId ?? '(講習なし)'} 希望 ${requested}・消化 ${-delta}(残 ${remaining}・画面は 0 と表示)`,
-    })
+      rule: 'INV-06', severity: 'check', kind: 'lecture-overconsumed', studentId, subject, ...(sessionId ? { sessionId } : {}),
+      // 「台帳の差分」は manualLectureStockCounts の値(負＝消化の記録)。盤面に置いたコマ数とは別物。
+      message: `未消化講習の台帳の差分が提出の希望数を超えている: ${sid(studentId)} ${subject} 講習 ${sessionId ?? '(講習なし)'}${sessionEndDate ? `(〜${sessionEndDate})` : ''} 希望 ${requested}・台帳の差分 ${delta}(残 ${remaining}・画面は 0 と表示)`,
+    }, sessionEndDate || undefined)
   }
 
   // ── INV-06 根拠を失った振替(collectOrphanedMakeups・テンプレの反映日以降の振替元だけ) ──
@@ -229,7 +247,7 @@ export function auditClassroomSnapshot(input: {
       const slotNumber = cell?.slotNumber
       const studentId = removal.student.managedStudentId ?? null
       push({
-        rule: 'INV-06', severity: 'bug', kind: 'orphaned-makeup', studentId, dateKey: removal.targetDateKey, slotNumber, ...(deskIndex >= 0 ? { deskIndex } : {}),
+        rule: 'INV-06', severity: 'bug', kind: 'orphaned-makeup', studentId, subject: removal.student.subject, dateKey: removal.targetDateKey, slotNumber, ...(deskIndex >= 0 ? { deskIndex } : {}),
         message: `根拠を失った振替: ${removal.targetDateKey} ${slotNumber ?? '?'}限 ${deskIndex >= 0 ? desk(deskIndex) : '机?'}${removal.inLower ? '(保留の下段)' : ''} ${sid(studentId)} ${removal.student.subject} 振替元 ${removal.sourceDateKey}${removal.sourceSlotNumber ? ` ${removal.sourceSlotNumber}限` : ''}(振替元の日にテンプレの授業も在庫の元コマも無い)`,
       })
     }
@@ -245,7 +263,7 @@ export function auditClassroomSnapshot(input: {
         if (!student) continue
         const studentId = resolveManagedId(student)
         push({
-          rule: 'HOLIDAY', severity: 'bug', kind: 'holiday-lesson', studentId, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex,
+          rule: 'HOLIDAY', severity: 'bug', kind: 'holiday-lesson', studentId, subject: student.subject, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex,
           message: `休日に授業が残っている: ${cell.dateKey} ${cell.slotNumber}限 ${desk(deskIndex)} ${sid(studentId)} ${student.lessonType} ${student.subject}`,
         })
       }
@@ -283,10 +301,12 @@ export function auditClassroomSnapshot(input: {
     }
 
     // INV-01: 1 つの机(講師日程表の 1 行)が 2 人以上の講師のページに出る。
+    // 講師日程表はその期間に在籍していない講師を一覧に出さない(getVisibleTeachers → isVisibleInRange)ので、そのコマの日で在籍していない講師は数えない。
     const assignments = buildTeacherAssignments(teacherPayload.cells)
     const holders = new Map<TeacherScheduleEntry, string[]>()
     for (const teacher of teacherPayload.teachers) {
       for (const entry of collectTeacherAssignmentEntries(assignments, teacher)) {
+        if (!isVisibleInRange(teacher, entry.dateKey, entry.dateKey, today)) continue
         const list = holders.get(entry) ?? []
         if (!list.includes(teacher.id)) list.push(teacher.id)
         holders.set(entry, list)
@@ -362,12 +382,21 @@ export function auditClassroomSnapshot(input: {
   if (cells.length === 0) push({ rule: 'INV-14', severity: 'check', kind: 'empty-weeks', studentId: null, message: '盤面の週(boardState.weeks)が 0 件' })
 
   // ── 既知を除き、並べ、数える ──
-  const known = new Set(asArray<KnownIssue>(input.known).filter(isPlainObject)
+  const knownIssues = asArray<KnownIssue>(input.known).filter((issue): issue is KnownIssue => isPlainObject(issue))
     .filter((issue) => issue.classroomId === classroomId && typeof issue.rule === 'string' && issue.studentId)
-    .map((issue) => `${issue.rule}#${issue.dateKey}#${Number(issue.slotNumber)}#${issue.studentId}`))
+  const optionalMatches = (expected: string | undefined, actual: string | undefined) => expected === undefined || expected === actual
+  const isKnown = (finding: InvAuditFinding) => Boolean(finding.studentId) && knownIssues.some((issue) => (
+    issue.rule === finding.rule
+    && issue.studentId === finding.studentId
+    && (issue.dateKey ?? undefined) === finding.dateKey
+    && (issue.slotNumber == null ? finding.slotNumber == null : Number(issue.slotNumber) === finding.slotNumber)
+    && optionalMatches(issue.kind, finding.kind)
+    && optionalMatches(issue.subject, finding.subject)
+    && optionalMatches(issue.sessionId, finding.sessionId)
+  ))
   let knownSkipped = 0
   const kept = findings.filter((finding) => {
-    if (finding.studentId && known.has(`${finding.rule}#${finding.dateKey}#${Number(finding.slotNumber)}#${finding.studentId}`)) {
+    if (isKnown(finding)) {
       knownSkipped += 1
       return false
     }
@@ -388,14 +417,14 @@ export function auditClassroomSnapshot(input: {
 
   const counts: Record<string, number> = { total: sorted.length, bug: 0, check: 0, known: knownSkipped }
   for (const rule of INV_AUDIT_RULES) {
-    counts[rule] = 0
-    counts[`${rule}.future`] = 0
-    counts[`${rule}.past`] = 0
+    for (const suffix of ['', '.future', '.past', '.bug', '.bug.future', '.check', '.check.future']) counts[`${rule}${suffix}`] = 0
   }
   for (const finding of sorted) {
     counts[finding.severity] += 1
     counts[finding.rule] += 1
     counts[`${finding.rule}.${finding.period}`] += 1
+    counts[`${finding.rule}.${finding.severity}`] += 1
+    if (finding.period === 'future') counts[`${finding.rule}.${finding.severity}.future`] += 1
   }
   return { findings: sorted, counts, notes }
 }

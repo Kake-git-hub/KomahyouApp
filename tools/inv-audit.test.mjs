@@ -178,6 +178,31 @@ describe('INV-06 在庫(未消化講習の消化が希望数を超える・根�
     expect(rulesOf(audit(payload))).not.toContain('INV-06')
   })
 
+  it('講習の所見は講習の終わりの日で数える: 終わった講習(8/31)の台帳だけの跡は past。メッセージは「台帳の差分」(盤面のコマ数と取り違えない)', () => {
+    const ended = { ...session({ s1: input({ 数: 2 }) }), startDate: '2026-07-20', endDate: '2026-08-31' }
+    const result = audit(makePayload({ specialSessions: [ended], board: { manualLectureStockCounts: { 's1__数__sp1': -3 } } }))
+    const found = findingsOf(result, 'INV-06')
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ period: 'past', kind: 'lecture-overconsumed', subject: '数', sessionId: 'sp1' })
+    expect(found[0].message).toContain('台帳の差分 -3')
+    expect(found[0].message).not.toContain('消化 3')
+    expect(result.counts['INV-06.past']).toBe(1)
+    expect(result.counts['INV-06.future']).toBe(0)
+    // 終わっていない講習(1/7 まで)は今日以降
+    const running = audit(makePayload({ specialSessions: [session({ s1: input({ 数: 2 }) })], board: { manualLectureStockCounts: { 's1__数__sp1': -3 } } }))
+    expect(findingsOf(running, 'INV-06')[0].period).toBe('future')
+  })
+
+  it('日付の無い所見の既知: kind・subject・sessionId を書けば一致を要求し、書かなければ今までどおり(rule・教室・生徒の一致だけ)', () => {
+    const payload = makePayload({ specialSessions: [session({ s1: input({ 数: 2 }) })], board: { manualLectureStockCounts: { 's1__数__sp1': -3 } } })
+    const base = { rule: 'INV-06', classroomId: ROOM, studentId: 's1' }
+    expect(audit(payload, { known: [{ ...base, kind: 'lecture-overconsumed', subject: '数', sessionId: 'sp1' }] }).counts['INV-06']).toBe(0)
+    expect(audit(payload, { known: [base] }).counts['INV-06']).toBe(0)
+    expect(audit(payload, { known: [{ ...base, subject: '英' }] }).counts['INV-06']).toBe(1)
+    expect(audit(payload, { known: [{ ...base, sessionId: 'sp2' }] }).counts['INV-06']).toBe(1)
+    expect(audit(payload, { known: [{ ...base, kind: 'orphaned-makeup' }] }).counts['INV-06']).toBe(1)
+  })
+
   const templateSettings = makeSettings({ regularLessonTemplate: { version: 1, effectiveStartDate: '2026-11-01', savedAt: '2026-11-01T00:00:00.000Z', cells: [] }, templateFreezeBeforeDate: '2026-11-01' })
   const makeupWeeks = [[makeCell('2026-11-11', 1, [makeDesk('d1', [makeStudentEntry({ id: 'mk1', lessonType: 'makeup', makeupSourceDate: '2026-11-04', makeupSourceLabel: '11/4(水) 1限' }), null])])]]
 
@@ -239,6 +264,16 @@ describe('INV-01 講師日程表で 1 コマの生徒が 2 人の講師に出る
     const teachers = [makeTeacherRow('t1', '講師A'), makeTeacherRow('t2', '講師B')]
     const weeks = [[makeCell('2026-11-11', 1, [makeDesk('d1', [makeStudentEntry(), null], { teacher: '講師A', teacherAssignmentTeacherId: 't1' }), makeDesk('d2')])]]
     expect(rulesOf(audit(makePayload({ weeks, teachers })))).not.toContain('INV-01')
+  })
+
+  it('出ない: もう一人がそのコマの日に在籍していない講師(講師日程表が getVisibleTeachers で外す講師・退職した講師)なら数えない', () => {
+    const teachers = [makeTeacherRow('t1', '講師A'), { ...makeTeacherRow('t2', '講師B'), withdrawDate: '2026-10-31' }]
+    const regularLessons = [{
+      id: 'r1', schoolYear: 2026, teacherId: 't2', student1Id: 's1', subject1: '数', startDate: '', endDate: '', student2Id: '', subject2: '',
+      student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 1,
+    }]
+    const weeks = [[makeCell('2026-11-11', 1, [makeDesk('d1', [makeStudentEntry(), null], { teacher: '講師A' }), makeDesk('d2')])]]
+    expect(rulesOf(audit(makePayload({ weeks, teachers, regularLessons })))).not.toContain('INV-01')
   })
 })
 
@@ -370,6 +405,25 @@ describe('名前を出さない', () => {
 })
 
 describe('formatInvAuditText', () => {
+  it('違反は bug だけで数える: check だけの教室は 1 行目が「保証台帳の違反: なし(要確認 INV-06 1 件)」。counts も bug と check を分ける', () => {
+    const session = { id: 'sp1', label: '冬期講習', startDate: '2026-12-20', endDate: '2027-01-07', teacherInputs: {}, createdAt: '', updatedAt: '', studentInputs: { s1: { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 数: 1 }, regularOnly: false, countSubmitted: true, updatedAt: '' } } }
+    const result = audit(makePayload({ specialSessions: [session], board: { manualLectureStockCounts: { 's1__数__sp1': -2 } } }))
+    expect(result.counts['INV-06.check']).toBe(1)
+    expect(result.counts['INV-06.bug']).toBe(0)
+    expect(result.counts.bug).toBe(0)
+    const first = formatInvAuditText(result, { classroomLabel: ROOM, today: TODAY }).split('\n')[0]
+    expect(first).toContain('保証台帳の違反: なし')
+    expect(first).toContain('要確認 INV-06 1 件')
+
+    // bug と check が両方あれば、違反は bug の件数だけ・要確認は別に
+    const weeks = duplicateWeeks('2026-11-18', 5)
+    const both = audit(makePayload({ weeks, specialSessions: [session], board: { manualLectureStockCounts: { 's1__数__sp1': -2 } } }))
+    const line = formatInvAuditText(both, { classroomLabel: ROOM, today: TODAY }).split('\n')[0]
+    expect(line).toContain('保証台帳の違反: INV-12 1 件(今日以降 1 件)')
+    expect(line).toContain('要確認 INV-06 1 件')
+    expect(line).not.toContain('違反: INV-12 1 件(今日以降 1 件)・INV-06')
+  })
+
   it('違反が無ければ「保証台帳の違反: なし」1 行', () => {
     const text = formatInvAuditText(audit(makePayload()), { classroomLabel: ROOM, today: TODAY })
     expect(text.split('\n').filter((line) => line.includes('保証台帳の違反: なし'))).toHaveLength(1)

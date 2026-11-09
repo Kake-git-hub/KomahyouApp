@@ -20,7 +20,7 @@
 //   - 教室ファイル: 教室別バックアップ({classroomId}.json.gz)・教室の版履歴・バックアップ書き出しの JSON(gzip 可)。
 //     形の判定と教室の取り出しは tools/snapshot-diff.mjs と同じ。
 //   - --today: これより前の日付を「今日より前」に数える(既定は JST の今日)。
-//   - --known: 既知の除外 [{ rule, classroomId, dateKey, slotNumber, studentId, note }](tools/board-health-known-issues.json)。
+//   - --known: 既知の除外 [{ rule, classroomId, dateKey, slotNumber, studentId, kind?, subject?, sessionId?, note }](tools/board-health-known-issues.json)。
 import { mkdtemp, rm } from 'node:fs/promises'
 import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -73,15 +73,18 @@ export function jstToday(now = Date.now()) {
 const RULE_ORDER = ['INV-12', 'INV-06', 'HOLIDAY', 'INV-01', 'INV-13', 'INV-08', 'INV-14']
 
 /**
- * 文字の出力。1 行目に教室と件数の要約、続けて今日以降 → 今日より前の順に 1 件 1 行。
+ * 文字の出力。1 行目に教室と件数の要約(違反＝bug の件数・要確認＝check の件数を分ける)、続けて今日以降 → 今日より前の順に 1 件 1 行。
  * studentNames(Map<生徒ID, 名前>)を渡したときだけ名前を添える(--show-names)。
  */
 export function formatInvAuditText(result, options = {}) {
   const label = options.classroomLabel ?? ''
-  const rules = RULE_ORDER.filter((rule) => (result.counts[rule] ?? 0) > 0)
-  const summary = rules.length === 0
-    ? '保証台帳の違反: なし'
-    : `保証台帳の違反: ${rules.map((rule) => `${rule} ${result.counts[rule]} 件(今日以降 ${result.counts[`${rule}.future`]} 件)`).join('・')}`
+  // 違反＝severity bug だけ。check は「要確認」として別に出す(違反に数えない)。
+  const bugRules = RULE_ORDER.filter((rule) => (result.counts[`${rule}.bug`] ?? 0) > 0)
+  const checkRules = RULE_ORDER.filter((rule) => (result.counts[`${rule}.check`] ?? 0) > 0)
+  const checkText = checkRules.length > 0 ? `(要確認 ${checkRules.map((rule) => `${rule} ${result.counts[`${rule}.check`]} 件`).join('・')})` : ''
+  const summary = bugRules.length === 0
+    ? `保証台帳の違反: なし${checkText}`
+    : `保証台帳の違反: ${bugRules.map((rule) => `${rule} ${result.counts[`${rule}.bug`]} 件(今日以降 ${result.counts[`${rule}.bug.future`]} 件)`).join('・')}${checkText}`
   const knownText = result.counts.known > 0 ? `(既知 ${result.counts.known} 件を除く)` : ''
   const lines = [`■ ${label}${options.today ? `(${options.today} 時点)` : ''}: ${summary}${knownText}`]
   const nameOf = (finding) => {
