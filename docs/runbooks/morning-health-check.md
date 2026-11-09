@@ -95,11 +95,19 @@ done
 
 ## 5. GitHub と外形監視
 
+公開リポジトリなので、GitHub の公開 API を**認証なし**で読む(スケジュール実行のセッションでは `gh` がリポジトリに繋がらず 403 になる・2026-11-09 の初回で確認)。
+
 ```bash
-gh api -X GET search/issues -f q='repo:Kake-git-hub/KomahyouApp label:source:user-report is:open created:>=<前日の日付>' --jq '.items[] | "#\(.number) \(.title)"'
+# 利用者報告 Issue(開いているもの・番号と作成日だけ。題名は出さない)
+env -u GH_TOKEN -u GITHUB_TOKEN curl -sS "https://api.github.com/repos/Kake-git-hub/KomahyouApp/issues?labels=source:user-report&state=open&per_page=50" \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const i of JSON.parse(s))console.log('#'+i.number,i.created_at)})"
+# 外形監視の最新の実行
+env -u GH_TOKEN -u GITHUB_TOKEN curl -sS "https://api.github.com/repos/Kake-git-hub/KomahyouApp/actions/workflows/uptime-check.yml/runs?per_page=1" \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s).workflow_runs?.[0];console.log(r?r.conclusion+' '+r.created_at:'取得できず')})"
 ```
 
-外形監視(`uptime-check.yml`)の最新実行が赤なら報告に入れる(GitHub MCP の actions_list か Actions 画面)。
+- 前日 7:40 以降に作られた Issue があれば件数を報告に入れる。外形監視が `failure` なら報告に入れる。
+- どちらも取れないときは「取得できず」と書いて続ける(止まらない)。
 
 ## 6. 報告の形(日本語・実名なし)
 
