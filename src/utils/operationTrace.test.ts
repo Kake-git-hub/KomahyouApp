@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from '../components/schedule-board/types'
 import {
+  OPERATION_TRACE_AUTO_CAP_SUMMARY,
+  OPERATION_TRACE_AUTO_SAVE_LIMIT,
   OPERATION_TRACE_DIFF_ITEM_LIMIT,
   OPERATION_TRACE_LIMIT,
   OPERATION_TRACE_SAVE_LIMIT,
@@ -14,6 +16,7 @@ import {
   collectOperationTraceSinceLastSave,
   markOperationTraceSaved,
   peekOperationTrace,
+  recordAutoBoardChange,
   recordOperationTrace,
   resetOperationTrace,
   selectOperationTraceSinceMarker,
@@ -340,5 +343,124 @@ describe('operationTrace: 教室をまたがない(INV-08 の兄弟・保存へ�
     // 失敗側の catch(操作ログを戻す場所)より前にあり、catch の中には無い。
     expect(mark).toBeLessThan(restore)
     expect(app.slice(restore - 400, restore + 200)).not.toContain('markOperationTraceSaved(')
+  })
+})
+
+// 自動処理の操作痕跡(2026-11-09 オーナー「並べたとおりになっていない」の理由を後から追う・INV-02 / INV-03)。
+// 再反映・盤面を開いたときの再反映・起動時の自己修復・QR 提出の反映が机を変えたときだけ「自動: <処理名>: <机の差>」を残す。
+// 記録の嵐を防ぐ: 机が変わらなければ残さない・前回保存以降で直前の自動処理の行と同じ要約は残さない・前回保存以降の自動処理の行は 50 件まで。
+describe('operationTrace: 自動処理の記録(recordAutoBoardChange)', () => {
+  const weeksWithTeacher = (teacher: string): SlotCell[][] => [[cell('2026-11-10', 1, [desk(teacher, [student('青木', { managedStudentId: 's001' }), null])])]]
+  const autoLines = (classroomId: string) => peekOperationTrace(classroomId).filter((entry) => entry.summary.startsWith('自動: '))
+  let clock = Date.parse('2026-11-09T01:00:00.000Z')
+  beforeEach(() => {
+    clearOperationTraceMemory()
+    installStorage()
+    vi.useFakeTimers()
+    clock = Date.parse('2026-11-09T01:00:00.000Z')
+    vi.setSystemTime(clock)
+    setOperationTraceClassroomId('auto1')
+    resetOperationTrace('auto1')
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+  const tick = () => {
+    clock += 1000
+    vi.setSystemTime(clock)
+  }
+
+  it('机が変わらないときは何も残さない', () => {
+    recordAutoBoardChange('board-rebuild', '再反映(基本データ・テンプレの変更)', weeksWithTeacher('田中'), weeksWithTeacher('田中'))
+    expect(peekOperationTrace('auto1')).toEqual([])
+  })
+
+  it('机が変わったら「自動: <処理名>: <机の差>」を 1 行残す(生徒は 名前#ID)', () => {
+    recordAutoBoardChange('board-rebuild', '再反映(基本データ・テンプレの変更)', weeksWithTeacher('田中'), weeksWithTeacher('佐藤'))
+    const trace = peekOperationTrace('auto1')
+    expect(trace).toHaveLength(1)
+    expect(trace[0].kind).toBe('board-rebuild')
+    expect(trace[0].summary).toBe('自動: 再反映(基本データ・テンプレの変更): 2026-11-10 1限 机1: 田中: 青木#s001(通常 数) / 空 → 佐藤: 青木#s001(通常 数) / 空')
+  })
+
+  it('教室が未登録なら残さない(別教室へ混入させない)', () => {
+    setOperationTraceClassroomId('')
+    recordAutoBoardChange('auto', 'QR 提出の反映', weeksWithTeacher('田中'), weeksWithTeacher('佐藤'))
+    expect(peekOperationTrace('auto1')).toEqual([])
+  })
+
+  it('同じ要約が続けば 1 行(間に手の操作が入っても、直前の自動処理の行と同じなら残さない)・違う要約なら残す', () => {
+    recordAutoBoardChange('board-rebuild', '盤面を開いたときの再反映', weeksWithTeacher('田中'), weeksWithTeacher('佐藤'))
+    tick()
+    recordAutoBoardChange('board-rebuild', '盤面を開いたときの再反映', weeksWithTeacher('田中'), weeksWithTeacher('佐藤'))
+    tick()
+    recordOperationTrace('board-commit', '手の操作')
+    tick()
+    recordAutoBoardChange('board-rebuild', '盤面を開いたときの再反映', weeksWithTeacher('田中'), weeksWithTeacher('佐藤'))
+    expect(autoLines('auto1')).toHaveLength(1)
+    tick()
+    recordAutoBoardChange('auto', '起動時の自己修復(QR 提出の講師)', weeksWithTeacher('田中'), weeksWithTeacher('鈴木'))
+    expect(autoLines('auto1').map((entry) => entry.kind)).toEqual(['board-rebuild', 'auto'])
+    expect(peekOperationTrace('auto1')).toHaveLength(3)
+  })
+
+  it('前回保存以降の自動処理の行は 50 件まで。超えたら 1 回だけ「自動処理の記録を省略(上限)」を残し、手の操作の行は押し出さない', () => {
+    expect(OPERATION_TRACE_AUTO_SAVE_LIMIT).toBe(50)
+    recordOperationTrace('board-commit', '手の操作(前)')
+    for (let index = 0; index < 60; index += 1) {
+      tick()
+      recordAutoBoardChange('board-rebuild', '再反映(基本データ・テンプレの変更)', weeksWithTeacher('田中'), weeksWithTeacher(`講師${index}`))
+    }
+    tick()
+    recordOperationTrace('board-commit', '手の操作(後)')
+    const lines = autoLines('auto1')
+    expect(lines).toHaveLength(51)
+    expect(lines.filter((entry) => entry.summary === OPERATION_TRACE_AUTO_CAP_SUMMARY)).toHaveLength(1)
+    expect(lines[50].summary).toBe(OPERATION_TRACE_AUTO_CAP_SUMMARY)
+    expect(OPERATION_TRACE_AUTO_CAP_SUMMARY).toBe('自動: 自動処理の記録を省略(上限)')
+    const summaries = peekOperationTrace('auto1').map((entry) => entry.summary)
+    expect(summaries[0]).toBe('手の操作(前)')
+    expect(summaries[summaries.length - 1]).toBe('手の操作(後)')
+    expect(collectOperationTraceSinceLastSave('auto1')).toHaveLength(53)
+  })
+
+  it('保存が成功したら数え直す(次の保存ぶんはまた 50 件まで残る)', () => {
+    for (let index = 0; index < 55; index += 1) {
+      tick()
+      recordAutoBoardChange('auto', 'QR 提出の反映', weeksWithTeacher('田中'), weeksWithTeacher(`講師${index}`))
+    }
+    expect(autoLines('auto1')).toHaveLength(51)
+    markOperationTraceSaved('auto1', collectOperationTraceSinceLastSave('auto1'))
+    tick()
+    recordAutoBoardChange('auto', 'QR 提出の反映', weeksWithTeacher('田中'), weeksWithTeacher('保存後の講師'))
+    const sinceSave = collectOperationTraceSinceLastSave('auto1')
+    expect(sinceSave.map((entry) => entry.summary)).toHaveLength(1)
+    expect(sinceSave[0].summary).toContain('保存後の講師')
+  })
+
+  // 修正ラウンド 1(レビュー Minor-5 a): 保存に失敗した(markOperationTraceSaved を呼ばない)ときは印が進まないので、上限は解けない。
+  it('保存に失敗した(印を進めない)ら上限は解けない(省略の行のあとは次の保存が成功するまで残さない)', () => {
+    for (let index = 0; index < 55; index += 1) {
+      tick()
+      recordAutoBoardChange('auto', 'QR 提出の反映', weeksWithTeacher('田中'), weeksWithTeacher(`講師${index}`))
+    }
+    expect(autoLines('auto1')).toHaveLength(51)
+    // 保存リクエストに載せる分を切り出したが、保存は失敗した(markOperationTraceSaved を呼ばない)。
+    const sent = collectOperationTraceSinceLastSave('auto1')
+    expect(sent).toHaveLength(51)
+    tick()
+    recordOperationTrace('save', '保存失敗: テスト')
+    tick()
+    recordAutoBoardChange('auto', 'QR 提出の反映', weeksWithTeacher('田中'), weeksWithTeacher('保存失敗後の講師'))
+    expect(autoLines('auto1')).toHaveLength(51)
+    expect(peekOperationTrace('auto1').some((entry) => entry.summary.includes('保存失敗後の講師'))).toBe(false)
+    // 次の保存の切り出しには、失敗した保存の分(自動の 51 行)ももう一度乗る。
+    expect(collectOperationTraceSinceLastSave('auto1').filter((entry) => entry.summary.startsWith('自動: '))).toHaveLength(51)
+  })
+
+  it('記録の失敗で本体を止めない(壊れた盤面でも例外を出さない)', () => {
+    const broken = [[{ dateKey: '2026-09-04', slotNumber: 1, desks: null }]] as unknown as SlotCell[][]
+    expect(() => recordAutoBoardChange('auto', 'QR 提出の反映', broken, broken)).not.toThrow()
   })
 })

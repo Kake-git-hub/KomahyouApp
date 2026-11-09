@@ -206,7 +206,8 @@ describe('確認リストの項目定義', () => {
     // 第120版(2026-11-07): 確認リストの書き方(操作 → 確認)の確認 c-8 は開発用教室だけ。
     // 第128版(2026-11-08): 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 は開発用教室だけ(本番の教室名が出るのでテスト教室には出さない)。
     // 第129版(2026-11-08): 作成済みの講習が非公開になったことを本番の教室で見る pr-4 も開発用教室だけ。
-    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4']
+    // 第130版(2026-11-09): 自動処理を操作痕跡に残す確認 tr-1 も開発用教室だけ(記録は Claude がツールで読む)。
+    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
@@ -263,7 +264,8 @@ describe('確認リストの項目定義', () => {
     // 第126版(2026-11-08・v1.5.708): OK の 14 件(tp-72・tp-75・tp-59・tp-70・v2-3・v2-6・se-1〜se-8)を外し、se-9 を mg-2 の前に足した。
     // 第128版(2026-11-08・v1.5.711): 11/8 の送信で se-9・se-10・mg-2 も OK → 外し、4 機能の全教室展開の確認 pr-1〜pr-3 を足した(開発用教室だけ)。
     // 第129版(2026-11-08・v1.5.711 据え置き): 作成済みの講習をすべて非公開にした確認 pr-4 を足した(開発用教室だけ)。
-    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4'])
+    // 第130版(2026-11-09・v1.5.714 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 自動処理を操作痕跡に残す確認 tr-1 を足した(開発用教室だけ)。
+    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual([])
     expect(ids).not.toContain('mg-1')
     expect(ids).not.toContain('mg-2')
@@ -1249,9 +1251,9 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
   // 第128版: 開発用教室 11/8 の送信(受付 20261108-140209277〜20261108-141722435)で se-9・se-10・mg-2 も OK → 確認リストは全部 OK。
   const REMOVED = ['tp-72', 'tp-75', 'tp-59', 'tp-70', 'v2-3', 'v2-6', 'se-1', 'se-2', 'se-3', 'se-4', 'se-5', 'se-6', 'se-7', 'se-8', 'se-9', 'se-10', 'mg-2']
 
-  it('版は v1.5.711(OK 済みを外したので上げる)。項目は 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 と、第129版の pr-4', () => {
+  it('版は v1.5.711(OK 済みを外したので上げる)。項目は 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 と、第129版の pr-4(第130版で tr-1 を足した・版は据え置き)', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
-    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4'])
+    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1'])
   })
 
   it('第129版: pr-4(作成済みの講習がすべて非公開)は v1.5.712 で追加・開発用教室だけ・本番の教室では公開を押さない。pr-2 も「非公開」へ', () => {
@@ -1297,5 +1299,36 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
     for (const key of ['parentPortalQr', 'lectureSchedulePublishToggle', 'teacherOnlySpecialSession', 'templateDiffApply'] as const) {
       expect(featureRolloutRegistry[key].scope, key).toBe(resolveExpectedFeatureScope(key))
     }
+  })
+})
+
+// 第130版(2026-11-09・v1.5.714 で入る・版は v1.5.711 据え置き＝確認中の版へ項目を足しただけ): 自動処理(盤面を開いたときと基本データ変更時の再反映・起動時の自己修復・QR 提出の反映)が机を変えたとき、
+// 変わった机の要約を操作痕跡に残す(spec-developer-report §D-3)。報告画面には最近の操作が出ないので、確認は画面で見えること
+// (保存できる・机が勝手に動かない)にし、記録の行は Claude がツールで読む。
+describe('第130版(2026-11-09・版は v1.5.711 据え置き): 自動処理を操作痕跡に残す確認 tr-1', () => {
+  const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tr-1')!
+
+  it('v1.5.714 で追加(版は v1.5.711 据え置き)・開発用教室だけ・準備するは付けない', () => {
+    expect(item).toBeDefined()
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
+    expect(item.introducedIn).toBe('v1.5.714')
+    expect(item.area).toBe('コマ表')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('tr-1')
+    expect(item.autoPrep).toBeUndefined()
+  })
+
+  // 修正ラウンド 1(レビュー Important-2): 基本データの画面で通常授業の時限は変えられない(テンプレの Excel 入出力だけ・盤面の通常授業はテンプレの行が優先)。
+  // 今の画面でできる「表示名を 1 字変える」で再反映を起こし、元に戻して保存する。記録の行は盤面を開いたときの再反映として残り、Claude がツールで読む。
+  it('操作は基本データで表示名を 1 字変える → 保存 → 元に戻して保存。確認は画面で見えること。記録は Claude がツールで読むと書く', () => {
+    expect(item.steps[0]).toContain('基本データ')
+    expect(item.steps[0]).toContain('表示名')
+    expect(item.steps[0]).not.toContain('時限')
+    expect(item.steps[1]).toContain('「保存」')
+    expect(item.steps[2]).toContain('元に戻して「保存」')
+    expect(`${item.title}\n${item.steps.join('\n')}`).toContain('Claude がツールで読む')
+    const check = item.check!.join('\n')
+    expect(check).toContain('「保存」できる')
+    expect(check).toContain('机の名前だけ新しい名前になる')
+    expect(check).toContain('勝手に動いていない')
   })
 })

@@ -78,7 +78,7 @@
 
 ## D. 操作痕跡（端末内・全操作）
 
-- 対象: 盤面が変わる全確定（`commitWeeks` の前後差分＝「日付 限 机番: 前 → 後」）、テンプレ反映(board-rebuild)、
+- 対象: 盤面が変わる全確定（`commitWeeks` の前後差分＝「日付 限 机番: 前 → 後」）、テンプレ反映(board-rebuild)、自動処理が変えた机（§D-3・2026-11-09）、
   undo/redo、保存の成否、操作ログ(`operationLog.ts`)のイベントの写し、日程表など別タブからの postMessage、
   報告モーダルの開閉・送信結果。
 - 保持: 教室ごとに最新 **1000 件**（2026-10-22 に 300 → 1000・案 2）をメモリ＋`localStorage`(`operation-trace:<classroomId>`)。再読み込みを跨いで残る。報告に同梱するのは新しい方から 300 件（不変）。
@@ -108,6 +108,21 @@
   失敗した保存の分は次の保存にもう一度乗る（文書 id は saveId なので重複にはならない）。
 - 保持 **90 日**（`OPERATION_TRACE_RETENTION_DAYS`・掃除は `cleanupOldSaveAttempts` の対応表）。保存ごとの教室版履歴（`docs/spec-save-restore.md` §8-1 #14）と
   同じ saveId・版数で突き合わせ、`tools/snapshot-diff.mjs` の前後比較と並べて読む。
+- **自動処理の記録（2026-11-09・オーナー「室長から『並べたとおりになっていない』と言われる」の理由を後から追う）**: 次の 4 か所が盤面の机を変えたとき、
+  変わった机の要約（`summarizeWeeksDiff`・生徒は「名前#ID」）を **「自動: <処理名>: <机の差>」** の 1 行で残す（`recordAutoBoardChange`・`src/utils/operationTrace.ts`）。
+  | 処理 | 処理名 | kind |
+  |---|---|---|
+  | 基本データ・テンプレの変更で走る再反映（`ScheduleBoardScreen` の再反映の effect） | 再反映(基本データ・テンプレの変更) | `board-rebuild` |
+  | 盤面を開いたときの再反映（`createInitialBoardSnapshot` が保存版から作り直した差。教室の読み込み・ほかの画面から戻ったとき。基本データの変更はほぼこちら＝盤面はコマ表の画面でだけ描かれ、戻ると作り直される） | 盤面を開いたときの再反映 | `board-rebuild` |
+  | 起動時の自己修復（`reconcileSubmittedTeacherPlacements`） | 起動時の自己修復(QR 提出の講師) | `auto` |
+  | QR 提出の反映（App の購読が頼んだ講師の自動配置・頼みの `source: 'qr-submission'`。室長が日程表で押す「登録」は手の操作なので残さない） | QR 提出の反映 | `auto` |
+  - 机が変わらなければ残さない。**前回保存以降で直前の自動処理の行と同じ要約は残さない**（同じ再反映が何度走っても 1 行）。
+  - **前回保存以降の自動処理の行は 50 件まで**（`OPERATION_TRACE_AUTO_SAVE_LIMIT`）。超えたら 1 回だけ「自動: 自動処理の記録を省略(上限)」を残し、
+    次の保存が成功するまで残さない（保存に載せる 300 件を手の操作の行のために空ける）。保存が成功すると数え直す（数えるのは保存の印より後の行）。
+  - 盤面・保存・在庫は変えない（痕跡に行が増えるだけ・INV-02）。1 回の処理は 1 回だけ記録する（INV-03）: `setWeeks` の関数更新の中では記録しない
+    （StrictMode が 2 回呼ぶ）。再反映の effect は今の盤面から 1 回作って effect の本体で記録し、関数更新は盤面がそのままならその結果を返す
+    （`buildRemergeWeeksUpdater`）。同じ入力の 2 回目（StrictMode の effect の二重実行）は記録しない。読み込み時・自己修復は ref で 1 回、QR は頼みの requestId で 1 回。
+  - 新しい Firestore 書き込みは無い（次の保存に相乗りする）。報告画面には最近の操作を出さないので、読むのは開発者（tools の経緯ツール・保存ごとの痕跡）。
 
 ## E. 開発者が受け取る仕組み
 

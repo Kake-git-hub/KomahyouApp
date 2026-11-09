@@ -74,13 +74,40 @@ done
 - `tools/board-health-known-issues.json` = 既知の 2 か所配置(除外)。緑が丘の生徒 s072・11/18・11/25・5 限(確認リスト mg-2・室長が直す)。
 - 出力は warn → info → 件数の順。生徒は ID だけ。異常が無ければ「異常なし」1 行。
 
-## 5. GitHub と外形監視
+続けて、**保証台帳の違反の洗い出し**(`tools/inv-audit.mjs`・2026-11-09 追加・読み取り専用)を教室ごとに最新のファイルへ当てる。
 
 ```bash
-gh api -X GET search/issues -f q='repo:Kake-git-hub/KomahyouApp label:source:user-report is:open created:>=<前日の日付>' --jq '.items[] | "#\(.number) \(.title)"'
+for ID in 5w5OMueETerSKrSf14HC KzFnOQoTFLsCxwUp1tvh; do
+  node tools/inv-audit.mjs "$S/<最新の key>.$ID.json.gz" --classroom $ID --known tools/board-health-known-issues.json
+done
 ```
 
-外形監視(`uptime-check.yml`)の最新実行が赤なら報告に入れる(GitHub MCP の actions_list か Actions 画面)。
+- 物差しは `docs/spec-invariants.md` の保証文(「決めつけずに保証台帳に違反しているものがバグ」)と、休日に設定した日に残る授業(オーナー指示でバグ)。判定はアプリの権威関数を束ねて呼ぶ。
+  - INV-12 同じコマに同じ生徒が 2 か所(保留の下段は数えない)／INV-06 未消化講習の台帳の差分が提出の希望数を超える(check・講習の終わりの日が今日より前なら「今日より前」に数える)・根拠を失った振替(振替元の日にテンプレの授業も在庫の元コマも無い)／
+    HOLIDAY 休日の机に授業が残る(休み・振無休・移動・休) の記録だけの机は出ない)／INV-01 講師日程表で 1 コマの生徒が 2 人の講師に出る(**二重表示だけを見る**。誰のページにも出ない漏れは見ない。そのコマの日に在籍していない講師は数えない)／
+    INV-13 保留の下段が日程表に出る／INV-08 写しトークン(保護者QR・講習の提出)の発行元の教室が別／INV-14 名簿・講師・教室設定・盤面の週のどれかが空(check)。
+  - **番人(漏れたときだけ出る)**: INV-13(下段は盤面の週と別の保留マップにあるので、今の作りでは日程表に入らない)と、未消化振替の残が負(INV-06・アプリが残を 0 で止めている)。
+  - INV-12 の件数は健診ツールの「同じコマに同じ生徒 2 か所」と食い違うことがある(健診ツールは同じ机の 2 席を数えない・こちらはアプリの重複判定どおり数える)。
+- 1 行目が件数の要約。**違反＝bug だけ**を `INV-xx n 件(今日以降 m 件)` で数え、check は `(要確認 INV-xx n 件)` と別に出す。違反が無ければ「保証台帳の違反: なし」(check があれば「なし(要確認 INV-06 2 件)」)。続けて今日以降 → 今日より前の順に 1 件 1 行(`[bug]`／`[check]`)。
+- 既知(`tools/board-health-known-issues.json` の `rule`・`classroomId`・`dateKey`・`slotNumber`・`studentId` が一致)は数えない。健診ツールも同じファイルを読む(`rule` が INV-12 の項目だけを重複の除外に使う)。
+  - 日付の無い所見(未消化講習・写しトークンなど)を載せるときは `dateKey`・`slotNumber` を書かず、`kind`(所見の種類)・`subject`・`sessionId` で絞る(例 `{ "rule": "INV-06", "kind": "lecture-overconsumed", "classroomId": "…", "studentId": "s0xx", "subject": "数", "sessionId": "…", "note": "…" }`。書いた項目だけ一致を要求する)。**オーナー確認前の所見は載せない**。
+- `--show-names` を付けると名簿の名前を添える。**その出力はスクラッチ領域にだけ置き、報告・Issue に貼らない**(既定は生徒 ID だけ)。
+
+## 5. GitHub と外形監視
+
+公開リポジトリなので、GitHub の公開 API を**認証なし**で読む(スケジュール実行のセッションでは `gh` がリポジトリに繋がらず 403 になる・2026-11-09 の初回で確認)。
+
+```bash
+# 利用者報告 Issue(開いているもの・番号と作成日だけ。題名は出さない)
+env -u GH_TOKEN -u GITHUB_TOKEN curl -sS "https://api.github.com/repos/Kake-git-hub/KomahyouApp/issues?labels=source:user-report&state=open&per_page=50" \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{for(const i of JSON.parse(s))console.log('#'+i.number,i.created_at)})"
+# 外形監視の最新の実行
+env -u GH_TOKEN -u GITHUB_TOKEN curl -sS "https://api.github.com/repos/Kake-git-hub/KomahyouApp/actions/workflows/uptime-check.yml/runs?per_page=1" \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s).workflow_runs?.[0];console.log(r?r.conclusion+' '+r.created_at:'取得できず')})"
+```
+
+- 前日 7:40 以降に作られた Issue があれば件数を報告に入れる。外形監視が `failure` なら報告に入れる。
+- どちらも取れないときは「取得できず」と書いて続ける(止まらない)。
 
 ## 6. 報告の形(日本語・実名なし)
 
@@ -88,11 +115,13 @@ gh api -X GET search/issues -f q='repo:Kake-git-hub/KomahyouApp label:source:use
 11/10(月) 7:40 の健診
 ■ 日大前校: 異常なし(保存 12 回・保留 0・組 0)
 ■ 緑が丘校: ⚠ 同じコマに同じ生徒 2 か所: 11/12 5限 机3/机7 s0xx
+■ 保証台帳の違反: 日大前校 なし(要確認 INV-06 1 件・s0zz)／緑が丘校 INV-06 2 件(今日以降 1 件)・s0xx s0yy
 ■ 利用者報告: 1 件(request・緑が丘・自動エラー報告なし)
 ■ 外形監視: 緑
 ```
 
 - 異常ゼロの日は 1 行(「異常なし(日大前 保存 n 回・緑が丘 保存 m 回)」)。
+- 保証台帳の違反は教室ごとに「保証台帳の違反: INV-xx n 件(今日以降 m 件)・生徒 ID」の形で書く(`tools/inv-audit.mjs` の 1 行目と所見の生徒 ID)。**違反＝バグ(`[bug]`)**、**要確認＝確かめるもの(`[check]`・違反に数えない)**は「(要確認 INV-xx n 件・生徒 ID)」と分けて書く。違反が無ければ「なし」。
 - 異常があれば、止める判断の材料として `docs/runbooks/feature-flag-rollback.md` の「症状→フラグ」の表を 1 行で添える。直さない。
 
 ## 7. 止め方

@@ -18,7 +18,7 @@
 //   - 前のファイルが `-` なら前日との差の検査(保留の増減・名簿/講師の減少・振替の急減・机の変更数)を省く。
 //   - ファイルの形・gzip の判定・教室の取り出しは tools/snapshot-diff.mjs と同じ(そちらを import して使う)。
 //   - --save-attempts / --reports: Firestore の saveAttempts / developerReports を JSON 配列で(runQuery の返り値もそのまま可)。
-//   - --known: 既知の 2 か所の除外 [{ classroomId, dateKey, slotNumber, studentId }]。
+//   - --known: 既知の 2 か所の除外 [{ rule, classroomId, dateKey, slotNumber, studentId }](inv-audit と共有。rule が INV-12 か無い項目だけ使う)。
 //   - --now: 「直近 24 時間」の基準時刻(既定は実行時刻)。
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -251,8 +251,10 @@ export function buildBoardHealthReport(input) {
   const counts = {}
 
   // 同じコマに同じ生徒が 2 か所(INV-12)。既知のものは数えない。
+  // 既知のファイルは tools/inv-audit.mjs と共有する(2026-11-09)。rule が INV-12 の項目(rule の無い古い項目を含む)だけを使う。
   const known = new Set(asArray(input.knownIssues).filter(isPlainObject)
     .filter((issue) => trimmedString(issue.classroomId) === classroomId)
+    .filter((issue) => !trimmedString(issue.rule) || trimmedString(issue.rule) === 'INV-12')
     .map((issue) => `${trimmedString(issue.dateKey)}#${Number(issue.slotNumber)}#${trimmedString(issue.studentId)}`))
   let knownSkipped = 0
   let duplicateCount = 0

@@ -67,6 +67,8 @@ function decodeDoc(doc) {
   return { ...fields, ...body, data: undefined }
 }
 
+export { fieldValue, decodeDoc }
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
