@@ -113,7 +113,7 @@
   | 処理 | 処理名 | kind |
   |---|---|---|
   | 基本データ・テンプレの変更で走る再反映（`ScheduleBoardScreen` の再反映の effect） | 再反映(基本データ・テンプレの変更) | `board-rebuild` |
-  | 盤面を開いたときの再反映（`createInitialBoardSnapshot` が保存版から作り直した差） | 読み込み時の再反映 | `board-rebuild` |
+  | 盤面を開いたときの再反映（`createInitialBoardSnapshot` が保存版から作り直した差。教室の読み込み・ほかの画面から戻ったとき。基本データの変更はほぼこちら＝盤面はコマ表の画面でだけ描かれ、戻ると作り直される） | 盤面を開いたときの再反映 | `board-rebuild` |
   | 起動時の自己修復（`reconcileSubmittedTeacherPlacements`） | 起動時の自己修復(QR 提出の講師) | `auto` |
   | QR 提出の反映（App の購読が頼んだ講師の自動配置・頼みの `source: 'qr-submission'`。室長が日程表で押す「登録」は手の操作なので残さない） | QR 提出の反映 | `auto` |
   - 机が変わらなければ残さない。**前回保存以降で直前の自動処理の行と同じ要約は残さない**（同じ再反映が何度走っても 1 行）。

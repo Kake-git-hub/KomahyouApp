@@ -9369,7 +9369,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 自動処理の操作痕跡(2026-11-09): 再反映の effect の本体で今の盤面を読むため(描画ごとに今の盤面を指す)。
   const weeksRef = useRef(weeks)
   weeksRef.current = weeks
-  // 読み込み時の再反映の痕跡: createInitialBoardSnapshot に渡した保存版の盤面(最初の描画の initialBoardState.weeks)と、マウントで 1 回だけの印。
+  // 盤面を開いたときの再反映の痕跡: createInitialBoardSnapshot に渡した保存版の盤面(最初の描画の initialBoardState.weeks)と、マウントで 1 回だけの印。
   const initialSavedWeeksRef = useRef<SlotCell[][] | null>(initialBoardState?.weeks ?? null)
   const didTraceInitialRemergeRef = useRef(false)
   // 再反映の effect の痕跡: 前回記録したときの入力(同じ入力の 2 回目＝StrictMode の effect の二重実行は記録しない)。
@@ -10129,7 +10129,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     weekIndex,
   ])
 
-  // 読み込み時の再反映の痕跡(2026-11-09・spec-developer-report §D-3): createInitialBoardSnapshot が保存版から作り直した差を、マウントで 1 回だけ残す
+  // 盤面を開いたときの再反映の痕跡(2026-11-09・spec-developer-report §D-3): createInitialBoardSnapshot が保存版から作り直した差を、マウントで 1 回だけ残す
+  // (教室の読み込み・ほかの画面から戻ったとき。盤面は board 画面でだけ描かれるので、基本データの変更はほぼこちらに出る)
   // (ref で 1 回・StrictMode の effect の二重実行でも 1 回・INV-03)。保存版が無い(初期の盤面を作った)ときは残さない。盤面には触らない(INV-02)。
   useEffect(() => {
     if (didTraceInitialRemergeRef.current) return
@@ -10138,7 +10139,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!savedWeeks?.length) return
     const initialWeeks = initialBoardSnapshotRef.current?.weeks
     if (!initialWeeks) return
-    recordAutoBoardChange('board-rebuild', '読み込み時の再反映', savedWeeks, initialWeeks)
+    recordAutoBoardChange('board-rebuild', '盤面を開いたときの再反映', savedWeeks, initialWeeks)
   }, [])
 
   useEffect(() => {

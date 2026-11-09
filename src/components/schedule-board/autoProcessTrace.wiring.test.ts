@@ -2,7 +2,8 @@
 //
 // 記録する 4 か所(spec-developer-report §D-3):
 //   - 再反映の effect(基本データ・テンプレの変更で setWeeks の関数更新を当てる) … 「再反映(基本データ・テンプレの変更)」
-//   - マウント時の再反映(createInitialBoardSnapshot が保存版から作り直した差)        … 「読み込み時の再反映」
+//   - マウント時の再反映(createInitialBoardSnapshot が保存版から作り直した差)        … 「盤面を開いたときの再反映」
+//     (教室の読み込み・ほかの画面から戻ったとき。基本データの変更はほぼこちらに出る＝盤面は board 画面でだけ描かれ、戻ると作り直される)
 //   - 起動時の自己修復(reconcileSubmittedTeacherPlacements)                          … 「起動時の自己修復(QR 提出の講師)」
 //   - QR 提出の反映(App の購読が講師の自動配置を頼み、盤面が置いた差)                 … 「QR 提出の反映」
 //
@@ -18,7 +19,9 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell } from './types'
-import { buildManagedScheduleCellsForRange, buildRemergeWeeksUpdater, isSameRemergeTraceInputs, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, buildRemergeWeeksUpdater, createInitialBoardSnapshot, isSameRemergeTraceInputs, remergeBoardWeeksWithManagedData } from './ScheduleBoardScreen'
+import { summarizeWeeksDiff } from '../../utils/operationTrace'
+import type { PersistedBoardState } from '../../types/appState'
 
 const BOARD_TSX = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
 const APP_TSX = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
@@ -52,10 +55,10 @@ function sliceFrom(source: string, marker: string, length = 4000): string {
 }
 
 describe('自動処理の操作痕跡: 4 か所が recordAutoBoardChange を呼ぶ', () => {
-  it('再反映の effect・読み込み時の再反映・起動時の自己修復・QR 提出の反映', () => {
+  it('再反映の effect・盤面を開いたときの再反映・起動時の自己修復・QR 提出の反映', () => {
     expect(BOARD_TSX).toContain("import { recordAutoBoardChange, recordOperationTrace, summarizeBoardCommitForTrace, summarizeWeeksDiff } from '../../utils/operationTrace'")
     expect(BOARD_TSX).toContain("recordAutoBoardChange('board-rebuild', '再反映(基本データ・テンプレの変更)', baseWeeks, remergedWeeks)")
-    expect(BOARD_TSX).toContain("recordAutoBoardChange('board-rebuild', '読み込み時の再反映', savedWeeks, initialWeeks)")
+    expect(BOARD_TSX).toContain("recordAutoBoardChange('board-rebuild', '盤面を開いたときの再反映', savedWeeks, initialWeeks)")
     expect(BOARD_TSX).toContain("recordAutoBoardChange('auto', '起動時の自己修復(QR 提出の講師)', weeks, result.nextWeeks)")
     expect(BOARD_TSX).toContain("recordAutoBoardChange('auto', 'QR 提出の反映', weeks, result.nextWeeks)")
   })
@@ -100,7 +103,7 @@ describe('自動処理の操作痕跡: 4 か所が recordAutoBoardChange を呼�
     expect(BOARD_TSX).toContain('const weeksRef = useRef(weeks)\n  weeksRef.current = weeks')
   })
 
-  it('読み込み時の再反映: マウントで 1 回だけ(ref)・保存版が無い(初期の盤面)ときは残さない', () => {
+  it('盤面を開いたときの再反映: マウントで 1 回だけ(ref)・保存版が無い(初期の盤面)ときは残さない', () => {
     const effect = sliceFrom(BOARD_TSX, 'if (didTraceInitialRemergeRef.current) return', 900)
     expect(effect).toContain('didTraceInitialRemergeRef.current = true')
     expect(effect).toContain('const savedWeeks = initialSavedWeeksRef.current')
@@ -164,6 +167,20 @@ describe('再反映の関数更新は今までと同じ盤面を返す(INV-02)',
     expect(calls).toBe(1)
     expect(result).not.toBe(precomputed)
     expect(result).toEqual(remerge(pending))
+  })
+
+  // 修正ラウンド 1(レビュー Minor-5 b): 再反映済みの盤面を保存版として開き直しても差は空＝普通に開いただけでは「盤面を開いたときの再反映」の行は出ない。
+  it('再反映済みの盤面を保存版として createInitialBoardSnapshot に通すと机の差は空(開いただけでは記録の行が出ない)', () => {
+    const changed = remerge([savedWeek])
+    // 前提: 時限を変えた再反映は机を変える(差が空でない)。
+    expect(summarizeWeeksDiff([savedWeek], changed)).not.toBe('')
+    for (const applyTemplateOriginRules of [false, true]) {
+      const reopened = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: [row(3)], initialBoardState: { weeks: changed } as unknown as PersistedBoardState, applyTemplateOriginRules })
+      expect(summarizeWeeksDiff(changed, reopened.weeks), String(applyTemplateOriginRules)).toBe('')
+      // もう一度開いても同じ(不動点)。
+      const again = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons: [row(3)], initialBoardState: { weeks: reopened.weeks } as unknown as PersistedBoardState, applyTemplateOriginRules })
+      expect(summarizeWeeksDiff(reopened.weeks, again.weeks), String(applyTemplateOriginRules)).toBe('')
+    }
   })
 
   it('同じ入力かどうか(StrictMode の effect の二重実行で 2 回記録しない)', () => {
