@@ -73,6 +73,47 @@ describe('名前の置き換え maskNames', () => {
   })
 })
 
+describe('名前の置き換え 修正ラウンド 1(本番予行で見つかった漏れ)', () => {
+  const roster = [{ id: 's060', name: '山田' }, { id: 's001', name: '生徒A' }]
+
+  it('名簿に無い体験生の「名前#エントリID」は名前を「体験生」にし、別人の ID を付けない', () => {
+    const text = '11/5 5限 机8: 講師なし: 山田花子#2026-11-05_5_8_0_mvhrov5d(trial 英) / 空'
+    const masked = maskNames(text, roster)
+    expect(masked).not.toContain('山田')
+    expect(masked).not.toContain('花子')
+    expect(masked).not.toContain('s060')
+    expect(masked).toContain('体験生#2026-11-05_5_8_0_mvhrov5d(trial 英)')
+  })
+
+  it('# の後ろが生徒 ID でなく体験と分からないときは「名簿外」にする', () => {
+    const masked = maskNames('講師なし: 誰か#b_17(通常 数学)', roster)
+    expect(masked).toBe('講師なし: 名簿外#b_17(通常 数学)')
+  })
+
+  it('名簿外の名前に空白があっても(姓 名#ID)姓を残さない', () => {
+    const masked = maskNames('講師なし: 鈴木 一郎#b_17(trial 数学)', roster)
+    expect(masked).not.toContain('鈴木')
+    expect(masked).not.toContain('一郎')
+  })
+
+  it('名簿の「山田」と体験生「山田花子」がいても「山田花子」を sNNN花子 にしない(部分一致を当てない)', () => {
+    const masked = maskNames('山田花子 と 山田 が来た', roster)
+    expect(masked).not.toContain('s060花子')
+    expect(masked).toContain('s060 が来た')
+  })
+
+  it('「名前#sNNN」は sNNN になる(名簿外の名前でも)', () => {
+    expect(maskNames('講師A: 生徒A#s001(通常 数学) / 消えた子#s123(振替 英語)', roster)).toBe('講師A: s001(通常 数学) / s123(振替 英語)')
+  })
+
+  it('痕跡の operation-event の「studentName=名前」は名簿に無くても伏せる', () => {
+    const masked = maskNames('status-mark action=absent studentName=体験の子 displacedStudentName=生徒A dateKey=2026-11-05', roster)
+    expect(masked).not.toContain('体験の子')
+    expect(masked).toContain('displacedStudentName=s001')
+    expect(masked).toContain('dateKey=2026-11-05')
+  })
+})
+
 describe('台帳から変化日を出す', () => {
   const days = [
     ledgerDay('2026-11-01', '2026-11-01T09:00:00.000Z', [mathRow(), otherRow()]),

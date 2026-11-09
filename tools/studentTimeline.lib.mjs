@@ -105,12 +105,28 @@ function nameVariants(name) {
 
 // 「名前#ID」の名前側に来ない文字(区切り)。
 const NAME_STOP_CHARS = '\\s#()（）\\[\\]［］{}<>/:：、。,，・「」『』|+→←=＝'
+// 名前の前後に来たら「名前の一部」とみなす文字(日本語の文字・英数字)。部分一致を当てないための境目。
+const WORD_BEFORE = '(?<![\\p{L}\\p{N}])'
+const WORD_AFTER = '(?![\\p{L}\\p{N}])'
+// 「姓 名#ID」の姓の側に来うる語(日本語の文字だけ)。
+const JAPANESE_WORD = '[\\p{sc=Han}\\p{sc=Hiragana}\\p{sc=Katakana}ー々]+'
+// 「語 名前#ID」の語が名前ではなく見出し(出欠・種別・操作)のときは残す。
+const KEEP_LEADING_WORDS = new Set(['出席', '休み', '振無休', '移動', '休日', '記録', '通常', '振替', '講習', '増コマ', '体験', '退塾', '退塾取消', '削除', '追加', 'メモ', '元に戻す', 'やり直し', '講師なし', '空'])
+// 名前が入る操作ログの項目(痕跡の operation-event の要約は「key=値」を空白でつないだ形)。
+const NAME_KEY_PATTERN = /\b(studentName|displacedStudentName|teacherName)=(.*?)(?=\s+[A-Za-z][A-Za-z0-9_]*=|$)/g
+const PERSON_ID_PATTERN = /^[st]\d+$/
 
 /**
- * 文の中の名簿の名前・表示名を ID に置き換える(生徒も講師も)。
- * - 「名前#ID」は ID だけにする(名簿に無い名前でも #ID の前は伏せる・削除済みの生徒などのため)。
- * - 名前の空白の有無・全角/半角の空白の違いも置き換える。長い名前から先に置き換える(部分一致で崩さない)。
+ * 文の中の名前を伏せる(生徒も講師も)。順番に意味がある(2026-11-09 修正ラウンド 1・本番予行で体験生の名前が残り、
+ * 別人の名前の部分一致で取り違えた ID まで付いた漏れの再発防止)。
+ *   1. 「名前#ID」の形を先に処理する。# の後ろが生徒/講師の ID(名簿の ID か sNNN/tNNN)なら「名前#」ごと ID にする。
+ *      そうでない(体験生の盤面エントリ ID など)なら名前を「体験生」(直後が「(trial」「(体験」)か「名簿外」に置き換え、
+ *      エントリ ID は残す。台帳のコマ「2026-11-02#3」は名前ではないので崩さない。「姓 名#ID」の姓も伏せる。
+ *   2. 名簿の名前・表示名を ID に置き換える。前後が日本語の文字・英数字なら置き換えない(別人の名前の一部に当てない)。
+ *      長い名前から順に。空白の有無・全角/半角の空白の違いも置き換える。
+ *   3. 操作ログの「studentName=名前」など名前の項目は、ID にならなかった値を「(名簿外)」にする。
  * - options.except に渡した ID の人だけは名前を残す。
+ * - 自由記述(メモなど)の中の名簿に無い名前は伏せられない(出力はスクラッチ領域にだけ置く・手順書)。
  * @param {string} text
  * @param {Array<{ id: string, name?: string, displayName?: string }>} roster
  * @param {{ except?: string }} [options]
@@ -118,6 +134,9 @@ const NAME_STOP_CHARS = '\\s#()（）\\[\\]［］{}<>/:：、。,，・「」『
 export function maskNames(text, roster, options = {}) {
   const except = options.except ?? ''
   let result = String(text ?? '')
+  const rosterIds = new Set((roster ?? []).map((person) => String(person?.id ?? '').trim()).filter(Boolean))
+  const isPersonId = (id) => rosterIds.has(id) || PERSON_ID_PATTERN.test(id)
+  const exceptNames = new Set((roster ?? []).filter((person) => except && person?.id === except).flatMap((person) => [...nameVariants(person.name), ...nameVariants(person.displayName)]))
   const replacements = []
   for (const person of roster ?? []) {
     const id = String(person?.id ?? '').trim()
@@ -125,17 +144,32 @@ export function maskNames(text, roster, options = {}) {
     for (const variant of [...nameVariants(person.name), ...nameVariants(person.displayName)]) replacements.push({ variant, id })
   }
   replacements.sort((left, right) => right.variant.length - left.variant.length)
-  const seen = new Set()
-  for (const { variant, id } of replacements) {
-    if (seen.has(variant)) continue
-    seen.add(variant)
-    result = result.replace(new RegExp(`${escapeRegExp(variant)}(#[${ID_CHARS}]+)?`, 'g'), (_match, ref) => (ref ? ref.slice(1) : id))
+  const variants = [...new Map(replacements.map((entry) => [entry.variant, entry])).values()]
+
+  // 1a. 名簿の名前(空白入りも)の「名前#生徒ID」→ 生徒ID。
+  for (const { variant } of variants) {
+    result = result.replace(new RegExp(`${WORD_BEFORE}${escapeRegExp(variant)}#([${ID_CHARS}]+)`, 'gu'), (match, id) => (isPersonId(id) && id !== except ? id : match))
   }
-  // 名簿に無い「名前#ID」(削除済み・未管理の生徒など)。台帳のコマ「2026-11-02#3」は名前ではないので崩さない
-  // (ID は英字で始まるものだけ・# の前が日付の形なら残す)。
-  result = result.replace(new RegExp(`([^${NAME_STOP_CHARS}]+)#([A-Za-z][${ID_CHARS}]*)`, 'g'), (match, prefix, id) => {
+  // 1b. 残りの「名前#ID」(名簿に無い名前・体験生・削除済みの生徒など)。
+  result = result.replace(new RegExp(`(?:(${JAPANESE_WORD})([ 　]))?([^${NAME_STOP_CHARS}]+)#([${ID_CHARS}]+)`, 'gu'), (match, word, space, prefix, id, offset, whole) => {
     if (/^[\d./-]+$/.test(prefix)) return match
-    return except && id === except ? match : id
+    if (except && id === except) return match
+    const lead = word && KEEP_LEADING_WORDS.has(word) ? `${word}${space}` : ''
+    if (isPersonId(id)) return `${lead}${id}`
+    const after = whole.slice(offset + match.length)
+    const label = /^[(（](trial|体験)/.test(after) ? '体験生' : '名簿外'
+    return `${lead}${label}#${id}`
+  })
+  // 2. 名簿の名前(境目を確かめる)。
+  for (const { variant, id } of variants) {
+    result = result.replace(new RegExp(`${WORD_BEFORE}${escapeRegExp(variant)}${WORD_AFTER}`, 'gu'), id)
+  }
+  // 3. 名前の項目の値で ID にならなかったもの。
+  result = result.replace(NAME_KEY_PATTERN, (match, key, value) => {
+    const trimmed = value.trim()
+    if (!trimmed || isPersonId(trimmed) || trimmed.startsWith('(')) return match
+    if (exceptNames.has(trimmed)) return match
+    return `${key}=(名簿外)`
   })
   return result
 }
