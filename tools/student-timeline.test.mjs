@@ -517,3 +517,25 @@ describe('問い合わせの形(複合索引が要らない形)', () => {
     expect(query.structuredQuery.orderBy[0].field.fieldPath).toBe('recordedAt')
   })
 })
+
+describe('修正ラウンド 3(再レビュー)', () => {
+  it('名前で一致して付け直すとき、名簿に無い姓(「姓 名#エントリID」の姓)を残さない', () => {
+    const timeline = buildStudentTimeline({
+      studentId: 's002', roster: [{ id: 's002', name: '花子' }, { id: 't001', name: '講師A' }], ledgerDays: [], events: [], versionDiffs: [],
+      traces: [{ entries: [{ at: '2026-11-04T01:00:00.000Z', kind: 'board-commit', summary: '2026-11-05 4限 机1: 講師A: 山田 花子#e9(regular 数学) / 空 → 講師A: 空 / 空' }] }],
+    })
+    expect(timeline).toHaveLength(1)
+    expect(timeline[0].text).not.toContain('山田')
+    expect(timeline[0].text).toContain('s002#e9')
+    expect(timeline[0].text).toContain('名前で一致')
+  })
+
+  it('痕跡の「(机なし) → 講師」は講師名だけを伏せ、前後の形を残す', () => {
+    const timeline = buildStudentTimeline({
+      studentId: 's001', roster: ROSTER, ledgerDays: [], events: [], versionDiffs: [],
+      traces: [{ entries: [{ at: '2026-11-04T01:00:00.000Z', kind: 'board-commit', summary: '2026-11-05 4限 机3: (机なし) → 辞めた講師: 生徒A#s001(regular 数学) / 空' }] }],
+    })
+    expect(timeline[0].text).toContain('机3: (机なし) → (名簿に無い講師): s001(regular 数学)')
+    expect(timeline[0].text).not.toContain('辞めた講師')
+  })
+})

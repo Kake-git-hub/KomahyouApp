@@ -154,8 +154,9 @@ export function maskNames(text, roster, options = {}) {
   result = result.replace(new RegExp(`(?:(${JAPANESE_WORD})([ 　]))?([^${NAME_STOP_CHARS}]+)#([${ID_CHARS}]+)`, 'gu'), (match, word, space, prefix, id, offset, whole) => {
     if (/^[\d./-]+$/.test(prefix)) return match
     if (except && id === except) return match
-    if (PERSON_ID_PATTERN.test(prefix) || rosterIds.has(prefix)) return match
     const lead = word && KEEP_LEADING_WORDS.has(word) ? `${word}${space}` : ''
+    // # の前がすでに ID(名前で一致した行の付け直し)でも、前の語(名簿に無い姓など)は ID の分岐と同じく落とす(修正ラウンド 3)。
+    if (PERSON_ID_PATTERN.test(prefix) || rosterIds.has(prefix)) return `${lead}${prefix}#${id}`
     if (isPersonId(id)) return `${lead}${id}`
     const after = whole.slice(offset + match.length)
     const label = /^[(（](trial|体験)/.test(after) ? '体験生' : '名簿外'
@@ -500,7 +501,8 @@ export function maskFreeText(text) {
 
 /** 痕跡の要約(「机N: 講師: 枠 / 枠 → 講師: 枠 / 枠 | …」)の各机の講師名を、名簿に無ければ伏せる。 */
 function maskTraceTeachers(summary, roster) {
-  return String(summary ?? '').replace(/(机\d+: |→ )([^:|]+?)(?=: )/g, (_match, lead, teacher) => {
+  // 講師名の候補に「→」を含めない(「机N: (机なし) → 講師:」を講師名ごと拾って前後が読めなくなるため・修正ラウンド 3)。
+  return String(summary ?? '').replace(/(机\d+: |→ )([^:|→]+?)(?=: )/g, (_match, lead, teacher) => {
     const masked = maskDeskTeacher(`${teacher}: `, roster)
     return `${lead}${masked.slice(0, -2)}`
   })
