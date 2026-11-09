@@ -111,6 +111,15 @@ describe('duplicate-placement(INV-12)', () => {
     const report2 = buildBoardHealthReport({ classroomId: ROOM, before: null, after: makePayload({ weeks }), knownIssues: other, now: NOW })
     expect(report2.counts.duplicatePlacements).toBe(2)
   })
+
+  it('既知のファイルは inv-audit と共有: rule が INV-12(または rule 無し)の項目だけを重複の除外に使い、別のルールの項目では除外しない', () => {
+    const weeks = duplicateWeeks('2026-11-18', 5)
+    const base = { classroomId: ROOM, dateKey: '2026-11-18', slotNumber: 5, studentId: 's1' }
+    const countWith = (issue) => buildBoardHealthReport({ classroomId: ROOM, before: null, after: makePayload({ weeks }), knownIssues: [issue], now: NOW }).counts.duplicatePlacements
+    expect(countWith({ ...base, rule: 'INV-12' })).toBe(0)
+    expect(countWith(base)).toBe(0)
+    expect(countWith({ ...base, rule: 'HOLIDAY' })).toBe(1)
+  })
 })
 
 describe('件数(保留・組・出自の印)', () => {

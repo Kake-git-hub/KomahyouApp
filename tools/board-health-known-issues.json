@@ -1,4 +1,4 @@
 [
-  { "classroomId": "KzFnOQoTFLsCxwUp1tvh", "dateKey": "2026-11-18", "slotNumber": 5, "studentId": "s072", "note": "確認リスト mg-2・室長が余分な方を消す(v1.5.704 で判明)" },
-  { "classroomId": "KzFnOQoTFLsCxwUp1tvh", "dateKey": "2026-11-25", "slotNumber": 5, "studentId": "s072", "note": "確認リスト mg-2・室長が余分な方を消す(v1.5.704 で判明)" }
+  { "rule": "INV-12", "classroomId": "KzFnOQoTFLsCxwUp1tvh", "dateKey": "2026-11-18", "slotNumber": 5, "studentId": "s072", "note": "確認リスト mg-2・室長が余分な方を消す(v1.5.704 で判明)" },
+  { "rule": "INV-12", "classroomId": "KzFnOQoTFLsCxwUp1tvh", "dateKey": "2026-11-25", "slotNumber": 5, "studentId": "s072", "note": "確認リスト mg-2・室長が余分な方を消す(v1.5.704 で判明)" }
 ]

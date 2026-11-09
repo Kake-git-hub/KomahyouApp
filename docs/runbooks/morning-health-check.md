@@ -74,6 +74,23 @@ done
 - `tools/board-health-known-issues.json` = 既知の 2 か所配置(除外)。緑が丘の生徒 s072・11/18・11/25・5 限(確認リスト mg-2・室長が直す)。
 - 出力は warn → info → 件数の順。生徒は ID だけ。異常が無ければ「異常なし」1 行。
 
+続けて、**保証台帳の違反の洗い出し**(`tools/inv-audit.mjs`・2026-11-09 追加・読み取り専用)を教室ごとに最新のファイルへ当てる。
+
+```bash
+for ID in 5w5OMueETerSKrSf14HC KzFnOQoTFLsCxwUp1tvh; do
+  node tools/inv-audit.mjs "$S/<最新の key>.$ID.json.gz" --classroom $ID --known tools/board-health-known-issues.json
+done
+```
+
+- 物差しは `docs/spec-invariants.md` の保証文(「決めつけずに保証台帳に違反しているものがバグ」)と、休日に設定した日に残る授業(オーナー指示でバグ)。判定はアプリの権威関数を束ねて呼ぶ。
+  - INV-12 同じコマに同じ生徒が 2 か所(保留の下段は数えない)／INV-06 未消化講習の消化が提出の希望数を超える(check)・根拠を失った振替(振替元の日にテンプレの授業も在庫の元コマも無い)／
+    HOLIDAY 休日の机に授業が残る(休み・振無休・移動・休) の記録だけの机は出ない)／INV-01 講師日程表で 1 コマの生徒が 2 人の講師に出る／INV-13 保留の下段が日程表に出る／
+    INV-08 写しトークン(保護者QR・講習の提出)の発行元の教室が別／INV-14 名簿・講師・教室設定・盤面の週のどれかが空(check)。
+  - 未消化振替の残が負(INV-06)は、アプリが残を 0 で止めているので今の作りでは出ない(番人として残してある)。
+- 1 行目が件数の要約(`INV-xx n 件(今日以降 m 件)`)。続けて今日以降 → 今日より前の順に 1 件 1 行。違反が無ければ「保証台帳の違反: なし」。
+- 既知(`tools/board-health-known-issues.json` の `rule`・`classroomId`・`dateKey`・`slotNumber`・`studentId` が一致)は数えない。健診ツールも同じファイルを読む(`rule` が INV-12 の項目だけを重複の除外に使う)。
+- `--show-names` を付けると名簿の名前を添える。**その出力はスクラッチ領域にだけ置き、報告・Issue に貼らない**(既定は生徒 ID だけ)。
+
 ## 5. GitHub と外形監視
 
 ```bash
@@ -88,11 +105,13 @@ gh api -X GET search/issues -f q='repo:Kake-git-hub/KomahyouApp label:source:use
 11/10(月) 7:40 の健診
 ■ 日大前校: 異常なし(保存 12 回・保留 0・組 0)
 ■ 緑が丘校: ⚠ 同じコマに同じ生徒 2 か所: 11/12 5限 机3/机7 s0xx
+■ 保証台帳の違反: 日大前校 なし／緑が丘校 INV-06 2 件(今日以降 1 件)・s0xx s0yy
 ■ 利用者報告: 1 件(request・緑が丘・自動エラー報告なし)
 ■ 外形監視: 緑
 ```
 
 - 異常ゼロの日は 1 行(「異常なし(日大前 保存 n 回・緑が丘 保存 m 回)」)。
+- 保証台帳の違反は教室ごとに「保証台帳の違反: INV-xx n 件(今日以降 m 件)・生徒 ID」の形で書く(`tools/inv-audit.mjs` の 1 行目と所見の生徒 ID)。違反が無ければ「なし」。
 - 異常があれば、止める判断の材料として `docs/runbooks/feature-flag-rollback.md` の「症状→フラグ」の表を 1 行で添える。直さない。
 
 ## 7. 止め方

@@ -14,6 +14,7 @@
     "verify:firebase:live": "node tools/verify-firebase-hosting.mjs",
     "lint": "eslint .",
     "flag:rollback": "node tools/feature-flag-rollback.mjs",
+    "inv:audit": "node tools/inv-audit.mjs",
     "preview": "vite preview",
     "deploy:firebase": "node tools/deploy-firebase.mjs",
     "deploy:firebase:with-functions": "node tools/deploy-firebase.mjs --with-functions",
