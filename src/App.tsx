@@ -163,6 +163,9 @@ export type TeacherAutoAssignRequest = {
   // 1リクエストで複数講師ぶんを運ぶ。QR提出の一括取り込みで反映した講師全員を1リクエストにまとめ、
   // 受け手(ScheduleBoardScreen)が全件を盤面へ畳み込む。
   items: TeacherAutoAssignItem[]
+  // QR 提出の購読が作った頼みの印(2026-11-09・自動処理の操作痕跡)。盤面は机を変えたら「自動: QR 提出の反映」を痕跡に残す。
+  // 室長が日程表で押した「登録」「登録解除」の頼みには付けない(手の操作)。盤面の結果には効かない。
+  source?: 'qr-submission'
 }
 
 // QR提出の一括取り込みで反映した講師全員ぶんの自動配置アイテムを作る。
@@ -5090,6 +5093,7 @@ function AuthenticatedApp() {
         const submissionTeacherRequest: TeacherAutoAssignRequest = {
           requestId: teacherAutoAssignRequestIdRef.current,
           items: teacherAutoAssignItems,
+          source: 'qr-submission',
         }
         setTeacherAutoAssignRequestQueue((current) => enqueueStudentScheduleRequest(current, submissionTeacherRequest))
       }

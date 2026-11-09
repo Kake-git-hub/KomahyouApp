@@ -300,12 +300,74 @@ export function recordOperationTrace(kind: OperationTraceKind, summary: string):
   try {
     if (!currentClassroomId) return null
     const entry = buildOperationTraceEntry(kind, summary)
-    const next = appendOperationTrace(ensureBuffer(currentClassroomId), entry)
-    buffersByClassroomId.set(currentClassroomId, next)
-    persistToStorage(currentClassroomId, next)
+    appendToCurrentClassroom(entry)
     return entry
   } catch {
     return null
+  }
+}
+
+function appendToCurrentClassroom(entry: OperationTraceEntry) {
+  const next = appendOperationTrace(ensureBuffer(currentClassroomId), entry)
+  buffersByClassroomId.set(currentClassroomId, next)
+  persistToStorage(currentClassroomId, next)
+}
+
+// ---------------------------------------------------------------------------
+// 自動処理の記録(2026-11-09 オーナー「室長から『並べたとおりになっていない』と言われる」の理由を後から追う・spec-developer-report §D-3)
+// 再反映(基本データ・テンプレの変更)・読み込み時の再反映・起動時の自己修復・QR 提出の反映が盤面を変えたとき、変わった机の要約を
+// 「自動: <処理名>: <机の差>」で残す。盤面・保存・在庫には触らない(痕跡に行が増えるだけ・INV-02)。
+// 記録の嵐を防ぐ(再反映の effect は依存が変わるたびに走る):
+//   - 机が変わらなければ残さない。
+//   - 前回保存以降で、直前の自動処理の行と同じ要約なら残さない(同じ再反映が何度走っても 1 行・INV-03)。
+//   - 前回保存以降の自動処理の行は OPERATION_TRACE_AUTO_SAVE_LIMIT 件まで。超えたら 1 回だけ「自動処理の記録を省略(上限)」を残し、
+//     それ以降は次の保存が成功するまで残さない(保存に載せる 300 件を手の操作の行のために空けておく)。
+// 前回保存以降で数えるのは、保存ごとの痕跡の文書(classroomSnapshots/{id}/operationTraces/{saveId})だけで「なぜ変わったか」が読めるようにするため。
+// ---------------------------------------------------------------------------
+
+/** 1 回の保存に相乗りさせる自動処理の行の上限(手の操作の行を押し出さないため。保存の上限 OPERATION_TRACE_SAVE_LIMIT の内数)。 */
+export const OPERATION_TRACE_AUTO_SAVE_LIMIT = 50
+/** 自動処理の行の頭。テンプレ保存の再構築(board-rebuild)と見分ける印でもある。 */
+export const OPERATION_TRACE_AUTO_PREFIX = '自動: '
+/** 上限に達したときに 1 回だけ残す行。 */
+export const OPERATION_TRACE_AUTO_CAP_SUMMARY = `${OPERATION_TRACE_AUTO_PREFIX}自動処理の記録を省略(上限)`
+
+export type AutoBoardChangeKind = Extract<OperationTraceKind, 'board-rebuild' | 'auto'>
+
+export function isAutoBoardChangeTraceEntry(entry: OperationTraceEntry): boolean {
+  return (entry.kind === 'board-rebuild' || entry.kind === 'auto') && entry.summary.startsWith(OPERATION_TRACE_AUTO_PREFIX)
+}
+
+/**
+ * 自動処理の行を残すかを決める(純関数)。entries は教室の痕跡(古い→新しい)・marker は前回保存の印。
+ * summary を省くと上限の判定だけ(机の差を作る前に、上限で捨てるなら差の計算を省くため)。
+ */
+export function decideAutoBoardChangeTrace(entries: readonly OperationTraceEntry[], marker: string, summary?: string, limit: number = OPERATION_TRACE_AUTO_SAVE_LIMIT): 'record' | 'skip' | 'cap' {
+  const autoSinceSave = selectOperationTraceSinceMarker(entries, marker, Number.POSITIVE_INFINITY).filter(isAutoBoardChangeTraceEntry)
+  if (autoSinceSave.some((entry) => entry.summary === OPERATION_TRACE_AUTO_CAP_SUMMARY)) return 'skip'
+  if (summary !== undefined && autoSinceSave[autoSinceSave.length - 1]?.summary === summary) return 'skip'
+  return autoSinceSave.length >= limit ? 'cap' : 'record'
+}
+
+/**
+ * 自動処理が盤面を変えたときに、変わった机の要約を痕跡に残す。before/after は処理の前後の盤面。
+ * ★呼ぶのは effect の本体など 1 回の処理につき 1 回だけ走る所。setWeeks の関数更新の中では呼ばない(StrictMode が 2 回呼ぶ・INV-03)。
+ * 例外は一切外へ出さない(記録の失敗で本体の処理を止めない)。
+ */
+export function recordAutoBoardChange(kind: AutoBoardChangeKind, label: string, before: SlotCell[][], after: SlotCell[][]): void {
+  try {
+    if (!currentClassroomId) return
+    if (before === after) return
+    const marker = readSavedMarker(currentClassroomId)
+    if (decideAutoBoardChangeTrace(ensureBuffer(currentClassroomId), marker) === 'skip') return
+    const diff = summarizeWeeksDiff(before, after)
+    if (!diff) return
+    const entry = buildOperationTraceEntry(kind, `${OPERATION_TRACE_AUTO_PREFIX}${label}: ${diff}`)
+    const decision = decideAutoBoardChangeTrace(ensureBuffer(currentClassroomId), marker, entry.summary)
+    if (decision === 'skip') return
+    appendToCurrentClassroom(decision === 'cap' ? buildOperationTraceEntry(kind, OPERATION_TRACE_AUTO_CAP_SUMMARY) : entry)
+  } catch {
+    // noop
   }
 }
 

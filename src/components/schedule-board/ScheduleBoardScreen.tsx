@@ -14,7 +14,7 @@ import { startLongPressDragSession, type LongPressDragSession } from './longPres
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 // 操作ログ(在庫が減る・記録が消える操作の監査記録)。詳細は src/utils/operationLog.ts。
 import { recordOperationEvent } from '../../utils/operationLog'
-import { recordOperationTrace, summarizeBoardCommitForTrace, summarizeWeeksDiff } from '../../utils/operationTrace'
+import { recordAutoBoardChange, recordOperationTrace, summarizeBoardCommitForTrace, summarizeWeeksDiff } from '../../utils/operationTrace'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
@@ -2941,6 +2941,22 @@ export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], inputParam
     normalizeWeeksDeskCount(weeks.map((week) => remergeBoardWeekWithManagedData(week, params)), params.classroomSettings.deskCount),
     params.suppressedRegularLessonOccurrences, buildWholeDayPairTargetBlockResolver(params.templateOriginRules?.pendingDesks),
   )
+}
+
+/**
+ * 再反映の effect が setWeeks に渡す関数更新(2026-11-09・自動処理の操作痕跡・INV-02 / INV-03)。
+ * effect の本体で今の盤面(baseWeeks)から作った再反映の結果(remergedWeeks)を痕跡の比較に使い、関数更新に来た盤面が baseWeeks のままなら
+ * その結果をそのまま返す(再反映を 2 回計算しない)。待ちの更新があって盤面が違えば、今までどおりその盤面から作り直す
+ * (関数更新で最新の weeks に当てる 3746fda3 の意味を変えない)。★ここで記録しない(StrictMode は関数更新を 2 回呼ぶ)。
+ */
+export function buildRemergeWeeksUpdater(baseWeeks: SlotCell[][], remergedWeeks: SlotCell[][], remerge: (weeks: SlotCell[][]) => SlotCell[][]): (currentWeeks: SlotCell[][]) => SlotCell[][] {
+  return (currentWeeks) => (currentWeeks === baseWeeks ? remergedWeeks : remerge(currentWeeks))
+}
+
+/** 再反映の痕跡を残すかの判定用: 前回記録した入力と同じ(参照が全部同じ)なら同じ再反映(StrictMode の effect の二重実行)。 */
+export function isSameRemergeTraceInputs(previous: readonly unknown[] | null, next: readonly unknown[]): boolean {
+  if (!previous || previous.length !== next.length) return false
+  return previous.every((value, index) => Object.is(value, next[index]))
 }
 
 /**
@@ -9350,6 +9366,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
   const initialBoardSnapshot = initialBoardSnapshotRef.current
   const [weeks, setWeeks] = useState<SlotCell[][]>(() => initialBoardSnapshot.weeks)
+  // 自動処理の操作痕跡(2026-11-09): 再反映の effect の本体で今の盤面を読むため(描画ごとに今の盤面を指す)。
+  const weeksRef = useRef(weeks)
+  weeksRef.current = weeks
+  // 読み込み時の再反映の痕跡: createInitialBoardSnapshot に渡した保存版の盤面(最初の描画の initialBoardState.weeks)と、マウントで 1 回だけの印。
+  const initialSavedWeeksRef = useRef<SlotCell[][] | null>(initialBoardState?.weeks ?? null)
+  const didTraceInitialRemergeRef = useRef(false)
+  // 再反映の effect の痕跡: 前回記録したときの入力(同じ入力の 2 回目＝StrictMode の effect の二重実行は記録しない)。
+  const lastRemergeTraceInputsRef = useRef<readonly unknown[] | null>(null)
   const normalizedWeeks = useMemo(() => applyClassroomAvailability(weeks, classroomSettings), [classroomSettings, weeks])
   const [weekIndex, setWeekIndex] = useState(initialBoardSnapshot.weekIndex)
   // 性能最適化(挙動不変): `?? []` が範囲外時に毎レンダー新配列を返すと cells 依存の useMemo 群が全て無効化されるため、
@@ -10105,11 +10129,23 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     weekIndex,
   ])
 
+  // 読み込み時の再反映の痕跡(2026-11-09・spec-developer-report §D-3): createInitialBoardSnapshot が保存版から作り直した差を、マウントで 1 回だけ残す
+  // (ref で 1 回・StrictMode の effect の二重実行でも 1 回・INV-03)。保存版が無い(初期の盤面を作った)ときは残さない。盤面には触らない(INV-02)。
+  useEffect(() => {
+    if (didTraceInitialRemergeRef.current) return
+    didTraceInitialRemergeRef.current = true
+    const savedWeeks = initialSavedWeeksRef.current
+    if (!savedWeeks?.length) return
+    const initialWeeks = initialBoardSnapshotRef.current?.weeks
+    if (!initialWeeks) return
+    recordAutoBoardChange('board-rebuild', '読み込み時の再反映', savedWeeks, initialWeeks)
+  }, [])
+
   useEffect(() => {
     bumpMemCounter('overlay-recompute')
     const todayJstKey = getJstTodayDateKey()
     // 退塾ボタン/編集での退塾日入力はどちらも students を更新するので、この effect でその場に盤面へ反映される。
-    setWeeks((currentWeeks) => remergeBoardWeeksWithManagedData(currentWeeks, {
+    const remergeParams = {
       classroomSettings,
       teachers,
       students,
@@ -10119,7 +10155,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // 第 2 版（spec-template-conflict-v2 §2-2〜§2-4）: フラグ templateDiffApply の教室だけ。保留の下段の手入力も規則の材料にする
       // （保留マップは ref で読む＝保留の片づけのたびに再マージを走らせない。保留マップが変わる操作はどれも commitWeeks を通る）。
       templateOriginRules: templateDiffApplyEnabled ? { pendingDesks: templatePendingDesksRef.current } : null,
-    }))
+    }
+    // 自動処理の操作痕跡(2026-11-09・spec-developer-report §D-3): 今の盤面から再反映を 1 回作り、変わった机をここ(effect の本体)で残す。
+    // ★setWeeks の関数更新の中では記録しない(StrictMode は関数更新を 2 回呼ぶ・INV-03)。同じ入力の 2 回目(effect の二重実行)も残さない。
+    // ★盤面は今までと同じ(INV-02): 関数更新は buildRemergeWeeksUpdater が、盤面がこのままなら作った結果を、待ちの更新があればその盤面から作り直した結果を返す。
+    //   保留マップの ref は描画の中でしか書き換わらないので、ここで読んでも関数更新の中で読んでも同じ値。
+    // 再反映を呼ぶのはこの 1 か所(経路ごとの呼び出しの数は studentWithdrawSweep / studentWithdrawDateExclusive のテストが字面で固定)。
+    const remerge = (currentWeeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(currentWeeks, remergeParams)
+    const baseWeeks = weeksRef.current
+    const remergedWeeks = remerge(baseWeeks)
+    const traceInputs = [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences, templateDiffApplyEnabled, baseWeeks]
+    if (!isSameRemergeTraceInputs(lastRemergeTraceInputsRef.current, traceInputs)) {
+      lastRemergeTraceInputsRef.current = traceInputs
+      recordAutoBoardChange('board-rebuild', '再反映(基本データ・テンプレの変更)', baseWeeks, remergedWeeks)
+    }
+    setWeeks(buildRemergeWeeksUpdater(baseWeeks, remergedWeeks, remerge))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences, templateDiffApplyEnabled])
 
   useEffect(() => {
@@ -10170,6 +10220,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       for (const message of result.messages) {
         recordOperationEvent('auto-teacher-assign', { requestId: request.requestId, itemCount: request.items.length, message })
       }
+      // 自動処理の操作痕跡(2026-11-09): QR 提出の反映が机を変えた差を残す(室長が日程表で押した「登録」は手の操作なので残さない)。
+      // 頼みは requestId で 1 回だけ処理される(Issue #46)ので、記録も 1 回(INV-03)。
+      if (request.source === 'qr-submission') recordAutoBoardChange('auto', 'QR 提出の反映', weeks, result.nextWeeks)
     }
     if (result.messages.length > 0) {
       setStatusMessage(result.messages[result.messages.length - 1])
@@ -10204,6 +10257,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       )
       // ★2 操作ログ(自動処理): 起動時の自己修復が講師を置き直した(「講師が勝手に湧いた」系の調査用)。
       recordOperationEvent('auto-teacher-reconcile', { placedCount: result.placedCount, weekIndexOffset: result.weekIndexOffset })
+      // 自動処理の操作痕跡(2026-11-09): 置き直した机の差も残す(ref で 1 回だけの effect・INV-03)。
+      recordAutoBoardChange('auto', '起動時の自己修復(QR 提出の講師)', weeks, result.nextWeeks)
       if (result.placedCount > 0) {
         setStatusMessage(`提出済みで未配置だった講師 ${result.placedCount} 名を出席可能コマへ自動配置しました。保存してください。`)
       }
