@@ -2,6 +2,7 @@
 // 決まりの表は docs/plan-2026-11-11-ui-patrol.md の Task 2。フィクスチャはこのファイル内の架空の名前だけ
 // (甲野　一郎・乙川　二郎・丙山　三子・丁谷　四郎 など)。実在の人の名前は使わない。
 import { describe, it, expect } from 'vitest'
+import * as anonymizeModule from './anonymize.ts'
 import { anonymizeClassroomPayload, compareAuditForParity, findNameLeaks } from './anonymize.ts'
 import { deriveManagedDisplayName } from '../../src/components/basic-data/basicDataModel'
 import { buildManagedStudentByAnyNameMap } from '../../src/components/schedule-board/ScheduleBoardScreen'
@@ -311,5 +312,70 @@ describe('保証台帳の結果の一致(compareAuditForParity)', () => {
 
     const extraCount = { findings: real.findings, counts: { ...real.counts, known: 1 }, notes: [] }
     expect(compareAuditForParity(real, extraCount).join('\n')).toContain('known')
+  })
+})
+
+describe('名前引きの前後一致(compareNameResolutionForParity)・講師と生徒の表を分ける(修正 1)', () => {
+  // 1 枚の表だと「生徒 → 講師の順・先に登録した文字列が勝つ」で、講師の姓が生徒の姓と同じとき講師欄が生徒の仮名になっていた。
+  const compare = (real, anonymized) => anonymizeModule.compareNameResolutionForParity(real, anonymized)
+
+  it('姓が同じ講師と生徒がいても、講師欄は講師の仮名になり、講師の名前引きが前後で同じ', () => {
+    const input = makePayload()
+    // 講師 丙山　三子(表示名 丙山)と同じ姓の生徒。生徒の名簿が先に登録される。
+    input.students.push(makeStudentRow('s095', '丙山　花子', ''))
+    const { payload } = anonymizeClassroomPayload(input)
+    const d1 = desksOf(payload)[0]
+    expect(d1.teacher).toBe('講師005')
+    expect(d1.statusSlots[0].teacherName).toBe('講師005')
+    expect(payload.boardState.groupClassEntries['2026-12-21_1'].teacherName).toBe('講師005')
+    expect(payload.boardState.templatePendingDesks['2026-11-12_1::d1'].lower.teacher.teacher).toBe('講師005')
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('同じ表示名の生徒が 2 人いても名前引きが前後で同じ', () => {
+    const input = makePayload()
+    // s092 と同じ表示名。アプリの名前引きは後の行が勝つ(new Map)。
+    input.students.push(makeStudentRow('s096', '甲野　六郎', '甲野'))
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(compare(input, payload)).toEqual([])
+    // 名簿の行と盤面で同じ表を引く(同じ文字列は同じ仮名)
+    expect(payload.students[3].displayName).toBe(payload.students[0].displayName)
+    expect(desksOf(payload)[0].lesson.studentSlots[0].name).toBe(payload.students[0].displayName)
+  })
+
+  it('わざと名簿の仮名だけ変えると食い違いを返す(経路と件数だけ・値は返さない)', () => {
+    const input = makePayload()
+    const { payload } = anonymizeClassroomPayload(input)
+    payload.students[0].displayName = '別の仮名'
+    payload.teachers[0].displayName = '別の講師'
+    const diff = compare(input, payload)
+    expect(diff.length).toBeGreaterThan(0)
+    const text = diff.join('\n')
+    expect(text).toContain('boardState.weeks[][].desks[].lesson.studentSlots[].name')
+    expect(text).toContain('boardState.weeks[][].desks[].teacher')
+    for (const name of [...REAL_NAMES, '別の仮名', '別の講師', '生徒092', '講師005']) expect(text).not.toContain(name)
+  })
+
+  it('講師の項目の別名は 別講NNN・生徒の項目の別名は 別名NNN。室長は講師の表の中の室長と同じ仮名', () => {
+    const input = makePayload()
+    desksOf(input)[2].teacher = '架空先生'
+    desksOf(input)[0].statusSlots[0].teacherName = '己原室長'
+    const { payload, stats } = anonymizeClassroomPayload(input)
+    expect(desksOf(payload)[2].teacher).toBe('別講001')
+    expect(desksOf(payload)[0].statusSlots[0].teacherName).toBe(payload.managers[0].name)
+    expect(payload.managers[0].name).toBe('室長1')
+    expect(desksOf(payload)[1].lesson.studentSlots[0].name).toBe('別名001')
+    expect(stats.aliases).toBe(2)
+  })
+
+  it('teacherAssignmentTeacherId・teacherId は名簿の講師 ID か ID の形(英字＋数字 2 桁以上)ならそのまま', () => {
+    const input = makePayload()
+    desksOf(input)[2].teacherAssignmentTeacherId = 't099'
+    desksOf(input)[2].teacherRest = { teacher: '丁谷', teacherId: 'tch0123' }
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(desksOf(payload)[2].teacherAssignmentTeacherId).toBe('t099')
+    expect(desksOf(payload)[2].teacherRest).toEqual({ teacher: '講師006', teacherId: 'tch0123' })
+    // ID の形でない名前は講師の表で引く
+    expect(desksOf(payload)[1].teacherAssignmentTeacherId).toBe('講師005')
   })
 })

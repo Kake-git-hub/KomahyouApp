@@ -6,10 +6,15 @@
 //   アプリは名前の一致で生徒・講師を引く(buildManagedStudentByAnyNameMap・講師欄の名前と名簿の照合など)。
 //   同じ文字列を必ず同じ仮名にし、名簿の登録名・表示名・姓(deriveManagedDisplayName)を先に登録しておけば、
 //   伏せ字の前後で「どの文字列がどの生徒・講師に当たるか」の関係が変わらない＝アプリの挙動が変わらない。
-//   伏せ字で挙動が変わったまま点検しても意味がないので、呼び出し側は compareAuditForParity で確かめる。
+//   伏せ字で挙動が変わったまま点検しても意味がないので、呼び出し側は compareAuditForParity と
+//   compareNameResolutionForParity(盤面の名前から名簿を引いた ID の前後一致)で確かめる。
+// ★表は「講師の項目用」と「生徒の項目用」の 2 枚(修正 1・主セッション裁定 A 2026-11-11)。
+//   アプリは講師の文字列を講師名簿で、生徒の文字列を生徒名簿で引き、型をまたいだ一致は使わない。1 枚の表だと講師の姓が
+//   生徒の姓と同じとき講師欄が生徒の仮名になり、講師の名前引きが変わった(本番 2 校で 1,700〜2,000 件)。
 // ★漏れ検査(findNameLeaks)が最後の番人。名前の入る項目の一覧に漏れがあっても、名前が残れば経路で知らせる(値は返さない)。
 // ★読み取り専用。入力の payload は書き換えない(複製してから置き換える)。ネットワークにもファイルにも触れない。
-import { deriveManagedDisplayName, getStudentDisplayName, type StudentRow } from '../../src/components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../../src/components/basic-data/basicDataModel'
+import { buildManagedStudentByAnyNameMap } from '../../src/components/schedule-board/ScheduleBoardScreen'
 import type { AppSnapshotPayload } from '../../src/types/appState'
 import { hasRealDeskTeacher } from '../../src/utils/deskTeacherLabel'
 import type { InvAuditFinding, InvAuditResult } from '../invAuditEntry'
@@ -29,21 +34,28 @@ const PATROL_SCHOOL_NAME = '巡回用教室'
 const PATROL_UPDATED_BY = 'patrol'
 
 /**
- * 盤面(boardState の中・保留の下段を含む)で人の名前を持つ文字列のキー。
+ * 盤面(boardState の中・保留の下段を含む)で人の名前を持つ文字列のキー。生徒の項目と講師の項目で引く表が違う。
  * 2026-11-11 に本番 2 校で数えた一覧(desks[].teacher・studentSlots[].name・statusSlots[].name / teacherName・
  * fallbackMakeupStudents.*.studentName / displayName・manualLectureStockOrigins.*[].displayName・
  * fallbackLectureStockStudents.*.displayName・groupClassEntries.*.teacherName)に、types.ts の DeskCell が持つ講師の写し
  * (templateTeacherShift.teacher・teacherRest.teacher・templateTeacherDeclined.teacher / adopted.teacher・
  * wholeDayPairMovedTeacherFrom.teacher / block.teacher・保留の下段の teacher.teacher)が同じキー名で入る。
- * キー名で拾うので、同じ形の項目はどの深さでも同じ規則になる。
+ * キー名で拾うので、同じ形の項目はどの深さでも同じ規則になる(boardState の displayName はすべて生徒の在庫の写し)。
  */
-const BOARD_NAME_KEYS = new Set(['name', 'teacher', 'teacherName', 'studentName', 'displayName'])
+const BOARD_STUDENT_NAME_KEYS = new Set(['name', 'studentName', 'displayName'])
+const BOARD_TEACHER_NAME_KEYS = new Set(['teacher', 'teacherName'])
 /**
  * 講師 ID を持つはずだが、本番では名前が入っている机がある項目(teacherAssignmentTeacherId に約 2,100 机)。
- * 名簿の講師 ID と同じならそのまま、違えば名前として対応表で置き換える。teacherId(teacherRest・templateTeacherDeclined・
- * scheduleRegistrationSupersededByTemplate・wholeDayPairMovedTeacherFrom)も同じ作りの写しなので同じ規則にする。
+ * 名簿の講師 ID と同じ、または ID の形(TEACHER_ID_SHAPE)ならそのまま、ほかは名前として講師の表で引く。
+ * teacherId(teacherRest・templateTeacherDeclined・scheduleRegistrationSupersededByTemplate・wholeDayPairMovedTeacherFrom)も
+ * 同じ作りの写しなので同じ規則にする。
  */
 const BOARD_ID_OR_NAME_KEYS = new Set(['teacherAssignmentTeacherId', 'teacherId'])
+/**
+ * ID の形(半角英字 1 文字以上＋半角数字 2 桁以上だけ・例 t019)。名簿から外れた講師の ID を別名にすると、同じ ID をキーに持つ
+ * specialSessions[].teacherInputs との結び付きが切れる(緑が丘で 8 机・講習 4 つ)ため、名前として置き換えない(裁定 B)。
+ */
+const TEACHER_ID_SHAPE = /^[A-Za-z]+[0-9]{2,}$/
 const TOKEN_KEYS = new Set(['boardShareToken', 'parentPortalToken', 'submissionToken'])
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -78,11 +90,12 @@ function matchWhitespaceShape(value: string, alias: string) {
   return `${lead}${aliasCore}${trail}`
 }
 
-/** 文字列ごとの対応表。先に登録した文字列が勝つ(同じ文字列は必ず同じ仮名)。 */
+/** 文字列ごとの対応表。先に登録した文字列が勝つ(同じ文字列は必ず同じ仮名)。別名は表ごとの連番(種類が分かる接頭辞)。 */
 class NameTable {
   readonly exact = new Map<string, string>()
   private readonly stripped = new Map<string, string>()
   aliasCount = 0
+  constructor(private readonly aliasPrefix: string) {}
 
   register(real: string, pseudo: string) {
     if (!real.trim()) return
@@ -101,15 +114,18 @@ class NameTable {
       return shaped
     }
     this.aliasCount += 1
-    const alias = `別名${pad3(this.aliasCount)}`
+    const alias = `${this.aliasPrefix}${pad3(this.aliasCount)}`
     this.register(value, alias)
     return alias
   }
 }
 
-type RosterKind = { full: string; short: string }
-const STUDENT_KIND: RosterKind = { full: '生徒', short: '生' }
-const TEACHER_KIND: RosterKind = { full: '講師', short: '講' }
+type RosterKind = { full: string; short: string; displayOf: (row: { name: string; displayName?: string }) => string }
+// 名前引きの形(表示名 → 無ければ姓 → 無ければ登録名)はアプリの権威関数で作る。
+const STUDENT_KIND: RosterKind = { full: '生徒', short: '生', displayOf: (row) => getStudentDisplayName({ ...row, displayName: row.displayName ?? '' } as StudentRow) }
+const TEACHER_KIND: RosterKind = { full: '講師', short: '講', displayOf: (row) => getTeacherDisplayName(row as TeacherRow) }
+const STUDENT_ALIAS_PREFIX = '別名'
+const TEACHER_ALIAS_PREFIX = '別講'
 
 /** 名簿の行の番号(ID の数字部分)。数字が無い・他の行と重なる ID は名簿順の X 番号(重なると名前引きの関係が壊れるため)。 */
 function buildRosterNumbers(ids: string[]) {
@@ -138,21 +154,29 @@ function buildRosterDisplayName(kind: RosterKind, number: string, originalName: 
 
 type RosterRow = { id: string; name: string; displayName?: string }
 
-/** 名簿の行を伏せ字にし、登録名・表示名・名前引きに使う形(表示名が空なら姓)を対応表へ登録する。 */
-function anonymizeRoster<T extends RosterRow>(rows: T[], kind: RosterKind, table: NameTable) {
+/** 名簿の行の登録名・表示名・名前引きに使う形(表示名が空なら姓)を対応表へ登録する(出力は resolveRoster が同じ表を引いて作る)。 */
+function registerRoster<T extends RosterRow>(rows: T[], kind: RosterKind, table: NameTable) {
   const numbers = buildRosterNumbers(rows.map((row) => row.id))
-  return rows.map((row, index) => {
+  rows.forEach((row, index) => {
     const originalName = typeof row.name === 'string' ? row.name : ''
     const name = buildRosterName(kind, numbers[index], originalName)
     const displayName = buildRosterDisplayName(kind, numbers[index], originalName, row.displayName)
     table.register(originalName, name)
     if (typeof row.displayName === 'string' && typeof displayName === 'string') table.register(row.displayName, displayName)
-    // アプリの名前引きは「表示名 → 無ければ姓 → 無ければ登録名」(getStudentDisplayName / getTeacherDisplayName)。
-    // 表示名が空の行も、盤面には姓が入るので姓を登録する。
-    const before = getStudentDisplayName({ name: originalName, displayName: row.displayName ?? '' } as StudentRow)
-    const after = getStudentDisplayName({ name, displayName: displayName ?? '' } as StudentRow)
-    table.register(before, after)
+    // 表示名が空の行も、盤面には姓が入るので名前引きの形と姓を登録する。
+    table.register(kind.displayOf({ name: originalName, displayName: row.displayName }), kind.displayOf({ name, displayName }))
     table.register(deriveManagedDisplayName(originalName), deriveManagedDisplayName(name))
+  })
+}
+
+/**
+ * 名簿の出力は、登録を済ませた表を引いた結果にする(裁定 A)。同じ文字列は名簿の行と盤面で必ず同じ仮名になるので、
+ * 同じ表示名の生徒が 2 人いても、アプリの名前引き(後の行が勝つ)の当たり方が伏せ字の前後で変わらない。
+ */
+function resolveRoster<T extends RosterRow>(rows: T[], table: NameTable) {
+  return rows.map((row) => {
+    const name = typeof row.name === 'string' && row.name.trim() ? table.resolve(row.name) : row.name
+    const displayName = typeof row.displayName === 'string' && row.displayName.trim() ? table.resolve(row.displayName) : row.displayName
     return { ...row, name, ...('displayName' in row ? { displayName } : {}) }
   })
 }
@@ -198,23 +222,31 @@ function replaceBoardName(value: string, table: NameTable) {
   return table.resolve(value)
 }
 
-/** 盤面の中を歩き、名前のキーを対応表で、メモを「メモ」に置き換える。 */
-function anonymizeBoardValue(value: unknown, table: NameTable, teacherIds: Set<string>, counters: Counters): unknown {
-  if (Array.isArray(value)) return value.map((item) => anonymizeBoardValue(item, table, teacherIds, counters))
+type BoardTables = { students: NameTable; teachers: NameTable; teacherIds: Set<string> }
+
+function isTeacherIdValue(value: string, teacherIds: Set<string>) {
+  return teacherIds.has(value) || TEACHER_ID_SHAPE.test(value)
+}
+
+/** 盤面の中を歩き、名前のキーを生徒／講師の表で、メモを「メモ」に置き換える。 */
+function anonymizeBoardValue(value: unknown, tables: BoardTables, counters: Counters): unknown {
+  if (Array.isArray(value)) return value.map((item) => anonymizeBoardValue(item, tables, counters))
   if (!isPlainObject(value)) return value
   const next: Record<string, unknown> = {}
   for (const [key, child] of Object.entries(value)) {
-    if (typeof child === 'string' && BOARD_NAME_KEYS.has(key)) {
-      next[key] = replaceBoardName(child, table)
+    if (typeof child === 'string' && BOARD_STUDENT_NAME_KEYS.has(key)) {
+      next[key] = replaceBoardName(child, tables.students)
+    } else if (typeof child === 'string' && BOARD_TEACHER_NAME_KEYS.has(key)) {
+      next[key] = replaceBoardName(child, tables.teachers)
     } else if (typeof child === 'string' && BOARD_ID_OR_NAME_KEYS.has(key)) {
-      next[key] = teacherIds.has(child) ? child : replaceBoardName(child, table)
+      next[key] = isTeacherIdValue(child, tables.teacherIds) ? child : replaceBoardName(child, tables.teachers)
     } else if (key === 'memoSlots' && Array.isArray(child)) {
       next[key] = child.map((memo) => memoize(memo, counters))
     } else if (key === 'wholeDayPairMovedMemoFrom' && Array.isArray(child)) {
       // 付け替えで移したメモの写し(席ごとの本文)。メモと同じく本文を伏せる。
       next[key] = child.map((entry) => (isPlainObject(entry) ? { ...entry, text: memoize(entry.text, counters) } : entry))
     } else {
-      next[key] = anonymizeBoardValue(child, table, teacherIds, counters)
+      next[key] = anonymizeBoardValue(child, tables, counters)
     }
   }
   return next
@@ -244,25 +276,30 @@ function anonymizeClassroomSettings(settings: unknown, counters: Counters) {
 export function anonymizeClassroomPayload(payload: AppSnapshotPayload): AnonymizeResult {
   // 入力を書き換えないよう、最初に丸ごと複製する(以降の置き換えはすべて新しいオブジェクトを作る)。
   const source = structuredClone(payload) as AppSnapshotPayload
-  const table = new NameTable()
+  const studentTable = new NameTable(STUDENT_ALIAS_PREFIX)
+  const teacherTable = new NameTable(TEACHER_ALIAS_PREFIX)
   const counters: Counters = { memos: 0, cleared: 0, tokens: new Map() }
   const students = Array.isArray(source.students) ? source.students : []
   const teachers = Array.isArray(source.teachers) ? source.teachers : []
   const managers = Array.isArray(source.managers) ? source.managers : []
 
-  // 名簿を先に登録する(生徒 → 講師 → 室長の順・先に登録した文字列が勝つ)。
-  const nextStudents = anonymizeRoster(students, STUDENT_KIND, table)
-  const nextTeachers = anonymizeRoster(teachers, TEACHER_KIND, table).map((row) => (
+  // 名簿を先に登録する。生徒の表＝生徒だけ。講師の表＝講師 → 室長の順(先に登録した文字列が勝つ)。
+  registerRoster(students, STUDENT_KIND, studentTable)
+  registerRoster(teachers, TEACHER_KIND, teacherTable)
+  managers.forEach((row, index) => {
+    if (typeof row.name === 'string') teacherTable.register(row.name, `室長${index + 1}`)
+  })
+  const nextStudents = resolveRoster(students, studentTable)
+  const nextTeachers = resolveRoster(teachers, teacherTable).map((row) => (
     'memo' in row ? { ...row, memo: memoize((row as { memo?: unknown }).memo, counters) } : row
   ))
-  const nextManagers = managers.map((row, index) => {
-    const name = `室長${index + 1}`
-    if (typeof row.name === 'string') table.register(row.name, name)
-    return { ...row, name }
-  })
+  // 室長は講師の項目用の表の中の室長と同じ仮名(室長の名前は講師欄・出欠記録の講師名に入りうる)。
+  const nextManagers = managers.map((row) => ({ ...row, name: typeof row.name === 'string' && row.name.trim() ? teacherTable.resolve(row.name) : row.name }))
 
   const teacherIds = new Set(teachers.map((row) => row.id).filter((id): id is string => typeof id === 'string' && id !== ''))
-  const boardState = source.boardState ? anonymizeBoardValue(source.boardState, table, teacherIds, counters) : source.boardState
+  const boardState = source.boardState
+    ? anonymizeBoardValue(source.boardState, { students: studentTable, teachers: teacherTable, teacherIds }, counters)
+    : source.boardState
 
   const replaced = {
     ...source,
@@ -275,8 +312,9 @@ export function anonymizeClassroomPayload(payload: AppSnapshotPayload): Anonymiz
   const scrubbed = scrubContactsAndTokens(replaced, counters) as AppSnapshotPayload
   return {
     payload: scrubbed,
-    nameMap: new Map(table.exact),
-    stats: { students: students.length, teachers: teachers.length, aliases: table.aliasCount, memos: counters.memos, cleared: counters.cleared },
+    // 漏れ検査の「実名の一覧」に使うだけ。2 枚の表の元の文字列を合わせる(値は生徒の表を優先)。
+    nameMap: new Map([...teacherTable.exact, ...studentTable.exact]),
+    stats: { students: students.length, teachers: teachers.length, aliases: studentTable.aliasCount + teacherTable.aliasCount, memos: counters.memos, cleared: counters.cleared },
   }
 }
 
@@ -328,6 +366,61 @@ export function findNameLeaks(anonymized: unknown, realNames: Iterable<string>):
   }
   walk(anonymized, '')
   return [...found].sort()
+}
+
+type NameResolvers = { student: (value: string) => string | null; teacher: (value: string) => string | null; teacherIds: Set<string> }
+
+function buildNameResolvers(payload: AppSnapshotPayload): NameResolvers {
+  const students = (Array.isArray(payload?.students) ? payload.students : []) as StudentRow[]
+  const teachers = (Array.isArray(payload?.teachers) ? payload.teachers : []) as TeacherRow[]
+  // 生徒はアプリの権威関数で引く。講師は名簿の登録名と getTeacherDisplayName(new Map なので後の行が勝つ＝アプリの Map と同じ)。
+  const studentByName = buildManagedStudentByAnyNameMap(students.filter((row) => isPlainObject(row) && typeof row.name === 'string'))
+  const teacherByName = new Map<string, string>(teachers
+    .filter((row) => isPlainObject(row) && typeof row.name === 'string')
+    .flatMap((row) => [[row.name, row.id], [getTeacherDisplayName(row), row.id]] as Array<[string, string]>))
+  const teacherIds = new Set(teachers.map((row) => row?.id).filter((id): id is string => typeof id === 'string' && id !== ''))
+  return {
+    student: (value) => studentByName.get(value)?.id ?? null,
+    teacher: (value) => teacherByName.get(value) ?? null,
+    teacherIds,
+  }
+}
+
+function resolveBoardName(key: string, value: string, resolvers: NameResolvers) {
+  if (BOARD_STUDENT_NAME_KEYS.has(key)) return resolvers.student(value)
+  if (BOARD_ID_OR_NAME_KEYS.has(key) && resolvers.teacherIds.has(value)) return value
+  return resolvers.teacher(value)
+}
+
+/** 伏せ字の前後で、盤面の名前の項目から名簿を引いた結果(生徒 ID・講師 ID)が同じか。食い違いの説明(項目の経路と件数だけ。空なら一致)。 */
+export function compareNameResolutionForParity(real: AppSnapshotPayload, anonymized: AppSnapshotPayload): string[] {
+  const before = buildNameResolvers(real)
+  const after = buildNameResolvers(anonymized)
+  const mismatches = new Map<string, number>()
+  const add = (path: string) => mismatches.set(path, (mismatches.get(path) ?? 0) + 1)
+  // 前後で同じ位置の項目どうしを比べる(伏せ字は形を変えないので、配列の位置とキーで対応が取れる)。
+  const walk = (a: unknown, b: unknown, path: string) => {
+    if (Array.isArray(a)) {
+      a.forEach((item, index) => walk(item, Array.isArray(b) ? b[index] : undefined, `${path}[]`))
+      return
+    }
+    if (!isPlainObject(a)) return
+    const other = isPlainObject(b) ? b : {}
+    for (const [key, child] of Object.entries(a)) {
+      // 経路に値を出さない: 識別子の形のキーだけ名前を書き、ほか(日付・生徒の鍵など動くキー)は * にまとめる。
+      const childPath = path ? `${path}.${IDENTIFIER_KEY.test(key) ? key : '*'}` : key
+      const isNameKey = BOARD_STUDENT_NAME_KEYS.has(key) || BOARD_TEACHER_NAME_KEYS.has(key) || BOARD_ID_OR_NAME_KEYS.has(key)
+      if (typeof child === 'string' && isNameKey) {
+        const otherValue = other[key]
+        const resolvedAfter = typeof otherValue === 'string' ? resolveBoardName(key, otherValue, after) : undefined
+        if (resolveBoardName(key, child, before) !== resolvedAfter) add(childPath)
+        continue
+      }
+      walk(child, other[key], childPath)
+    }
+  }
+  walk(real?.boardState, anonymized?.boardState, 'boardState')
+  return [...mismatches.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([path, count]) => `名前引きの食い違い ${path}: ${count} 件`)
 }
 
 const FINDING_TUPLE_KEYS = ['rule', 'severity', 'kind', 'studentId', 'dateKey', 'slotNumber', 'deskIndex', 'subject', 'sessionId', 'period'] as const
