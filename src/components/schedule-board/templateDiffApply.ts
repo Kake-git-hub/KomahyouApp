@@ -2598,6 +2598,10 @@ export type TemplateDiffConfirmContext = {
 export type TemplateDiffStudentNote = {
   kind: 'manual-first' | 'lower-promoted' | 'teacher-kept' | 'duplicate-skipped' | 'duplicate-demoted' | 'transfer-placed' | 'transfer-pending' | 'slot-followed' | 'slot-follow-pending' | 'transfer-stocked' | 'transfer-settled' | 'transfer-count-adjusted' | 'orphan-removed' | 'teacher-pending' | 'teacher-replaced' | 'teacher-elsewhere'
     | 'copy-kept-record' | 'copy-kept-vanish'
+    /** 2026-11-10（「手入力は講師について行く」・spec §2-1）: 机の講師が新しいテンプレのそのコマにいないため、手入力の生徒をテンプレが使わない机へ移した（detail＝移した先の机の番号〔1 始まり〕）。 */
+    | 'teacher-left-moved'
+    /** 同じ形で、テンプレが使わない机に空きが無く、残った机（テンプレが使う机＝別の講師の机になりうる）へ入った（detail＝入った机の番号・deskTeacherName＝その机のテンプレの講師・M-2）。 */
+    | 'teacher-left-no-desk'
   /** 生徒の名前（講師の行では講師の名前）。 */
   studentName: string
   /** 科目（講師の行では空）。 */
@@ -2620,6 +2624,12 @@ export type TemplateDiffStudentNote = {
   displacedName?: string
   /** teacher-pending（2026-11-01・旧 A-7 → 2026-11-05 決定記録 64）: テンプレのこの机が講師だけ（生徒なし）＝手で置いた生徒は上の行に残し、講師だけ下の行。 */
   templateTeacherOnly?: boolean
+  /** teacher-left-moved／teacher-left-no-desk（2026-11-10）: 机の講師（新しいテンプレのそのコマにいない講師）。 */
+  formerTeacherName?: string
+  /** teacher-left-moved（2026-11-10）: 机と一緒に移る手置きの講師（無ければ講師なしの机になる）。 */
+  movedTeacherName?: string
+  /** teacher-left-no-desk（2026-11-10）: 入った机の新しいテンプレの講師（無ければ undefined）。 */
+  deskTeacherName?: string
 }
 
 /** Q41: 確認の画面に出す講師ごとの理由。 */
@@ -2673,6 +2683,22 @@ function describeTemplateDiffStudentNote(rawNote: TemplateDiffStudentNote) {
     case 'teacher-elsewhere': {
       // 第 2 版 §2-3（講師の一意・手置き講師が勝つ・§9-1）: studentName＝テンプレの講師・detail＝手置きの机の番号（1 始まり）。
       return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は空のままです）。`
+    }
+    // 2026-11-10（オーナー決定「手入力は講師について行く」・spec §2-1）: 講師が新しいテンプレのそのコマにいない机の手入力の生徒を、テンプレが使わない机へ移した。
+    case 'teacher-left-moved': {
+      const teacher = note.formerTeacherName ? formatDeskTeacherLabel(note.formerTeacherName) : ''
+      const desk = note.detail ? `机 ${note.detail} ` : '机'
+      const after = note.movedTeacherName
+        ? `${desk}へ、手で置いた講師 ${note.movedTeacherName} と一緒に移します。`
+        : `${desk}へ移します（講師なし。講師を付けてください）。`
+      return `${where} ${who}: 講師が替わったので（テンプレのこのコマに${teacher ? `講師 ${teacher} が` : 'この机の講師が'}いません）、手で置いたこの生徒をテンプレが使わない${after}`
+    }
+    // 同じ形で空いた机が無く、残った机（別の講師の机になりうる）へ入った（regression-reviewer M-2・必ず出す）。
+    case 'teacher-left-no-desk': {
+      const teacher = note.formerTeacherName ? formatDeskTeacherLabel(note.formerTeacherName) : ''
+      const deskTeacher = note.deskTeacherName ? formatDeskTeacherLabel(note.deskTeacherName) : ''
+      const desk = `${note.detail ? `机 ${note.detail}` : '残った机'}${deskTeacher ? `（講師 ${deskTeacher} の机）` : ''}`
+      return `${where} ${who}: 講師が替わりましたが（テンプレのこのコマに${teacher ? `講師 ${teacher} が` : 'この机の講師が'}いません）、空いた机が無いので${desk}に入ります。`
     }
     // 第 2 版 §9-14: 下段だけに居た手入力の生徒をテンプレの席へ上げた（detail＝机の番号）。
     case 'lower-promoted': return `${where} ${who}: 緑の下の行にだけ居た手入力のこの生徒を、テンプレの席${note.detail ? `（机 ${note.detail}）` : ''}へ上げて 1 行にします（テンプレの同じ授業は置きません）。`
