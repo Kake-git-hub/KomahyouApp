@@ -6,7 +6,7 @@
   "scripts": {
     "prebuild": "node tools/clean-dist.mjs",
     "dev": "vite",
-    "build": "tsc -b && vite build && node tools/write-version-file.mjs",
+    "build": "tsc -b && vite build && node tools/write-version-file.mjs && node tools/check-dist-dev-hooks.mjs",
     "build:firebase": "npm run build",
     "build:functions": "npm --prefix functions run build",
     "firebase:first-classroom": "node tools/firebase-first-classroom-helper.mjs",
