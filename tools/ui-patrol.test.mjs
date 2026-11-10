@@ -197,6 +197,47 @@ describe('ui-patrol --prepare-only', () => {
     }
   }, 120000)
 
+  it('トークンを作れない・アプリを読み込めないときも、前回の種データは消す(出力先の検査の直後に消す)', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      writeFileSync(path.join(out, `${ROOM_A}.seed.json`), '{"old":true}')
+      let io = collect()
+      expect(await main({ argv: ['--out', out, '--classroom', ROOM_A, '--prepare-only'], env: {}, fetchImpl: async () => { throw new Error('x') }, ...io })).toBe(2)
+      expect(existsSync(path.join(out, `${ROOM_A}.seed.json`))).toBe(false)
+      writeFileSync(path.join(out, `${ROOM_A}.seed.json`), '{"old":true}')
+      io = collect()
+      const failingLoad = async () => { throw new Error('束ねられません') }
+      expect(await main({ argv: ['--out', out, '--classroom', ROOM_A, '--prepare-only'], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl: async () => { throw new Error('x') }, ...io }, { loadApp: failingLoad })).toBe(2)
+      expect(existsSync(path.join(out, `${ROOM_A}.seed.json`))).toBe(false)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('巡回(--prepare-only なし・--seed-file): 教室が違う種データは 2。合えば台本の報告を <out>/report.json に書き、終了コードは報告から決める', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seedFile = path.join(out, 'in.seed.json')
+      writeFileSync(seedFile, JSON.stringify({ actingClassroomId: ROOM_A, classrooms: [{ id: ROOM_A, data: {} }] }))
+      const fakeApp = async () => ({ app: {}, cleanup: async () => {} })
+      const deps = (report) => ({ loadApp: fakeApp, loadPlaywright: () => ({}), runPatrol: async ({ seeds }) => { expect(seeds.map((seed) => seed.classroomId)).toEqual([ROOM_A]); return report } })
+      let io = collect()
+      expect(await main({ argv: ['--out', out, '--seed-file', seedFile, '--classroom', ROOM_B], env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, deps({}))).toBe(2)
+      expect(io.err.join('')).toContain('種データではありません')
+      const stopReport = { appVersion: 'x', backupKey: 'seed-file', classrooms: [{ classroomId: ROOM_A, label: 'A', backupKey: 'seed-file', knownCount: 0, aborted: null, steps: [{ name: 'boot', title: '起動', durationMs: 1, operations: 1, findings: [{ level: 'stop', code: 'page-error', message: 'x' }], notes: [] }] }] }
+      io = collect()
+      expect(await main({ argv: ['--out', out, '--seed-file', seedFile, '--classroom', ROOM_A], env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, deps(stopReport))).toBe(1)
+      expect(JSON.parse(readFileSync(path.join(out, 'report.json'), 'utf8')).classrooms[0].classroomId).toBe(ROOM_A)
+      // 種データ(入力)は消さない
+      expect(existsSync(seedFile)).toBe(true)
+      io = collect()
+      expect(await main({ argv: ['--out', out, '--seed-file', seedFile, '--classroom', ROOM_A], env: {}, ...io }, { ...deps(stopReport), loadPlaywright: () => null })).toBe(2)
+      expect(io.err.join('')).toContain('Playwright')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
   it('壊れた教室データ(架空の名前入りの壊れた JSON)でも、出力に名前や元の文の断片が出ない', async () => {
     const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
     try {

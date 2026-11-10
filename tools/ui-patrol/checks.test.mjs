@@ -13,6 +13,7 @@ import {
   checkPendingCountMatchesPreview,
   checkSameState,
   checkTeacherlessStudentsNotAdded,
+  parseAnnouncedOrphanedMakeupCount,
   parsePendingCountFromConfirm,
   summarizeChanges,
 } from './checks.ts'
@@ -69,7 +70,8 @@ function pending(deskId, lower) {
 it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('manual-student-teacher-changed')
   expect(PATROL_FINDING_CODES).toContain('change-summary')
-  expect(PATROL_FINDING_CODES).toHaveLength(19)
+  expect(PATROL_FINDING_CODES).toContain('orphaned-makeup-removed-announced')
+  expect(PATROL_FINDING_CODES).toHaveLength(20)
 })
 
 describe('変わってよい範囲', () => {
@@ -230,6 +232,48 @@ describe('手入力の生徒の講師（2026-11-10 緑が丘の形）', () => {
     const before = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師A' })])])
     const after = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師B' })])])
     expect(checkManualStudentsKeepTeacher(before, after)).toEqual([])
+  })
+})
+
+describe('根拠を失った振替を消す(spec-template-conflict-v2 §9-12・Q40-1)', () => {
+  // 休日設定の日の授業の振替を別の日へ置いた後、テンプレでその授業が無くなったら、テンプレ保存がその振替と振替元の「移)」の記録を消す(仕様どおり)。
+  // 確認の画面は件数を「テンプレから外した生徒の振替n件を消します」と出す(templateDiffApply.ts の buildTemplateDiffConfirmDetail)。
+  // 名前は「ほか n 件」に畳まれることがあるので、件数の範囲で、消えた手入力の「振替」とその振替元の「移動」の記録だけを info に下げる。
+  const H = '2026-11-20' // 振替元(休日)
+  const HC = `${H}_4`
+  const movedRecord = status({ status: 'moved', dateKey: H, slotNumber: 4 })
+  const before = facts([
+    cell(H, 4, [desk('h1', [null, null], { statusSlots: [movedRecord, null] })]),
+    cell(D, 3, [desk('d1', [makeupA({ makeupSourceDate: H }), studentB({ lessonType: 'makeup', makeupSourceDate: H })], { teacher: '講師A' })]),
+  ])
+  const after = facts([cell(H, 4, [desk('h1')]), cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' })])])
+
+  it('件数を読む(無ければ 0)', () => {
+    expect(parseAnnouncedOrphanedMakeupCount('丸ごと…\nテンプレから外した生徒の振替2件を消します（振替元の授業が無くなるため）。')).toBe(2)
+    expect(parseAnnouncedOrphanedMakeupCount('テンプレの中身に変更はありません。')).toBe(0)
+    expect(parseAnnouncedOrphanedMakeupCount(undefined)).toBe(0)
+  })
+
+  it('確認の画面の件数の範囲だけ、消えた手入力の振替を info に下げる。件数を越えた分・件数が無いときは stop のまま', () => {
+    expect(codes(checkManualStudentsKeepTeacher(before, after))).toEqual(['stop:manual-student-lost', 'stop:manual-student-lost'])
+    const one = checkManualStudentsKeepTeacher(before, after, { announcedOrphanedMakeupCount: 1 })
+    expect(codes(one).sort()).toEqual(['info:orphaned-makeup-removed-announced', 'stop:manual-student-lost'])
+    expect(codes(checkManualStudentsKeepTeacher(before, after, { announcedOrphanedMakeupCount: 2 }))).toEqual(['info:orphaned-makeup-removed-announced', 'info:orphaned-makeup-removed-announced'])
+  })
+
+  it('振替でない手入力の生徒は件数があっても stop のまま', () => {
+    const regularBefore = facts([cell(D, 3, [desk('d1', [student({ manualAdded: true }), null], { teacher: '講師A' })])])
+    const regularAfter = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' })])])
+    expect(codes(checkManualStudentsKeepTeacher(regularBefore, regularAfter, { announcedOrphanedMakeupCount: 3 }))).toEqual(['stop:manual-student-lost'])
+  })
+
+  it('振替元の「移動」の記録は、消えた振替の生徒の分だけ info に下げる(ほかの記録は stop のまま)', () => {
+    expect(codes(checkManualInputsNotLost(before, after))).toEqual(['stop:manual-input-lost'])
+    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatusStudentKeys: new Set(['s1']) }))).toEqual(['info:orphaned-makeup-removed-announced'])
+    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatusStudentKeys: new Set(['s2']) }))).toEqual(['stop:manual-input-lost'])
+    // 休みの記録は下げない(根拠を失った振替で消えてよいのは「移)」の印だけ)
+    const absentBefore = facts([cell(H, 4, [desk('h1', [null, null], { statusSlots: [status({ dateKey: H, slotNumber: 4 }), null] })])])
+    expect(codes(checkManualInputsNotLost(absentBefore, facts([cell(H, 4, [desk('h1')])]), { releasedMovedStatusStudentKeys: new Set(['s1']) }))).toEqual(['stop:manual-input-lost'])
   })
 })
 

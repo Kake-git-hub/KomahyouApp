@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // 画面の自動巡回(docs/test-strategy.md 層 5)。本番の形のデータ(名前は伏せる)を手元のアプリに入れ、室長と同じ画面操作を
-// 自動で行い、操作のたびに点検する。この作業(作業 4)は入口の骨組み: 引数 → 取得 → 伏せ字 → 自己点検 3 つ → 種データの書き出し
-// (--prepare-only)まで。ブラウザを動かす部分は作業 5 が足す。
+// 自動で行い、操作のたびに点検する。流れ: 引数 → 取得 → 伏せ字 → 自己点検 3 つ → 種データの書き出し(--prepare-only はここまで)
+// → 開発用サーバー(ローカルモード) → 教室ごとにブラウザ → 台本(起動・c・b・a・tools/ui-patrol/scenarios.mjs) → 報告(<out>/report.json)。
+// --seed-file を渡すと取得・伏せ字を飛ばし、伏せ字済みの種データで流す。
 //
 // ★読み取り専用・実名を残さない(本番データ保護ルール)
 //   - 本番へは Storage の GET と Firestore の :runQuery(読み取り)だけ。通信は tools/ui-patrol/fetchData.mjs の 1 か所から出る。
@@ -11,7 +12,7 @@
 //   (a) 伏せ字のあとに実名が残っていない(findNameLeaks) (b) 名前引きと鍵の対応が前後で同じ(compareNameResolutionForParity)
 //   (c) 保証台帳の結果が前後で同じ(compareAuditForParity)
 // 終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { isInvokedDirectly } from './invoked-directly.mjs'
 import { fetchReadonlyAccessToken } from './prod-readonly-token.mjs'
@@ -20,6 +21,10 @@ import { DEFAULT_CLASSROOMS, fetchClassroomBackup, fetchLatestBackupKey } from '
 import { loadPatrolApp } from './ui-patrol/loadApp.mjs'
 import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './ui-patrol/options.mjs'
 import { buildPatrolWorkspaceSnapshot } from './ui-patrol/seed.mjs'
+import { startDevServer } from './ui-patrol/devServer.mjs'
+import { closePatrolBrowser, launchPatrolBrowser, loadPlaywright } from './ui-patrol/driver.mjs'
+import { createClassroomReport, createPatrolReport, formatPatrolReportText, resolveExitCode } from './ui-patrol/report.mjs'
+import { runClassroomPatrol } from './ui-patrol/scenarios.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..')
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -102,6 +107,26 @@ function prepareClassroom({ app, classroomId, buffer, today }) {
   }
 }
 
+/** --seed-file の種データを読む。教室 ID が --classroom と同じ順で合っているかも見る(取り違えた教室で点検しない)。 */
+function readSeedFiles(options) {
+  return options.seedFiles.map((file, index) => {
+    const seed = JSON.parse(readFileSync(file, 'utf8'))
+    const classroomId = options.classrooms[index]
+    if (seed?.actingClassroomId !== classroomId || !Array.isArray(seed?.classrooms) || !seed.classrooms.some((room) => room.id === classroomId)) {
+      throw new Error(`${path.basename(file)} は教室 ${classroomId} の種データではありません。`)
+    }
+    return { classroomId, label: labelOf(classroomId), key: 'seed-file', seed }
+  })
+}
+
+/** 既知の所見(tools/ui-patrol-known.json・ID だけ・理由つき)。無ければ空。 */
+function readKnown(file) {
+  const resolved = path.isAbsolute(file) ? file : path.join(REPO_ROOT, file)
+  if (!existsSync(resolved)) return []
+  const parsed = JSON.parse(readFileSync(resolved, 'utf8'))
+  return Array.isArray(parsed) ? parsed : []
+}
+
 export async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl = fetch, stdout = process.stdout, stderr = process.stderr } = {}, deps = {}) {
   const say = (text) => stdout.write(`${text}\n`)
   const warn = (text) => stderr.write(`${text}\n`)
@@ -122,14 +147,15 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     warn(`エラー: ${error.message}`)
     return 2
   }
-  if (!options.prepareOnly) {
-    warn('エラー: ブラウザの巡回はまだ組み込まれていません(作業 5)。今は --prepare-only だけ使えます。')
-    return 2
-  }
-  if (options.seedFiles.length > 0) {
+  const usesSeedFiles = options.seedFiles.length > 0
+  // 前回の種データは出力先の検査が通った直後に全部消す(取得するときだけ。--seed-file は入力を消さない)。今回通った教室だけが残るので、
+  // トークンの失敗・アプリの読み込みの失敗・取得の途中で止まっても、古い種データを次の作業が読まない(作業 4 の再レビューの指摘)。
+  if (!usesSeedFiles) for (const classroomId of options.classrooms) removeStaleSeed(options.out, classroomId)
+
+  if (options.prepareOnly && usesSeedFiles) {
     // 伏せ字済みの種データを使う指定。取得も伏せ字もしないので、読めるかだけ確かめる。
     try {
-      for (const file of options.seedFiles) JSON.parse(readFileSync(file, 'utf8'))
+      readSeedFiles(options)
     } catch (error) {
       warn(`エラー: --seed-file を読めません: ${error.message}`)
       return 2
@@ -137,65 +163,126 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     say(`種データ ${options.seedFiles.length} 件を読めました(取得・伏せ字は行いません)。`)
     return 0
   }
-
-  // トークン: 環境変数 FIRESTORE_ACCESS_TOKEN、無ければ読み取り専用サービスアカウントから作る。
-  let token = env.FIRESTORE_ACCESS_TOKEN || ''
-  if (!token) {
-    try {
-      token = (await fetchReadonlyAccessToken(env, guardTokenFetch(fetchImpl))).accessToken
-    } catch (error) {
-      warn(`エラー: 読み取り専用トークンを作れません(${describeTokenFailure(error)})。`)
-      return 2
-    }
+  // ブラウザが無ければ取得もしない(読み取りの通信を無駄に出さない)。
+  const loadBrowser = deps.loadPlaywright ?? loadPlaywright
+  if (!options.prepareOnly && !loadBrowser()) {
+    warn('エラー: Playwright が無い環境では回せません。')
+    return 2
   }
 
   const loadApp = deps.loadApp ?? loadPatrolApp
   let loaded = null
-  const results = []
+  let seeds = []
+  let backupKey = ''
+  const today = jstToday()
   try {
-    loaded = await loadApp()
-    mkdirSync(options.out, { recursive: true })
-    // 前回の種データは最初に全部消す。今回通った教室だけが残るので、途中で止まっても古い種データを次の作業が読まない。
-    for (const classroomId of options.classrooms) removeStaleSeed(options.out, classroomId)
-    const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
-    const today = jstToday()
-    for (const classroomId of options.classrooms) {
-      const started = Date.now()
-      const label = labelOf(classroomId)
+    if (usesSeedFiles) {
       try {
-        const { buffer } = await fetchClassroomBackup({ token, classroomId, key, fetchImpl })
-        const prepared = prepareClassroom({ app: loaded.app, classroomId, buffer, today })
-        if (prepared.problems.length > 0) {
-          warn(`■ ${label}(${classroomId}・データ ${key}): 自己点検に引っかかりました。種データは書きません。`)
-          for (const problem of prepared.problems) {
-            warn(`  [${problem.kind}] ${problem.total} 件`)
-            for (const line of problem.lines) warn(`    ${line}`)
-          }
-          results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
-          continue
-        }
-        const file = path.join(options.out, `${classroomId}.seed.json`)
-        const text = JSON.stringify(prepared.seed)
-        writeFileSync(file, text)
-        const seconds = (Date.now() - started) / 1000
-        results.push({ classroomId, label, key, ok: true, file, bytes: Buffer.byteLength(text), seconds, leaks: prepared.leakCount })
-        if (!options.json) {
-          say(`■ ${label}(${classroomId}・データ ${key}): 漏れ ${prepared.leakCount}・名前引きの一致・保証台帳の結果の一致`)
-          say(`  種データ ${path.basename(file)}(${Buffer.byteLength(text)} バイト)・${seconds.toFixed(1)} 秒`)
-        }
+        seeds = readSeedFiles(options)
       } catch (error) {
-        warn(`■ ${label}(${classroomId}): 準備できませんでした: ${error instanceof Error ? error.message : String(error)}`)
-        results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
+        warn(`エラー: --seed-file を読めません: ${error.message}`)
+        return 2
       }
+      backupKey = 'seed-file'
+      loaded = await loadApp()
+    } else {
+      // トークン: 環境変数 FIRESTORE_ACCESS_TOKEN、無ければ読み取り専用サービスアカウントから作る。
+      let token = env.FIRESTORE_ACCESS_TOKEN || ''
+      if (!token) {
+        try {
+          token = (await fetchReadonlyAccessToken(env, guardTokenFetch(fetchImpl))).accessToken
+        } catch (error) {
+          warn(`エラー: 読み取り専用トークンを作れません(${describeTokenFailure(error)})。`)
+          return 2
+        }
+      }
+      loaded = await loadApp()
+      mkdirSync(options.out, { recursive: true })
+      const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
+      backupKey = key
+      const results = []
+      for (const classroomId of options.classrooms) {
+        const started = Date.now()
+        const label = labelOf(classroomId)
+        try {
+          const { buffer } = await fetchClassroomBackup({ token, classroomId, key, fetchImpl })
+          const prepared = prepareClassroom({ app: loaded.app, classroomId, buffer, today })
+          if (prepared.problems.length > 0) {
+            warn(`■ ${label}(${classroomId}・データ ${key}): 自己点検に引っかかりました。種データは書きません。`)
+            for (const problem of prepared.problems) {
+              warn(`  [${problem.kind}] ${problem.total} 件`)
+              for (const line of problem.lines) warn(`    ${line}`)
+            }
+            results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
+            continue
+          }
+          const file = path.join(options.out, `${classroomId}.seed.json`)
+          const text = JSON.stringify(prepared.seed)
+          writeFileSync(file, text)
+          const seconds = (Date.now() - started) / 1000
+          results.push({ classroomId, label, key, ok: true, file, bytes: Buffer.byteLength(text), seconds, leaks: prepared.leakCount })
+          seeds.push({ classroomId, label, key, seed: prepared.seed })
+          if (!options.json) {
+            say(`■ ${label}(${classroomId}・データ ${key}): 漏れ ${prepared.leakCount}・名前引きの一致・保証台帳の結果の一致`)
+            say(`  種データ ${path.basename(file)}(${Buffer.byteLength(text)} バイト)・${seconds.toFixed(1)} 秒`)
+          }
+        } catch (error) {
+          warn(`■ ${label}(${classroomId}): 準備できませんでした: ${error instanceof Error ? error.message : String(error)}`)
+          results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
+        }
+      }
+      const allPrepared = results.length > 0 && results.every((result) => result.ok)
+      if (options.prepareOnly) {
+        if (options.json) say(JSON.stringify({ appVersion: readAppVersion(), prepared: results.map(({ classroomId, key: resultKey, ok, bytes, seconds, leaks }) => ({ classroomId, key: resultKey, ok, bytes, seconds, leaks })) }, null, 2))
+        return allPrepared ? 0 : 2
+      }
+      // 自己点検に落ちた教室があれば流さない(伏せ字で挙動が変わったまま点検しても意味がない)。
+      if (!allPrepared) return 2
     }
+    const runPatrol = deps.runPatrol ?? runBrowserPatrol
+    const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn })
+    const reportFile = path.join(options.out, 'report.json')
+    mkdirSync(options.out, { recursive: true })
+    writeFileSync(reportFile, JSON.stringify(report, null, 2))
+    say(options.json ? JSON.stringify(report, null, 2) : formatPatrolReportText(report))
+    if (!options.json) say(`報告: ${reportFile}`)
+    return resolveExitCode(report)
   } catch (error) {
     warn(`エラー: ${error instanceof Error ? error.message : String(error)}`)
     return 2
   } finally {
     if (loaded) await loaded.cleanup()
   }
-  if (options.json) say(JSON.stringify({ appVersion: readAppVersion(), prepared: results.map(({ classroomId, key, ok, bytes, seconds, leaks }) => ({ classroomId, key, ok, bytes, seconds, leaks })) }, null, 2))
-  return results.length > 0 && results.every((result) => result.ok) ? 0 : 2
+}
+
+/** 開発用サーバー → 教室ごとにブラウザ → 台本。ブラウザとサーバーは finally で必ず止める。 */
+async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say }) {
+  const known = readKnown(options.known)
+  let report = createPatrolReport({ appVersion: readAppVersion(), backupKey })
+  const server = await startDevServer({ port: options.port, repoRoot: REPO_ROOT, env })
+  try {
+    for (const { classroomId, label, key, seed } of seeds) {
+      const started = Date.now()
+      let session = null
+      let classroomReport
+      try {
+        session = await launchPatrolBrowser({ baseUrl: server.baseUrl, headed: options.headed })
+        classroomReport = await runClassroomPatrol({
+          session, app, classroom: { classroomId, label, backupKey: key }, seedSnapshot: seed, options, outDir: options.out, known, today,
+        })
+      } catch (error) {
+        // ブラウザを起動できないなど、台本に入る前に止まった。
+        classroomReport = { ...createClassroomReport({ classroomId, label, backupKey: key }), aborted: error instanceof Error ? error.message.split('\n')[0] : String(error) }
+      } finally {
+        await closePatrolBrowser(session)
+      }
+      report = { ...report, classrooms: [...report.classrooms, classroomReport] }
+      if (!options.json) say(`  (${label}: ${((Date.now() - started) / 1000).toFixed(1)} 秒)`)
+    }
+  } finally {
+    await server.stop()
+  }
+  return report
 }
 
 // import しただけでは何も実行しない(テストから main を呼ぶため・tools/invoked-directly.mjs)。

@@ -14,6 +14,8 @@ export const PATROL_FINDING_CODES = [
   'manual-student-to-pending', 'teacherless-student-added', 'manual-input-lost', 'inv-new-violation', 'inv-new-check',
   'undo-not-restored', 'redo-not-restored', 'save-changed', 'reload-changed', 'pending-count-mismatch',
   'external-request', 'page-error', 'move-not-applied', 'move-blocked', 'change-summary',
+  // 作業 5(実データで流した結果): テンプレ保存が根拠を失った振替を消した(spec-template-conflict-v2 §9-12・Q40-1・仕様どおり)。確認の画面の件数の範囲だけ。
+  'orphaned-makeup-removed-announced',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string }
@@ -111,8 +113,21 @@ function pushOccurrence(map: Map<string, SeatOccurrence[]>, occurrence: SeatOccu
   else map.set(identity, [occurrence])
 }
 
-export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardFacts, options: { announcedText?: string; excludeDeskKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
+/**
+ * 確認の画面の「テンプレから外した生徒の振替n件を消します」の n(templateDiffApply.ts の buildTemplateDiffConfirmDetail・
+ * summary.orphanedMakeupsRemoved)。書いてなければ 0。
+ */
+export function parseAnnouncedOrphanedMakeupCount(text: string | undefined): number {
+  const match = /テンプレから外した生徒の振替\s*(\d+)\s*件を消します/u.exec(typeof text === 'string' ? text : '')
+  return match ? Number(match[1]) : 0
+}
+
+export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardFacts, options: { announcedText?: string; excludeDeskKeys?: ReadonlySet<string>; announcedOrphanedMakeupCount?: number } = {}): PatrolFinding[] {
   const findings: PatrolFinding[] = []
+  // 作業 5(実データ・日大前校で確認): テンプレ保存は、休日設定の日の授業の振替を別の日へ置いた後でテンプレからその授業が無くなると、
+  // 置いた振替を消す(spec-template-conflict-v2 §9-12「今どおり消す」・旧 Q40-1・ScheduleBoardScreen.tsx の orphaned.removals)。
+  // 確認の画面は件数を出し、名前は「ほか n 件」に畳まれることがあるので、件数の範囲で「消えた手入力の振替」だけを info に下げる。
+  let orphanedMakeupLeft = Math.max(0, options.announcedOrphanedMakeupCount ?? 0)
   const afterByCell = groupByCell(after)
   for (const [cellId, beforeDesks] of groupByCell(before)) {
     // 操作前の手入力の生徒(除外の机は見ない＝動かした本人など、変わってよい机)。
@@ -189,7 +204,12 @@ export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardF
           findings.push({ level: 'info', code: 'manual-student-to-pending', message: `手入力の生徒が保留の下段へ移った: ${where}`, ...location })
           continue
         }
-        // 5) どこにもいない。
+        // 5) どこにもいない。振替で、確認の画面が「根拠を失った振替を消す」と件数を出していた分は info(§9-12)。
+        if (student.lessonType === 'makeup' && orphanedMakeupLeft > 0) {
+          orphanedMakeupLeft -= 1
+          findings.push({ level: 'info', code: 'orphaned-makeup-removed-announced', message: `根拠を失った振替が消えた(確認の画面に件数が出ていた): ${where} 講師 ${teacherText(desk.teacher)}`, ...location })
+          continue
+        }
         findings.push({ level: 'stop', code: 'manual-student-lost', message: `手入力の生徒が同じコマから消えた: ${where} 講師 ${teacherText(desk.teacher)}`, ...location })
       }
       for (const { desk, student } of lowerLost) {
@@ -247,7 +267,10 @@ function describeStatus(status: string): { text: string; studentKey: string } {
   return { text: `${studentIdText(studentKey)} ${STATUS_LABELS[kind] ?? kind} ${subject} ${LESSON_TYPE_LABELS[lessonType] ?? lessonType}`, studentKey }
 }
 
-export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
+export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; releasedMovedStatusStudentKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
+  // 根拠を失った振替を消すと、振替元の「移)」の記録(status 'moved')も一緒に消える(§9-12)。checkManualStudentsKeepTeacher が info に下げた
+  // 振替の生徒(呼び出し側が渡す)の「移動」の記録だけ、生徒 1 人につき 1 件まで info にする。休み・出席などほかの記録は下げない。
+  const releasedLeft = new Map<string, number>([...(options.releasedMovedStatusStudentKeys ?? [])].map((key) => [key, 1]))
   // 操作後の同じコマに残っている数(席の上段・保留の下段のどちらでも盤面に残っている＝消えていない)。
   const afterCounts = new Map<string, number>()
   const bump = (key: string) => afterCounts.set(key, (afterCounts.get(key) ?? 0) + 1)
@@ -273,6 +296,14 @@ export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, 
     for (const status of [...desk.statuses, ...desk.pendingStatuses]) {
       if (take(`${desk.cellId}\u0000status\u0000${status}`)) continue
       const described = describeStatus(status)
+      if (status.split('|')[1] === 'moved' && (releasedLeft.get(described.studentKey) ?? 0) > 0) {
+        releasedLeft.set(described.studentKey, 0)
+        findings.push({
+          level: 'info', code: 'orphaned-makeup-removed-announced', message: `根拠を失った振替の振替元の記録が消えた: ${placeOf(desk)} ${described.text}`,
+          ...locationOf(desk), studentId: described.studentKey,
+        })
+        continue
+      }
       findings.push({
         level: 'stop', code: 'manual-input-lost', message: `出欠記録が同じコマから消えた: ${placeOf(desk)} ${described.text}`,
         ...locationOf(desk), studentId: described.studentKey,

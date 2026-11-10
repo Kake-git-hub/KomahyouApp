@@ -59,6 +59,11 @@ export function validateArgs(options) {
   for (const value of options.stray ?? []) errors.push(`余分な引数です: ${value}`)
   if (!options.out) errors.push('--out を指定してください(リポジトリの外のスクラッチ領域)。')
   if (options.key && !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}$/.test(options.key)) errors.push('--key は YYYY-MM-DDTHH-mm の形で指定してください(例 2026-11-10T23-45)。')
+  // 教室 ID はファイル名(<out>/<classroomId>.seed.json・画面写真)にも使う。`../` や区切り文字で --out の外を消したり書いたり
+  // させないよう、Firestore の文書 ID として実際に使っている形(英数字・_・-)だけを通す。
+  for (const classroomId of options.classrooms ?? []) {
+    if (!/^[A-Za-z0-9_-]+$/.test(classroomId)) errors.push(`--classroom は英数字・_・- だけで指定してください: ${classroomId}`)
+  }
   for (const name of options.scenarios ?? []) {
     if (!SCENARIO_NAMES.includes(name)) errors.push(`--scenario に知らない台本があります: ${name}(boot,c,b,a から選びます)。`)
   }

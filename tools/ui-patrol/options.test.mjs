@@ -44,6 +44,13 @@ describe('parseArgs / validateArgs', () => {
     expect(validateArgs(parseArgs([...OUT, '--moves', 'abc'])).join('\n')).toContain('--moves')
     expect(validateArgs(parseArgs([...OUT, 'stray'])).join('\n')).toContain('stray')
   })
+
+  it('--classroom は英数字・_・- だけ(`../` などで --out の外の <名前>.seed.json を消したり書いたりさせない)', () => {
+    for (const bad of ['../x', '..', 'a/b', 'a\\b', 'a.b', 'a b', '/abs', '教室']) {
+      expect(validateArgs(parseArgs([...OUT, '--classroom', bad])).join('\n')).toContain('--classroom')
+    }
+    expect(validateArgs(parseArgs([...OUT, '--classroom', 'test_classroom_20260507_dai', '--classroom', 'v8OZ7zH8vONNHjjYVcR1', '--classroom', 'a-b']))).toEqual([])
+  })
 })
 
 describe('assertOutDirOutsideRepo', () => {
