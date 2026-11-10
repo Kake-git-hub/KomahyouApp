@@ -39,7 +39,7 @@ npm run build              # tsc -b + vite build が通ること
 - **盤面のロジックや画面を変えたときは、画面の自動巡回も回す**（2026-11-11 追加・オーナー決定）。本番 2 校の形のデータ（名前は伏せる）を
   手元のアプリに入れ、室長と同じ画面操作をして点検する。約 3 分半。手順は `docs/runbooks/ui-patrol.md`。
   ```bash
-  node tools/ui-patrol.mjs --out <スクラッチ領域>/ui-patrol-$(date +%Y%m%d-%H%M)   # 終了コード 0=変なし／1=変あり(止めて調べる)／2=流せなかった
+  node tools/ui-patrol.mjs --out <スクラッチ領域>/ui-patrol-$(date +%Y%m%d-%H%M)   # 終了コード 0=変なし／1=変あり(止めて調べる)／2=流せなかった／130=途中で止めた
   ```
 - ※E2E は廃止。UI操作の回帰はユニット（純粋関数）で、実環境の通し動作は本番反映後に開発用教室の確認リストで担保する（`docs/test-strategy.md`）。
 
