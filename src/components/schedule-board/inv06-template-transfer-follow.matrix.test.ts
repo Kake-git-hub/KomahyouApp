@@ -20,6 +20,7 @@ import { buildTemplateSlotKey } from './templateDefinitionDiff'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { appendTemplateTransferMakeupOrigin, isWholeDayTransferMappedMakeup, planFullDeskDisplacement, removeTemplateTransferMakeupOrigin, TEMPLATE_TRANSFER_STOCK_REASON } from './templateTransferFollow'
 import { buildTemplateDiffStudentNoteLines } from './templateDiffApply'
+import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 
 const WEEK_START = '2026-10-05'
 const WEEK_END = '2026-10-11'
@@ -106,12 +107,13 @@ function transferredBoard(rows = OLD_ROWS, classroomSettings = settings(), trans
   return { weeks, suppressed: result.nextSuppressedRegularLessonOccurrences, ledgers: result.nextManualMakeupAdjustments }
 }
 
-function save(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], options: { classroomSettings?: ClassroomSettings; slotFilter?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedMakeupOrigins?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['templatePendingDesks']; previousRegularLessons?: readonly RegularLessonRow[] } = {}) {
+function save(weeks: SlotCell[][], rows: RegularLessonRow[], suppressed: string[], options: { classroomSettings?: ClassroomSettings; slotFilter?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['slotFilter']; manualMakeupAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedMakeupOrigins?: Record<string, ManualMakeupOrigin[]>; effectiveStartDate?: string; templatePendingDesks?: Parameters<typeof computeTemplateDiffApplyForBoard>[0]['templatePendingDesks']; previousRegularLessons?: readonly RegularLessonRow[]; previousRegularLessonTemplateHistory?: readonly RegularLessonTemplate[] } = {}) {
   return computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
     weeks, classroomSettings: options.classroomSettings ?? settings(), teachers, students, regularLessons: rows, effectiveStartDate: options.effectiveStartDate ?? EFFECTIVE,
     suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: options.templatePendingDesks ?? {}, createdAt: '2026-10-01T10:00:00.000Z', slotFilter: options.slotFilter, manualMakeupAdjustments: options.manualMakeupAdjustments ?? {},
     suppressedMakeupOrigins: options.suppressedMakeupOrigins,
     previousRegularLessons: options.previousRegularLessons,
+    ...(options.previousRegularLessonTemplateHistory ? { previousRegularLessonTemplateHistory: options.previousRegularLessonTemplateHistory } : {}),
   })
 }
 function suppressedAfter(suppressed: string[], saved: ReturnType<typeof save>) {
@@ -1024,6 +1026,33 @@ describe('Q40-9 時限変更の追従（決定記録 46）', () => {
     expect(again.summary.orphanedMakeupsRemoved).toBe(0)
     expect(again.summary.wholeDayTransferPlacedStudents).toBe(0)
     expect(liveIds(again.nextWeeks, THU3).filter((id) => id === 'sA')).toHaveLength(1)
+  })
+
+  // 2026-11-10（緑が丘の報告の兄弟監査・INV-02）: 保存済みのテンプレが反映日より後に効く未来版（A は既に 3限）で、盤面はその前の版（A は 5限）から作った形。
+  // 時限の入れ替わりを保存前の行（未来版）だけと比べると「変わっていない」に見えて振替が 5限に取り残される。振替元の日に効いていた保存前のテンプレ
+  // （保存前の履歴から合成した行をその日付で絞ったもの）と比べる。
+  it('保存済みのテンプレが未来の反映日の版でも、振替元の日に効いていた版と比べて移送済みの振替を新しい時限へ動かす（未来版の行だけと比べない）', () => {
+    const templateOf = (effectiveStartDate: string, cells: Array<[number, number, Array<[string, string]>]>): RegularLessonTemplate => ({
+      version: 1, effectiveStartDate, savedAt: '2026-09-01T00:00:00.000Z',
+      cells: cells.map(([dayOfWeek, slotNumber, desks]) => ({ dayOfWeek, slotNumber, desks: desks.map(([teacherId, studentId], index) => ({ deskIndex: index + 1, teacherId, students: [studentId ? { studentId, subject: '数' as const } : null, null] })) })),
+    })
+    // 盤面の元になった版（4/6〜）: 水 5限 机 0=田中+A・机 1=鈴木+B／木 5限 佐藤（講師だけ）
+    const CURRENT_VERSION = templateOf('2026-04-06', [[3, 5, [['t1', 'sA'], ['t2', 'sB']]], [4, 5, [['t3', '']]]])
+    // 保存済みの未来版（2027/2/1〜）: A を 水 3限へ
+    const FUTURE_VERSION = templateOf('2027-02-01', [[3, 3, [['t1', 'sA']]], [3, 5, [['', ''], ['t2', 'sB']]], [4, 5, [['t3', '']]]])
+    const savedTemplate: RegularLessonTemplate = { ...FUTURE_VERSION, effectiveStartDate: EFFECTIVE, savedAt: '2026-10-01T10:00:00.000Z' }
+    const rowsOf = (template: RegularLessonTemplate) => buildRegularLessonsFromTemplate({ template, teachers, students })
+    const futureRows = rowsOf(FUTURE_VERSION)
+    const savedRows = rowsOf(savedTemplate)
+    expect(futureRows.every((item) => item.startDate === '2027-02-01')).toBe(true)
+    const board = transferredBoard(rowsOf(CURRENT_VERSION))
+    const classroomSettings = settings({ regularLessonTemplate: savedTemplate, regularLessonTemplateHistory: [CURRENT_VERSION, savedTemplate] })
+    const saved = save(board.weeks, savedRows, board.suppressed, { previousRegularLessons: futureRows, previousRegularLessonTemplateHistory: [CURRENT_VERSION, FUTURE_VERSION], classroomSettings })
+    expect(saved.summary.slotFollowMovedMakeups).toBe(1)
+    expect(saved.slotFollowMoves[0]).toMatchObject({ sourceDateKey: WED, oldSlotNumber: 5, newSlotNumber: 3, targetDateKey: THU, targetCellId: THU3, placement: 'upper' })
+    expect(liveIds(saved.nextWeeks, THU_CELL)).toEqual(['sB'])
+    expect(liveIds(saved.nextWeeks, THU3).filter((id) => id === 'sA')).toHaveLength(1)
+    expect(cellOf(saved.nextWeeks, THU3).desks[0].lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: WED, makeupSourceLabel: '2026/10/7(水) 3限' })
   })
 
   it('新しい時限（木 3限）が満席なら、テンプレの机番号の机を保留にし、席の手入力の生徒を下段へ残して上段に振替を置く（決定記録 59・2026-11-01）。保留 n机に数える。在庫中立・不動点', () => {

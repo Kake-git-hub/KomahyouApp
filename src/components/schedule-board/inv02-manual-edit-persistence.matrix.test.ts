@@ -46,7 +46,7 @@ import { resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import * as FX from './templateTransferFollow.fixture'
 import * as pairFx from './wholeDayTransferPair.fixture'
 import { cleanupChecklistPrepBoard, planChecklistPrepCleanup } from './checklistPrepTemplate'
-import { buildTemplateBoardCells, convertTemplateCellsToTemplate, setTemplateEditorDeskTeacher, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildTemplateBoardCells, convertTemplateCellsToTemplate, setTemplateEditorDeskTeacher, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { setManualTeacherAssignment } from './deskTeacherAssignment'
 
 // ============================================================================
@@ -1615,12 +1615,14 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     records: (desk.statusSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.status}` : null)),
     memos: desk.memoSlots ?? null,
   }))
-  function saveAndRemerge(week: SlotCell[], rows: RegularLessonRow[], options: { suppressed?: string[]; classroom?: ClassroomSettings; compare?: 'strict' | 'content'; previousRows?: RegularLessonRow[] } = {}) {
+  function saveAndRemerge(week: SlotCell[], rows: RegularLessonRow[], options: { suppressed?: string[]; classroom?: ClassroomSettings; compare?: 'strict' | 'content'; previousRows?: RegularLessonRow[]; previousHistory?: RegularLessonTemplate[] } = {}) {
     const classroom = options.classroom ?? diffSettings({ templateFreezeBeforeDate: DATE })
     const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
       weeks: [week], classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows,
       effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z', manualMakeupAdjustments: {},
       ...(options.previousRows ? { previousRegularLessons: options.previousRows } : {}),
+      // 保存前の教室設定のテンプレ履歴（盤面の保存は保存**前**の履歴を渡す・buildTemplateDiffSavePlan）。
+      ...(options.previousHistory ? { previousRegularLessonTemplateHistory: options.previousHistory } : {}),
     })
     // 保存（handleSaveRegularLessonTemplateByDiff）と同じ抑止: 保存前の抑止から Q36 で外した分を除き、Q21-11 / Q35 で足した分を加える。
     const removed = new Set(saved.removedSuppressedRegularLessonOccurrences)
@@ -2045,6 +2047,62 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤'])
       expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sM', 'sC']])
       expect(saved.manualFirstSkipped).toEqual([])
+    })
+
+    // 2026-11-10（緑が丘の報告・INV-02）: 保存済みのテンプレが**反映日より後に効く未来版**（行の開始日が保存日より後）で、盤面はその前の履歴の版から
+    // 作られている形。並び替えの戻しの基準を保存前の行（未来版）だけで作ると、その日には生徒の居ない講師だけの机しか無い基準になり、講師の机が
+    // 「動いた」扱いになって残りの机が「手入力だけの机」として押し出され、手入力の生徒が講師の机から離れていた（机番号の突き合わせで 2 行にも）。
+    // 基準は「その日付に効いていた保存前のテンプレ」（保存前の履歴から合成した行をその日付で絞ったもの）で作る。
+    // 古い版（4/6〜9/1）の講師だけの行（高橋）も基準へ漏らさない（講師だけの行は開始日・終了日を見ずに置かれるので、日付で絞らないと机がずれる）。
+    const templateOf = (effectiveStartDate: string, desks: Array<[string, string]>): RegularLessonTemplate => ({
+      version: 1, effectiveStartDate, savedAt: '2026-09-01T00:00:00.000Z',
+      cells: [{ dayOfWeek: 3, slotNumber: 5, desks: desks.map(([teacherId, studentId], index) => ({ deskIndex: index + 1, teacherId, students: [studentId ? { studentId, subject: '数' as const } : null, null] })) }],
+    })
+    const OLDER_VERSION = templateOf('2026-04-06', [['t4', ''], ['t1', 'sA'], ['t2', 'sB']])
+    // 盤面の元になった版（9/2〜）: 机0=田中(A)・机1=鈴木(B)・机2=佐藤(講師だけ)
+    const CURRENT_VERSION = templateOf('2026-09-02', [['t1', 'sA'], ['t2', 'sB'], ['t3', '']])
+    // 保存済みの未来版（2027/2/1〜）: B を外して鈴木と佐藤は講師だけ
+    const FUTURE_VERSION = templateOf('2027-02-01', [['t1', 'sA'], ['t2', ''], ['t3', '']])
+    const rowsOf = (template: RegularLessonTemplate) => buildRegularLessonsFromTemplate({ template, teachers: teacherRows, students: studentRows })
+    it.each(SORTS)('%s: 保存済みのテンプレが未来の反映日の版（盤面は前の版から作った）でも、手入力は佐藤の机に揃ったまま 1 行・テンプレの生徒は元の講師の机（再マージ 2 回でも同じ）', (_label, sortDesks) => {
+      const futureRows = rowsOf(FUTURE_VERSION)
+      expect(futureRows.every((item) => item.startDate === '2027-02-01')).toBe(true)
+      const week = buildManagedScheduleCellsForRange({
+        range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' }, fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END,
+        classroomSettings: diffSettings(), teachers: teacherRows, students: studentRows, regularLessons: rowsOf(CURRENT_VERSION), boardWeeks: [],
+      }).map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index !== 2 ? desk : { ...desk, lesson: { id: 'hand', studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), entry('sC', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' })] as [StudentEntry | null, StudentEntry | null] } })) }))
+      const sorted = week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: sortDesks(cell) }))
+      expect(sorted.find((cell) => cell.id === CELL)!.desks.map((desk) => desk.teacher)).toEqual(['佐藤', '田中', '鈴木'])
+      // 今の版と同じ内容を反映日 10/7 で保存（保存後の履歴＝反映日より前の版＋新しい版・未来版は捨てる）
+      const savedTemplate: RegularLessonTemplate = { ...CURRENT_VERSION, effectiveStartDate: DATE, savedAt: '2026-09-29T10:00:00.000Z' }
+      const rows = rowsOf(savedTemplate)
+      const classroom = diffSettings({ templateFreezeBeforeDate: DATE, regularLessonTemplate: savedTemplate, regularLessonTemplateHistory: [OLDER_VERSION, CURRENT_VERSION, savedTemplate] })
+      const { saved } = saveAndRemerge(sorted, rows, { classroom, previousRows: futureRows, previousHistory: [OLDER_VERSION, CURRENT_VERSION, FUTURE_VERSION] })
+      const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+      expect(saved.nextPendingDesks).toEqual({})
+      expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤'])
+      expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sM', 'sC']])
+      expect(saved.manualFirstSkipped).toEqual([])
+    })
+
+    // regression-reviewer T-2（2026-11-10）: ふだんの形（保存済みの最新版の反映日が保存する日以前）では、保存前の履歴を渡しても渡さなくても結果が同じ
+    // （本番の保存は毎回履歴を渡す経路を通る。日付で絞る経路が従来の結果を変えないことを固定する）。
+    it.each(SORTS)('%s: 最新版が反映日以前なら、保存前の履歴の有無で保存の結果が変わらない', (_label, sortDesks) => {
+      const currentRows = rowsOf(CURRENT_VERSION)
+      const week = buildManagedScheduleCellsForRange({
+        range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' }, fallbackStartDate: WEEK_START, fallbackEndDate: WEEK_END,
+        classroomSettings: diffSettings(), teachers: teacherRows, students: studentRows, regularLessons: currentRows, boardWeeks: [],
+      }).map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index !== 2 ? desk : { ...desk, lesson: { id: 'hand', studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), entry('sC', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' })] as [StudentEntry | null, StudentEntry | null] } })) }))
+      const sorted = week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: sortDesks(cell) }))
+      const savedTemplate: RegularLessonTemplate = { ...CURRENT_VERSION, effectiveStartDate: DATE, savedAt: '2026-09-29T10:00:00.000Z' }
+      const classroom = diffSettings({ templateFreezeBeforeDate: DATE, regularLessonTemplate: savedTemplate, regularLessonTemplateHistory: [OLDER_VERSION, savedTemplate] })
+      const withHistory = saveAndRemerge(sorted, rowsOf(savedTemplate), { classroom, previousRows: currentRows, previousHistory: [OLDER_VERSION, CURRENT_VERSION] })
+      const withoutHistory = saveAndRemerge(sorted, rowsOf(savedTemplate), { classroom, previousRows: currentRows })
+      expect(withHistory.saved.nextWeeks).toEqual(withoutHistory.saved.nextWeeks)
+      expect(withHistory.saved.nextPendingDesks).toEqual(withoutHistory.saved.nextPendingDesks)
+      const cell = withHistory.saved.nextWeeks.flat().find((item) => item.id === CELL)!
+      expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤'])
+      expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sM', 'sC']])
     })
   })
 

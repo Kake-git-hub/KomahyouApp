@@ -214,7 +214,9 @@ describe('1-6(改・§9-22 案 A・オーナー決定 2026-11-06): コマ表の�
     const text = source()
     const run = text.slice(text.indexOf('function runTemplateDiffApplyV2('), text.indexOf('export function restoreTemplateDeskOrderForDiff('))
     expect(run).toContain('const weeks = restoreTemplateDeskOrderForDiff({')
-    expect(run).toContain('buildTemplateDiffTemplateCells({ ...params, regularLessons: [...params.previousRegularLessons]')
+    // 2026-11-10（緑が丘の報告・INV-02）: 基準の行は保存前の履歴から合成した「その日付に効いていた保存前のテンプレ」（履歴が無ければ保存前の行のまま）。
+    expect(run).toContain('buildTemplateDiffTemplateCells({ ...params, regularLessons: [...previousTemplateRows.rows]')
+    expect(run).toContain('buildTemplateDiffAnchorCellsByDate({ ...params, suppressedRegularLessonOccurrences: suppressed }, previousTemplateRows, templateCells)')
     expect(run).toContain('anchorCells })')
     expect(run).toMatch(/computeTemplateDiffApply\(\{\s+weeks,/)
     expect(run).toContain('buildTemplateTeacherRestPredicate(weeks, teacherAliases)')

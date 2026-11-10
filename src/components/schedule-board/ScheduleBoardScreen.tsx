@@ -3073,6 +3073,14 @@ export function computeTemplateDiffApplyForBoard(input: {
    * 盤面の保存は必ず渡す（配線テスト templateSlotChangeFollow.wiring で固定）。省略すると時限の追従だけが起きない（＝v1.5.642 までと同じ）。
    */
   previousRegularLessons?: readonly RegularLessonRow[] | null
+  /**
+   * 2026-11-10（緑が丘の報告・INV-02）: 保存**前**の教室設定のテンプレ履歴（regularLessonTemplateHistory）とテンプレ適用前の通常授業（preTemplateRegularLessons）。
+   * previousRegularLessons と合わせて「その日付に効いていた保存前のテンプレの行」を作る（resolveTemplateDiffPreviousRows・§9-22 案 A の並びの戻しの基準と
+   * 時限の追従の比較相手）。保存済みのテンプレが反映日より後に効く未来版だと、保存前の行だけではその日に効いていない版と比べてしまう。
+   * 盤面の保存は必ず渡す（配線テスト templateDiffPreviousRows.wiring で固定）。省略すると保存前の行を全日付に当てる（＝v1.5.714 までと同じ）。
+   */
+  previousRegularLessonTemplateHistory?: readonly RegularLessonTemplate[] | null
+  previousPreTemplateRegularLessons?: readonly RegularLessonRow[] | null
 }) {
   // Q40-3（2026-10-21 H-A）: 精算済み判定の材料。在庫の正本は保存前の盤面・台帳で 1 回だけ引く（この保存で置く振替はまだ無い）。
   const wholeDayTransferSettlement = {
@@ -3086,7 +3094,9 @@ export function computeTemplateDiffApplyForBoard(input: {
   }
   // 第 2 版（docs/spec-template-conflict-v2.md §6 Q39）: 「変えたコマだけ」の絞り込みは使わない（毎回、反映日以降の全コマを当て直す）。
   // 確認の画面の範囲の選択（applyScope）は残るが、結果は同じになる（2-9: 手入力のある席は反映前後で変わらない）。
-  const params = { ...input, wholeDayTransferSettlement, slotFilter: null as TemplateDiffSlotFilter | null }
+  // 2026-11-10（緑が丘の報告・INV-02）: 保存前のテンプレの行を「その日付に効いていた版」で引けるようにする（並びの戻しの基準・時限の追従の比較相手が共有）。
+  const previousTemplateRows = resolveTemplateDiffPreviousRows(input)
+  const params = { ...input, wholeDayTransferSettlement, slotFilter: null as TemplateDiffSlotFilter | null, previousTemplateRows }
   // 旧 Q36（同日移動の写しの反復）は廃止（§6）。同じ日の中で手で動かしたテンプレの授業は出自＝テンプレ（§1-1 #2）なので、
   // 差分反映がテンプレの位置へ置き直す（runTemplateDiffApplyV2 が移動の抑止キーを外して管理セルを作る）。
   const run = runTemplateDiffApplyV2(params)
@@ -3124,7 +3134,9 @@ export function computeTemplateDiffApplyForBoard(input: {
   // 決定記録 46（2026-10-26・Q40-9）: 時限を変えた生徒の、丸ごと振替で移送済みの振替（＝新しい時限の分を精算済みにしている授業）を新しい時限へ動かす。
   // 振替元の移動元記録も新しい時限の机へ移す。満席なら同じ机番号の下段（保留・緑）。在庫中立。
   const slotFollow = planSlotChangeTransferFollow({
-    weeks: follow.weeks, pendingDesks: follow.nextPendingDesks, previousRegularLessons: params.previousRegularLessons, regularLessons: params.regularLessons,
+    weeks: follow.weeks, pendingDesks: follow.nextPendingDesks, previousRegularLessons: previousTemplateRows?.rows ?? null, regularLessons: params.regularLessons,
+    // 2026-11-10（兄弟監査・INV-02）: 振替元の日ごとに、その日付に効いていた保存前のテンプレの行と比べる（履歴を合成した行は同じ年度・同じ ID が日付違いで並ぶ）。
+    resolvePreviousRegularLessonsOnDate: previousTemplateRows ? (dateKey) => selectTemplateDiffPreviousRowsOnDate(previousTemplateRows, dateKey) : undefined,
     settled: run.diff.wholeDayTransferSettled, templateCells: run.templateCells, effectiveStartDate: params.effectiveStartDate, createdAt: params.createdAt,
     formatOriginLabel: formatStockOriginLabel, buildMovedSourceStatusEntry, studentFromStatus: buildStudentEntryFromStatus,
     // M-1（regression-reviewer 2026-10-26）: 丸ごと振替の両日（日単位の足場講師の抑止）だけを 1 対 1 の写像として扱う（1 コマの別日 D&D を動かさない＝INV-02）。
@@ -3239,6 +3251,8 @@ function runTemplateDiffApplyV2(params: {
   wholeDayTransferSettlement: { originDatesByKey: Record<string, string[]>; scheduleCountAdjustments: readonly ScheduleCountAdjustmentEntry[] }
   /** 保存前のテンプレの行（盤面の元になったテンプレ）。§9-22 案 A の並びの戻しの基準。省略時は戻さない。 */
   previousRegularLessons?: readonly RegularLessonRow[] | null
+  /** 保存前のテンプレの行を日付ごとに引く形（resolveTemplateDiffPreviousRows）。省略時は previousRegularLessons を全日付に当てる。 */
+  previousTemplateRows?: TemplateDiffPreviousRows | null
 }) {
   const removedSuppressed = collectSameDayMovedTemplateOccurrenceKeys(params)
   const suppressed = removedSuppressed.size > 0 ? params.suppressedRegularLessonOccurrences.filter((key) => !removedSuppressed.has(key)) : params.suppressedRegularLessonOccurrences
@@ -3247,11 +3261,17 @@ function runTemplateDiffApplyV2(params: {
   // §9-22 案 A（オーナー決定 2026-11-06・確認リスト v2-1）: コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）。差分反映は机番号でテンプレと
   // 突き合わせるので、突き合わせる前に並び替えた週の机を「テンプレの並び」へ戻す（中身は変えない・反映日より前と並び替えていないコマは参照ごとそのまま＝INV-10）。
   // 基準は保存前の行で作ったテンプレの机（保存前と同じ行なら作り直さず templateCells の raw を使う＝試し実行の時間を増やさない）。
-  const anchorCells = !params.previousRegularLessons
+  // 2026-11-10（緑が丘の報告・INV-02）: 保存前の行は「その日付に効いていた保存前のテンプレ」（保存前の履歴から合成・日付で絞る）。保存済みのテンプレが
+  //   反映日より後に効く未来版のとき、保存前の行（未来版）だけで作ると、その日の基準は生徒の居ない講師だけの机になり、講師の机が「動いた」扱いになって
+  //   残りの机が「手入力だけの机」として押し出され、手入力の生徒が講師の机から離れていた。
+  const previousTemplateRows = params.previousTemplateRows ?? (params.previousRegularLessons ? { rows: params.previousRegularLessons, byDate: false } : null)
+  const anchorCells = !previousTemplateRows
     ? null
-    : JSON.stringify(params.previousRegularLessons) === JSON.stringify(params.regularLessons)
-      ? templateCells
-      : buildTemplateDiffTemplateCells({ ...params, regularLessons: [...params.previousRegularLessons], suppressedRegularLessonOccurrences: suppressed })
+    : previousTemplateRows.byDate
+      ? buildTemplateDiffAnchorCellsByDate({ ...params, suppressedRegularLessonOccurrences: suppressed }, previousTemplateRows, templateCells)
+      : JSON.stringify(previousTemplateRows.rows) === JSON.stringify(params.regularLessons)
+        ? templateCells
+        : buildTemplateDiffTemplateCells({ ...params, regularLessons: [...previousTemplateRows.rows], suppressedRegularLessonOccurrences: suppressed })
   const weeks = restoreTemplateDeskOrderForDiff({ weeks: params.weeks, templateCells, effectiveStartDate: params.effectiveStartDate, templatePendingDesks: params.templatePendingDesks, teacherAliases, anchorCells })
   const diff = computeTemplateDiffApply({
     weeks,
@@ -3267,6 +3287,68 @@ function runTemplateDiffApplyV2(params: {
     isTeacherOnRest: buildTemplateTeacherRestPredicate(weeks, teacherAliases) ?? undefined,
   })
   return { diff, suppressed, removedSuppressed, templateCells }
+}
+
+/**
+ * 2026-11-10（緑が丘の報告・INV-02）: テンプレ差分反映が比べる「保存前のテンプレの行」。rows は保存前の行（履歴が無い教室）か、保存前の履歴・
+ * テンプレ適用前の通常授業・保存前の行を盤面の日程表と同じ権威関数 buildCombinedRegularLessonsFromHistory で合成した行（日付範囲つき）。
+ * byDate＝合成した行なので、使う側は日付ごとに selectTemplateDiffPreviousRowsOnDate で絞る（同じ年度・同じ ID の行が版ごとに日付違いで並び、
+ * 講師だけの行は管理セルの生成〔buildManagedRegularLessonsRange〕が開始日・終了日を見ずに置くので、絞らずに渡すと別の版の講師が机に混ざる）。
+ */
+export type TemplateDiffPreviousRows = { rows: readonly RegularLessonRow[]; byDate: boolean }
+
+export function resolveTemplateDiffPreviousRows(params: {
+  previousRegularLessons?: readonly RegularLessonRow[] | null
+  previousRegularLessonTemplateHistory?: readonly RegularLessonTemplate[] | null
+  previousPreTemplateRegularLessons?: readonly RegularLessonRow[] | null
+  teachers: TeacherRow[]
+  students: StudentRow[]
+}): TemplateDiffPreviousRows | null {
+  if (!params.previousRegularLessons) return null
+  const history = params.previousRegularLessonTemplateHistory ?? []
+  // 履歴が無い教室は保存前の行がそのまま盤面の元（合成しない＝従来どおり・basic-data の行の講師だけの机も今までどおり基準に入る）。
+  if (history.length === 0) return { rows: params.previousRegularLessons, byDate: false }
+  return {
+    rows: buildCombinedRegularLessonsFromHistory({
+      regularLessons: [...params.previousRegularLessons],
+      regularLessonTemplateHistory: [...history],
+      preTemplateRegularLessons: params.previousPreTemplateRegularLessons ? [...params.previousPreTemplateRegularLessons] : undefined,
+      teachers: params.teachers,
+      students: params.students,
+    }),
+    byDate: true,
+  }
+}
+
+/** その日付に効いていた保存前のテンプレの行（合成した行は行の期間〔isRegularLessonParticipantActiveOnDate〕で絞る・合成していなければそのまま）。 */
+export function selectTemplateDiffPreviousRowsOnDate(previous: TemplateDiffPreviousRows, dateKey: string): readonly RegularLessonRow[] {
+  return previous.byDate ? previous.rows.filter((row) => isRegularLessonParticipantActiveOnDate(row, dateKey)) : previous.rows
+}
+
+/**
+ * §9-22 案 A の基準（anchorCells）を日付ごとの保存前のテンプレの行で作る（2026-11-10）。週の中の日付を「効いていた行の組」でまとめ、組ごとに
+ * 同じ準備関数 buildTemplateDiffTemplateCells でその週を作ってその日付の分だけ取る（版の切り替わりが週の途中でも日付ごとに正しい版）。
+ * 組の行が反映するテンプレの行と同じなら作り直さず templateCells を使う（従来の近道と同じ・試し実行の時間を増やさない）。
+ */
+function buildTemplateDiffAnchorCellsByDate(params: Parameters<typeof buildTemplateDiffTemplateCells>[0], previous: TemplateDiffPreviousRows, templateCells: readonly TemplateDiffTemplateCell[]): TemplateDiffTemplateCell[] {
+  const nextRowsJson = JSON.stringify(params.regularLessons)
+  const result: TemplateDiffTemplateCell[] = []
+  for (const week of params.weeks) {
+    const groups = new Map<string, { rows: RegularLessonRow[]; dateKeys: Set<string> }>()
+    for (const dateKey of new Set(week.map((cell) => cell.dateKey))) {
+      if (!dateKey || dateKey < params.effectiveStartDate) continue
+      const rows = [...selectTemplateDiffPreviousRowsOnDate(previous, dateKey)]
+      const json = JSON.stringify(rows)
+      const group = groups.get(json)
+      if (group) group.dateKeys.add(dateKey)
+      else groups.set(json, { rows, dateKeys: new Set([dateKey]) })
+    }
+    for (const [json, group] of groups) {
+      const source = json === nextRowsJson ? templateCells : buildTemplateDiffTemplateCells({ ...params, weeks: [week], regularLessons: group.rows })
+      for (const entry of source) if (group.dateKeys.has(entry.raw.dateKey)) result.push(entry)
+    }
+  }
+  return result
 }
 
 /**
@@ -9721,6 +9803,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedMakeupOrigins,
       // 決定記録 46（Q40-9）: 保存前のテンプレの行（時限を変えた生徒の丸ごと振替の振替を新しい時限へ動かす）。
       previousRegularLessons: regularLessons,
+      // 2026-11-10（緑が丘の報告・INV-02）: 保存**前**の履歴とテンプレ適用前の通常授業（nextClassroomSettings ではない）。保存済みのテンプレが未来の反映日の版でも、
+      // 並びの戻しの基準・時限の追従の比較相手を「その日付に効いていた保存前のテンプレ」で作る。
+      previousRegularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      previousPreTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
     })
     // 範囲の説明は差分反映の後に作る（Q39-9 でその日を全コマにした日を入口から写す・regression-reviewer M-1）。
     const baseScopeNote = describeTemplateDiffScope(definitionDiff, applyScope, extraSlotKeys)

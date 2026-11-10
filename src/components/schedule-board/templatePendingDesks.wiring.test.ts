@@ -409,7 +409,8 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(BOARD_TSX).toContain('slotFilter: params.slotFilter,')
     expect(BOARD_TSX).toContain('if (!isCellInTemplateDiffScope(cell, params.slotFilter)) return cell')
     // 第 2 版（spec-template-conflict-v2 §6 Q39 廃止）: 入口は絞り込みを使わず全コマを当て直す（旧 Q39-9 の「写しのある日は全コマ」も不要）。
-    expect(BOARD_TSX).toContain('const params = { ...input, wholeDayTransferSettlement, slotFilter: null as TemplateDiffSlotFilter | null }')
+    // 2026-11-10: 保存前のテンプレの行を日付ごとに引く形（previousTemplateRows）も入口で 1 回作って渡す（templateDiffPreviousRows.wiring）。
+    expect(BOARD_TSX).toContain('const params = { ...input, wholeDayTransferSettlement, slotFilter: null as TemplateDiffSlotFilter | null, previousTemplateRows }')
     expect(BOARD_TSX).not.toContain('expandTemplateDiffSlotFilterForSameDayMoves({ weeks: input.weeks')
     // 範囲の権威は計画関数 1 か所: 基準は保存時点の保存済みテンプレ（編集画面と同じ在籍フィルタ）、範囲は定義の差 ∪ 盤面の行との差（regression-reviewer H-2）。
     const planFn = sliceBody(BOARD_TSX, 'const buildTemplateDiffSavePlan = useCallback(', 'const handleSaveRegularLessonTemplateByDiff = useCallback(')
@@ -444,7 +445,9 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     expect(plan).toContain('computeTemplateDiffApplyForBoard({')
     // Q40: 在庫台帳・抑止した origin は計画関数に渡して読むだけ（根拠 (b)・取り下げ M-2）。書くのは保存本体だけ。
     // 2026-10-26（決定記録 46）: 保存前のテンプレの行を後ろに足した（台帳 2 本を渡すことは不変）。
-    expect(plan).toContain('manualMakeupAdjustments,\n      suppressedMakeupOrigins,\n      // 決定記録 46（Q40-9）: 保存前のテンプレの行（時限を変えた生徒の丸ごと振替の振替を新しい時限へ動かす）。\n      previousRegularLessons: regularLessons,\n    })')
+    // 2026-11-10（緑が丘の報告・INV-02）: 保存**前**の履歴とテンプレ適用前の通常授業をその後ろに足した（templateDiffPreviousRows.wiring）。
+    expect(plan).toContain('manualMakeupAdjustments,\n      suppressedMakeupOrigins,\n      // 決定記録 46（Q40-9）: 保存前のテンプレの行（時限を変えた生徒の丸ごと振替の振替を新しい時限へ動かす）。\n      previousRegularLessons: regularLessons,\n')
+    expect(plan).toContain('      previousPreTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,\n    })')
     expect(plan).not.toMatch(/filterTemplateOverwriteHolidayDates\(/)
     // Q40-1 根拠 (b) は在庫の正本 collectMakeupOriginDatesByKey を、取り下げ後の台帳・保存後の盤面（上段＋保留の下段）・同じ抑止で呼ぶ（監査 H-A/M-A・判定を在庫と分けない）。
     const entry = sliceBody(BOARD_TSX, 'export function computeTemplateDiffApplyForBoard(', '// 第 2 版の差分反映の本体')

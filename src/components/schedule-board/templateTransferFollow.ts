@@ -857,6 +857,12 @@ export function planSlotChangeTransferFollow(params: {
   pendingDesks: TemplatePendingDeskMap
   /** 保存前のテンプレの行。無ければ何もしない（呼び出し側は必ず渡す＝配線テストで固定）。 */
   previousRegularLessons: readonly RegularLessonRow[] | null | undefined
+  /**
+   * 2026-11-10（緑が丘の報告の兄弟監査・INV-02）: 振替元の日付に効いていた保存前のテンプレの行を返す（保存前の履歴から合成した行を日付で絞ったもの）。
+   * 保存済みのテンプレが反映日より後に効く未来版だと、previousRegularLessons（未来版）はその日に効いていないので、ありもしない時限の入れ替わりを拾い・
+   * 本当の入れ替わりを見落とす。省略時は previousRegularLessons を全日付に当てる（従来どおり）。
+   */
+  resolvePreviousRegularLessonsOnDate?: (dateKey: string) => readonly RegularLessonRow[]
   regularLessons: readonly RegularLessonRow[]
   /**
    * 新しい時限のテンプレの机・席の手がかり（Q35 が置かなかった生徒＝精算済みを含む・机・席つき）。無ければテンプレの管理セル（抑止前の raw ／休日は
@@ -922,7 +928,8 @@ export function planSlotChangeTransferFollow(params: {
     .sort()
   const candidates: Array<{ sourceDateKey: string; studentId: string; subject: string; oldSlot: number; newSlot: number }> = []
   for (const sourceDateKey of sourceDates) {
-    for (const change of listTemplateSlotChanges(params.previousRegularLessons, params.regularLessons, resolveDayOfWeekFromDateKey(sourceDateKey), params.resolveSchoolYear?.(sourceDateKey))) {
+    const previousRows = params.resolvePreviousRegularLessonsOnDate?.(sourceDateKey) ?? params.previousRegularLessons
+    for (const change of listTemplateSlotChanges(previousRows, params.regularLessons, resolveDayOfWeekFromDateKey(sourceDateKey), params.resolveSchoolYear?.(sourceDateKey))) {
       candidates.push({ sourceDateKey, ...change })
     }
   }
