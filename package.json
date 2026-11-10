@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "flag:rollback": "node tools/feature-flag-rollback.mjs",
     "inv:audit": "node tools/inv-audit.mjs",
+    "ui:patrol": "node tools/ui-patrol.mjs",
     "preview": "vite preview",
     "deploy:firebase": "node tools/deploy-firebase.mjs",
     "deploy:firebase:with-functions": "node tools/deploy-firebase.mjs --with-functions",

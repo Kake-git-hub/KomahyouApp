@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+// 画面の自動巡回(docs/test-strategy.md 層 5)。本番の形のデータ(名前は伏せる)を手元のアプリに入れ、室長と同じ画面操作を
+// 自動で行い、操作のたびに点検する。この作業(作業 4)は入口の骨組み: 引数 → 取得 → 伏せ字 → 自己点検 3 つ → 種データの書き出し
+// (--prepare-only)まで。ブラウザを動かす部分は作業 5 が足す。
+//
+// ★読み取り専用・実名を残さない(本番データ保護ルール)
+//   - 本番へは Storage の GET と Firestore の :runQuery(読み取り)だけ。通信は tools/ui-patrol/fetchData.mjs の 1 か所から出る。
+//   - 取得した元データ(実名入り)はメモリの中だけ。ファイルに書くのは伏せ字のあとの種データ(<out>/<classroomId>.seed.json)だけで、
+//     出力先はリポジトリの外(スクラッチ領域)に限る。出力・報告に出すのは仮名と ID・件数・経路だけ。
+// ★自己点検(伏せ字で挙動が変わったまま点検しても意味がないので、1 つでも引っかかれば種データを書かず終了コード 2)
+//   (a) 伏せ字のあとに実名が残っていない(findNameLeaks) (b) 名前引きと鍵の対応が前後で同じ(compareNameResolutionForParity)
+//   (c) 保証台帳の結果が前後で同じ(compareAuditForParity)
+// 終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { isInvokedDirectly } from './invoked-directly.mjs'
+import { fetchReadonlyAccessToken } from './prod-readonly-token.mjs'
+import { decodeJsonBuffer, extractClassroomSnapshot } from './snapshot-diff.mjs'
+import { DEFAULT_CLASSROOMS, fetchClassroomBackup, fetchLatestBackupKey } from './ui-patrol/fetchData.mjs'
+import { loadPatrolApp } from './ui-patrol/loadApp.mjs'
+import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './ui-patrol/options.mjs'
+import { buildPatrolWorkspaceSnapshot } from './ui-patrol/seed.mjs'
+
+const REPO_ROOT = path.join(import.meta.dirname, '..')
+const TOKEN_URL = 'https://oauth2.googleapis.com/token'
+
+/** トークンを作る通信は prod-readonly-token が出す。ここでは「Google の認証サーバーへの POST だけ」に絞った fetch を渡す。 */
+function guardTokenFetch(fetchImpl) {
+  return (url, init = {}) => {
+    if (String(url) !== TOKEN_URL || String(init.method ?? 'GET').toUpperCase() !== 'POST') {
+      throw new Error('読み取り専用ガード: トークン作成以外の通信は許可していません。')
+    }
+    return fetchImpl(url, init)
+  }
+}
+
+function readAppVersion() {
+  try {
+    return JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function labelOf(classroomId) {
+  return DEFAULT_CLASSROOMS.find((room) => room.id === classroomId)?.label ?? classroomId
+}
+
+/**
+ * 1 教室ぶんの取得 → 伏せ字 → 自己点検。通れば伏せ字のあとの種データの中身を、引っかかれば problems を返す。
+ * 元の payload はここから外へ出さない。
+ */
+function prepareClassroom({ app, classroomId, buffer, today }) {
+  const snapshot = extractClassroomSnapshot(decodeJsonBuffer(buffer), { file: `${classroomId}.json.gz`, classroomId })
+  const original = snapshot.payload
+  const anonymized = app.anonymizeClassroomPayload(original)
+  const problems = []
+  // (a) 漏れ検査。返るのは経路だけ(値は出さない)。
+  const leaks = app.findNameLeaks(anonymized.payload, anonymized.nameMap.keys())
+  if (leaks.length > 0) problems.push({ kind: '漏れ', lines: leaks.slice(0, 20).map((route) => `実名が残っている項目: ${route}`), total: leaks.length })
+  // (b) 名前引きと鍵の対応が前後で同じ。
+  const resolution = app.compareNameResolutionForParity(original, anonymized.payload)
+  if (resolution.length > 0) problems.push({ kind: '名前引きの食い違い', lines: resolution.slice(0, 20), total: resolution.length })
+  // (c) 保証台帳の結果が前後で同じ(今日は JST の今日)。
+  const audit = (payload) => app.auditClassroomSnapshot({ classroomId, payload, today, known: [] })
+  const parity = app.compareAuditForParity(audit(original), audit(anonymized.payload))
+  if (parity.length > 0) problems.push({ kind: '保証台帳の結果の食い違い', lines: parity.slice(0, 20), total: parity.length })
+  const savedAt = snapshot.times?.find((time) => time.key === 'savedAt')?.iso
+  return {
+    problems,
+    leakCount: leaks.length,
+    stats: anonymized.stats,
+    seed: problems.length === 0 ? buildPatrolWorkspaceSnapshot({ classroomId, payload: anonymized.payload, savedAt }) : null,
+  }
+}
+
+export async function main({ argv = process.argv.slice(2), env = process.env, fetchImpl = fetch, stdout = process.stdout, stderr = process.stderr } = {}, deps = {}) {
+  const say = (text) => stdout.write(`${text}\n`)
+  const warn = (text) => stderr.write(`${text}\n`)
+  const options = parseArgs(argv)
+  if (options.help) {
+    say(USAGE)
+    return 0
+  }
+  const errors = validateArgs(options)
+  if (errors.length > 0) {
+    warn(USAGE)
+    for (const error of errors) warn(`  - ${error}`)
+    return 2
+  }
+  try {
+    assertOutDirOutsideRepo(options.out, REPO_ROOT)
+  } catch (error) {
+    warn(`エラー: ${error.message}`)
+    return 2
+  }
+  if (!options.prepareOnly) {
+    warn('エラー: ブラウザの巡回はまだ組み込まれていません(作業 5)。今は --prepare-only だけ使えます。')
+    return 2
+  }
+  if (options.seedFiles.length > 0) {
+    // 伏せ字済みの種データを使う指定。取得も伏せ字もしないので、読めるかだけ確かめる。
+    try {
+      for (const file of options.seedFiles) JSON.parse(readFileSync(file, 'utf8'))
+    } catch (error) {
+      warn(`エラー: --seed-file を読めません: ${error.message}`)
+      return 2
+    }
+    say(`種データ ${options.seedFiles.length} 件を読めました(取得・伏せ字は行いません)。`)
+    return 0
+  }
+
+  // トークン: 環境変数 FIRESTORE_ACCESS_TOKEN、無ければ読み取り専用サービスアカウントから作る。
+  let token = env.FIRESTORE_ACCESS_TOKEN || ''
+  if (!token) {
+    try {
+      token = (await fetchReadonlyAccessToken(env, guardTokenFetch(fetchImpl))).accessToken
+    } catch {
+      warn('エラー: 読み取り専用トークンを作れません(環境変数 FIRESTORE_ACCESS_TOKEN か KOMAHYOU_READONLY_SA_JSON_B64 が必要です)。')
+      return 2
+    }
+  }
+
+  const loadApp = deps.loadApp ?? loadPatrolApp
+  let loaded = null
+  const results = []
+  try {
+    loaded = await loadApp()
+    const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
+    mkdirSync(options.out, { recursive: true })
+    const today = jstToday()
+    for (const classroomId of options.classrooms) {
+      const started = Date.now()
+      const label = labelOf(classroomId)
+      try {
+        const { buffer } = await fetchClassroomBackup({ token, classroomId, key, fetchImpl })
+        const prepared = prepareClassroom({ app: loaded.app, classroomId, buffer, today })
+        if (prepared.problems.length > 0) {
+          warn(`■ ${label}(${classroomId}・データ ${key}): 自己点検に引っかかりました。種データは書きません。`)
+          for (const problem of prepared.problems) {
+            warn(`  [${problem.kind}] ${problem.total} 件`)
+            for (const line of problem.lines) warn(`    ${line}`)
+          }
+          results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
+          continue
+        }
+        const file = path.join(options.out, `${classroomId}.seed.json`)
+        const text = JSON.stringify(prepared.seed)
+        writeFileSync(file, text)
+        const seconds = (Date.now() - started) / 1000
+        results.push({ classroomId, label, key, ok: true, file, bytes: Buffer.byteLength(text), seconds, leaks: prepared.leakCount })
+        if (!options.json) {
+          say(`■ ${label}(${classroomId}・データ ${key}): 漏れ ${prepared.leakCount}・名前引きの一致・保証台帳の結果の一致`)
+          say(`  種データ ${path.basename(file)}(${Buffer.byteLength(text)} バイト)・${seconds.toFixed(1)} 秒`)
+        }
+      } catch (error) {
+        warn(`■ ${label}(${classroomId}): 準備できませんでした: ${error instanceof Error ? error.message : String(error)}`)
+        results.push({ classroomId, label, key, ok: false, seconds: (Date.now() - started) / 1000 })
+      }
+    }
+  } catch (error) {
+    warn(`エラー: ${error instanceof Error ? error.message : String(error)}`)
+    return 2
+  } finally {
+    if (loaded) await loaded.cleanup()
+  }
+  if (options.json) say(JSON.stringify({ appVersion: readAppVersion(), prepared: results.map(({ classroomId, key, ok, bytes, seconds, leaks }) => ({ classroomId, key, ok, bytes, seconds, leaks })) }, null, 2))
+  return results.length > 0 && results.every((result) => result.ok) ? 0 : 2
+}
+
+// import しただけでは何も実行しない(テストから main を呼ぶため・tools/invoked-directly.mjs)。
+if (isInvokedDirectly(import.meta.url)) {
+  process.exitCode = await main()
+}
