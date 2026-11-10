@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildPatrolWorkspaceSnapshot, PATROL_CLASSROOM_NAME, PATROL_MANAGER_USER_ID } from './seed.mjs'
 import { parseWorkspaceSnapshot } from '../../src/data/appSnapshotRepository'
+import { anonymizeClassroomPayload } from './anonymize.ts'
 
 const SAVED_AT = '2026-11-11T00:00:00.000Z'
 
@@ -66,5 +67,16 @@ describe('種データ(buildPatrolWorkspaceSnapshot)', () => {
     expect(emails.length).toBeGreaterThan(0)
     for (const email of emails) expect(email === '' || email.endsWith('@example.invalid')).toBe(true)
     expect(seed.developerPassword).toBeUndefined()
+  })
+
+  it('伏せ字のあとの payload を種データにしても parseWorkspaceSnapshot が通る', () => {
+    const input = makePayload()
+    input.students[0].name = '甲野　一郎'
+    input.students[0].email = 'someone@example.com'
+    const { payload } = anonymizeClassroomPayload(input)
+    const seed = buildPatrolWorkspaceSnapshot({ classroomId: 'room1', payload, savedAt: SAVED_AT })
+    const parsed = parseWorkspaceSnapshot(JSON.stringify(seed))
+    expect(parsed.classrooms[0].data.students[0].name).toBe('生徒092　名')
+    expect(JSON.stringify(parsed)).not.toContain('甲野')
   })
 })

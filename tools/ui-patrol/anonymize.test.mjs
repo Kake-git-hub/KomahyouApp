@@ -379,3 +379,91 @@ describe('名前引きの前後一致(compareNameResolutionForParity)・講師�
     expect(desksOf(payload)[1].teacherAssignmentTeacherId).toBe('講師005')
   })
 })
+
+describe('名前から作った鍵(name:・manual:name:・名前のままの鍵)の伏せ字(修正 2)', () => {
+  // アプリは名簿に当たらない生徒の台帳を `name:<表示名>__科目`(手動追加は `manual:` を前に付ける)の鍵で持つ
+  // (makeupStock.ts buildMakeupStockKey・lectureStock.ts buildLectureStockKey・ScheduleBoardScreen.tsx)。
+  // 名前の部分だけを生徒の表で引いて組み直さないと、伏せ字のあとのアプリが台帳に当たらない。
+  const compare = (real, anonymized) => anonymizeModule.compareNameResolutionForParity(real, anonymized)
+  const KEY = 'name:架空　謎男__数'
+
+  function withLedgers() {
+    const input = makePayload()
+    input.boardState.fallbackMakeupStudents = { [KEY]: { studentName: '架空　謎男', displayName: '架空　謎男', subject: '数' } }
+    input.boardState.manualMakeupAdjustments = { [KEY]: [{ dateKey: '2026-11-05' }] }
+    input.boardState.suppressedMakeupOrigins = { [KEY]: [{ dateKey: '2026-10-29', reasonLabel: '休' }] }
+    return input
+  }
+
+  it('振替の 3 つの台帳が同じ鍵 name:<仮名>__数 になり、仮名は値側と盤面の席の仮名と同じ。元の名前は残らない', () => {
+    const input = withLedgers()
+    const { payload } = anonymizeClassroomPayload(input)
+    const board = payload.boardState
+    const seatName = desksOf(payload)[1].lesson.studentSlots[0].name
+    const expected = `name:${seatName}__数`
+    expect(Object.keys(board.fallbackMakeupStudents)).toEqual([expected])
+    expect(Object.keys(board.manualMakeupAdjustments)).toEqual([expected])
+    expect(Object.keys(board.suppressedMakeupOrigins)).toEqual([expected])
+    expect(board.fallbackMakeupStudents[expected].studentName).toBe(seatName)
+    expect(board.manualMakeupAdjustments[expected]).toEqual([{ dateKey: '2026-11-05' }])
+    expect(findNameLeaks(payload, REAL_NAMES)).toEqual([])
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('manual:name: の鍵は manual: を残して名前の部分だけ置き換える', () => {
+    const input = makePayload()
+    input.boardState.manualLectureStockCounts = { 'manual:name:乙川二__英': 2 }
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(payload.boardState.manualLectureStockCounts).toEqual({ 'manual:name:生093__英': 2 })
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('講習の在庫の鍵 name:…__科目__講習 ID は名前の部分だけ置き換え、科目と講習 ID は変えない', () => {
+    const input = makePayload()
+    input.boardState.manualLectureStockCounts = { 'name:甲野__数__session_2026_winter': 1 }
+    input.boardState.manualLectureStockOrigins = { 'name:甲野__数__session_2026_winter': [{ displayName: '甲野', sessionId: 'session_2026_winter' }] }
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(Object.keys(payload.boardState.manualLectureStockCounts)).toEqual(['name:生徒092__数__session_2026_winter'])
+    expect(Object.keys(payload.boardState.manualLectureStockOrigins)).toEqual(['name:生徒092__数__session_2026_winter'])
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('scheduleCountAdjustments[].studentKey は name: の形も名前のままの形も置き換える', () => {
+    const input = makePayload()
+    input.boardState.scheduleCountAdjustments = [
+      { studentKey: 'name:甲野', subject: '数', countKind: 'regular', dateKey: '2026-11-12', delta: -1 },
+      { studentKey: '架空　謎男', subject: '数', countKind: 'regular', dateKey: '2026-11-12', delta: -1 },
+      { studentKey: 's093', subject: '英', countKind: 'special', dateKey: '2026-11-12', delta: 1 },
+    ]
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(payload.boardState.scheduleCountAdjustments.map((entry) => entry.studentKey)).toEqual(['name:生徒092', '別名001', 's093'])
+    expect(findNameLeaks(payload, REAL_NAMES)).toEqual([])
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('ID の形の鍵と、名前の入らない抑止キーは変わらない。名前のままの抑止キーは名前の部分だけ', () => {
+    const input = makePayload()
+    input.boardState.manualMakeupAdjustments = { 's092__数': [{ dateKey: '2026-11-05' }], 'manual:s093__英': [{ dateKey: '2026-11-06' }] }
+    input.boardState.suppressedRegularLessonOccurrences = ['s092__数__2026-11-12__1', '架空　謎男__数__2026-11-12__2', '__template_teacher__2026-11-12__0', 'WHOLE_DAY_PAIR__2026-11-12__2026-11-19']
+    const { payload } = anonymizeClassroomPayload(input)
+    expect(Object.keys(payload.boardState.manualMakeupAdjustments)).toEqual(['s092__数', 'manual:s093__英'])
+    expect(payload.boardState.suppressedRegularLessonOccurrences).toEqual(['s092__数__2026-11-12__1', '別名001__数__2026-11-12__2', '__template_teacher__2026-11-12__0', 'WHOLE_DAY_PAIR__2026-11-12__2026-11-19'])
+    expect(compare(input, payload)).toEqual([])
+  })
+
+  it('自己点検: わざと鍵だけ伏せないと、鍵の対応の食い違いを経路と件数で返す(値は返さない)', () => {
+    const input = withLedgers()
+    const { payload } = anonymizeClassroomPayload(input)
+    const [anonKey] = Object.keys(payload.boardState.fallbackMakeupStudents)
+    payload.boardState.fallbackMakeupStudents = { [KEY]: payload.boardState.fallbackMakeupStudents[anonKey] }
+    const diff = compare(input, payload)
+    expect(diff.length).toBeGreaterThan(0)
+    const text = diff.join('\n')
+    expect(text).toContain('boardState.fallbackMakeupStudents')
+    for (const name of REAL_NAMES) expect(text).not.toContain(name)
+    // 鍵の数が違うのも拾う
+    const { payload: second } = anonymizeClassroomPayload(input)
+    delete second.boardState.suppressedMakeupOrigins[anonKey]
+    expect(compare(input, second).join('\n')).toContain('boardState.suppressedMakeupOrigins')
+  })
+})
