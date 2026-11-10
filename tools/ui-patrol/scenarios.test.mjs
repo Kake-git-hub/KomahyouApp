@@ -2,8 +2,14 @@
 // フィクスチャはこのファイル内の架空データだけ(生徒A〜E・講師A〜C)。盤面の事実は boardFacts.ts で作る(台本と同じ入り口)。
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
-import { MOVE_ALLOWED_SECTIONS, MOVE_KINDS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, createSeededRandom, pickMoveCandidates } from './scenarios.mjs'
+import {
+  MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, collectTemplateTeacherlessKeys,
+  createSeededRandom, pickMoveCandidates, pickMoveCandidatesFromWeeks, runClassroomPatrol,
+} from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
+import * as boardFactsModule from './boardFacts.ts'
+import * as checksModule from './checks.ts'
+import { resolveNextMondayDateKey } from '../../src/components/schedule-board/templateDefinitionDiff.ts'
 
 const WEEK = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']
 const TODAY = '2026-11-17'
@@ -159,14 +165,224 @@ describe('変わってよい範囲', () => {
     expect([...allowed.deskKeys].sort()).toEqual(['2026-11-17_1#0', '2026-11-18_2#3'])
     expect(allowed.fromDateKey).toBeUndefined()
     expect([...allowed.sections].sort()).toEqual([...MOVE_ALLOWED_SECTIONS].sort())
+    // 既定では出欠記録の台帳(移)の印で上書きした前の生徒の記録を確定する経路)は入れない。元か先の机に出欠記録があるときだけ。
+    for (const name of MOVE_DISPLACED_STATUS_SECTIONS) expect(allowed.sections.has(name)).toBe(false)
+    const withStatuses = buildMoveAllowedChange({ kind: 'regular-other-day', from: { cellId: 'a', deskIndex: 0, seat: 0 }, to: { cellId: 'b', deskIndex: 0, seat: 0 }, studentId: 'sA' }, { hasDisplacedStatuses: true })
+    for (const name of [...MOVE_ALLOWED_SECTIONS, ...MOVE_DISPLACED_STATUS_SECTIONS]) expect(withStatuses.sections.has(name)).toBe(true)
   })
 
   it('変わってよい部分は、盤面の事実が知っている部分の名前だけ(書き損じで点検が黙らない)', () => {
-    for (const name of [...MOVE_ALLOWED_SECTIONS, ...TEMPLATE_SAVE_ALLOWED_SECTIONS]) expect(BOARD_FACT_SECTIONS).toContain(name)
+    for (const name of [...MOVE_ALLOWED_SECTIONS, ...MOVE_DISPLACED_STATUS_SECTIONS, ...TEMPLATE_SAVE_ALLOWED_SECTIONS]) expect(BOARD_FACT_SECTIONS).toContain(name)
     // 名簿・講師・教室設定のテンプレ以外は、移動でもテンプレ保存でも変わってはいけない。
     for (const name of ['students', 'teachers', 'classroomSettings.other']) {
       expect(MOVE_ALLOWED_SECTIONS).not.toContain(name)
       expect(TEMPLATE_SAVE_ALLOWED_SECTIONS).not.toContain(name)
     }
+  })
+})
+
+describe('候補の週・テンプレ自体の講師なし', () => {
+  it('来週に候補が無ければ、その先の週を 3 週まで順に探す', () => {
+    const later = factsOf([cell('2026-11-24', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
+    const found = pickMoveCandidatesFromWeeks(later, { mondayKey: '2026-11-16', todayKey: TODAY, count: 6, seed: 1 })
+    expect(found.weekStart).toBe('2026-11-23')
+    expect(found.candidates.map((candidate) => candidate.kind)).toEqual(['regular-same-slot'])
+    const tooFar = factsOf([cell('2026-12-14', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
+    expect(pickMoveCandidatesFromWeeks(tooFar, { mondayKey: '2026-11-16', todayKey: TODAY, count: 6, seed: 1 })).toEqual({ weekStart: null, candidates: [], searchedWeeks: ['2026-11-16', '2026-11-23', '2026-11-30', '2026-12-07'] })
+  })
+
+  it('テンプレ自体が講師なしの授業の鍵(曜日|時限|生徒キー)を集める', () => {
+    const template = {
+      effectiveStartDate: '2026-11-16',
+      cells: [
+        { dayOfWeek: 4, slotNumber: 4, desks: [
+          { deskIndex: 1, teacherId: '', students: [{ studentId: 's071', subject: '英' }, null] },
+          { deskIndex: 2, teacherId: 't1', students: [{ studentId: 's072', subject: '数' }, null] },
+        ] },
+      ],
+    }
+    const result = collectTemplateTeacherlessKeys(template)
+    expect([...result.keys]).toEqual(['4|4|s071'])
+    expect(result.fromDateKey).toBe('2026-11-16')
+    expect([...collectTemplateTeacherlessKeys(null).keys]).toEqual([])
+  })
+})
+
+// ── 台本のつなぎ(偽の driver・本物の盤面の事実と点検)。ブラウザは使わない。
+const ROOM = 'roomA'
+const PATROL_TODAY = '2026-11-11' // 来週の月曜は 11/16
+const app = { ...boardFactsModule, ...checksModule, resolveNextMondayDateKey, auditClassroomSnapshot: () => ({ findings: [] }) }
+const clone = (value) => structuredClone(value)
+
+function patrolPayload(cells, settings = {}) {
+  return { ...payloadOf(cells), classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 4, ...settings } }
+}
+
+function findDesk(payload, cellId, deskIndex) {
+  return payload.boardState.weeks.flat().find((item) => item.id === cellId).desks[deskIndex]
+}
+
+/** 移動を盤面へ当てる(偽のアプリ)。 */
+function applyMove(payload, from, to) {
+  const next = clone(payload)
+  const source = findDesk(next, from.cellId, from.deskIndex)
+  const target = findDesk(next, to.cellId, to.deskIndex)
+  target.lesson.studentSlots[to.seat] = source.lesson.studentSlots[from.seat]
+  source.lesson.studentSlots[from.seat] = null
+  return next
+}
+
+function makeFakeDriver(initialPayload, behavior = {}) {
+  const state = { payload: clone(initialPayload), status: '初期', undo: [], redo: [], gotoWeeks: [], undoDisabled: false, dragCount: 0 }
+  const session = { dialogs: [], downloads: 0, externalRequests: [], pageErrors: [] }
+  const driver = {
+    seedAndOpen: async (_session, seed) => { state.payload = clone(seed.classrooms[0].data) },
+    readClassroom: async () => ({ classroomId: ROOM, payload: clone(state.payload) }),
+    readStatusText: async () => state.status,
+    readSaveState: async () => 'clean',
+    clickSave: async () => false,
+    reloadApp: async () => {},
+    gotoWeekOf: async (_session, dateKey) => { state.gotoWeeks.push(dateKey) },
+    dragStudent: async (_session, from, to) => {
+      state.dragCount += 1
+      const result = (behavior.drag ?? (() => 'move'))(state.dragCount, from, to)
+      if (result === 'move') {
+        state.undo.push(state.payload)
+        state.redo = []
+        state.payload = applyMove(state.payload, from, to)
+        state.status = `移動しました ${state.dragCount}`
+      } else if (result === 'blocked') {
+        state.status = `断りました ${state.dragCount}`
+      }
+      return state.status
+    },
+    clickUndo: async () => {
+      if (state.undoDisabled || state.undo.length === 0) return false
+      state.redo.push(state.payload)
+      state.payload = state.undo.pop()
+      state.status = '元に戻しました'
+      return true
+    },
+    clickRedo: async () => {
+      if (state.redo.length === 0) return false
+      state.undo.push(state.payload)
+      state.payload = state.redo.pop()
+      state.status = 'やり直しました'
+      return true
+    },
+    openTemplateEditor: async () => behavior.templateDefaultDate ?? '2026-11-16',
+    setTemplateStartDate: async () => {},
+    requestTemplateSave: async () => behavior.templateConfirm ?? { confirmMessage: '11/16 以降に反映します（置き換え 0机・保留 0机）。', detailText: '' },
+    confirmTemplateSave: async () => { if (behavior.templateApply) state.payload = behavior.templateApply(clone(state.payload)) },
+    takeScreenshot: async () => null,
+  }
+  return { state, session, driver }
+}
+
+async function runPatrol(payload, { scenarios, behavior, moves = 2 } = {}) {
+  const fake = makeFakeDriver(payload, behavior)
+  const seedSnapshot = { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] }
+  const report = await runClassroomPatrol({
+    session: fake.session, app, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' }, seedSnapshot,
+    options: { scenarios, moves, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+  })
+  return { report, fake }
+}
+
+/** 11/17(火) 1限に生徒 2 人と空いた講師の机 2 つ(同じコマの移動の候補が 2 つ)。 */
+const twoMoveWeek = () => patrolPayload([cell('2026-11-17', 1, [
+  desk('a0', '講師A', [student('e1', 'sA', 'regular'), student('e2', 'sB', 'regular')]),
+  desk('a1', '講師B'),
+  desk('a2', '講師C'),
+])])
+const stepsOf = (report, name) => report.steps.filter((step) => step.name === name)
+
+describe('runClassroomPatrol(台本 b のつなぎ)', () => {
+  it('移動のあと状態が変わらず、ステータスの文も変わらなければ中断(押しても何も起きない・台本が画面に合っていない)', async () => {
+    const { report } = await runPatrol(twoMoveWeek(), { scenarios: ['boot', 'b'], behavior: { drag: () => 'nothing' } })
+    expect(report.aborted).toMatch(/^b: /)
+    expect(report.aborted).toContain('何も起きません')
+  })
+
+  it('ステータスの文が変わって状態が変わらなければ info move-blocked・操作 1(元に戻す・やり直しは押さない)', async () => {
+    const { report, fake } = await runPatrol(twoMoveWeek(), { scenarios: ['boot', 'b'], behavior: { drag: (count) => (count === 1 ? 'blocked' : 'move') } })
+    expect(report.aborted).toBeNull()
+    const [blocked, moved] = stepsOf(report, 'b').slice(1)
+    expect(blocked.findings.map((finding) => `${finding.level}:${finding.code}`)).toEqual(['info:move-blocked'])
+    expect(blocked.findings[0].message).toContain('断りました 1')
+    expect(blocked.operations).toBe(1)
+    expect(moved.operations).toBe(4)
+    expect(moved.findings.filter((finding) => finding.level === 'stop')).toEqual([])
+    // 週へ移るだけの準備は操作に数えない
+    expect(stepsOf(report, 'b')[0].operations).toBe(0)
+    expect(fake.state.gotoWeeks).toEqual(['2026-11-16'])
+  })
+
+  it('効いた移動が 1 回も無ければ教室を中断する(全部断られた・候補が 0)', async () => {
+    const allBlocked = await runPatrol(twoMoveWeek(), { scenarios: ['boot', 'b'], behavior: { drag: () => 'blocked' } })
+    expect(allBlocked.report.aborted).toContain('効いた移動が 1 回もありません')
+    const none = await runPatrol(patrolPayload([cell('2026-11-17', 1, [desk('a0', '講師A')])]), { scenarios: ['boot', 'b'] })
+    expect(none.report.aborted).toContain('効いた移動が 1 回もありません')
+  })
+
+  it('来週に候補が無く再来週にあれば、再来週へ移って使う(使った週を notes に出す)', async () => {
+    const payload = patrolPayload([cell('2026-11-24', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
+    const { report, fake } = await runPatrol(payload, { scenarios: ['boot', 'b'], moves: 1 })
+    expect(report.aborted).toBeNull()
+    expect(fake.state.gotoWeeks).toEqual(['2026-11-23'])
+    expect(stepsOf(report, 'b')[0].notes.join('\n')).toContain('2026-11-23 の週')
+  })
+
+  it('移動が効いたのに元に戻すが押せなければ stop undo-not-restored(押せなかったボタンは数えない)', async () => {
+    const fake = makeFakeDriver(twoMoveWeek(), {})
+    const originalDrag = fake.driver.dragStudent
+    fake.driver.dragStudent = async (...args) => { const result = await originalDrag(...args); fake.state.undoDisabled = true; return result }
+    const report = await runClassroomPatrol({
+      session: fake.session, app, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: twoMoveWeek() }] },
+      options: { scenarios: ['boot', 'b'], moves: 2, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    const moveStep = stepsOf(report, 'b')[1]
+    expect(moveStep.findings.map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:undo-not-restored')
+    expect(moveStep.operations).toBe(1)
+    // 土台が戻らないので、残りの候補は流さない
+    expect(stepsOf(report, 'b')).toHaveLength(2)
+  })
+})
+
+describe('runClassroomPatrol(台本 a のつなぎ)', () => {
+  it('根拠を失った振替(件数)・テンプレ自体が講師なしの授業・手前の日付で当てた注を組み立てる', async () => {
+    const holiday = '2026-11-20'
+    const movedRecord = { id: 'st', studentId: 'm1', name: '生徒sM', managedStudentId: 'sM', subject: '英', lessonType: 'regular', status: 'moved', dateKey: holiday, slotNumber: 4 }
+    const before = patrolPayload([
+      cell(holiday, 4, [desk('h0', '', [null, null], { statusSlots: [movedRecord, null] })]),
+      cell('2026-11-26', 4, [desk('m0', '講師A', [student('m1', 'sM', 'makeup', { subject: '英', makeupSourceDate: holiday }), null]), desk('m1', '講師B'), desk('m2', '')]),
+    ])
+    const templateApply = (payload) => {
+      findDesk(payload, `${holiday}_4`, 0).statusSlots = [null, null]
+      findDesk(payload, '2026-11-26_4', 0).lesson.studentSlots = [null, null]
+      // テンプレ自体が講師なしで置く授業(木曜 4限 sT)と、テンプレには講師がいるのに講師なしで置かれた授業(sU)
+      findDesk(payload, '2026-11-26_4', 2).lesson.studentSlots = [student('t1', 'sT', 'regular'), student('u1', 'sU', 'regular')]
+      payload.classroomSettings.regularLessonTemplate = {
+        effectiveStartDate: '2026-11-16',
+        cells: [{ dayOfWeek: 4, slotNumber: 4, desks: [{ deskIndex: 3, teacherId: '', students: [{ studentId: 'sT', subject: '数' }, null] }, { deskIndex: 2, teacherId: 't9', students: [{ studentId: 'sU', subject: '数' }, null] }] }],
+      }
+      return payload
+    }
+    const { report } = await runPatrol(before, {
+      scenarios: ['boot', 'a'],
+      behavior: {
+        templateDefaultDate: '2027-02-01',
+        templateConfirm: { confirmMessage: '11/16 以降に反映します（置き換え 1机・保留 0机）。', detailText: 'テンプレの中身に変更はありません。\nテンプレから外した生徒の振替1件を消します（振替元の授業が無くなるため）。' },
+        templateApply,
+      },
+    })
+    expect(report.aborted).toBeNull()
+    const step = stepsOf(report, 'a')[0]
+    const codes = step.findings.map((finding) => `${finding.level}:${finding.code}`)
+    expect(codes.filter((code) => code === 'info:orphaned-makeup-removed-announced')).toHaveLength(2)
+    expect(codes).toContain('info:teacherless-student-by-template')
+    expect(step.findings.filter((finding) => finding.level === 'stop').map((finding) => `${finding.code}:${finding.studentId}`)).toEqual(['teacherless-student-added:sU'])
+    expect(step.notes.join('\n')).toContain('保存済みのテンプレ(反映日 2027-02-01)を手前の日付で当てています')
   })
 })

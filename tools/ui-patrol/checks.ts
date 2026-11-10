@@ -16,9 +16,11 @@ export const PATROL_FINDING_CODES = [
   'external-request', 'page-error', 'move-not-applied', 'move-blocked', 'change-summary',
   // 作業 5(実データで流した結果): テンプレ保存が根拠を失った振替を消した(spec-template-conflict-v2 §9-12・Q40-1・仕様どおり)。確認の画面の件数の範囲だけ。
   'orphaned-makeup-removed-announced',
+  // 作業 5 修正 1: テンプレ自体がその授業を講師なしにしている(テンプレの机の teacherId が空)。テンプレどおりの結果なので info。
+  'teacherless-student-by-template',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
-export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string }
+export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
 export type AllowedChange = { deskKeys?: ReadonlySet<string>; fromDateKey?: string; sections?: ReadonlySet<string> }
 export type KnownPatrolIssue = { code?: string; classroomId?: string; step?: string; dateKey?: string; slotNumber?: number; studentId?: string; note?: string }
 
@@ -207,7 +209,7 @@ export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardF
         // 5) どこにもいない。振替で、確認の画面が「根拠を失った振替を消す」と件数を出していた分は info(§9-12)。
         if (student.lessonType === 'makeup' && orphanedMakeupLeft > 0) {
           orphanedMakeupLeft -= 1
-          findings.push({ level: 'info', code: 'orphaned-makeup-removed-announced', message: `根拠を失った振替が消えた(確認の画面に件数が出ていた): ${where} 講師 ${teacherText(desk.teacher)}`, ...location })
+          findings.push({ level: 'info', code: 'orphaned-makeup-removed-announced', message: `根拠を失った振替が消えた(確認の画面に件数が出ていた): ${where} 講師 ${teacherText(desk.teacher)}`, ...location, subject: student.subject })
           continue
         }
         findings.push({ level: 'stop', code: 'manual-student-lost', message: `手入力の生徒が同じコマから消えた: ${where} 講師 ${teacherText(desk.teacher)}`, ...location })
@@ -229,7 +231,18 @@ function isTeacherlessStudentDesk(desk: DeskFact): boolean {
   return desk.teacher === '' && !desk.teacherRest && desk.students.some((student) => student !== null)
 }
 
-export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
+/** dateKey(YYYY-MM-DD)の曜日(日曜 0)。テンプレの dayOfWeek と同じ数え方。 */
+function dayOfWeekOf(dateKey: string): number {
+  return new Date(`${dateKey}T00:00:00Z`).getUTCDay()
+}
+
+/**
+ * テンプレ自体が講師なしにしている授業(鍵は「曜日|時限|生徒キー」・fromDateKey はそのテンプレの反映日)。
+ * 当たる生徒はテンプレどおりの結果なので info に下げる(作業 5 修正 1・緑が丘 11/10 朝の形の 12/3 木 4限)。
+ */
+export type TemplateTeacherless = { keys: ReadonlySet<string>; fromDateKey: string }
+
+export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; templateTeacherless?: TemplateTeacherless } = {}): PatrolFinding[] {
   const beforeCounts = new Map<string, number>()
   for (const desk of before.desks.values()) {
     if (options.excludeDeskKeys?.has(desk.key) || !isTeacherlessStudentDesk(desk)) continue
@@ -251,6 +264,15 @@ export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: Boar
         beforeCounts.set(key, left - 1)
         continue
       }
+      const byTemplate = options.templateTeacherless
+      if (byTemplate && desk.dateKey >= byTemplate.fromDateKey && byTemplate.keys.has(`${dayOfWeekOf(desk.dateKey)}|${desk.slotNumber}|${student.key}`)) {
+        findings.push({
+          level: 'info', code: 'teacherless-student-by-template',
+          message: `テンプレ自体が講師なしの授業を講師のいない机に置いた: ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
+          ...locationOf(desk), studentId: student.key,
+        })
+        continue
+      }
       findings.push({
         level: 'stop', code: 'teacherless-student-added',
         message: `講師のいない机に座る生徒が増えた: ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
@@ -267,10 +289,13 @@ function describeStatus(status: string): { text: string; studentKey: string } {
   return { text: `${studentIdText(studentKey)} ${STATUS_LABELS[kind] ?? kind} ${subject} ${LESSON_TYPE_LABELS[lessonType] ?? lessonType}`, studentKey }
 }
 
-export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; releasedMovedStatusStudentKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
+export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; releasedMovedStatuses?: ReadonlyArray<string> } = {}): PatrolFinding[] {
   // 根拠を失った振替を消すと、振替元の「移)」の記録(status 'moved')も一緒に消える(§9-12)。checkManualStudentsKeepTeacher が info に下げた
-  // 振替の生徒(呼び出し側が渡す)の「移動」の記録だけ、生徒 1 人につき 1 件まで info にする。休み・出席などほかの記録は下げない。
-  const releasedLeft = new Map<string, number>([...(options.releasedMovedStatusStudentKeys ?? [])].map((key) => [key, 1]))
+  // 振替(呼び出し側が「生徒キー|科目」で 1 件ずつ渡す)と同じ生徒×科目の「移動」の記録だけ、消えた振替の数まで info にする。
+  // 休み・出席などほかの記録・別の科目の「移動」は下げない。
+  // 限界: アプリが「どの振替を消すか」を取り違えても、生徒×科目と件数が合っていればこの点検では見分けられない。
+  const releasedLeft = new Map<string, number>()
+  for (const key of options.releasedMovedStatuses ?? []) releasedLeft.set(key, (releasedLeft.get(key) ?? 0) + 1)
   // 操作後の同じコマに残っている数(席の上段・保留の下段のどちらでも盤面に残っている＝消えていない)。
   const afterCounts = new Map<string, number>()
   const bump = (key: string) => afterCounts.set(key, (afterCounts.get(key) ?? 0) + 1)
@@ -296,8 +321,10 @@ export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, 
     for (const status of [...desk.statuses, ...desk.pendingStatuses]) {
       if (take(`${desk.cellId}\u0000status\u0000${status}`)) continue
       const described = describeStatus(status)
-      if (status.split('|')[1] === 'moved' && (releasedLeft.get(described.studentKey) ?? 0) > 0) {
-        releasedLeft.set(described.studentKey, 0)
+      const [, statusKind = '', statusSubject = ''] = status.split('|')
+      const releasedKey = `${described.studentKey}|${statusSubject}`
+      if (statusKind === 'moved' && (releasedLeft.get(releasedKey) ?? 0) > 0) {
+        releasedLeft.set(releasedKey, (releasedLeft.get(releasedKey) ?? 0) - 1)
         findings.push({
           level: 'info', code: 'orphaned-makeup-removed-announced', message: `根拠を失った振替の振替元の記録が消えた: ${placeOf(desk)} ${described.text}`,
           ...locationOf(desk), studentId: described.studentKey,

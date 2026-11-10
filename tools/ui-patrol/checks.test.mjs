@@ -71,7 +71,8 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('manual-student-teacher-changed')
   expect(PATROL_FINDING_CODES).toContain('change-summary')
   expect(PATROL_FINDING_CODES).toContain('orphaned-makeup-removed-announced')
-  expect(PATROL_FINDING_CODES).toHaveLength(20)
+  expect(PATROL_FINDING_CODES).toContain('teacherless-student-by-template')
+  expect(PATROL_FINDING_CODES).toHaveLength(21)
 })
 
 describe('変わってよい範囲', () => {
@@ -257,6 +258,8 @@ describe('根拠を失った振替を消す(spec-template-conflict-v2 §9-12・Q
   it('確認の画面の件数の範囲だけ、消えた手入力の振替を info に下げる。件数を越えた分・件数が無いときは stop のまま', () => {
     expect(codes(checkManualStudentsKeepTeacher(before, after))).toEqual(['stop:manual-student-lost', 'stop:manual-student-lost'])
     const one = checkManualStudentsKeepTeacher(before, after, { announcedOrphanedMakeupCount: 1 })
+    // 下げた所見には科目を載せる(振替元の「移動」の記録を 生徒キー|科目 で引くため)
+    expect(one.find((finding) => finding.level === 'info')).toMatchObject({ studentId: 's1', subject: '数' })
     expect(codes(one).sort()).toEqual(['info:orphaned-makeup-removed-announced', 'stop:manual-student-lost'])
     expect(codes(checkManualStudentsKeepTeacher(before, after, { announcedOrphanedMakeupCount: 2 }))).toEqual(['info:orphaned-makeup-removed-announced', 'info:orphaned-makeup-removed-announced'])
   })
@@ -269,11 +272,16 @@ describe('根拠を失った振替を消す(spec-template-conflict-v2 §9-12・Q
 
   it('振替元の「移動」の記録は、消えた振替の生徒の分だけ info に下げる(ほかの記録は stop のまま)', () => {
     expect(codes(checkManualInputsNotLost(before, after))).toEqual(['stop:manual-input-lost'])
-    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatusStudentKeys: new Set(['s1']) }))).toEqual(['info:orphaned-makeup-removed-announced'])
-    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatusStudentKeys: new Set(['s2']) }))).toEqual(['stop:manual-input-lost'])
+    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatuses: ['s1|数'] }))).toEqual(['info:orphaned-makeup-removed-announced'])
+    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatuses: ['s2|数'] }))).toEqual(['stop:manual-input-lost'])
+    // 同じ生徒の別の科目の「移動」は下げない(鍵は 生徒キー|科目)
+    expect(codes(checkManualInputsNotLost(before, after, { releasedMovedStatuses: ['s1|英'] }))).toEqual(['stop:manual-input-lost'])
+    // 件数は消えた振替の数まで(同じ生徒×科目の「移動」が 2 件消えて、振替が 1 件なら 1 件は stop)
+    const twoMoved = facts([cell(H, 4, [desk('h1', [null, null], { statusSlots: [movedRecord, null] }), desk('h2', [null, null], { statusSlots: [movedRecord, null] })])])
+    expect(codes(checkManualInputsNotLost(twoMoved, facts([cell(H, 4, [desk('h1'), desk('h2')])]), { releasedMovedStatuses: ['s1|数'] })).sort()).toEqual(['info:orphaned-makeup-removed-announced', 'stop:manual-input-lost'])
     // 休みの記録は下げない(根拠を失った振替で消えてよいのは「移)」の印だけ)
     const absentBefore = facts([cell(H, 4, [desk('h1', [null, null], { statusSlots: [status({ dateKey: H, slotNumber: 4 }), null] })])])
-    expect(codes(checkManualInputsNotLost(absentBefore, facts([cell(H, 4, [desk('h1')])]), { releasedMovedStatusStudentKeys: new Set(['s1']) }))).toEqual(['stop:manual-input-lost'])
+    expect(codes(checkManualInputsNotLost(absentBefore, facts([cell(H, 4, [desk('h1')])]), { releasedMovedStatuses: ['s1|数'] }))).toEqual(['stop:manual-input-lost'])
   })
 })
 
@@ -292,6 +300,15 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     // 埋め草の講師は講師なし
     const placeholder = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師未割当' }), desk('d2'), desk('d3')])])
     expect(codes(checkTeacherlessStudentsNotAdded(before, placeholder))).toEqual(['stop:teacherless-student-added'])
+  })
+
+  it('テンプレ自体が講師なしの授業(曜日|時限|生徒キー)は info teacherless-student-by-template。反映日より前・ほかの生徒は stop', () => {
+    const before = facts([cell(D, 3, [desk('d1'), desk('d2')])])
+    const after = facts([cell(D, 3, [desk('d1', [student(), studentB()]), desk('d2')])])
+    const templateTeacherless = { keys: new Set(['4|3|s1']), fromDateKey: '2026-11-16' }
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless }))).toEqual(['info:teacherless-student-by-template', 'stop:teacherless-student-added'])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless: { keys: new Set(['4|3|s1']), fromDateKey: '2026-11-20' } }))).toEqual(['stop:teacherless-student-added', 'stop:teacherless-student-added'])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless: { keys: new Set(['3|3|s1']), fromDateKey: '' } }))).toEqual(['stop:teacherless-student-added', 'stop:teacherless-student-added'])
   })
 
   it('メモ・出欠記録が同じコマから消えたら stop。同じコマの別の机へ移ったのは所見なし', () => {

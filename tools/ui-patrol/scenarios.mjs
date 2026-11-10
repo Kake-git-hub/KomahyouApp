@@ -7,10 +7,8 @@
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { addStep, createClassroomReport } from './report.mjs'
-import {
-  PatrolAbortError, clickRedo, clickSave, clickUndo, confirmTemplateSave, dragStudent, gotoWeekOf, openTemplateEditor, readClassroom,
-  readSaveState, readStatusText, reloadApp, requestTemplateSave, seedAndOpen, setTemplateStartDate, takeScreenshot,
-} from './driver.mjs'
+import * as realDriver from './driver.mjs'
+import { PatrolAbortError } from './driver.mjs'
 
 export const MOVE_KINDS = ['regular-same-slot', 'regular-other-day', 'makeup-same-slot', 'makeup-other-day', 'special-same-slot', 'special-other-day']
 const KIND_LABELS = {
@@ -23,8 +21,6 @@ const KIND_LABELS = {
  * 生徒の移動で、元と先の机のほかに変わってよい部分(boardFacts.ts の BOARD_FACT_SECTIONS の名前)。根拠(ScheduleBoardScreen.tsx):
  * - boardState.suppressedRegularLessonOccurrences: computeStudentMove が通常授業を動かすと移動元の日の抑止キーを積む
  *   (resolveSuppressedRegularLessonOccurrenceKeys → nextSuppressedRegularLessonOccurrences → commitWeeks)。
- * - boardState.manualMakeupAdjustments・boardState.fallbackMakeupStudents: executeMoveStudent が、移動元の「移)」の印で上書きされた前の生徒の
- *   出欠記録を台帳へ確定する(displacedStatusEntries → materializeDisplacedStatusEntryIntoLedgers → commitWeeks・Issue #57 / INV-06)。
  * 入れていないもの: 在庫(manualLectureStock*)・希望回数(scheduleCountAdjustments)・教室設定・保留の机(templatePendingDesks)。
  * 生徒の移動は commitWeeks へ今の値をそのまま渡す(元に戻すの履歴 createHistoryEntry もこれらを戻す)。
  * 出席不可コマへの移動の確認(confirmReopenForPlacements → App の applyReopenedSlotConversions)は specialSessions を変えるが、
@@ -32,6 +28,14 @@ const KIND_LABELS = {
  */
 export const MOVE_ALLOWED_SECTIONS = [
   'boardState.suppressedRegularLessonOccurrences',
+]
+
+/**
+ * 元か先の机に出欠記録があるときだけ足す部分: executeMoveStudent が、移動元の「移)」の印で上書きされた前の生徒の出欠記録を台帳へ確定する
+ * (computeStudentMove の displacedStatusEntries → materializeDisplacedStatusEntryIntoLedgers → commitWeeks・Issue #57 / INV-06)。
+ * 候補選び(pickMoveCandidates)は出欠記録のある机を元にも先にもしないので、今の台本では使わない(作業 5 修正 1・レビューの指摘)。
+ */
+export const MOVE_DISPLACED_STATUS_SECTIONS = [
   'boardState.manualMakeupAdjustments',
   'boardState.fallbackMakeupStudents',
 ]
@@ -146,11 +150,11 @@ export function pickMoveCandidates(facts, { weekDateKeys, todayKey, count, seed 
   }
 }
 
-/** 移動で変わってよい範囲: 元と先の机・MOVE_ALLOWED_SECTIONS。 */
-export function buildMoveAllowedChange(candidate) {
+/** 移動で変わってよい範囲: 元と先の机・MOVE_ALLOWED_SECTIONS(元か先の机に出欠記録があるときは MOVE_DISPLACED_STATUS_SECTIONS も)。 */
+export function buildMoveAllowedChange(candidate, { hasDisplacedStatuses = false } = {}) {
   return {
     deskKeys: new Set([`${candidate.from.cellId}#${candidate.from.deskIndex}`, `${candidate.to.cellId}#${candidate.to.deskIndex}`]),
-    sections: new Set(MOVE_ALLOWED_SECTIONS),
+    sections: new Set([...MOVE_ALLOWED_SECTIONS, ...(hasDisplacedStatuses ? MOVE_DISPLACED_STATUS_SECTIONS : [])]),
   }
 }
 
@@ -158,6 +162,39 @@ export function buildMoveAllowedChange(candidate) {
 export function weekDateKeysFrom(mondayKey) {
   const start = Date.parse(`${mondayKey}T00:00:00Z`)
   return Array.from({ length: 7 }, (_, index) => new Date(start + index * 86400000).toISOString().slice(0, 10))
+}
+
+/**
+ * 来週の月曜の週から順に候補を探し、候補のある最初の週を使う(来週に候補が無ければ、その先の週を extraWeeks 週まで)。
+ * → { weekStart(使った週の月曜・無ければ null), candidates, searchedWeeks }
+ */
+export function pickMoveCandidatesFromWeeks(facts, { mondayKey, todayKey, count, seed, extraWeeks = 3 }) {
+  const searchedWeeks = []
+  for (let offset = 0; offset <= extraWeeks; offset += 1) {
+    const weekStart = new Date(Date.parse(`${mondayKey}T00:00:00Z`) + offset * 7 * 86400000).toISOString().slice(0, 10)
+    searchedWeeks.push(weekStart)
+    const candidates = pickMoveCandidates(facts, { weekDateKeys: weekDateKeysFrom(weekStart), todayKey, count, seed })
+    if (candidates.length > 0) return { weekStart, candidates, searchedWeeks }
+  }
+  return { weekStart: null, candidates: [], searchedWeeks }
+}
+
+/**
+ * テンプレ自体が講師なしにしている授業の鍵「曜日|時限|生徒ID」(テンプレの机の teacherId が空で生徒がいる)と、そのテンプレの反映日。
+ * テンプレの形: { effectiveStartDate, cells: [{ dayOfWeek(日曜 0), slotNumber, desks: [{ deskIndex, teacherId, students: [{ studentId, subject }] }] }] }。
+ * checks.ts の checkTeacherlessStudentsNotAdded の templateTeacherless に渡す(テンプレどおりの講師なしは「変」ではない・作業 5 修正 1)。
+ */
+export function collectTemplateTeacherlessKeys(template) {
+  const keys = new Set()
+  for (const cell of Array.isArray(template?.cells) ? template.cells : []) {
+    for (const desk of Array.isArray(cell?.desks) ? cell.desks : []) {
+      if (typeof desk?.teacherId === 'string' && desk.teacherId.trim() !== '') continue
+      for (const student of Array.isArray(desk?.students) ? desk.students : []) {
+        if (student?.studentId) keys.add(`${cell.dayOfWeek}|${cell.slotNumber}|${student.studentId}`)
+      }
+    }
+  }
+  return { keys, fromDateKey: typeof template?.effectiveStartDate === 'string' ? template.effectiveStartDate : '' }
 }
 
 function describeSeat(seat) {
@@ -175,7 +212,12 @@ function describeCandidate(candidate) {
 function writeStopDiff(file, stops, before, after) {
   const cells = [...new Set(stops.filter((finding) => finding.dateKey && finding.slotNumber !== undefined).map((finding) => `${finding.dateKey}_${finding.slotNumber}`))].slice(0, 40)
   if (cells.length === 0) return null
-  const pick = (facts, cellId) => [...facts.desks.values()].filter((desk) => desk.cellId === cellId).map((desk) => Object.fromEntries(Object.entries(desk).filter(([key]) => key !== 'signature')))
+  const pick = (facts, cellId) => [...facts.desks.values()].filter((desk) => desk.cellId === cellId).map((desk) => {
+    // メモの中身は出さず件数だけ(伏せ字で「メモ」になっているが二重の守り)。出欠記録の文字列は生徒キー・状態・科目・種類だけなのでそのまま。
+    const { memos, pendingMemos } = desk
+    const rest = Object.fromEntries(Object.entries(desk).filter(([key]) => !['signature', 'memos', 'pendingMemos'].includes(key)))
+    return { ...rest, memoCount: memos.length, pendingMemoCount: pendingMemos.length }
+  })
   try {
     writeFileSync(file, JSON.stringify({ findings: stops, cells: cells.map((cellId) => ({ cellId, before: pick(before, cellId), after: pick(after, cellId) })) }, null, 1))
     return file
@@ -184,8 +226,12 @@ function writeStopDiff(file, stops, before, after) {
   }
 }
 
-/** 教室 1 つぶんの台本を流し、教室の報告(report.mjs の形)を返す。 */
-export async function runClassroomPatrol({ session, app, classroom, seedSnapshot, options, outDir, known, today }) {
+/**
+ * 教室 1 つぶんの台本を流し、教室の報告(report.mjs の形)を返す。driver は差し替えられる(テストの偽の driver・既定は driver.mjs)。
+ * 操作の数え方: 実際に押せた/効いたものだけ(断られた移動は 1、押せなかった元に戻す・やり直しは 0。週へ移るだけの準備は数えない)。
+ */
+export async function runClassroomPatrol({ session, app, classroom, seedSnapshot, options, outDir, known, today, driver = realDriver }) {
+  const d = driver
   const { classroomId } = classroom
   let report = createClassroomReport(classroom)
   const scenarios = options.scenarios ?? ['boot', 'c', 'b', 'a']
@@ -194,20 +240,19 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   let lastScenario = 'boot'
   const shoot = async (scenario) => {
     shotCount += 1
-    return takeScreenshot(session, path.join(outDir, `${classroomId}-${scenario}-${shotCount}.png`))
+    return d.takeScreenshot(session, path.join(outDir, `${classroomId}-${scenario}-${shotCount}.png`))
   }
   const toState = (read) => ({ payload: read.payload, facts: app.collectBoardFacts(read.payload), auditResult: null })
   const auditOf = (state) => {
     if (!state.auditResult) state.auditResult = app.auditClassroomSnapshot({ classroomId, payload: state.payload, today, known: [] })
     return state.auditResult
   }
-  const read = async () => toState(await readClassroom(session))
   const sameState = (before, after, code) => app.checkSameState(before.facts, after.facts, code)
   const timings = { audit: 0, read: 0 }
   const timedAudit = (state) => { const started = Date.now(); const result = auditOf(state); timings.audit += Date.now() - started; return result }
-  const timedRead = async () => { const started = Date.now(); const state = await read(); timings.read += Date.now() - started; return state }
+  const timedRead = async () => { const started = Date.now(); const state = toState(await d.readClassroom(session)); timings.read += Date.now() - started; return state }
 
-  /** 手順を報告へ足す(既知を外し、stop があれば画面写真)。 */
+  /** 手順を報告へ足す(既知を外し、stop があれば画面写真と差分)。 */
   const finish = async (scenario, step) => {
     const filtered = app.applyKnownIssues(step.findings, known, { classroomId, step: scenario })
     report = { ...report, knownCount: report.knownCount + filtered.knownCount }
@@ -234,7 +279,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const seededClassroom = seedSnapshot.classrooms.find((room) => room.id === classroomId)
       if (!seededClassroom) throw new PatrolAbortError('種データにこの教室がありません。')
       const before = toState({ payload: seededClassroom.data })
-      await seedAndOpen(session, seedSnapshot)
+      await d.seedAndOpen(session, seedSnapshot)
       step.operations += 1
       current = await timedRead()
       step.diff = { before: before.facts, after: current.facts }
@@ -245,7 +290,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         ...app.checkAuditNotWorse(timedAudit(before), timedAudit(current)),
         ...app.summarizeChanges(before.facts, current.facts),
       )
-      step.notes.push(`開いた直後のステータス: ${await readStatusText(session)}`, `保存ボタン: ${await readSaveState(session)}`)
+      step.notes.push(`開いた直後のステータス: ${await d.readStatusText(session)}`, `保存ボタン: ${await d.readSaveState(session)}`)
       await finish('boot', step)
     }
 
@@ -253,49 +298,63 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
     if (scenarios.includes('c')) {
       lastScenario = 'c'
       const step = newStep('保存→読み込み直し')
-      const pressed = await clickSave(session)
+      const pressed = await d.clickSave(session)
       if (pressed) step.operations += 1
-      else step.notes.push('保存ボタンは既に clean で押せませんでした(保存する変更が無い)。')
+      else step.notes.push('保存ボタンは既に clean で押せませんでした(保存する変更が無い・ローカルモードは変更の 5 秒後に自分で保存する)。')
       const saved = await timedRead()
       step.findings.push(...sameState(current, saved, 'save-changed'))
-      await reloadApp(session)
+      await d.reloadApp(session)
       step.operations += 1
       current = await timedRead()
       step.findings.push(...sameState(saved, current, 'reload-changed'))
-      step.notes.push(`読み込み直しのあとの保存ボタン: ${await readSaveState(session)}`)
+      step.notes.push(`読み込み直しのあとの保存ボタン: ${await d.readSaveState(session)}`)
       await finish('c', step)
     }
 
     // ── (b) 生徒の移動: 長押しドラッグ → 元に戻す → やり直し → 元に戻す。変わってよいのは元と先の机だけ。
     if (scenarios.includes('b')) {
       lastScenario = 'b'
-      const step = newStep(`生徒の移動の準備(${nextMonday} の週)`)
-      await gotoWeekOf(session, nextMonday)
-      step.operations += 1
-      const base = await timedRead()
-      const candidates = pickMoveCandidates(base.facts, { weekDateKeys: weekDateKeysFrom(nextMonday), todayKey: today, count: options.moves, seed: options.seed })
+      const found = pickMoveCandidatesFromWeeks(current.facts, { mondayKey: nextMonday, todayKey: today, count: options.moves, seed: options.seed })
+      const step = newStep(`生徒の移動の準備(${found.weekStart ?? nextMonday} の週)`)
+      const candidates = found.candidates
       const kinds = new Set(candidates.map((candidate) => candidate.kind))
+      if (found.weekStart) {
+        step.notes.push(`使った週: ${found.weekStart} の週${found.weekStart !== nextMonday ? `(来週 ${nextMonday} の週に候補が無かった)` : ''}`)
+        // 週へ移るだけ(室長の操作だが盤面は変えない)なので操作に数えない。
+        await d.gotoWeekOf(session, found.weekStart)
+      } else step.notes.push(`動かせる生徒と空いた席の組が見つかりませんでした(探した週: ${found.searchedWeeks.join('・')})。`)
       step.notes.push(`候補 ${candidates.length} か所(種類 ${kinds.size}/${MOVE_KINDS.length}: ${[...kinds].map((kind) => KIND_LABELS[kind]).join('・') || 'なし'})`)
-      if (candidates.length === 0) step.notes.push('動かせる生徒と空いた席の組が見つかりませんでした。')
+      const base = candidates.length > 0 ? await timedRead() : current
       await finish('b', step)
       const baseAudit = candidates.length > 0 ? timedAudit(base) : null
+      let effectiveMoves = 0
       for (const [index, candidate] of candidates.entries()) {
         const moveStep = newStep(`生徒の移動 ${index + 1}(${KIND_LABELS[candidate.kind]})`)
         moveStep.notes.push(describeCandidate(candidate))
         const dialogsBefore = session.dialogs.length
-        const status = await dragStudent(session, candidate.from, candidate.to)
+        const statusBefore = await d.readStatusText(session)
+        const status = await d.dragStudent(session, candidate.from, candidate.to)
         moveStep.operations += 1
         const moved = await timedRead()
         moveStep.notes.push(`ステータス: ${status}`)
         for (const dialog of session.dialogs.slice(dialogsBefore)) moveStep.notes.push(`ダイアログ: ${dialog}`)
         const diff = app.diffBoardFacts(base.facts, moved.facts)
         if (diff.desks.length === 0 && diff.sections.length === 0) {
-          // アプリが断った移動(出席済み・メモ・同じコマに同じ生徒・休校日など)。元に戻すは押さない(履歴が積まれていない)。
+          // 状態が変わらない。ステータスの文が変わっていればアプリが断った移動(出席済み・メモ・同じコマに同じ生徒・休校日など)。
+          // 文も変わらなければ「押しても何も起きない」か「台本が画面に合っていない」ので、黙って通さず中断する(作業 5 修正 1)。
+          if (status === statusBefore) {
+            await finish('b', moveStep)
+            throw new PatrolAbortError(`移動しても盤面もステータスの文も変わらず、何も起きません: ${describeCandidate(candidate)}`)
+          }
+          // 元に戻すは押さない(履歴が積まれていない)。
           moveStep.findings.push({ level: 'info', code: 'move-blocked', message: `アプリが移動を断った: ${describeSeat(candidate.from)} → ${describeSeat(candidate.to)}(${status})` })
           await finish('b', moveStep)
           continue
         }
-        const allowed = buildMoveAllowedChange(candidate)
+        effectiveMoves += 1
+        const deskOf = (seat) => base.facts.desks.get(`${seat.cellId}#${seat.deskIndex}`)
+        const hasDisplacedStatuses = [deskOf(candidate.from), deskOf(candidate.to)].some((desk) => (desk?.statuses.length ?? 0) > 0)
+        const allowed = buildMoveAllowedChange(candidate, { hasDisplacedStatuses })
         const exclude = { excludeDeskKeys: allowed.deskKeys }
         moveStep.diff = { before: base.facts, after: moved.facts }
         moveStep.findings.push(
@@ -309,18 +368,36 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         if (!landed || landed.key !== candidate.studentId) {
           moveStep.findings.push({ level: 'stop', code: 'move-not-applied', message: `動かした生徒が先の席にいない: ${describeCandidate(candidate)}`, studentId: candidate.studentId })
         }
-        if (!(await clickUndo(session))) moveStep.notes.push('元に戻すが押せませんでした(履歴が無い)。')
+        // 元に戻す・やり直しが押せないのは、移動が効いたあとの室長にとって「変」(戻せない)。押せなかったボタンは操作に数えない。
+        const cannotPress = (label, code) => ({ level: 'stop', code, message: `${label}が押せない(ボタンが無効): ${describeCandidate(candidate)}`, studentId: candidate.studentId })
+        if (!(await d.clickUndo(session))) {
+          moveStep.findings.push(cannotPress('移動のあと元に戻す', 'undo-not-restored'))
+          current = moved
+          moveStep.notes.push('盤面が移動のあとのまま戻せないので、残りの移動は流しません。')
+          await finish('b', moveStep)
+          break
+        }
         moveStep.operations += 1
         moveStep.findings.push(...sameState(base, await timedRead(), 'undo-not-restored'))
-        if (!(await clickRedo(session))) moveStep.notes.push('やり直しが押せませんでした。')
-        moveStep.operations += 1
-        moveStep.findings.push(...sameState(moved, await timedRead(), 'redo-not-restored'))
-        if (!(await clickUndo(session))) moveStep.notes.push('2 回目の元に戻すが押せませんでした。')
-        moveStep.operations += 1
-        current = await timedRead()
-        moveStep.findings.push(...sameState(base, current, 'undo-not-restored'))
+        if (await d.clickRedo(session)) {
+          moveStep.operations += 1
+          moveStep.findings.push(...sameState(moved, await timedRead(), 'redo-not-restored'))
+          if (!(await d.clickUndo(session))) {
+            moveStep.findings.push(cannotPress('やり直しのあと元に戻す', 'undo-not-restored'))
+            current = await timedRead()
+            moveStep.notes.push('盤面が移動のあとのまま戻せないので、残りの移動は流しません。')
+            await finish('b', moveStep)
+            break
+          }
+          moveStep.operations += 1
+          moveStep.findings.push(...sameState(base, await timedRead(), 'undo-not-restored'))
+        } else {
+          moveStep.findings.push(cannotPress('元に戻したあとやり直し', 'redo-not-restored'))
+        }
         await finish('b', moveStep)
       }
+      // 効いた移動が 1 回も無い台本 b は、中身が無いまま緑になる。台本 b を指定しているなら中断(作業 5 修正 1)。
+      if (effectiveMoves === 0) throw new PatrolAbortError('台本 b で効いた移動が 1 回もありません(候補が無い・全部断られた)。')
       current = await timedRead()
     }
 
@@ -329,12 +406,18 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       lastScenario = 'a'
       const step = newStep(`テンプレ保存(反映日 ${nextMonday}・何も変えない)`)
       const before = current
-      const defaultDate = await openTemplateEditor(session)
+      const defaultDate = await d.openTemplateEditor(session)
       step.operations += 1
       step.notes.push(`反映開始日の既定: ${defaultDate}`)
-      await setTemplateStartDate(session, nextMonday)
+      if (defaultDate && defaultDate > nextMonday) {
+        // 確認の画面は「テンプレの中身に変更はありません」と出すが、盤面には別の版が当たる(読む人が「何も変えない保存」と誤解しないため)。
+        step.notes.push(`保存済みのテンプレ(反映日 ${defaultDate})を手前の日付で当てています(${nextMonday} 以降に、その版の中身が当たる)。`)
+      } else if (defaultDate && defaultDate !== nextMonday) {
+        step.notes.push(`既定の反映日 ${defaultDate} と違う日 ${nextMonday} で保存しています。`)
+      }
+      await d.setTemplateStartDate(session, nextMonday)
       step.operations += 1
-      const { confirmMessage, detailText } = await requestTemplateSave(session)
+      const { confirmMessage, detailText } = await d.requestTemplateSave(session)
       step.operations += 1
       step.notes.push(`確認の画面: ${confirmMessage}`)
       if (detailText) {
@@ -342,22 +425,26 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         step.notes.push(`確認の画面の詳細(${lines.length} 行): ${lines.slice(0, 12).join(' / ')}${lines.length > 12 ? ' / …' : ''}`)
       } else step.notes.push('確認の画面の詳細: なし')
       const downloadsBefore = session.downloads
-      await confirmTemplateSave(session)
+      await d.confirmTemplateSave(session)
       step.operations += 1
       const after = await timedRead()
       step.diff = { before: before.facts, after: after.facts }
-      step.notes.push(`保存のあとのステータス: ${await readStatusText(session)}`, `テンプレ保存前の盤面の PDF: ${session.downloads - downloadsBefore} 件(保存せず取り消し)`)
-      // 根拠を失った振替を消す件数(§9-12・確認の画面の詳細に出る)。その範囲で消えた振替と、その振替元の「移)」の記録は info になる。
+      step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`, `テンプレ保存前の盤面の PDF: ${session.downloads - downloadsBefore} 件(保存せず取り消し)`)
+      // 根拠を失った振替を消す件数(§9-12・確認の画面の詳細に出る)。その範囲で消えた振替と、同じ生徒×科目の振替元の「移)」の記録は info になる。
       const manualFindings = app.checkManualStudentsKeepTeacher(before.facts, after.facts, {
         announcedText: detailText,
         announcedOrphanedMakeupCount: app.parseAnnouncedOrphanedMakeupCount(detailText),
       })
-      const releasedMovedStatusStudentKeys = new Set(manualFindings.filter((finding) => finding.code === 'orphaned-makeup-removed-announced' && finding.studentId).map((finding) => finding.studentId))
+      const releasedMovedStatuses = manualFindings
+        .filter((finding) => finding.code === 'orphaned-makeup-removed-announced' && finding.studentId)
+        .map((finding) => `${finding.studentId}|${finding.subject ?? ''}`)
+      // テンプレ自体が講師なしにしている授業は「変」ではない(保存のあとのテンプレ＝反映日 nextMonday 以降に効く版から作る)。
+      const templateTeacherless = collectTemplateTeacherlessKeys(after.payload?.classroomSettings?.regularLessonTemplate)
       step.findings.push(
         ...app.checkOutsideAllowedRange(before.facts, after.facts, { fromDateKey: nextMonday, sections: new Set(TEMPLATE_SAVE_ALLOWED_SECTIONS) }),
         ...manualFindings,
-        ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts),
-        ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatusStudentKeys }),
+        ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
+        ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
         ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
         ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage),
         ...app.summarizeChanges(before.facts, after.facts),
@@ -366,11 +453,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       current = after
 
       const persistStep = newStep('テンプレ保存のあと 保存→読み込み直し')
-      if (await clickSave(session)) persistStep.operations += 1
+      if (await d.clickSave(session)) persistStep.operations += 1
       else persistStep.notes.push('保存ボタンは既に clean で押せませんでした。')
       const saved = await timedRead()
       persistStep.findings.push(...sameState(current, saved, 'save-changed'))
-      await reloadApp(session)
+      await d.reloadApp(session)
       persistStep.operations += 1
       current = await timedRead()
       persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
@@ -385,7 +472,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   // ── 最後に、外への通信の試みと画面のエラーを所見にする(途中で止まっても出す)。
   const browserStep = newStep('ブラウザの記録(外への通信・画面のエラー)')
   for (const host of [...new Set(session.externalRequests)]) {
-    browserStep.findings.push({ level: 'stop', code: 'external-request', message: `localhost 以外への通信を試みた: ${host}(${session.externalRequests.filter((item) => item === host).length} 回)` })
+    browserStep.findings.push({ level: 'stop', code: 'external-request', message: `手元のサーバー以外への通信を試みた: ${host}(${session.externalRequests.filter((item) => item === host).length} 回)` })
   }
   for (const message of [...new Set(session.pageErrors)]) {
     browserStep.findings.push({ level: 'stop', code: 'page-error', message: `画面でエラーが出た: ${message}` })

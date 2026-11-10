@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { DRIVER_TIMING, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES } from './selectors.mjs'
+import { DRIVER_TIMING, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, studentCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -20,6 +20,17 @@ describe('selectors', () => {
     expect(missing).toEqual([])
     const missingPrefixes = Object.entries(TESTID_PREFIXES).filter(([, value]) => !source.includes(`data-testid={\`${value}`)).map(([key, value]) => `${key}=${value}`)
     expect(missingPrefixes).toEqual([])
+  })
+
+  it('接頭辞の後ろの並び(席は {cellId}-{deskIndex}-{studentIndex}・週の日は {dateKey})がアプリのテンプレート文字列と同じ', () => {
+    const grid = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardGrid.tsx'), 'utf8')
+    expect(grid).toMatch(/data-testid=\{`student-cell-\$\{cell\.id\}-\$\{deskIndex\}-\$\{studentIndex\}`\}/)
+    // 同じ要素に data-cell-id / data-desk-index / data-student-index もある(放した位置の席の引き方・handleStudentMouseDown)
+    expect(grid).toMatch(/data-cell-id=\{cell\.id\}/)
+    expect(studentCellTestId({ cellId: '2026-11-17_3', deskIndex: 2, seat: 1 })).toBe('student-cell-2026-11-17_3-2-1')
+    const toolbar = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardToolbar.tsx'), 'utf8')
+    expect(toolbar).toMatch(/data-testid=\{`week-jump-day-\$\{cell\.dateKey\}`\}/)
+    expect(weekJumpDayTestId('2026-11-16')).toBe('week-jump-day-2026-11-16')
   })
 
   it('長押しの長さと取り消しの距離がアプリと合っている', () => {

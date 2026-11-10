@@ -7,7 +7,8 @@ import { generateKeyPairSync } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { main } from './ui-patrol.mjs'
+import { EventEmitter } from 'node:events'
+import { main, runBrowserPatrol } from './ui-patrol.mjs'
 import { loadPatrolApp } from './ui-patrol/loadApp.mjs'
 
 const ROOM_A = '5w5OMueETerSKrSf14HC'
@@ -228,6 +229,10 @@ describe('ui-patrol --prepare-only', () => {
       io = collect()
       expect(await main({ argv: ['--out', out, '--seed-file', seedFile, '--classroom', ROOM_A], env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, deps(stopReport))).toBe(1)
       expect(JSON.parse(readFileSync(path.join(out, 'report.json'), 'utf8')).classrooms[0].classroomId).toBe(ROOM_A)
+      // 文の報告も標準出力と同じ文で <out>/report.txt に残す
+      const text = readFileSync(path.join(out, 'report.txt'), 'utf8')
+      expect(text).toContain('■ 画面の自動巡回')
+      expect(io.out.join('')).toContain(text.trim())
       // 種データ(入力)は消さない
       expect(existsSync(seedFile)).toBe(true)
       io = collect()
@@ -297,5 +302,49 @@ describe('ui-patrol --prepare-only', () => {
     const io = collect()
     expect(await main({ argv: ['--help'], env: {}, ...io })).toBe(0)
     expect(io.out.join('')).toContain('ui-patrol')
+  })
+})
+
+describe('runBrowserPatrol(止めるときの片づけ)', () => {
+  it('流している途中で SIGINT/SIGTERM を受けたら、ブラウザと開発用サーバーを止めて終了コード 130 で終わる。流し終えたらハンドラを外す', async () => {
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      const calls = []
+      const proc = new EventEmitter()
+      let exited = null
+      const exitPromise = new Promise((resolve) => { proc.exit = (code) => { exited = code; resolve() } })
+      const deps = {
+        process: proc,
+        startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => { calls.push('server.stop') } }),
+        launchPatrolBrowser: async () => ({ browser: { close: async () => { calls.push('browser.close') } } }),
+        closePatrolBrowser: async (session) => { await session?.browser?.close() },
+        // 台本は終わらない(途中でシグナルを受ける)
+        runClassroomPatrol: () => new Promise(() => {}),
+      }
+      void runBrowserPatrol({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {} }, deps)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(proc.listenerCount(signal)).toBe(1)
+      proc.emit(signal)
+      await exitPromise
+      expect(exited).toBe(130)
+      expect(calls.sort()).toEqual(['browser.close', 'server.stop'])
+    }
+  })
+
+  it('流し終えたらシグナルのハンドラを外す', async () => {
+    const proc = new EventEmitter()
+    proc.exit = () => { throw new Error('呼ばれない') }
+    const calls = []
+    const deps = {
+      process: proc,
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => { calls.push('server.stop') } }),
+      launchPatrolBrowser: async () => ({ browser: { close: async () => { calls.push('browser.close') } } }),
+      closePatrolBrowser: async (session) => { await session?.browser?.close() },
+      runClassroomPatrol: async ({ classroom }) => ({ classroomId: classroom.classroomId, label: 'A', backupKey: 'k', steps: [], knownCount: 0, aborted: null }),
+    }
+    const report = await runBrowserPatrol({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {} }, deps)
+    expect(report.classrooms).toHaveLength(1)
+    expect(proc.listenerCount('SIGINT')).toBe(0)
+    expect(proc.listenerCount('SIGTERM')).toBe(0)
+    expect(calls.sort()).toEqual(['browser.close', 'server.stop'])
   })
 })

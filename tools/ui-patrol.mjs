@@ -242,9 +242,12 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     const runPatrol = deps.runPatrol ?? runBrowserPatrol
     const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn })
     const reportFile = path.join(options.out, 'report.json')
+    const reportText = formatPatrolReportText(report)
     mkdirSync(options.out, { recursive: true })
     writeFileSync(reportFile, JSON.stringify(report, null, 2))
-    say(options.json ? JSON.stringify(report, null, 2) : formatPatrolReportText(report))
+    // 文の報告も標準出力と同じ文で残す(report.json と並べて、あとから読む人が同じものを見る)。
+    writeFileSync(path.join(options.out, 'report.txt'), `${reportText}\n`)
+    say(options.json ? JSON.stringify(report, null, 2) : reportText)
     if (!options.json) say(`報告: ${reportFile}`)
     return resolveExitCode(report)
   } catch (error) {
@@ -255,32 +258,75 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
   }
 }
 
-/** 開発用サーバー → 教室ごとにブラウザ → 台本。ブラウザとサーバーは finally で必ず止める。 */
-async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say }) {
+/**
+ * Ctrl+C(SIGINT)・SIGTERM を受けたら、片づけ(ブラウザ・開発用サーバー)を済ませてから終了コード 130 で終わる。
+ * 開発用サーバーは別のプロセスグループ(devServer.mjs の detached)なので端末の Ctrl+C が届かず、Node は SIGINT で finally を通らずに
+ * 終わるため、ここで止めないとサーバーが残る(作業 5 修正 1)。戻り値でハンドラを外す。
+ */
+function installSignalCleanup(proc, cleanup) {
+  const handler = () => {
+    void cleanup().catch(() => {}).finally(() => proc.exit(130))
+  }
+  proc.once('SIGINT', handler)
+  proc.once('SIGTERM', handler)
+  return () => {
+    proc.removeListener('SIGINT', handler)
+    proc.removeListener('SIGTERM', handler)
+  }
+}
+
+/**
+ * 開発用サーバー → 教室ごとにブラウザ → 台本。ブラウザとサーバーは、流し終えたとき・例外・シグナルのどれでも 1 つの片づけで止める。
+ * deps はテスト用(偽のサーバー・偽のブラウザ・偽の process)。
+ */
+export async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say }, deps = {}) {
+  const proc = deps.process ?? process
+  const startServer = deps.startDevServer ?? startDevServer
+  const launch = deps.launchPatrolBrowser ?? launchPatrolBrowser
+  const close = deps.closePatrolBrowser ?? closePatrolBrowser
+  const runClassroom = deps.runClassroomPatrol ?? runClassroomPatrol
   const known = readKnown(options.known)
   let report = createPatrolReport({ appVersion: readAppVersion(), backupKey })
-  const server = await startDevServer({ port: options.port, repoRoot: REPO_ROOT, env })
+  let server = null
+  let session = null
+  let cleaned = null
+  const cleanup = () => {
+    // 何度呼ばれても 1 回だけ(シグナルと finally が重なっても二重に止めない)。
+    if (!cleaned) {
+      cleaned = (async () => {
+        const current = session
+        session = null
+        await close(current).catch(() => {})
+        if (server) await server.stop().catch(() => {})
+      })()
+    }
+    return cleaned
+  }
+  const removeSignalHandlers = installSignalCleanup(proc, cleanup)
   try {
+    server = await startServer({ port: options.port, repoRoot: REPO_ROOT, env })
     for (const { classroomId, label, key, seed } of seeds) {
       const started = Date.now()
-      let session = null
       let classroomReport
       try {
-        session = await launchPatrolBrowser({ baseUrl: server.baseUrl, headed: options.headed })
-        classroomReport = await runClassroomPatrol({
+        session = await launch({ baseUrl: server.baseUrl, headed: options.headed })
+        classroomReport = await runClassroom({
           session, app, classroom: { classroomId, label, backupKey: key }, seedSnapshot: seed, options, outDir: options.out, known, today,
         })
       } catch (error) {
         // ブラウザを起動できないなど、台本に入る前に止まった。
         classroomReport = { ...createClassroomReport({ classroomId, label, backupKey: key }), aborted: error instanceof Error ? error.message.split('\n')[0] : String(error) }
       } finally {
-        await closePatrolBrowser(session)
+        const current = session
+        session = null
+        await close(current)
       }
       report = { ...report, classrooms: [...report.classrooms, classroomReport] }
       if (!options.json) say(`  (${label}: ${((Date.now() - started) / 1000).toFixed(1)} 秒)`)
     }
   } finally {
-    await server.stop()
+    await cleanup()
+    removeSignalHandlers()
   }
   return report
 }

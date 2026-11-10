@@ -35,12 +35,17 @@ export function loadPlaywright() {
   }
 }
 
-/** 止めずに通す URL(手元のサーバー・data:・blob:)か。 */
-export function isAllowedPatrolUrl(url) {
+/**
+ * 止めずに通す URL か: 手元のサーバー(baseUrl)と同じ origin(vite の HMR の WebSocket は同じホスト・ポートの ws:)・data:・blob: だけ。
+ * localhost でも別のポートは通さない(手元の別のサーバーへ巡回のデータが流れないように・作業 5 修正 1)。
+ */
+export function isAllowedPatrolUrl(url, baseUrl) {
   if (url.startsWith('data:') || url.startsWith('blob:')) return true
   try {
     const parsed = new URL(url)
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'ws:') && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')
+    const base = new URL(baseUrl)
+    if (parsed.host !== base.host) return false
+    return parsed.protocol === base.protocol || (base.protocol === 'http:' && parsed.protocol === 'ws:')
   } catch {
     return false
   }
@@ -68,12 +73,19 @@ export async function launchPatrolBrowser({ baseUrl, headed = false }) {
   if (!playwright) throw new PatrolAbortError('Playwright が無い環境では回せません。')
   const browser = await playwright.chromium.launch({
     headless: !headed,
+    // Playwright の既定は Ctrl+C でブラウザを閉じてすぐ process.exit する(開発用サーバーを止める前に終わってしまう)。
+    // シグナルは tools/ui-patrol.mjs の installSignalCleanup がまとめて片づける。
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
     args: [
       // ローカルモードのアプリは navigator.webdriver が true だと保存を止める(src/App.tsx の isSnapshotPersistenceRuntimeEnabled)。
       // 巡回は保存も通すので隠す(開いた直後に false を確かめる)。
       '--disable-blink-features=AutomationControlled',
       // localhost 以外は名前解決の段階で止める(本番・外部のサービスへ 1 件も出さない)。
       '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
+      // 環境変数の proxy(HTTPS_PROXY など)を使うと、名前解決はプロキシ側で行われ上の止め方が効かない。プロキシを使わない。
+      '--no-proxy-server',
     ],
   })
   const session = { browser, context: null, page: null, baseUrl, externalRequests: [], pageErrors: [], dialogs: [], downloads: 0, classroomId: null }
@@ -82,12 +94,22 @@ export async function launchPatrolBrowser({ baseUrl, headed = false }) {
     session.context = context
     await context.route('**/*', (route) => {
       const url = route.request().url()
-      if (new URL(url, baseUrl).pathname === BLANK_PATH && isAllowedPatrolUrl(url)) {
+      if (isAllowedPatrolUrl(url, baseUrl) && new URL(url).pathname === BLANK_PATH) {
         return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><title>ui-patrol</title>' })
       }
-      if (isAllowedPatrolUrl(url)) return route.continue()
+      if (isAllowedPatrolUrl(url, baseUrl)) return route.continue()
       session.externalRequests.push(hostOf(url))
       return route.abort('blockedbyclient')
+    })
+    // context.route は WebSocket を捕まえないので別に見る。同じ origin(vite の HMR)だけサーバーへつなぎ、ほかは閉じて記録する。
+    await context.routeWebSocket(/.*/, (socket) => {
+      const url = socket.url()
+      if (isAllowedPatrolUrl(url, baseUrl)) {
+        socket.connectToServer()
+        return
+      }
+      session.externalRequests.push(hostOf(url))
+      void Promise.resolve(socket.close({ code: 1008, reason: 'ui-patrol' })).catch(() => {})
     })
     const page = await context.newPage()
     session.page = page
