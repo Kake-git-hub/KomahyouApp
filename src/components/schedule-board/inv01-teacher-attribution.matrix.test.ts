@@ -1143,3 +1143,53 @@ describe('INV-01 × 並び替えた週の再マージ: 同じ講師が 2 机に�
     })
   })
 })
+
+// 2026-11-10（オーナー決定「手入力は講師について行く」・緑が丘の報告・INV-02・spec-template-conflict-v2 §2-1）: テンプレで講師の机番号を変えて保存すると、
+// 保存の直前に机を新しいテンプレの講師の位置へ移してから突き合わせる。ついて行ったあとも 1 コマに同じ講師は上段に 1 机（INV-01）で、手入力の生徒は
+// ついて行った講師の机にだけ居る（取り残された机で別の講師の担当にならない）。講師名を固定しただけの机（regression-reviewer M-3）も同じ講師の机へ行くので、
+// テンプレのその講師の机が「同じ講師が先にある」で講師なしになることもない。保存結果は再マージ 2 回の不動点。
+describe('INV-01 × テンプレで講師の机番号を変えて保存: ついて行ったあとも 1 コマに同じ講師は上段に 1 机', () => {
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const studentRows: StudentRow[] = [['sA', '青木'], ['sB', '馬場'], ['sM', '三浦']].map(([id, name]) => createStudent({ id, name, displayName: name }))
+  const teacherRows: TeacherRow[] = [['t1', '田中'], ['t2', '鈴木'], ['t3', '佐藤']].map(([id, name]) => createTeacher({ id, name, displayName: name, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }))
+  const row = (id: string, teacherId: string, studentId = ''): RegularLessonRow => createRegularLesson({ id, teacherId, student1Id: studentId, subject1: studentId ? '数' : '', dayOfWeek: 3, slotNumber: 5 })
+  const settings: ClassroomSettings = { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 4, templateFreezeBeforeDate: DATE }
+  const range = { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '' }
+  // 保存前: 机0=田中(青木)・机1=鈴木(馬場)・机2=佐藤(講師だけ)。保存後: 机0=佐藤(講師だけ)・机1=鈴木(馬場)・机2=田中(青木)
+  const OLD = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]
+  const NEW = [row('n0', 't3'), row('n1', 't2', 'sB'), row('n2', 't1', 'sA')]
+  const hand = () => ({ id: 'hand', studentSlots: [mkStudentEntry({ id: 'm', name: '三浦', managedStudentId: 'sM', subject: '数', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] as [StudentEntry | null, StudentEntry | null] })
+  const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+
+  it.each([
+    ['足場講師の机（佐藤）に手入力', (desk: DeskCell): DeskCell => ({ ...desk, lesson: hand() })],
+    ['講師名を固定しただけの机（佐藤・手置きの印だけ）に手入力', (desk: DeskCell): DeskCell => ({ ...desk, manualTeacher: true, lesson: hand() })],
+  ] as const)('%s → 佐藤の新しい机（机0）へ。田中・鈴木・佐藤は上段に 1 机ずつ、三浦は佐藤の机にだけ（再マージ 2 回でも同じ）', (_label, mark) => {
+    const week = buildManagedScheduleCellsForRange({
+      range, fallbackStartDate: range.startDate, fallbackEndDate: range.endDate, classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: OLD, boardWeeks: [],
+    }).map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 2 ? mark(desk) : desk)) }))
+    const saved = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
+      weeks: [week], classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: NEW,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-10-01T00:00:00.000Z', manualMakeupAdjustments: {},
+      previousRegularLessons: OLD,
+    })
+    const remerge = (weeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(weeks, {
+      classroomSettings: settings, teachers: teacherRows, students: studentRows, regularLessons: NEW, suppressedRegularLessonOccurrences: saved.addedSuppressedRegularLessonOccurrences, todayKey: '2026-10-01',
+      templateOriginRules: { pendingDesks: saved.nextPendingDesks },
+    })
+    const once = remerge(saved.nextWeeks)
+    const twice = remerge(once)
+    expect(saved.nextPendingDesks).toEqual({})
+    for (const weeks of [saved.nextWeeks, once, twice]) {
+      const desks = cellOf(weeks).desks
+      for (const name of ['田中', '鈴木', '佐藤']) expect(desks.filter((desk) => desk.teacher === name), name).toHaveLength(1)
+      const holding = desks.filter((desk) => (desk.lesson?.studentSlots ?? []).some((student) => student?.managedStudentId === 'sM'))
+      expect(holding.map((desk) => desk.teacher)).toEqual(['佐藤'])
+      expect(desks.findIndex((desk) => desk.teacher === '佐藤')).toBe(0)
+      // テンプレの生徒の居る机に講師欄が空の机が残らない
+      expect(desks.filter((desk) => !desk.teacher && (desk.lesson?.studentSlots ?? []).some(Boolean))).toEqual([])
+    }
+    expect(cellOf(twice)).toEqual(cellOf(once))
+  })
+})

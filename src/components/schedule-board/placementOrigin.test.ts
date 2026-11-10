@@ -221,7 +221,12 @@ describe('1-6(改・§9-22 案 A・オーナー決定 2026-11-06): コマ表の�
     expect(run).toMatch(/computeTemplateDiffApply\(\{\s+weeks,/)
     expect(run).toContain('buildTemplateTeacherRestPredicate(weeks, teacherAliases)')
     const restore = text.slice(text.indexOf('export function restoreTemplateDeskOrderForDiff('), text.indexOf('export function collectSameDayMovedTemplateOccurrenceKeys('))
-    expect(restore).toContain('restoreTemplateDeskOrder(cell, anchor.raw.desks')
+    // 2026-11-10（「手入力は講師について行く」・INV-02）: 講師の机は新しいテンプレ（applied）の講師の位置へ。下の空き机へ移した手入力は確認画面の行の材料として返す。
+    expect(restore).toContain('restoreTemplateDeskOrderWithMoves(cell, anchor.raw.desks')
+    expect(restore).toContain('usedDesks: templateCell.applied.desks,')
+    expect(restore).toContain('for (const move of teacherLeftMoves) params.onTeacherLeftMove?.(move)')
+    expect(run).toContain('onTeacherLeftMove: (move) => teacherLeftMoves.push(move)')
+    expect(run).toContain('return { diff, suppressed, removedSuppressed, templateCells, teacherLeftMoves }')
     expect(restore).toContain('lockedDeskIds: collectTemplatePendingDeskIdsInCell(params.templatePendingDesks, cell.id)')
   })
 })

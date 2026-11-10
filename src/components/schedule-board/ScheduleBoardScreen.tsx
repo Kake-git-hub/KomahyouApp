@@ -66,7 +66,7 @@ import {
   TEMPLATE_PENDING_MESSAGES,
   withTemplatePendingTeacherChoice,
 } from './templatePendingResolution'
-import { restoreTemplateDeskOrder } from './templateDeskOrderRestore'
+import { restoreTemplateDeskOrderWithMoves, type TemplateDeskTeacherLeftMove } from './templateDeskOrderRestore'
 import { hasDeskSeatContent } from './teacherDragSource'
 import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from './templatePendingRowHighlight'
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
@@ -3165,6 +3165,12 @@ export function computeTemplateDiffApplyForBoard(input: {
     ...orphaned.removals.map((item): TemplateDiffStudentNote => ({ kind: 'orphan-removed', studentName: noteName(item.student), subject: item.student.subject, dateKey: item.sourceDateKey, slotNumber: item.sourceSlotNumber, detail: `振替先 ${formatTemplateDiffMonthDay(item.targetDateKey)}` })),
     // Q41（2026-10-21）: 手置き講師の扱い（重ねて保留／テンプレの講師に替わる）。
     ...run.diff.teacherNotes.map((item): TemplateDiffStudentNote => ({ kind: item.kind, studentName: item.teacherName, subject: '', dateKey: item.dateKey, slotNumber: item.slotNumber, detail: item.templateTeacher, ...(item.keptStudentNames && item.keptStudentNames.length > 0 ? { keptStudentNames: [...item.keptStudentNames] } : {}), ...(item.templateTeacherOnly ? { templateTeacherOnly: true } : {}) })),
+    // 2026-11-10（「手入力は講師について行く」・spec §2-1）: 講師が新しいテンプレのそのコマにいない机の手入力の生徒（名前つき）。テンプレが使わない机へ移した（teacher-left-moved）か、
+    // 空いた机が無く残った机（別の講師の机になりうる）へ入った（teacher-left-no-desk・必ず出す・regression-reviewer M-2）。末尾に並べる（L-2）。
+    ...run.teacherLeftMoves.flatMap((move) => move.manualStudents.map((student): TemplateDiffStudentNote => ({
+      kind: move.kind === 'no-desk' ? 'teacher-left-no-desk' : 'teacher-left-moved', studentName: noteName(student), subject: student.subject, dateKey: move.dateKey, slotNumber: move.slotNumber, detail: String(move.toDeskIndex + 1),
+      formerTeacherName: move.formerTeacherName, ...(move.movedTeacherName ? { movedTeacherName: move.movedTeacherName } : {}), ...(move.deskTeacherName ? { deskTeacherName: move.deskTeacherName } : {}),
+    }))),
   ]
   // 追従で触ったセルは再マージの重ね合わせにだけ足す（Q36 の次の反復の絞り込みは入口のまま＝反復ごとに範囲が広がらない・regression-reviewer M-1）。
   const settleSlotFilter = extendTemplateDiffSlotFilterWithCells(params.slotFilter, new Set([...removal.touchedCellIds, ...follow.touchedCellIds, ...slotFollow.touchedCellIds]))
@@ -3272,7 +3278,10 @@ function runTemplateDiffApplyV2(params: {
       : JSON.stringify(previousTemplateRows.rows) === JSON.stringify(params.regularLessons)
         ? templateCells
         : buildTemplateDiffTemplateCells({ ...params, regularLessons: [...previousTemplateRows.rows], suppressedRegularLessonOccurrences: suppressed })
-  const weeks = restoreTemplateDeskOrderForDiff({ weeks: params.weeks, templateCells, effectiveStartDate: params.effectiveStartDate, templatePendingDesks: params.templatePendingDesks, teacherAliases, anchorCells })
+  // 2026-11-10（オーナー決定「手入力は講師について行く」・緑が丘の報告・INV-02）: 戻す先は新しいテンプレ（templateCells の applied）の講師の位置。
+  //   講師が新しいテンプレのそのコマにいない机の手入力は、テンプレが使わない机へ移す（teacherLeftMoves＝確認画面の行の材料・試し実行と保存本体で同じ）。
+  const teacherLeftMoves: TemplateDeskTeacherLeftMove[] = []
+  const weeks = restoreTemplateDeskOrderForDiff({ weeks: params.weeks, templateCells, effectiveStartDate: params.effectiveStartDate, templatePendingDesks: params.templatePendingDesks, teacherAliases, onTeacherLeftMove: (move) => teacherLeftMoves.push(move), anchorCells })
   const diff = computeTemplateDiffApply({
     weeks,
     templateCells,
@@ -3286,7 +3295,7 @@ function runTemplateDiffApplyV2(params: {
     // §2-4 講師の休み（休みが勝つ）: 休みの講師はそのコマのどの机にも置かない。再マージ（overlayPreparedManagedCells）と同じ述語。
     isTeacherOnRest: buildTemplateTeacherRestPredicate(weeks, teacherAliases) ?? undefined,
   })
-  return { diff, suppressed, removedSuppressed, templateCells }
+  return { diff, suppressed, removedSuppressed, templateCells, teacherLeftMoves }
 }
 
 /**
@@ -3355,6 +3364,7 @@ function buildTemplateDiffAnchorCellsByDate(params: Parameters<typeof buildTempl
  * §9-22 案 A: 差分反映の直前に、反映日以降のコマの机をテンプレの並びへ戻す（restoreTemplateDeskOrder）。基準（anchorCells）は盤面の元になったテンプレ
  * （保存前の行・抑止前の raw）。手入力だけの机を寄せる「テンプレが使わない番号」は反映するテンプレ（templateCells の applied）で決める。
  * 休日のコマ・丸ごと振替の日（足場講師を外す日）・基準の無いコマは戻さない。変えないコマ・週は参照ごとそのまま返す（INV-10）。
+ * 2026-11-10（オーナー決定「手入力は講師について行く」・INV-02）: 講師の机は新しいテンプレ（applied）のその講師の机番号へ移す（基準は机の講師を決めるのに使う）。
  */
 export function restoreTemplateDeskOrderForDiff(params: {
   weeks: SlotCell[][]
@@ -3363,6 +3373,8 @@ export function restoreTemplateDeskOrderForDiff(params: {
   effectiveStartDate: string
   templatePendingDesks: TemplatePendingDeskMap
   teacherAliases?: TeacherAliasResolver
+  /** 講師が新しいテンプレのそのコマにいない机の手入力の行き先（テンプレが使わない机へ移した／空いた机が無く残った机へ入った）を受け取る（確認画面の行の材料）。 */
+  onTeacherLeftMove?: (move: TemplateDeskTeacherLeftMove) => void
 }): SlotCell[][] {
   if (!params.anchorCells || params.anchorCells.length === 0) return params.weeks
   const anchorByDateSlot = new Map(params.anchorCells.map((entry) => [buildCellDateSlotKey(entry.raw), entry]))
@@ -3378,12 +3390,14 @@ export function restoreTemplateDeskOrderForDiff(params: {
       const templateCell = templateByDateSlot.get(key)
       const anchor = anchorByDateSlot.get(key)
       if (!templateCell || !anchor || !templateCell.applied.isOpenDay || templateCell.scaffoldTeachersStripped || anchor.scaffoldTeachersStripped) return cell
-      const restored = restoreTemplateDeskOrder(cell, anchor.raw.desks, {
+      // 2026-11-10: usedDesks（反映するテンプレ）が戻す先の講師の位置と、手入力を寄せる「テンプレが使わない番号」の両方を決める。
+      const { cell: restored, teacherLeftMoves } = restoreTemplateDeskOrderWithMoves(cell, anchor.raw.desks, {
         usedDesks: templateCell.applied.desks,
         lockedDeskIds: collectTemplatePendingDeskIdsInCell(params.templatePendingDesks, cell.id),
         aliases: params.teacherAliases,
       })
       if (restored !== cell) changed = true
+      for (const move of teacherLeftMoves) params.onTeacherLeftMove?.(move)
       return restored
     })
     if (!changed) return week
