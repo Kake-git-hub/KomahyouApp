@@ -207,7 +207,8 @@ describe('確認リストの項目定義', () => {
     // 第128版(2026-11-08): 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 は開発用教室だけ(本番の教室名が出るのでテスト教室には出さない)。
     // 第129版(2026-11-08): 作成済みの講習が非公開になったことを本番の教室で見る pr-4 も開発用教室だけ。
     // 第130版(2026-11-09): 自動処理を操作痕跡に残す確認 tr-1 も開発用教室だけ(記録は Claude がツールで読む)。
-    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1']
+    // 第131版(2026-11-10): 先の反映日のテンプレがあっても手入力が講師の机から動かない確認 tf-1 も開発用教室だけ。
+    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
@@ -265,7 +266,8 @@ describe('確認リストの項目定義', () => {
     // 第128版(2026-11-08・v1.5.711): 11/8 の送信で se-9・se-10・mg-2 も OK → 外し、4 機能の全教室展開の確認 pr-1〜pr-3 を足した(開発用教室だけ)。
     // 第129版(2026-11-08・v1.5.711 据え置き): 作成済みの講習をすべて非公開にした確認 pr-4 を足した(開発用教室だけ)。
     // 第130版(2026-11-09・v1.5.714 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 自動処理を操作痕跡に残す確認 tr-1 を足した(開発用教室だけ)。
-    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1'])
+    // 第131版(2026-11-10・v1.5.715 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 先の反映日のテンプレがあっても手入力が講師の机から動かない確認 tf-1(開発用教室だけ)。
+    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual([])
     expect(ids).not.toContain('mg-1')
     expect(ids).not.toContain('mg-2')
@@ -1253,7 +1255,8 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
 
   it('版は v1.5.711(OK 済みを外したので上げる)。項目は 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 と、第129版の pr-4(第130版で tr-1 を足した・版は据え置き)', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
-    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1'])
+    // 第131版(2026-11-10): tf-1 を足した(版は据え置き)。
+    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1'])
   })
 
   it('第129版: pr-4(作成済みの講習がすべて非公開)は v1.5.712 で追加・開発用教室だけ・本番の教室では公開を押さない。pr-2 も「非公開」へ', () => {
@@ -1330,5 +1333,28 @@ describe('第130版(2026-11-09・版は v1.5.711 据え置き): 自動処理を�
     expect(check).toContain('「保存」できる')
     expect(check).toContain('机の名前だけ新しい名前になる')
     expect(check).toContain('勝手に動いていない')
+  })
+})
+
+// 第131版(2026-11-10・v1.5.715 で入る・版は v1.5.711 据え置き＝確認中の版へ項目を足しただけ): 緑が丘の報告(先の反映日のテンプレが保存済みの教室で、
+// 並べ替えた週へテンプレを保存すると手入力の生徒が講師の机から離れた・INV-02)の修正の確認。
+describe('第131版(2026-11-10・版は v1.5.711 据え置き): 先の反映日のテンプレがあっても手入力が講師の机から動かない確認 tf-1', () => {
+  const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tf-1')!
+
+  it('v1.5.715 で追加(版は v1.5.711 据え置き)・開発用教室だけ・準備するは付けない', () => {
+    expect(item).toBeDefined()
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
+    expect(item.introducedIn).toBe('v1.5.715')
+    expect(item.area).toBe('コマ表')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('tf-1')
+    expect(item.autoPrep).toBeUndefined()
+  })
+
+  it('操作は 先の反映日で保存 → 来週を並べ替えて保存 → 来週の反映日で保存。確認は講師の机にいる・2 行にならない・講師のいない机へ移らない', () => {
+    expect(item.steps).toHaveLength(3)
+    expect(item.steps[0]).toContain('2か月先')
+    expect(item.steps[1]).toContain('「上に詰めて並べ替え」')
+    expect(item.steps[2]).toContain('来週')
+    expect(item.check).toEqual(['手で置いた生徒は同じ講師の机にいる', 'その机が2行(緑)にならない', '講師のいない机へ移っていない'])
   })
 })
