@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { auditClassroomSnapshot, INV_AUDIT_RULES } from './invAuditEntry.ts'
@@ -466,7 +466,9 @@ describe('CLI(束ねて実行・教室別バックアップの .json.gz を読�
       writeFileSync(knownFile, JSON.stringify([{ rule: 'INV-12', classroomId: ROOM, dateKey: '2026-11-18', slotNumber: 5, studentId: 's1' }]))
       const cli = path.join(import.meta.dirname, 'inv-audit.mjs')
       const cacheDir = path.join(import.meta.dirname, '..', 'node_modules', '.cache')
-      const before = readdirSync(cacheDir).filter((name) => name.startsWith('inv-audit-'))
+      // CI の新しい node_modules には .cache が無い(2026-11-10 CI で ENOENT)。無ければ空として数える。
+      const listCache = () => (existsSync(cacheDir) ? readdirSync(cacheDir).filter((name) => name.startsWith('inv-audit-')) : [])
+      const before = listCache()
 
       const json = JSON.parse(execFileSync(process.execPath, [cli, file, '--classroom', ROOM, '--today', TODAY, '--known', knownFile, '--json'], { encoding: 'utf8' }))
       expect(json.counts['INV-12']).toBe(0)
@@ -480,7 +482,7 @@ describe('CLI(束ねて実行・教室別バックアップの .json.gz を読�
       const named = execFileSync(process.execPath, [cli, file, '--classroom', ROOM, '--today', TODAY, '--show-names'], { encoding: 'utf8' })
       expect(named).toContain('生徒A')
 
-      expect(readdirSync(cacheDir).filter((name) => name.startsWith('inv-audit-'))).toEqual(before)
+      expect(listCache()).toEqual(before)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
