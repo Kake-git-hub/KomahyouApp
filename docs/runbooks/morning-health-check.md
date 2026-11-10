@@ -93,6 +93,9 @@ done
   - 日付の無い所見(未消化講習・写しトークンなど)を載せるときは `dateKey`・`slotNumber` を書かず、`kind`(所見の種類)・`subject`・`sessionId` で絞る(例 `{ "rule": "INV-06", "kind": "lecture-overconsumed", "classroomId": "…", "studentId": "s0xx", "subject": "数", "sessionId": "…", "note": "…" }`。書いた項目だけ一致を要求する)。**オーナー確認前の所見は載せない**。
 - `--show-names` を付けると名簿の名前を添える。**その出力はスクラッチ領域にだけ置き、報告・Issue に貼らない**(既定は生徒 ID だけ)。
 
+> **画面の自動巡回は健診に入れない**（オーナー決定 2026-11-11）。`tools/ui-patrol.mjs` は、盤面や画面を変えた修正を main へ入れる前に Claude が回す
+> （`docs/runbooks/ui-patrol.md`）。毎晩の自動実行は第 2 段の案で、まだ決まっていない。
+
 ## 5. GitHub と外形監視
 
 公開リポジトリなので、GitHub の公開 API を**認証なし**で読む(スケジュール実行のセッションでは `gh` がリポジトリに繋がらず 403 になる・2026-11-09 の初回で確認)。
