@@ -3,7 +3,9 @@
 // 実際のテンプレ保存の差分反映（computeTemplateDiffApplyForBoard）を通し、保存後の形が確認リストの項目の「OK の目安」と合うことを固定する。
 //   tp-69: 手置き講師だけの机 → テンプレに別の講師＋確認用の生徒 → 保留（緑）: 上＝テンプレの講師＋確認用の生徒・講師欄の下＝手置き講師。
 //   tp-70: 手置き講師＋体験の机 → テンプレに別の講師だけ → 体験は席に 1 行のまま・講師欄だけ上＝テンプレ・下＝手置き。
-//   tp-59: 机 A に手置き講師 X＋体験 → テンプレの別の机 B に X＋確認用の生徒 → A は X＋体験の 1 行・B は確認用の生徒だけで講師欄は空・保存の「詳細」に講師 X の行。
+//   tp-59: 机 A に手置き講師 X＋体験 → テンプレの別の机 B に X＋確認用の生徒 → （2026-11-10 オーナー決定・§9-1 改定）A は B へ合流＝B は X の 1 行で確認用の生徒、
+//          体験は同じ席がぶつかるので B の下の行（保留・緑）。A は空き机。「詳細」に「講師が別の机にいる」の行は出ない。
+//          （改定前: A は X＋体験の 1 行・B は確認用の生徒だけで講師欄は空＝B の生徒が講師なしになっていた。）
 // 第119版（2026-11-07）: 準備の結果の文は「準備しました（日付 時限）。」＋保存の一言の 2 行だけ。保存の中身（確認画面の「詳細」と同じ文）は
 // 結果の文に載せなくなったので、保存が返した summary・studentNotes から確認画面と同じ文（buildTemplateDiffConfirmDetail）を作って見る。
 // 項目の文に差し込む facts（いつ・どの机・誰）が、その項目の文の {{prep:キー}} を全部埋めることも固定する。
@@ -247,7 +249,10 @@ describe('tp-70: 講師だけのテンプレ机と同じ番号に手置き講師
 })
 
 describe('tp-59: 手置き講師 X の机があるコマで、テンプレが別の机に X を生徒つきで置く', () => {
-  it('準備 → テンプレ保存: 机 A は X＋体験の 1 行（緑にならない）。机 B は確認用の生徒だけで講師欄は空。「詳細」に講師 X の行', () => {
+  // 2026-11-10 オーナー決定・§9-1 改定（spec §2-3「同じ講師として合流する」・緑が丘の報告「テンプレで入れた先生が消えちゃう」）: 改定前は「机 A は X＋体験の 1 行・
+  // 机 B は確認用の生徒だけで講師欄は空・詳細に講師 X の行（teacher-elsewhere）」を固定していた。改定後は、机 A（授業の手がかりの無い手置き講師の机）を B へ合流させる。
+  // 準備の手順（ops・テンプレへの登録・facts）は変えていないので、変えたのは保存後の形と「詳細」の期待だけ。
+  it('準備 → テンプレ保存: 机 A は机 B へ合流。B は X の 1 行（講師欄は 1 行）で確認用の生徒・体験は同じ席がぶつかるので B の下の行（緑）。A は空き机。「詳細」に講師 X の「別の机」の行は出ない', () => {
     const { plan, prepared, saved, message, facts, detail } = prepareAndSave('tp-59', initialStage())
     // 机 A は盤面の机 5（机 B が入る盤面の机 4 は空けておく）。
     expect(plan.ops.map((op) => [op.kind, op.deskIndex])).toEqual([['manual-teacher', 4], ['trial', 4]])
@@ -255,16 +260,22 @@ describe('tp-59: 手置き講師 X の机があるコマで、テンプレが別
     expect(plan.templateTeacherRegistrations.map((entry) => [entry.templateDeskIndex, entry.teacherId])).toEqual([[4, 't4']])
     expect(plan.templateRegistrations.map((entry) => [entry.templateDeskIndex, entry.studentIndex])).toEqual([[4, 0]])
     const desks = cellOf(saved.nextWeeks).desks
-    // A: X＋体験の 1 行（保留にならない）。
-    expect(desks[4]).toMatchObject({ teacher: '高木', manualTeacher: true })
-    expect(names(desks[4])).toEqual(['確認用 体験1', null])
-    expect(saved.nextPendingDesks).toEqual({})
-    // B: 確認用の生徒だけ・講師欄は空。
-    expect(desks[3].teacher).toBe('')
+    // B（盤面の机 4）: 手置きの X（高木）の 1 行＋確認用の生徒。体験は同じ席（生徒 1）がぶつかるので B の下の行（保留・緑）。講師欄は 2 行にならない（下の行に講師なし）。
+    expect(desks[3]).toMatchObject({ teacher: '高木', manualTeacher: true, teacherAssignmentSource: 'manual' })
     expect(names(desks[3])).toEqual([prepared.assigned[0].studentName, null])
-    // X は 1 つの机だけ。
+    expect(Object.keys(saved.nextPendingDesks)).toEqual([buildTemplatePendingDeskKey(CELL_ID, desks[3].id)])
+    const lowerB = saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desks[3].id)].lower
+    expect(lowerB.lesson?.studentSlots.map((student) => student?.name ?? null)).toEqual(['確認用 体験1', null])
+    expect(lowerB.teacher).toBeUndefined()
+    expect(desks[3].templateTeacherDeclined).toBeUndefined()
+    // A（盤面の机 5）: 空き机（X も体験も B へ移った）。
+    expect(desks[4].teacher).toBe('')
+    expect(names(desks[4])).toEqual([null, null])
+    // X は 1 つの机だけ・生徒の居る机に講師欄が空の机が無い。
     expect(desks.filter((desk) => desk.teacher === '高木')).toHaveLength(1)
-    expect(detail).toContain('講師 高木: 同じコマの机 5 に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません')
+    expect(desks.filter((desk) => !desk.teacher && names(desk).some(Boolean))).toEqual([])
+    expect(detail).not.toContain('手で置いた同じ講師が先にあるため')
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')).toEqual([])
     expect(message.split('\n')).toHaveLength(2)
     expect(facts).toEqual({ slot: '10/8(木) 5限', deskA: '机 5', deskB: '机 4', X: '高木', trial: '確認用 体験1', A: prepared.assigned[0].studentName })
   })
@@ -278,7 +289,9 @@ describe('tp-59: 手置き講師 X の机があるコマで、テンプレが別
       scheduleCountAdjustments: [], previousRegularLessons: rows,
     })
     expect(cellOf(again.nextWeeks)).toEqual(cellOf([first.next.week]))
-    expect(again.nextPendingDesks).toEqual({})
+    // 2026-11-10 オーナー決定・§9-1 改定: 合流した B の下の行（体験）が 1 机あるので、保存し直しても同じ保留のまま（改定前は保留なし）。
+    expect(again.nextPendingDesks).toEqual(first.next.pendingDesks)
+    expect(Object.keys(again.nextPendingDesks)).toHaveLength(1)
   })
 })
 

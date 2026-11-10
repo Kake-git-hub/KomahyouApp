@@ -466,7 +466,8 @@ describe('v2-6: 丸ごと振替の解除で移した手入力が元の席へ戻�
   })
 })
 
-describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席へ上がり、手置き講師がテンプレの別の机にも居る机は手置き講師のまま。同じ日に動かして休みにした授業は戻らない', () => {
+// 2026-11-10 オーナー決定・§9-1 改定: 題の「手置き講師がテンプレの別の机にも居る机は手置き講師のまま」は「テンプレの X の机へ合流」に改めた（下の it の注記）。
+describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席へ上がり、手置き講師はテンプレの別の机の同じ講師へ合流する。同じ日に動かして休みにした授業は戻らない', () => {
   const opsOf = (run: Run) => stepsOf(run).flatMap((step) => (step.kind === 'board' ? step.ops : []))
   const templateSteps = (run: Run) => stepsOf(run).filter((step) => step.kind === 'template')
 
@@ -482,7 +483,10 @@ describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席�
     expect(lower?.lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', origin: 'manual' })
   })
 
-  it('準備（最後の保存まで）: A はテンプレの机の席に 1 行（緑は消える）・X の机は X の 1 行で別の机に X も別の講師も入らない・R の元の時限に授業は戻らない', () => {
+  // 2026-11-10 オーナー決定・§9-1 改定（spec §2-3「同じ講師として合流する」）: (2) は改定前「手置き講師 X の机 K は X の 1 行のまま・テンプレの X の机にも別の講師 W も入らない・
+  // 詳細に teacher-kept の行」を固定していた。K は X を空き机へ手で置いた机（机のテンプレの授業の手がかりが無い）なので、改定後は X がテンプレの X の机へ合流し、K にはテンプレの W が入る。
+  // (1)・(3) の期待は変えていない。
+  it('準備（最後の保存まで）: A はテンプレの机の席に 1 行（緑は消える）・手置き講師 X はテンプレの X の机へ合流して 1 行・K にはテンプレの W・R の元の時限に授業は戻らない', () => {
     const start = initialStage()
     const run = runPrep('v2-3', start)
     const makeup = opsOf(run).find((op) => op.kind === 'makeup') as { studentId: string; to: { cellId: string; deskIndex: number; dateKey: string } }
@@ -507,13 +511,16 @@ describe('v2-3: 緑の下の行だけの手入力の生徒はテンプレの席�
     const lastSave = run.saves[run.saves.length - 1]
     expect(lastSave.summary.skippedDuplicateStudents).toBe(0)
     expect(lastSave.studentNotes.filter((note) => note.studentName === aName).map((note) => note.kind)).toEqual(['lower-promoted'])
-    // (2) X の机は X の 1 行（手置き）。テンプレの X の机にも、別の講師 W も入らない。このコマの X は 1 回だけ。
+    // (2) 手置き講師 X は、テンプレの X の机へ合流して X の 1 行（手置きのまま・講師欄は 2 行にならない）。X を置いていた机 K にはテンプレの W。このコマの X・W は 1 回ずつ。
     const [registeredW, registeredX] = final.teacherRegistrations
-    expect(cell.desks[teacherOp.to.deskIndex]).toMatchObject({ teacher: teacherOp.teacherName, manualTeacher: true })
+    expect(registeredX.teacherName).toBe(teacherOp.teacherName)
+    expect(cell.desks[registeredX.deskIndex]).toMatchObject({ teacher: teacherOp.teacherName, manualTeacher: true, teacherAssignmentSource: 'manual' })
+    expect(cell.desks[registeredX.deskIndex].templateTeacherDeclined).toBeUndefined()
+    expect(cell.desks[teacherOp.to.deskIndex]).toMatchObject({ teacher: registeredW.teacherName, manualTeacher: false })
     expect(cell.desks.filter((desk) => desk.teacher === registeredX.teacherName)).toHaveLength(1)
-    expect(cell.desks.some((desk) => desk.teacher === registeredW.teacherName)).toBe(false)
-    expect(cell.desks[registeredX.deskIndex].teacher).not.toBe(registeredX.teacherName)
-    expect(detail).toContain(`この机の手で置いた講師 ${teacherOp.teacherName}は同じコマの別の机にもテンプレで入るため`)
+    expect(cell.desks.filter((desk) => desk.teacher === registeredW.teacherName)).toHaveLength(1)
+    expect(detail).not.toContain(`この机の手で置いた講師 ${teacherOp.teacherName}は同じコマの別の机にもテンプレで入るため`)
+    expect(detail).not.toContain('手で置いた同じ講師が先にあるため')
     // (3) R の元の時限（テンプレの位置）には授業が戻らず、休みの記録は動かした先のコマ。R の未消化振替は休みの 1 件だけ。
     expect(placesOf(run.stage.weeks, move.studentId, cellOf(run.stage.weeks, move.fromCellId).dateKey)).toEqual([])
     expect(recordsOf(run.stage.weeks, move.studentId)).toEqual([`${move.to.cellId}:absent`])

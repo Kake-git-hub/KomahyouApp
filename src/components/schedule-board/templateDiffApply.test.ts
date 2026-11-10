@@ -1700,7 +1700,9 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
     expect(liveNames(deskOf(tomb.nextWeeks, 0))).toEqual(['sA'])
   })
 
-  it('§2-3（2-6・§9-1）: 手置き講師 佐藤の机 2 があるコマでテンプレが机 0 に佐藤＋A → 机 0 に佐藤を置かない（A は置く・講師欄は空）。同じ講師は 2 机に出ない', () => {
+  // 2026-11-10 オーナー決定・§9-1 改定（regression-reviewer M-1）: 保存前の行を渡さない＝並べ直しを通らない差分反映単体の保険（合流できないとき＝手置きが勝つ）。
+  // 本番の保存では手置きの佐藤の机（授業の手がかり無し）はテンプレの佐藤の机へ合流する（inv02-manual-teacher-pending.matrix の「本番経路」・inv02-manual-edit-persistence.matrix の「合流」）。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】§2-3（2-6・§9-1）: 手置き講師 佐藤の机 2 があるコマでテンプレが机 0 に佐藤＋A → 机 0 に佐藤を置かない（A は置く・講師欄は空）。同じ講師は 2 机に出ない', () => {
     const week = mutateDesk(buildWeek(OLD_ROWS), 2, (desk) => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3' }))
     const saved = saveStable(week, [row('r0', 't3', 'sA', '数'), row('r1', 't2', 'sB', '数')])
     expect(deskOf(saved.nextWeeks, 0).teacher).toBe('')

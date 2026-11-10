@@ -631,7 +631,9 @@ function planTp70(context: CellContext, input: ChecklistPrepInput, aliases: Teac
 }
 
 // tp-59（手置き講師 X の机があるコマで、テンプレが別の机に X を生徒つきで置く）: 盤面の机 A（着地の机より後ろの空き机）に X と体験。
-// テンプレの机 B（保存後に盤面の着地の机に入る）に X と確認用の生徒。保存すると A は X＋体験の 1 行、B は確認用の生徒だけで講師欄は空（手入力が勝つ）。
+// テンプレの机 B（保存後に盤面の着地の机に入る）に X と確認用の生徒。保存すると A は B へ合流し、B は X の 1 行で確認用の生徒、体験は同じ席がぶつかるので
+// B の下の行（緑）に入る。A は空き机になる（2026-11-10 オーナー決定・§9-1 の改定「同じ講師として合流する」。改定前は「A は X＋体験の 1 行、B は確認用の生徒だけで
+// 講師欄は空（手入力が勝つ）」で、B の生徒が講師なしになっていた）。
 function planTp59(context: CellContext, input: ChecklistPrepInput, aliases: TeacherAliasResolver, serials: { trial: number; memo: number }): CellPlan | null {
   const { cell } = context
   const slot = resolvePackedTemplateSlot(context, input, aliases)
@@ -654,7 +656,7 @@ function planTp59(context: CellContext, input: ChecklistPrepInput, aliases: Teac
     ],
     lines: [
       `机 A（${cellLabel(cell)} 机 ${deskA + 1}）に講師 ${teacherName} を手で置き、生徒 1 に体験「${trialName}」を置きました。`,
-      `机 B（テンプレの ${templateDeskText(cell, slot.templateDeskIndex)}）に講師 ${teacherName} と確認用の生徒を登録して保存します（保存後はコマ表の机 ${deskB + 1} に入ります）。保存すると机 A は ${teacherName} と体験の 1 行のまま、机 B は確認用の生徒だけが入り講師欄は空になります。`,
+      `机 B（テンプレの ${templateDeskText(cell, slot.templateDeskIndex)}）に講師 ${teacherName} と確認用の生徒を登録して保存します（保存後はコマ表の机 ${deskB + 1} に入ります）。保存すると机 A は机 B へまとまり、机 B は講師 ${teacherName} の 1 行に確認用の生徒が入ります（体験は同じ席なので机 B の下の行・緑）。机 A は空きます。`,
     ],
     templateRegistrations: [{ dayOfWeek: slot.dayOfWeek, slotNumber: cell.slotNumber, deskIndex: deskB, templateDeskIndex: slot.templateDeskIndex, studentIndex: 0, subject: profile.subject, label: '机 B', factKey: 'A' }],
     templateTeacherRegistrations: [{ dayOfWeek: slot.dayOfWeek, slotNumber: cell.slotNumber, deskIndex: deskB, templateDeskIndex: slot.templateDeskIndex, teacherId: teacher.id, teacherName, label: '机 B' }],

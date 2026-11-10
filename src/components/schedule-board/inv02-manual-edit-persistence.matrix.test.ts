@@ -1979,7 +1979,9 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
   // 削除した講師は足さない」）が外すため、保存の結果が再マージの不動点にならなかった（中身は失われない・保存直後の effect で足場講師が外れるだけ）。
   // 2026-09-30（regression-reviewer L-7 兄弟 2）: 差分反映の入口が保存結果へ再マージの重ね合わせを 1 回当てるようにしたので、保存の時点で
   // 足場講師は外れた形になる（保存直後の effect の結果と同じ＝利用者に見える結果は従来と同じ）。saveAndRemerge が再マージ 2 回の不動点を検査する。
-  it('QR 講師と同名のテンプレ足場講師（講師だけの机）が同じコマの別の机にあっても、保存結果が再マージの不動点になる（足場講師は置かず QR 講師は 1 人のまま）', () => {
+  // 2026-11-10 オーナー決定・§9-1 改定（regression-reviewer M-1）: saveAndRemerge に保存前の行を渡さない＝並べ直しを通らない差分反映単体の保険。本番の保存では
+  // QR の田中の机（授業の手がかり無し）はテンプレの田中の机へ合流する（下の「本番経路の対」）。assert は変えていない。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】QR 講師と同名のテンプレ足場講師（講師だけの机）が同じコマの別の机にあっても、保存結果が再マージの不動点になる（足場講師は置かず QR 講師は 1 人のまま）', () => {
     const qrDesk = (desk: DeskCell): DeskCell => ({
       ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't1',
       lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
@@ -1998,7 +2000,8 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
   // QR 机の中身（講習生徒）は残り、手置きの講師（manual）は対象外（INV-02）。
   // 第 2 版（§2-3・§9-1・§9-13。旧 2026-10-15「QR 机の講師をテンプレに寄せて外す」・決定記録 66 は廃止）: 手置き・QR の講師 X が先にあれば、テンプレが別の机に X を置いても
   // その机には X を置かない（生徒は置く・講師欄は空）。同じ講師は上段に 1 机まで（INV-01）。保存結果は再マージ（フラグ ON）の不動点。
-  it('QR 講師と同じ講師をテンプレが同じコマの別の机に生徒つきで置く → その机には置かない（A は置く・講師欄は空）。手置きの同じ講師も同じ。保存結果は再マージの不動点', () => {
+  // 2026-11-10 オーナー決定・§9-1 改定（regression-reviewer M-1）: 同じく差分反映単体の保険（本番経路では合流＝下の「本番経路の対」）。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】QR 講師と同じ講師をテンプレが同じコマの別の机に生徒つきで置く → その机には置かない（A は置く・講師欄は空）。手置きの同じ講師も同じ。保存結果は再マージの不動点', () => {
     const qrDesk = (desk: DeskCell): DeskCell => ({
       ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't1',
       lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
@@ -2028,6 +2031,31 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     expect(manualCell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
     expect(manual.saved.nextPendingDesks).toEqual({})
     expect(manual.saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => [note.studentName, note.detail])).toEqual([['田中', '3']])
+  })
+
+  // 上の 2 行の本番経路の対（保存前の行あり＝並べ直しを通る・2026-11-10 オーナー決定・§9-1 改定・spec §2-3「同じ講師として合流する」）:
+  // QR・手置きの田中の机（授業の手がかり無し）は、テンプレの田中の机へ手入力ごと合流する（講師欄は田中の 1 行・テンプレの A は置く・講習の M は空いた席か下の行）。
+  // 田中はこのコマに 1 机・生徒の居る机に講師欄が空の机が残らない・理由の行（teacher-elsewhere）は出ない。再マージ 2 回の不動点は saveAndRemerge が見る。
+  it.each([
+    ['QR（schedule-registration）', { teacherAssignmentSource: 'schedule-registration' as const, teacherAssignmentSessionId: 'ss1' }],
+    ['手置き（manual）', { teacherAssignmentSource: 'manual' as const, teacherAssignmentSessionId: undefined }],
+  ])('本番経路の対: %s の田中＋講習 M の机 0 × テンプレが机 2 に田中＋A → 田中の机は机 2 へ合流（田中は 1 机・講師なしの机が残らない）', (_label, fields) => {
+    const handDesk = (desk: DeskCell): DeskCell => ({
+      ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentTeacherId: 't1', ...fields,
+      lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
+    })
+    // 新テンプレ: 机 0＝佐藤（講師だけ）・机 1＝鈴木（B）・机 2＝田中（A）
+    const rows = [row('r0', 't3'), row('r1', 't2', 'sB'), row('r2', 't1', 'sA')]
+    const { saved } = saveAndRemerge(board(handDesk), rows, { previousRows: OLD_ROWS })
+    const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+    expect(cell.desks.map((desk) => desk.teacher)).toEqual(['佐藤', '鈴木', '田中'])
+    expect(cell.desks[2]).toMatchObject({ manualTeacher: true, teacherAssignmentSource: fields.teacherAssignmentSource })
+    const lower2 = saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL, cell.desks[2].id)]?.lower
+    expect([...liveIds(cell.desks[2].lesson), ...liveIds(lower2?.lesson)].sort()).toEqual(['sA', 'sM'])
+    expect(lower2?.teacher).toBeUndefined()
+    expect(cell.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+    expect(cell.desks.filter((desk) => !desk.teacher && liveIds(desk.lesson).length > 0)).toEqual([])
+    expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')).toEqual([])
   })
 
   // §9-22 案 A（オーナー決定 2026-11-06・確認リスト v2-1）: コマ表の並び替えはテンプレ由来の机も動かす（その週だけ）。テンプレを変えずに保存しても
@@ -2361,6 +2389,100 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
       expect(saved.nextPendingDesks).toEqual({})
       expect(cell.desks.map((desk) => desk.teacher)).toEqual(['佐藤', '鈴木', '田中', ''])
       expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sM'], ['sB'], ['sA'], []])
+    })
+
+    // 2026-11-10（オーナー決定・§9-1 の改定・緑が丘の報告「テンプレで入れた先生が消えちゃう」・spec §2-3）: 手で置いた講師 X の机 A があり、テンプレが同じコマの別の机 B に X を置くとき、
+    // 同じ講師として A を手入力ごと B へ合流させる（講師欄は X の 1 行・B のテンプレの生徒は置く）。旧「手入力が勝つ＝B に X を置かない」は、B のテンプレの生徒が講師なし（赤字）になるため取り消し。
+    // 対象は机のテンプレの授業の手がかりが無い手置き講師の机（手置き・QR・名前を固定しただけ）。別の講師 W の授業に X を入れた机は W について行く（§9-15 のまま）。
+    describe('手で置いた講師 X × テンプレの別の机の X → 同じ講師として合流（§9-1 の改定）', () => {
+      // 新テンプレ: 机1=田中(A)・机2=鈴木(B)・机3=高橋(C)・机4=空（佐藤を外し、高橋＋C を机3 に置く）
+      const NEXT_TAKAHASHI: Array<[string, string]> = [['t1', 'sA'], ['t2', 'sB'], ['t4', 'sC'], ['', '']]
+      const handPlacedTakahashi = (lesson: DeskCell['lesson'], extra: Partial<DeskCell> = {}) => (desk: DeskCell): DeskCell => ({
+        ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', lesson, ...extra,
+      })
+      const noTeacherlessDeskWithStudents = (cell: SlotCell) => expect(cell.desks.filter((desk) => !desk.teacher && liveIds(desk.lesson).length > 0)).toEqual([])
+
+      it('形 1（11/19 4限の型）: 手置きの高橋の机（テンプレ由来の C・管理授業でない授業）→ テンプレの高橋の机（机3）へ合流。講師欄は高橋の 1 行・C は 1 か所・講師なしの机が残らない', () => {
+        const week = withDesk(boardOf(rowsOf(CURRENT)), 3, handPlacedTakahashi({ id: 'moved_sC_2026-10-07', studentSlots: [entry('sC', { origin: 'template' }), null] }))
+        const { saved, cell, lowerOf } = saveWith(week, NEXT_TAKAHASHI)
+        expect(saved.nextPendingDesks).toEqual({})
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '高橋', ''])
+        expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sC'], []])
+        expect(cell.desks[2].manualTeacher).toBe(true)
+        expect(lowerOf(2)).toBeUndefined()
+        expect(cell.desks[2].templateTeacherDeclined).toBeUndefined()
+        noTeacherlessDeskWithStudents(cell)
+        expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')).toEqual([])
+      })
+
+      it('形 2（11/19 3限の型）: 手置きの高橋の机に手入力の振替 M → テンプレの高橋の机（机3）へ合流。M は高橋の机・講師欄は 1 行・講師なしの机が残らない', () => {
+        const week = withDesk(boardOf(rowsOf(CURRENT)), 3, handPlacedTakahashi({ id: 'hand', studentSlots: [null, entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] }))
+        const { saved, cell, lowerOf } = saveWith(week, NEXT_TAKAHASHI)
+        expect(saved.nextPendingDesks).toEqual({})
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '高橋', ''])
+        expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sC', 'sM'], []])
+        expect(lowerOf(2)).toBeUndefined()
+        noTeacherlessDeskWithStudents(cell)
+        expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')).toEqual([])
+      })
+
+      it('形 2（席がぶつかる）: 手入力の M がテンプレの C と同じ席 → 席だけ 2 行（講師欄は高橋の 1 行のまま）', () => {
+        const week = withDesk(boardOf(rowsOf(CURRENT)), 3, handPlacedTakahashi({ id: 'hand', studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] }))
+        const { cell, lowerOf } = saveWith(week, [['t1', 'sA'], ['t2', 'sB'], ['t4', 'sC'], ['', '']])
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '高橋', ''])
+        expect([...liveIds(cell.desks[2].lesson), ...liveIds(lowerOf(2)?.lesson)].sort()).toEqual(['sC', 'sM'])
+        expect(lowerOf(2)?.teacher).toBeUndefined()
+        expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+        noTeacherlessDeskWithStudents(cell)
+      })
+
+      it('形 3（11/16 5限の型）: 今の番号に同じ講師のテンプレの机がある手置きの佐藤の机は動かない（ほかの机が動いても・講師の削除記録の机があっても）。佐藤は 1 行・C は佐藤の机', () => {
+        // 盤面: 机3=手置きの佐藤（テンプレ由来の C・管理授業でない授業）・机4=講師の削除記録（高橋＝新テンプレにいない）
+        const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 2, (desk) => ({ ...desk, manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3', lesson: { id: 'moved_sC_2026-10-07', studentSlots: [entry('sC', { origin: 'template' }), null] } })), 3,
+          (desk) => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't4' }))
+        // 新テンプレ: 机1=鈴木(B)・机2=田中(A)（入れ替え）・机3=佐藤(C)・机4=空
+        const { saved, cell } = saveWith(week, [['t2', 'sB'], ['t1', 'sA'], ['t3', 'sC'], ['', '']])
+        expect(saved.nextPendingDesks).toEqual({})
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['鈴木', '田中', '佐藤', ''])
+        expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sB'], ['sA'], ['sC'], []])
+        expect(cell.desks[2].manualTeacher).toBe(true)
+        noTeacherlessDeskWithStudents(cell)
+      })
+
+      it('形 3 の並べ直し単体: 今の番号に同じ講師のテンプレの机がある手置き講師の机は、その番号のまま（押し出されない）', () => {
+        const nextCell = boardOf(rowsOf(templateOf4(DATE, [['t2', 'sB'], ['t1', 'sA'], ['t3', 'sC'], ['', '']]))).find((item) => item.id === CELL)!
+        const anchorCell = boardOf(rowsOf(CURRENT)).find((item) => item.id === CELL)!
+        const boardCell = withDesk(boardOf(rowsOf(CURRENT)), 2, (desk) => ({ ...desk, manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'moved_sC_2026-10-07', studentSlots: [entry('sC', { origin: 'template' }), null] } })).find((item) => item.id === CELL)!
+        const restored = restoreTemplateDeskOrder(boardCell, anchorCell.desks, { usedDesks: nextCell.desks })
+        expect(restored.desks[2].lesson).toBe(boardCell.desks[2].lesson)
+        expect(restored.desks.map((desk) => desk.teacher)).toEqual(['鈴木', '田中', '佐藤', ''])
+      })
+
+      it('QR で自動で入った講師（schedule-registration）も合流する: 高橋＋講習の M → テンプレの高橋の机（机3）。講師欄は 1 行・講師なしの机が残らない', () => {
+        const week = withDesk(boardOf(rowsOf(CURRENT)), 3, handPlacedTakahashi(
+          { id: 'special_hand', studentSlots: [null, entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' })] },
+          { teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' },
+        ))
+        const { saved, cell, lowerOf } = saveWith(week, NEXT_TAKAHASHI)
+        expect(saved.nextPendingDesks).toEqual({})
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '高橋', ''])
+        expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], ['sC', 'sM'], []])
+        expect(lowerOf(2)).toBeUndefined()
+        noTeacherlessDeskWithStudents(cell)
+      })
+
+      it('ガード（§9-15 のまま）: 別の講師（鈴木）のテンプレの授業に高橋を入れた机は鈴木について行き、高橋のまま 1 行（テンプレの別の机の高橋は置かない）', () => {
+        const week = withDesk(boardOf(rowsOf(CURRENT)), 1, (desk) => ({
+          ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 't4',
+          lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] },
+        }))
+        // 新テンプレ: 机1=田中(A)・机2=高橋(講師だけ)・机3=鈴木(B)
+        const { saved, cell } = saveWith(week, [['t1', 'sA'], ['t4', ''], ['t2', 'sB'], ['', '']])
+        expect(saved.nextPendingDesks).toEqual({})
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '', '高橋', ''])
+        expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], [], ['sB', 'sM'], []])
+        expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+      })
     })
 
     it('試し実行（createdAt 空）と保存本体で、移した机と確認画面の行が同じ（Q32-1）', () => {
