@@ -89,54 +89,92 @@ export function checkOutsideAllowedRange(before: BoardFacts, after: BoardFacts, 
 
 type SeatOccurrence = { desk: DeskFact; student: StudentFact }
 
+const DIGIT = /[0-9０-９]/u
+
+/**
+ * 確認の文にこの生徒の名前が出ているか(修正 1・レビュー Minor 2)。伏せ字の仮名は「生徒092」「生092」のように数字で終わるので、
+ * 部分一致だと「生徒09」が「生徒092」に当たる。名前の直後が数字でない(文の終わりを含む)ときだけ「出ている」。名前が空なら出ていない。
+ */
+function isNameAnnounced(text: string | undefined, name: string): boolean {
+  if (!text || !name) return false
+  for (let index = text.indexOf(name); index >= 0; index = text.indexOf(name, index + 1)) {
+    const next = text.charAt(index + name.length)
+    if (!next || !DIGIT.test(next)) return true
+  }
+  return false
+}
+
+function pushOccurrence(map: Map<string, SeatOccurrence[]>, occurrence: SeatOccurrence) {
+  const identity = lessonIdentity(occurrence.student)
+  const list = map.get(identity)
+  if (list) list.push(occurrence)
+  else map.set(identity, [occurrence])
+}
+
 export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardFacts, options: { announcedText?: string; excludeDeskKeys?: ReadonlySet<string> } = {}): PatrolFinding[] {
   const findings: PatrolFinding[] = []
   const afterByCell = groupByCell(after)
   for (const [cellId, beforeDesks] of groupByCell(before)) {
     // 操作前の手入力の生徒(除外の机は見ない＝動かした本人など、変わってよい机)。
-    const manualByIdentity = new Map<string, SeatOccurrence[]>()
+    // 上段の席は出自が手入力の生徒、保留の下段は全員(下段＝手入力の側・spec-template-conflict-v2「2 行の席」)。
+    // ★回帰防止(修正 1・レビュー Important-1): 下段を集めないと、テンプレ保存の 2 回目や「上段を採用」で下段の生徒が盤面から消えても
+    //   どの点検も止めなかった(メモ・出欠記録の点検は生徒を見ない・範囲の点検はテンプレ保存の反映日以降を通す)。
+    const upperByIdentity = new Map<string, SeatOccurrence[]>()
+    const lowerByIdentity = new Map<string, SeatOccurrence[]>()
     for (const desk of beforeDesks) {
       if (options.excludeDeskKeys?.has(desk.key)) continue
       for (const student of desk.students) {
-        if (!student || student.origin !== 'manual') continue
-        const identity = lessonIdentity(student)
-        manualByIdentity.set(identity, [...(manualByIdentity.get(identity) ?? []), { desk, student }])
+        if (student && student.origin === 'manual') pushOccurrence(upperByIdentity, { desk, student })
       }
+      for (const student of desk.pendingStudents) pushOccurrence(lowerByIdentity, { desk, student })
     }
-    if (manualByIdentity.size === 0) continue
+    if (upperByIdentity.size === 0 && lowerByIdentity.size === 0) continue
     // 操作後の同じコマ(同じ cellId)の席と保留の下段。出自は問わない(テンプレに取られた形でも「どこにいるか」で見る)。
     const seatsByIdentity = new Map<string, SeatOccurrence[]>()
-    const pendingCountByIdentity = new Map<string, number>()
+    const afterLowerCountByIdentity = new Map<string, number>()
     for (const desk of afterByCell.get(cellId) ?? []) {
       for (const student of desk.students) {
-        if (!student) continue
-        const identity = lessonIdentity(student)
-        seatsByIdentity.set(identity, [...(seatsByIdentity.get(identity) ?? []), { desk, student }])
+        if (student) pushOccurrence(seatsByIdentity, { desk, student })
       }
       for (const student of desk.pendingStudents) {
         const identity = lessonIdentity(student)
-        pendingCountByIdentity.set(identity, (pendingCountByIdentity.get(identity) ?? 0) + 1)
+        afterLowerCountByIdentity.set(identity, (afterLowerCountByIdentity.get(identity) ?? 0) + 1)
       }
     }
-    for (const [identity, manualList] of manualByIdentity) {
+    const identities = new Set([...upperByIdentity.keys(), ...lowerByIdentity.keys()])
+    for (const identity of identities) {
       // 数で突き合わせる(同じコマに同じ生徒が 2 か所いる既存の INV-12 違反でも、1 か所ずつ対にして落ちない)。
       const seats = [...(seatsByIdentity.get(identity) ?? [])]
-      let pendingLeft = pendingCountByIdentity.get(identity) ?? 0
-      const unmatched: SeatOccurrence[] = []
-      // 1) 同じ講師の席(机番号だけの移動は数えない)。
-      for (const occurrence of manualList) {
+      let lowerLeft = afterLowerCountByIdentity.get(identity) ?? 0
+      // 0) 前から下段にいた分は、操作後の下段の同じ生徒と先に対にする(下段のまま＝所見なし)。
+      //    先に対にしないと、上段から消えた同じ生徒を「下段へ移った」と数えて stop が info に下がる(レビュー Minor 4)。
+      const lowerGone: SeatOccurrence[] = []
+      for (const occurrence of lowerByIdentity.get(identity) ?? []) {
+        if (lowerLeft > 0) lowerLeft -= 1
+        else lowerGone.push(occurrence)
+      }
+      // 1) 上段の手入力の生徒を同じ講師の席と対にする(机番号だけの移動は数えない)。
+      const upperUnmatched: SeatOccurrence[] = []
+      for (const occurrence of upperByIdentity.get(identity) ?? []) {
         const index = seats.findIndex((seat) => seat.desk.teacher === occurrence.desk.teacher)
         if (index >= 0) seats.splice(index, 1)
-        else unmatched.push(occurrence)
+        else upperUnmatched.push(occurrence)
       }
-      for (const occurrence of unmatched) {
+      // 2) 下段から上段の席へ上がった(室長が下段を採用した、など)。消えていない。講師は比べない
+      //    (下段にいた間の担当の講師は、机の上段の講師とは限らないため)。
+      const lowerLost: SeatOccurrence[] = []
+      for (const occurrence of lowerGone) {
+        if (seats.length > 0) seats.shift()
+        else lowerLost.push(occurrence)
+      }
+      for (const occurrence of upperUnmatched) {
         const { desk, student } = occurrence
         const where = `${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`
         const location = { ...locationOf(desk), studentId: student.key }
-        // 2) 席にいるが講師が違う。
+        // 3) 席にいるが講師が違う。
         const seat = seats.shift()
         if (seat) {
-          const announced = Boolean(options.announcedText && student.name && options.announcedText.includes(student.name))
+          const announced = isNameAnnounced(options.announcedText, student.name)
           findings.push({
             level: announced ? 'info' : 'stop',
             code: announced ? 'manual-student-teacher-changed-announced' : 'manual-student-teacher-changed',
@@ -145,14 +183,21 @@ export function checkManualStudentsKeepTeacher(before: BoardFacts, after: BoardF
           })
           continue
         }
-        // 3) 同じコマの保留の下段へ移った(下段＝手入力の側。仕様どおり)。
-        if (pendingLeft > 0) {
-          pendingLeft -= 1
+        // 4) 同じコマの保留の下段へ移った(下段＝手入力の側。仕様どおり)。
+        if (lowerLeft > 0) {
+          lowerLeft -= 1
           findings.push({ level: 'info', code: 'manual-student-to-pending', message: `手入力の生徒が保留の下段へ移った: ${where}`, ...location })
           continue
         }
-        // 4) どこにもいない。
+        // 5) どこにもいない。
         findings.push({ level: 'stop', code: 'manual-student-lost', message: `手入力の生徒が同じコマから消えた: ${where} 講師 ${teacherText(desk.teacher)}`, ...location })
+      }
+      for (const { desk, student } of lowerLost) {
+        findings.push({
+          level: 'stop', code: 'manual-student-lost',
+          message: `保留の下段の手入力の生徒が同じコマから消えた: ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
+          ...locationOf(desk), studentId: student.key,
+        })
       }
     }
   }
@@ -254,12 +299,16 @@ export function checkSameState(before: BoardFacts, after: BoardFacts, code: 'und
   return [...limitDeskFindings(deskFindings, 'stop', code, label), ...sectionFindings]
 }
 
+/**
+ * 保証台帳の所見の照合の鍵。机番号は入れない(修正 1・レビュー Minor 3): テンプレ保存では机の並びが変わるので、前からある違反
+ * (同じコマに同じ生徒が 2 か所など)が机番号だけ変わって「新しい違反」と出てしまう。鍵ごとの件数で比べる。
+ */
 function auditFindingKey(finding: InvAuditFinding): string {
-  return [finding.rule, finding.severity, finding.kind, finding.studentId ?? '', finding.dateKey ?? '', finding.slotNumber ?? '', finding.deskIndex ?? '', finding.subject ?? '', finding.sessionId ?? ''].join('|')
+  return [finding.rule, finding.severity, finding.kind, finding.studentId ?? '', finding.dateKey ?? '', finding.slotNumber ?? '', finding.subject ?? '', finding.sessionId ?? ''].join('|')
 }
 
 export function checkAuditNotWorse(before: InvAuditResult, after: InvAuditResult): PatrolFinding[] {
-  // 数で突き合わせる(同じ鍵の違反が 1 件 → 2 件に増えたのも「増えた」)。
+  // 鍵ごとの件数で突き合わせる(操作後の件数が操作前より多い鍵だけ、増えた分を所見にする。1 件 → 2 件も「増えた」)。
   const beforeCounts = new Map<string, number>()
   for (const finding of before?.findings ?? []) {
     const key = auditFindingKey(finding)

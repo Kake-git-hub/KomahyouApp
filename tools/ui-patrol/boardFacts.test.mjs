@@ -216,6 +216,35 @@ describe('盤面の事実(collectBoardFacts)', () => {
     expect(diffBoardFacts(collectBoardFacts(before), collectBoardFacts(after))).toEqual({ desks: [], sections: [] })
   })
 
+  it('休みの講師が誰かも署名に入る（講師A → 講師B の休みは変わる・同じなら変わらない）', () => {
+    const withRest = (teacher) => makePayload({ weeks: [[makeCell('2026-11-19', 3, [makeDesk('d1', [makeStudentEntry(), null], { teacherRest: { teacher } }), makeDesk('d2')])]] })
+    const factA = collectBoardFacts(withRest('講師A'))
+    expect(factA.desks.get(`${CELL_ID}#0`).teacherRestName).toBe('講師A')
+    expect(collectBoardFacts(withRest('講師A')).desks.get(`${CELL_ID}#0`).signature).toBe(factA.desks.get(`${CELL_ID}#0`).signature)
+    const diff = diffBoardFacts(factA, collectBoardFacts(withRest('講師B')))
+    expect(diff.desks.map((change) => [change.key, change.fields])).toEqual([[`${CELL_ID}#0`, ['teacher']]])
+    expect(collectBoardFacts(makePayload()).desks.get(`${CELL_ID}#0`).teacherRestName).toBe('')
+  })
+
+  it('盤面の週に無い机の保留は部分 boardState.templatePendingDesks.unmatched で比べる', () => {
+    const orphan = (studentName) => ({
+      'gone_cell::dZ': {
+        lower: { lesson: { id: 'LP', studentSlots: [makeStudentEntry({ name: studentName, managedStudentId: undefined, manualAdded: true }), null] } },
+        effectiveStartDate: '2026-11-19', createdAt: '2026-11-10T00:00:00.000Z',
+      },
+    })
+    expect(BOARD_FACT_SECTIONS).toContain('boardState.templatePendingDesks.unmatched')
+    const before = collectBoardFacts(makePayload({ board: { templatePendingDesks: orphan('生徒A') } }))
+    expect(before.pendingDeskCount).toBe(1)
+    const same = collectBoardFacts(makePayload({ board: { templatePendingDesks: orphan('生徒A') } }))
+    expect(diffBoardFacts(before, same).sections).toEqual([])
+    const gone = collectBoardFacts(makePayload())
+    expect(diffBoardFacts(before, gone).sections).toEqual(['boardState.templatePendingDesks.unmatched'])
+    // 机に結べた保留はこの部分に入らない(机の事実で比べる)
+    const matched = collectBoardFacts(makePayload({ board: { templatePendingDesks: { [`${CELL_ID}::d1`]: orphan('生徒A')['gone_cell::dZ'] } } }))
+    expect(diffBoardFacts(gone, matched).sections).toEqual([])
+  })
+
   it('教室設定のテンプレとそれ以外は別の部分として数える。boardState が無い教室でも落ちない', () => {
     const before = makePayload()
     const after = makePayload({ settings: { regularLessonTemplate: { effectiveStartDate: '2027-02-01', cells: [] }, holidayDates: ['2026-12-31'] } })

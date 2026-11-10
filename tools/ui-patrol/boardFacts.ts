@@ -32,6 +32,11 @@ export type DeskFact = {
   teacherOrigin: 'template' | 'manual' | null
   /** 講師の休みの机。 */
   teacherRest: boolean
+  /**
+   * 休みにした講師の名前(休みでなければ '')。盤面は「休 講師A」と名前を出すので、休みの講師が替わったのも意味の違い
+   * (修正 1・レビュー Minor 1)。名前が無く ID だけの記録は ID で持つ。
+   */
+  teacherRestName: string
   /** 席 0・席 1。 */
   students: Array<StudentFact | null>
   /** 出欠記録 1 件 1 文字列(生徒キー|status|科目|種類)。並べ替え済み。 */
@@ -76,6 +81,9 @@ export const BOARD_FACT_SECTIONS: readonly string[] = [
   'boardState.manualLectureStockOrigins',
   'boardState.fallbackLectureStockStudents',
   'boardState.groupClassEntries',
+  // 盤面の週に無い机を指す保留(キーはあるが机が weeks に無い)。机の事実に現れないので、ここで比べる(修正 1・レビュー Minor 4)。
+  // 消しても pendingDeskCount しか動かず、同じ状態の点検が気づかなかった。
+  'boardState.templatePendingDesks.unmatched',
 ]
 
 /** 教室設定のうちテンプレの部分。テンプレ保存はここだけを変えてよい、と台本が言えるように分ける。 */
@@ -160,6 +168,7 @@ function buildDeskFact(cell: SlotCell, desk: DeskCell, deskIndex: number, lower:
     teacher,
     teacherOrigin,
     teacherRest: hasDeskTeacherRest(desk),
+    teacherRestName: hasDeskTeacherRest(desk) ? (desk.teacherRest!.teacher.trim() || desk.teacherRest!.teacherId?.trim() || '') : '',
     students: toSeatFacts(desk.lesson?.studentSlots),
     statuses: toStatusFacts(desk.statusSlots),
     memos: toMemoFacts(desk.memoSlots),
@@ -179,7 +188,17 @@ function buildDeskFact(cell: SlotCell, desk: DeskCell, deskIndex: number, lower:
   }
 }
 
-function collectSections(payload: Partial<AppSnapshotPayload>): Record<string, string> {
+/** 机に結べなかった保留の中身(机の事実と同じ意味の形・内部の印は持たない)。 */
+function toUnmatchedPendingFact(lower: TemplatePendingLower) {
+  return {
+    students: asArray<StudentEntry | null>(lower.lesson?.studentSlots).filter((student): student is StudentEntry => isPlainObject(student)).map(toStudentFact),
+    teacher: realTeacherName(lower.teacher?.teacher),
+    statuses: toStatusFacts(lower.statusSlots),
+    memos: toMemoFacts(lower.memoSlots),
+  }
+}
+
+function collectSections(payload: Partial<AppSnapshotPayload>, unmatchedPending: Record<string, unknown>): Record<string, string> {
   const settings = isPlainObject(payload.classroomSettings) ? payload.classroomSettings : {}
   const template: Record<string, unknown> = {}
   const other: Record<string, unknown> = {}
@@ -195,6 +214,7 @@ function collectSections(payload: Partial<AppSnapshotPayload>): Record<string, s
     let value: unknown
     if (name === 'classroomSettings.template') value = template
     else if (name === 'classroomSettings.other') value = other
+    else if (name === 'boardState.templatePendingDesks.unmatched') value = unmatchedPending
     else if (name.startsWith('boardState.')) value = boardState[name.slice('boardState.'.length)]
     else value = record[name]
     sections[name] = sectionSignature(value)
@@ -214,18 +234,27 @@ export function collectBoardFacts(payload: AppSnapshotPayload): BoardFacts {
     if (parsed) lowerByCellDesk.set(`${parsed.cellId}\u0000${parsed.deskId}`, entry.lower)
   }
   const desks = new Map<string, DeskFact>()
+  const matchedCellDesks = new Set<string>()
   for (const week of weeks) {
     for (const cell of week) {
       if (!isPlainObject(cell) || typeof cell.id !== 'string') continue
       asArray<DeskCell>(cell.desks).forEach((desk, deskIndex) => {
         if (!isPlainObject(desk)) return
-        const lower = typeof desk.id === 'string' ? lowerByCellDesk.get(`${cell.id}\u0000${desk.id}`) : undefined
+        const cellDeskKey = `${cell.id}\u0000${desk.id}`
+        const lower = typeof desk.id === 'string' ? lowerByCellDesk.get(cellDeskKey) : undefined
+        if (lower) matchedCellDesks.add(cellDeskKey)
         const fact = buildDeskFact(cell, desk, deskIndex, lower)
         desks.set(fact.key, fact)
       })
     }
   }
-  return { desks, sections: collectSections(safePayload), pendingDeskCount: Object.keys(pendingMap).length }
+  const unmatchedPending: Record<string, unknown> = {}
+  for (const [pendingKey, entry] of Object.entries(pendingMap)) {
+    const parsed = parseTemplatePendingDeskKey(pendingKey)
+    if (parsed && matchedCellDesks.has(`${parsed.cellId}\u0000${parsed.deskId}`)) continue
+    unmatchedPending[pendingKey] = toUnmatchedPendingFact(entry.lower)
+  }
+  return { desks, sections: collectSections(safePayload, unmatchedPending), pendingDeskCount: Object.keys(pendingMap).length }
 }
 
 export function isEmptyDeskFact(fact: DeskFact): boolean {
@@ -245,7 +274,7 @@ const json = (value: unknown) => JSON.stringify(value)
 function changedFields(before: DeskFact | null, after: DeskFact | null): DeskChangeField[] {
   // 片方にしか無い机は、無い側を「中身なし」として項目を比べる。
   const pick = (fact: DeskFact | null) => ({
-    teacher: fact ? json([fact.teacher, fact.teacherOrigin, fact.teacherRest]) : json(['', null, false]),
+    teacher: fact ? json([fact.teacher, fact.teacherOrigin, fact.teacherRest, fact.teacherRestName]) : json(['', null, false, '']),
     students: fact ? json(fact.students) : json([null, null]),
     statuses: fact ? json(fact.statuses) : '[]',
     memos: fact ? json(fact.memos) : '[]',

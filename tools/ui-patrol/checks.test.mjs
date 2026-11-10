@@ -192,6 +192,40 @@ describe('手入力の生徒の講師（2026-11-10 緑が丘の形）', () => {
     expect(codes(checkManualStudentsKeepTeacher(before, one))).toEqual(['stop:manual-student-lost'])
   })
 
+  it('下段にいた手入力の生徒: 上段にも下段にも無ければ stop。下段のまま・上段の席へは stop にしない', () => {
+    const lowerA = (deskId = 'd1') => pending(deskId, { lesson: { id: 'LP', studentSlots: [makeupA(), null] } })
+    const before = facts([cell(D, 3, [desk('d1', [studentB(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])], { board: { templatePendingDesks: lowerA() } })
+    const gone = facts([cell(D, 3, [desk('d1', [studentB(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])])
+    const findings = checkManualStudentsKeepTeacher(before, gone)
+    expect(codes(findings)).toEqual(['stop:manual-student-lost'])
+    expect(findings[0]).toMatchObject({ dateKey: D, slotNumber: 3, deskIndex: 0, studentId: 's1' })
+    const stays = facts([cell(D, 3, [desk('d1', [studentB(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])], { board: { templatePendingDesks: lowerA('d2') } })
+    expect(checkManualStudentsKeepTeacher(before, stays)).toEqual([])
+    const adopted = facts([cell(D, 3, [desk('d1', [studentB(), null], { teacher: '講師A' }), desk('d2', [makeupA(), null], { teacher: '講師B' })])])
+    expect(checkManualStudentsKeepTeacher(before, adopted)).toEqual([])
+  })
+
+  it('前から下段にいる生徒と同じ生徒が上段から消えたら、下段の数で info に下げずに stop', () => {
+    const lower = pending('d2', { lesson: { id: 'LP', studentSlots: [makeupA({ id: 'e9' }), null] } })
+    const before = facts([cell(D, 3, [desk('d1', [makeupA(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])], { board: { templatePendingDesks: lower } })
+    const after = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])], { board: { templatePendingDesks: lower } })
+    expect(codes(checkManualStudentsKeepTeacher(before, after))).toEqual(['stop:manual-student-lost'])
+  })
+
+  it('確認の文の名前は、名前の直後が数字でないときだけ「出ている」', () => {
+    const p09 = makeupA({ name: '生徒09' })
+    const p092 = makeupA({ name: '生徒092', managedStudentId: 's092' })
+    const before = facts([cell(D, 3, [desk('d1', [p09, p092], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])])
+    const after = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [p09, p092], { teacher: '講師B' })])])
+    const findings = checkManualStudentsKeepTeacher(before, after, { announcedText: '講師B の机へ 生徒092 を移します' })
+    expect(findings.map((finding) => [finding.studentId, finding.code])).toEqual([
+      ['s1', 'manual-student-teacher-changed'],
+      ['s092', 'manual-student-teacher-changed-announced'],
+    ])
+    // 文の終わりでも「出ている」
+    expect(codes(checkManualStudentsKeepTeacher(before, after, { announcedText: '移す生徒: 生徒09' })).sort()).toEqual(['info:manual-student-teacher-changed-announced', 'stop:manual-student-teacher-changed'])
+  })
+
   it('テンプレの生徒は見ない(講師が変わっても所見なし)', () => {
     const before = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師A' })])])
     const after = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師B' })])])
@@ -244,6 +278,24 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     expect(codes(checkSameState(before, changed, 'save-changed'))).toEqual(['stop:save-changed'])
     const sectionChanged = facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師A' }), desk('d2')])], { extra: { regularLessons: [{ id: 'r1' }] } })
     expect(codes(checkSameState(before, sectionChanged, 'redo-not-restored'))).toEqual(['stop:redo-not-restored'])
+  })
+
+  it('同じ状態: 盤面の週に無い机の保留が消えた・休みの講師が替わったら stop', () => {
+    const orphan = { 'gone_cell::dZ': { lower: { memoSlots: ['メモ', null] }, effectiveStartDate: D, createdAt: '2026-11-10T00:00:00.000Z' } }
+    const before = facts([cell(D, 3, [desk('d1')])], { board: { templatePendingDesks: orphan } })
+    expect(checkSameState(before, facts([cell(D, 3, [desk('d1')])], { board: { templatePendingDesks: orphan } }), 'reload-changed')).toEqual([])
+    expect(codes(checkSameState(before, facts([cell(D, 3, [desk('d1')])]), 'reload-changed'))).toEqual(['stop:reload-changed'])
+    const rest = (teacher) => facts([cell(D, 3, [desk('d1', [student(), null], { teacherRest: { teacher } })])])
+    expect(checkSameState(rest('講師A'), rest('講師A'), 'undo-not-restored')).toEqual([])
+    expect(codes(checkSameState(rest('講師A'), rest('講師B'), 'undo-not-restored'))).toEqual(['stop:undo-not-restored'])
+  })
+
+  it('保証台帳: 同じ違反が机番号だけ変わったのは所見なし。同じ鍵が 1 件 → 2 件は stop 1 件', () => {
+    const finding = (overrides) => ({ rule: 'INV-12', severity: 'bug', kind: 'duplicate-placement', studentId: 's1', dateKey: D, slotNumber: 3, deskIndex: 0, period: 'future', message: 'x', ...overrides })
+    const before = { findings: [finding({})], counts: {}, notes: [] }
+    expect(checkAuditNotWorse(before, { findings: [finding({ deskIndex: 4 })], counts: {}, notes: [] })).toEqual([])
+    const doubled = checkAuditNotWorse(before, { findings: [finding({ deskIndex: 4 }), finding({ deskIndex: 5 })], counts: {}, notes: [] })
+    expect(codes(doubled)).toEqual(['stop:inv-new-violation'])
   })
 
   it('保証台帳: 新しい bug は stop・新しい check は info・前からある違反は所見なし', () => {
