@@ -15,7 +15,8 @@
 //   （緑が丘の報告・本番 2 月版の保存で手入力の生徒 100 人中 24 人・INV-02）。オーナーは「机番号の意味が変わる（手入力が講師について行く）」方を選んだ（spec §2-1）。
 //   - 机の「講師」（resolveDeskTeacherClue）: 足場講師（テンプレ由来）はその名前。手置き講師・入れ替えた講師の机は、机のテンプレの授業（授業 ID）が
 //     保存前のテンプレで乗っていた机の講師 → 下段の講師を採用した記録 templateTeacherDeclined の講師（採用した講師が今の机の講師のときだけ）→
-//     講師名を固定しただけの机（manualTeacher の印だけ）はその講師自身（新しいテンプレのそのコマにいるときだけ）。講師の削除記録・講師の休みの机は、消した／休んだ講師。
+//     授業の手がかりも採用の記録も無い手置き講師の机（手置き・入れ替え・QR・講師名を固定しただけ）はその講師自身（新しいテンプレのそのコマにいるときだけ・§9-1 改定で同じ講師の机へ合流）。
+//     講師の削除記録・講師の休みの机は、消した／休んだ講師。
 //   - その講師が新しいテンプレのそのコマにいる → 机ごと（中身はそのまま）その机番号へ。いない → 手入力があれば、テンプレが使う最後の机より下の空き机の
 //     一番若いもの → 無ければテンプレが使わない机の一番若いもの → どちらも無ければ残った机（別の講師の机になりうるので確認画面に出す）。
 //     テンプレの講師は付かない（差分反映がテンプレ由来の講師を外す）。手置きの講師は机と一緒に移る。
@@ -114,7 +115,7 @@ function resolveAnchorCandidates(desk: DeskCell, deskIndex: number, dateKey: str
  * 2026-11-10（「手入力は講師について行く」）: 机の「講師」の手がかり。label は確認画面に出す講師の名前、matches は新しいテンプレの机がその講師の机か。
  * null＝講師の手がかりが無い（従来どおり保存前のテンプレの机番号で戻す）。derived＝机の今の講師ではなく、手置き講師の机の手がかり
  * （テンプレの授業・採用の記録・固定した講師名）。足場講師の机より後に番号を取る。
- * onlyIfPresent＝その講師が新しいテンプレのそのコマにいなければ手がかりに使わない（講師名を固定しただけの机・regression-reviewer M-3）。
+ * onlyIfPresent＝その講師が新しいテンプレのそのコマにいなければ手がかりに使わない（講師自身の机・regression-reviewer M-3／§9-1 改定）。
  */
 type DeskTeacherClue = { label: string; matches: (templateDesk: TemplateDeskRef) => boolean; derived: boolean; onlyIfPresent?: boolean }
 
@@ -138,11 +139,14 @@ function resolveDeskTeacherClue(desk: DeskCell, templateDesks: readonly Template
     if (declined?.adopted && hasRealDeskTeacher(declined.teacher) && isSameTeacherRecord(declined.adopted, desk, aliases)) {
       return { label: declined.teacher.trim(), derived: true, matches: (templateDesk) => hasRealDeskTeacher(templateDesk.teacher) && isSameTeacherRecord(declined, templateDesk, aliases) }
     }
-    // 講師名を固定しただけの机（盤面の操作で名前に manualTeacher の印だけが付いた机＝生徒を動かして空いた机・丸ごと振替で移した机。授業の手がかりも採用の記録も無い）は、
-    // その講師が新しいテンプレのそのコマにいればその講師の机へ（同じ講師なのでぶつからない・regression-reviewer M-3）。
-    // ★手で置いた講師（teacherAssignmentSource が manual／manual-replaced／schedule-registration）は対象外: テンプレがその講師を別の机に置いても手置きの机が勝つ
-    //   （§2-3・§9-15・決定記録 66・確認リスト tp-59／v2-3 で確認済み）。ついて行かせるとその形が崩れる。
-    if (!desk.teacherAssignmentSource && hasRealDeskTeacher(desk.teacher)) return byName(desk.teacher.trim(), true, true)
+    // 机の講師の手がかりが講師自身の机（授業の手がかりも採用の記録も無い＝手で講師を置いた机・QR で自動で入った講師の机・講師名を固定しただけの机・
+    // 授業の手がかりの無い入れ替え〔manual-replaced〕の机）は、
+    // その講師が新しいテンプレのそのコマにいればその講師の机へ（同じ講師として合流・ぶつからない）。
+    //   regression-reviewer M-3（2026-11-10）: 講師名を固定しただけの机（manualTeacher の印だけ）を対象にした。
+    //   2026-11-10 オーナー決定・§9-1 の改定（spec §2-3「同じ講師として合流する」・緑が丘の報告「テンプレで入れた先生が消えちゃう」）: 手置き（manual）・QR（schedule-registration）
+    //   の講師の机も対象にした。改定前は「手置きが勝つ＝テンプレの別の机に X を置かない」で、その机のテンプレの生徒が講師なし（赤字）になっていた。今の番号が
+    //   同じ講師のテンプレの机なら、その番号に居るまま（押し出されない・11/16 5限の型）。別の講師 W の授業に X を入れた机は上の授業の手がかりで W について行く（§9-15 のまま）。
+    if (hasRealDeskTeacher(desk.teacher)) return byName(desk.teacher.trim(), true, true)
     return null
   }
   // 講師の削除記録（消した講師が分かるもの）は消した講師（記録がその講師を塞ぐので講師の新しい机へ付いて行く）
@@ -255,7 +259,7 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
       return Boolean(templateDesk) && clue.matches(templateDesk)
     })
     if (hits.length > 0) return { kind: 'follow', candidates: currentFirst(index, hits.filter((target) => !lockedIndexes.has(target))), derived: clue.derived }
-    // 講師名を固定しただけの机は、その講師が新しいテンプレにいなければ手がかりにしない（従来どおり）
+    // 講師自身が手がかりの机（手置き・QR・講師名を固定しただけ）は、その講師が新しいテンプレにいなければ手がかりにしない（従来どおり手入力だけの机）
     if (clue.onlyIfPresent) return anchorRoute()
     return { kind: 'teacher-left', teacherName: clue.label }
   })

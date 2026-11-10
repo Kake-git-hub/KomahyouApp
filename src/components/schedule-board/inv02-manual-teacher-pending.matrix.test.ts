@@ -517,8 +517,10 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
   })
 
   // §9-1（決定記録 66 の「講師の 2 行」は取り消し）: 手置き講師 X（倉島）の机 1（手で置いた A）があるコマで、テンプレが机 0 に倉島＋C を置く → 手入力が勝つ。
+  // 2026-11-10 オーナー決定・§9-1 改定（regression-reviewer M-1）: この行は previousRegularLessons を渡さない＝保存の直前の並べ直しを通らない差分反映単体の保険
+  // （合流できないとき＝手置きが勝つ）。本番の保存の結果（倉島の机は机 0 へ合流）は下の describe「本番経路」の「§9-1 の対」で固定する。assert は変えていない。
   for (const withStudent of [true, false]) {
-    it(`§9-1: 手置き講師 倉島の机 1（${withStudent ? '手で置いた A つき' : '生徒なし'}）× テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（C は置く・講師欄は空）。理由の行・講師日程表に倉島は${withStudent ? ' A だけ' : '出ない'}・再保存・再マージで同じ`, () => {
+    it(`【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】§9-1: 手置き講師 倉島の机 1（${withStudent ? '手で置いた A つき' : '生徒なし'}）× テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（C は置く・講師欄は空）。理由の行・講師日程表に倉島は${withStudent ? ' A だけ' : '出ない'}・再保存・再マージで同じ`, () => {
       const rows = [row('r0', 'tB', 'sC')]
       const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: withStudent ? { id: 'hand', studentSlots: [MAKEUP_A, null] as [StudentEntry | null, StudentEntry | null] } : undefined }))
       const saved = save(week, rows)
@@ -535,7 +537,8 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     })
   }
 
-  it('§9-1 の兄弟: テンプレの別の机が倉島だけ（生徒なし）でも同じ＝その机に倉島を置かない。机 1 は倉島＋A の 1 行のまま', () => {
+  // 2026-11-10・§9-1 改定: 差分反映単体の保険（本番経路の対は下の「§9-1 の兄弟の対」）。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】§9-1 の兄弟: テンプレの別の机が倉島だけ（生徒なし）でも同じ＝その机に倉島を置かない。机 1 は倉島＋A の 1 行のまま', () => {
     const rows = [row('r0', 'tB')]
     const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: { id: 'hand', studentSlots: [MAKEUP_A, null] as [StudentEntry | null, StudentEntry | null] } }))
     const saved = save(week, rows)
@@ -547,7 +550,9 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
 
   // §9-15（オーナー決定 2026-11-05・受け入れ条件 2-12）: 手置き講師 倉島の机 0 にテンプレが別の講師 田村を置き、さらに別の机 1 にテンプレの倉島が来る形は、
   // 机 0 は倉島のまま（田村を置かず講師欄は 1 行）・机 1 にも倉島を置かない。理由の行は 2 つ。倉島は講師日程表に 1 回だけ。
-  it('§9-15: 手置き 倉島の机 0 × テンプレが机 0 に田村＋C・机 1 に倉島＋X → 机 0 は倉島のまま（講師欄 1 行）・机 1 は講師なし。理由の行 2 つ・倉島は日程表に 1 回', () => {
+  // 2026-11-10・§9-1 改定（regression-reviewer M-1）: 机 0 は授業の手がかりの無い手置きの机なので、本番経路では倉島の机は机 1 へ合流する（下の「§9-15 の対」）。
+  // この行は並べ直しを通らない差分反映単体の保険（合流できないとき＝§9-15 で倉島のまま）。授業の手がかりがある §9-15 の机は本番経路でも倉島のまま（下の行で固定）。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】§9-15: 手置き 倉島の机 0 × テンプレが机 0 に田村＋C・机 1 に倉島＋X → 机 0 は倉島のまま（講師欄 1 行）・机 1 は講師なし。理由の行 2 つ・倉島は日程表に 1 回', () => {
     const rows = [row('r0', 'tD', 'sC'), row('r1', 'tB', 'sX')]
     const saved = save(boardWith(MAKEUP_A, 0), rows)
     const cell = cellOf(saved.nextWeeks)
@@ -582,7 +587,8 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     expect(cellOf(resaveSame(saved, rows).nextWeeks).desks).toEqual(cell.desks)
   })
 
-  it('§9-1 × QR（§9-13）: QR の倉島の机 1 があるコマで、テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（QR の講師も手入力が勝つ）', () => {
+  // 2026-11-10・§9-1 改定: 差分反映単体の保険（本番経路の対は下の「§9-1×QR の対」＝合流する）。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】§9-1 × QR（§9-13）: QR の倉島の机 1 があるコマで、テンプレが机 0 に倉島＋C → 机 0 に倉島を置かない（QR の講師も手入力が勝つ）', () => {
     const rows = [row('r0', 'tB', 'sC')]
     const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 'tB' }))
     const saved = save(week, rows)
@@ -590,6 +596,111 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
     expect(cellOf(saved.nextWeeks).desks[1].teacherAssignmentSource).toBe('schedule-registration')
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
   })
+  // ── 本番経路（2026-11-10 オーナー決定・§9-1 の改定・spec §2-3「同じ講師として合流する」・regression-reviewer M-1）
+  // 上の §9-1・§9-15・§9-1×QR の行は previousRegularLessons を渡さない＝保存の直前の並べ直し（templateDeskOrderRestore）を通らない差分反映単体の保険
+  // （合流できないとき＝手置きが勝つ）。本番の保存は必ず保存前の行を渡すので、並べ直しで机が合流してから突き合わせる。その結果をここで対にして固定する。
+  describe('本番経路（保存前の行あり＝並べ直しを通る）: 授業の手がかりの無い手置き・QR の講師の机は、テンプレの同じ講師の机へ合流する（§9-1 改定）', () => {
+    const saveProd = (week: SlotCell[], rows: RegularLessonRow[], previous: RegularLessonRow[], pending: TemplatePendingDeskMap = {}) => computeTemplateDiffApplyForBoard({
+      weeks: [week], classroomSettings: settings(), teachers, students, regularLessons: rows, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: [], templatePendingDesks: pending,
+      createdAt: '2026-10-21T10:00:00.000Z', manualMakeupAdjustments: {}, scheduleCountAdjustments: [], previousRegularLessons: previous,
+    })
+    const elsewhereOrKept = (saved: ReturnType<typeof saveProd>) => saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept').map((note) => [note.kind, note.studentName])
+
+    for (const withStudent of [true, false]) {
+      it(`§9-1 の対（${withStudent ? '手で置いた A つき' : '生徒なし'}）: 手置きの倉島の机 1 × テンプレが机 0 に倉島＋C → 倉島の机は机 0 へ合流（講師欄は倉島の 1 行・C は置く${withStudent ? '・A は同じ席がぶつかるので下の行' : ''}）。講師なしの机が残らない・再マージで同じ`, () => {
+        const rows = [row('r0', 'tB', 'sC')]
+        const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: withStudent ? { id: 'hand', studentSlots: [MAKEUP_A, null] as [StudentEntry | null, StudentEntry | null] } : undefined }))
+        const saved = saveProd(week, rows, OLD_ROWS)
+        const cell = cellOf(saved.nextWeeks)
+        expect(cell.desks.map((desk) => desk.teacher)).toEqual(['倉島', ''])
+        expect([cell.desks[0].manualTeacher, ids(cell.desks[0])]).toEqual([true, ['sC', null]])
+        const lower = saved.nextPendingDesks[key0(saved.nextWeeks)]?.lower
+        expect(lower?.teacher).toBeUndefined()
+        expect(lower?.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null) ?? []).toEqual(withStudent ? ['sA', null] : [])
+        expect(Object.keys(saved.nextPendingDesks)).toHaveLength(withStudent ? 1 : 0)
+        expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+        expect(cell.desks.filter((desk) => !desk.teacher && ids(desk).some(Boolean))).toEqual([])
+        expect(elsewhereOrKept(saved)).toEqual([])
+        expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual(['千葉'])
+        expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+      })
+    }
+
+    it('§9-1 の兄弟の対: テンプレの別の机が倉島だけ（生徒なし）→ 手置きの倉島＋A の机は机 0 へ合流して 1 行', () => {
+      const rows = [row('r0', 'tB')]
+      const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: { id: 'hand', studentSlots: [MAKEUP_A, null] as [StudentEntry | null, StudentEntry | null] } }))
+      const saved = saveProd(week, rows, OLD_ROWS)
+      const cell = cellOf(saved.nextWeeks)
+      expect(cell.desks.map((desk) => desk.teacher)).toEqual(['倉島', ''])
+      expect(ids(cell.desks[0])).toEqual(['sA', null])
+      expect(saved.nextPendingDesks).toEqual({})
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
+
+    it('§9-15 の対（授業の手がかりの無い手置きの机）: 手置きの倉島の机 0 × テンプレが机 0 に田村＋C・机 1 に倉島＋X → 倉島の机は机 1 へ合流（倉島の 1 行・X は置く・A は下の行）。机 0 は田村＋C。理由の行は出ない', () => {
+      const rows = [row('r0', 'tD', 'sC'), row('r1', 'tB', 'sX')]
+      const saved = saveProd(boardWith(MAKEUP_A, 0), rows, OLD_ROWS)
+      const cell = cellOf(saved.nextWeeks)
+      expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田村', '倉島'])
+      expect(ids(cell.desks[0])).toEqual(['sC', null])
+      expect([cell.desks[1].manualTeacher, ids(cell.desks[1])]).toEqual([true, ['sX', null]])
+      const lower1 = saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, cell.desks[1].id)]?.lower
+      expect(lower1?.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+      expect(lower1?.teacher).toBeUndefined()
+      expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+      expect(elsewhereOrKept(saved)).toEqual([])
+      expect(teacherSheetPeople(saved.nextWeeks, 'tB')).toEqual(['山田'])
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
+
+    it('§9-15（授業の手がかりがある机）は本番経路でも倉島のまま: 田村のテンプレの授業に倉島を入れた机 0 × テンプレが机 0 に田村＋C・机 1 に倉島＋X → 机 0 は倉島の 1 行・机 1 は講師なし。理由の行 2 つ', () => {
+      const OLD_W = [row('r0', 'tD', 'sC'), row('r1', 'tF')]
+      const rows = [row('r0', 'tD', 'sC'), row('r1', 'tB', 'sX')]
+      const week = mutateDesk(buildWeek(OLD_W), 0, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 'tB', lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], MAKEUP_A] } }))
+      const saved = saveProd(week, rows, OLD_W)
+      const cell = cellOf(saved.nextWeeks)
+      expect([cell.desks[0].teacher, cell.desks[0].manualTeacher]).toEqual(['倉島', true])
+      expect(ids(cell.desks[0])).toEqual(['sC', 'sA'])
+      expect([cell.desks[1].teacher, ids(cell.desks[1])]).toEqual(['', ['sX', null]])
+      expect(elsewhereOrKept(saved)).toEqual([['teacher-kept', '田村'], ['teacher-elsewhere', '倉島']])
+      expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
+
+    it('§9-1×QR の対: QR の倉島の机 1 × テンプレが机 0 に倉島＋C → QR の倉島の机は机 0 へ合流（QR の由来のまま 1 行・C は置く）', () => {
+      const rows = [row('r0', 'tB', 'sC')]
+      const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 'tB' }))
+      const saved = saveProd(week, rows, OLD_ROWS)
+      const cell = cellOf(saved.nextWeeks)
+      expect(cell.desks.map((desk) => desk.teacher)).toEqual(['倉島', ''])
+      expect(cell.desks[0]).toMatchObject({ teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+      expect(ids(cell.desks[0])).toEqual(['sC', null])
+      expect(saved.nextPendingDesks).toEqual({})
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
+
+    // regression-reviewer M-2（2026-11-10）: 合流できないとき（行き先の机 B が保留〔2 行〕の机＝位置・机 ID を固定する机）。並べ直しは保留の机へ机を入れないので、
+    // 差分反映の §2-3（手置きが勝つ）が INV-01 を守る: 倉島は 1 机・B には倉島を置かない・理由の行（teacher-elsewhere）が出る。
+    // ★既知の制約（台帳 INV-01／INV-02 に記載）: このとき B のテンプレの生徒は講師なしで残る（保留を片づけてからテンプレを保存し直すと合流する）。
+    it('合流できないとき（B が保留の机）: 倉島は 1 机のまま・B に倉島を置かない・理由の行が出る・再マージ 2 回で同じ（既知の制約: B の生徒は講師なし）', () => {
+      // 準備: 机 0 を保留（上＝田村＋C／下＝手入力の振替 E・X）にする（差分反映単体で作る＝机番号のまま突き合わせて 2 行にする）
+      const firstRows = [row('r0', 'tD', 'sC'), row('r1', 'tF')]
+      const first = save(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: 'hand_e', studentSlots: [entry('sE', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), entry('sX', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] } })), firstRows)
+      expect(Object.keys(first.nextPendingDesks)).toEqual([key0(first.nextWeeks)])
+      // 2 回目: 机 1 に手置きの倉島＋A → テンプレは机 0 を倉島＋C に替える（机 0 は保留のまま＝合流できない）
+      const rows = [row('r0', 'tB', 'sC')]
+      const week = mutateDesk(first.nextWeeks[0], 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: { id: 'hand', studentSlots: [MAKEUP_A, null] as [StudentEntry | null, StudentEntry | null] } }))
+      const saved = saveProd(week, rows, firstRows, first.nextPendingDesks)
+      const cell = cellOf(saved.nextWeeks)
+      expect(cell.desks[0].id).toBe(desk0(first.nextWeeks).id)
+      expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+      expect([cell.desks[1].teacher, cell.desks[1].manualTeacher, ids(cell.desks[1])]).toEqual(['倉島', true, ['sA', null]])
+      expect(cell.desks[0].teacher).toBe('')
+      expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => [note.studentName, note.detail])).toEqual([['倉島', '2']])
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
+  })
+
 })
 
 // 第 2 版 段 3（spec-template-conflict-v2 §2-3 の表の 5 行目・§2-4・§9-7）: 講師の休み。テンプレの講師 D（田村）を休みにした机は講師なし（休みが勝つ）。
@@ -954,7 +1065,9 @@ describe('第 2 版 §2-3 × 埋め草「講師未割当」（講師の居ない
     expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, NEW_ROWS, saved.addedSuppressedRegularLessonOccurrences)
   })
 
-  it('兄弟（本物の講師の形は不変）: 手置きの倉島の机 1 × テンプレが机 0 に倉島＋千葉 → 従来どおり理由の行（teacher-elsewhere）が出る', () => {
+  // 2026-11-10・§9-1 改定（regression-reviewer M-1）: 差分反映単体の保険（並べ直しを通らない）。本番経路では倉島の机は合流するので理由の行は出ない
+  // （describe「本番経路」の「§9-1 の対」）。合流できないときの理由の行は同じ describe の「合流できないとき」で固定する。
+  it('【差分反映単体の保険（並べ直しを通らない・合流できないとき＝手置きが勝つ）】兄弟（本物の講師の形は不変）: 手置きの倉島の机 1 × テンプレが机 0 に倉島＋千葉 → 従来どおり理由の行（teacher-elsewhere）が出る', () => {
     const rows = [row('r0', 'tB', 'sC')]
     const week = mutateDesk(buildWeek(OLD_ROWS), 1, (desk) => ({ ...desk, ...MANUAL_TEACHER_B, lesson: undefined }))
     const saved = save(week, rows)

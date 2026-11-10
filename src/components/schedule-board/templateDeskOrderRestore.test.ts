@@ -185,11 +185,35 @@ describe('restoreTemplateDeskOrder: 手入力は講師について行く（2026-
     expect(teacherLeftMoves).toEqual([])
   })
 
-  it('M-3 の対象外: 手で置いた講師（teacherAssignmentSource あり）の机は、その講師がテンプレの別の机に居てもついて行かない（§9-15・決定記録 66・tp-59 の形）', () => {
-    const handPlaced: Omit<DeskCell, 'id'> = { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'hand', studentSlots: [student('sM', { lessonType: 'trial' }), null] } }
-    // 机 4 の手置きの佐藤。新しいテンプレの佐藤は机 1 → 手置きの机は机 4 のまま（佐藤の机へ行かない）
+  // 2026-11-10 オーナー決定・§9-1 改定（spec §2-3「同じ講師として合流する」）: 改定前は「手で置いた講師（teacherAssignmentSource あり）の机はついて行かない（手置きが勝つ・tp-59 の形）」
+  // を固定していた。改定後は、机のテンプレの授業の手がかりが無い手置き・QR の講師の机も、その講師の名前で新しいテンプレの同じ講師の机へ合流する。
+  it.each([
+    ['手置き（manual）', { teacherAssignmentSource: 'manual' as const }],
+    ['QR（schedule-registration）', { teacherAssignmentSource: 'schedule-registration' as const, teacherAssignmentSessionId: 'ss1' }],
+    // regression-reviewer L（2026-11-10）: 入れ替えた講師（manual-replaced）でも、授業の手がかりも採用の記録も無ければ講師自身の名前で合流する
+    ['入れ替え（manual-replaced・授業の手がかりも採用の記録も無し）', { teacherAssignmentSource: 'manual-replaced' as const }],
+  ])('§9-1 改定: %s の講師の机（授業の手がかり無し）は、その講師がテンプレの別の机に居ればその机へ合流する', (_label, fields) => {
+    const handPlaced: Omit<DeskCell, 'id'> = { teacher: '佐藤', manualTeacher: true, ...fields, lesson: { id: 'hand', studentSlots: [student('sM', { lessonType: 'trial' }), null] } }
+    // 机 4 の手置きの佐藤。新しいテンプレの佐藤は机 1 → 手置きの机は机 1 へ
     const restored = restoreTemplateDeskOrder(cellWith([TANAKA, SUZUKI, EMPTY, handPlaced]), TEMPLATE, { usedDesks: SWAPPED })
-    expect(restored.desks.findIndex((desk) => desk.lesson?.id === 'hand')).toBe(3)
+    expect(restored.desks.findIndex((desk) => desk.lesson?.id === 'hand')).toBe(0)
+    expect(shape(restored)).toEqual(['佐藤|sM', '鈴木|sB', '田中|sA', '|'])
+  })
+
+  it('§9-1 改定のガード: 別の講師（田中）のテンプレの授業に手置きの佐藤を入れた机（manual-replaced）は、佐藤ではなく田中について行く（§9-15 のまま）', () => {
+    const replaced: Omit<DeskCell, 'id'> = { teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', lesson: managed('r0', student('sA'), student('sM', { lessonType: 'trial' })) }
+    const restored = restoreTemplateDeskOrder(cellWith([replaced, SUZUKI, EMPTY, EMPTY]), TEMPLATE, { usedDesks: SWAPPED })
+    // 新しいテンプレの田中は机 3 → 机ごと机 3 へ（佐藤の机 1 へは行かない）
+    expect(restored.desks.findIndex((desk) => desk.teacher === '佐藤')).toBe(2)
+  })
+
+  it('§9-1 改定: 今の番号に同じ講師のテンプレの机がある手置き講師の机は、ほかの机が動いてもその番号のまま', () => {
+    const handPlaced: Omit<DeskCell, 'id'> = { teacher: '鈴木', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'moved_x', studentSlots: [student('sB'), null] } }
+    // 盤面: 机1=田中・机2=手置きの鈴木・机3=佐藤。新しいテンプレ（SWAPPED）は田中と佐藤を入れ替え、鈴木は机 2 のまま
+    const cell = cellWith([TANAKA, handPlaced, { teacher: '佐藤' }, EMPTY])
+    const restored = restoreTemplateDeskOrder(cell, TEMPLATE, { usedDesks: SWAPPED })
+    expect(restored.desks[1]).toBe(cell.desks[1])
+    expect(shape(restored)).toEqual(['佐藤|', '鈴木|sB', '田中|sA', '|'])
   })
 
   it('declined: 採用した講師が今の机の講師でなければ、取り下げた講師を手がかりに使わない（isTemplateTeacherDeclinedAtDesk の S-1 と同じ）', () => {
