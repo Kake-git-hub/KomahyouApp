@@ -30,6 +30,7 @@ import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBa
 import { buildSnapshotPartsLoadFailedClassroomsNotice } from './integrations/firebase/snapshotPartsClientRead'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import { resolveWorkspaceBackupImportTarget } from './utils/workspaceBackupImport'
+import { installUiPatrolHook, pickUiPatrolClassroom, shouldInstallUiPatrolHook } from './utils/uiPatrolHook'
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, markLectureSubmissionsNotified, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
@@ -2213,6 +2214,21 @@ function AuthenticatedApp() {
       }),
     }
   }, [actingClassroomId, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef, workspaceClassroomsRef, workspaceUsersRef])
+
+  // 画面の自動巡回（tools/ui-patrol.mjs・docs/test-strategy.md 層 5）の読み口。開発用ビルド かつ ローカルモードだけ。
+  // 本番ビルドでは import.meta.env.DEV が false に置き換わり、この if の中身ごと消える（tools/check-dist-dev-hooks.mjs が番人）。
+  // 教室 ID は buildWorkspaceSnapshot が編集中の状態を差し込む先（actingClassroomId）と同じものを使う。
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      if (!shouldInstallUiPatrolHook({ isDevBuild: import.meta.env.DEV, backendEnabled: isFirebaseBackendEnabled() })) return
+      return installUiPatrolHook(window, {
+        version: 1,
+        backendMode: 'local',
+        appVersion: __APP_VERSION__,
+        readClassroom: () => pickUiPatrolClassroom(buildWorkspaceSnapshot(new Date().toISOString()), actingClassroomId),
+      })
+    }
+  }, [actingClassroomId, buildWorkspaceSnapshot])
 
   const blazeFreeTierEstimate = useMemo<BlazeFreeTierEstimate | null>(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())

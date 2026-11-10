@@ -16,6 +16,7 @@
 - [ ] バグ修正なら回帰防止テストを追加（修正なしで落ち・ありで通る）
 - [ ] **在庫数量ゴールデンが緑**（`makeupStockSnapshot.test.ts` / `lectureStockSnapshot.test.ts`）。落ちた＝在庫計算が変わった合図。→ §6
 - [ ] テストは実装より先に書き、今のコードで落ちるのを確認した（`superpowers:test-driven-development`・2026-11-05）
+- [ ] （盤面のロジック・画面・テンプレ・保存/読み込みを変えたとき）**画面の自動巡回**: `node tools/ui-patrol.mjs --out <スクラッチ領域>/…`。「変」が増えていないこと（`docs/runbooks/ui-patrol.md`・2026-11-11）
 - ※Playwright E2E は廃止（2026-06-29）。UI操作の回帰はユニット、実環境の通し動作は本番反映後に開発用教室の確認リストで担保（`docs/test-strategy.md`）。
 
 ## 3. 画面での確認（確認リスト）
