@@ -307,7 +307,7 @@ describe('ui-patrol --prepare-only', () => {
 
 describe('runBrowserPatrol(止めるときの片づけ)', () => {
   it('流している途中で SIGINT/SIGTERM を受けたら、ブラウザと開発用サーバーを止めて終了コード 130 で終わる。流し終えたらハンドラを外す', async () => {
-    for (const signal of ['SIGINT', 'SIGTERM']) {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
       const calls = []
       const proc = new EventEmitter()
       let exited = null
@@ -346,5 +346,96 @@ describe('runBrowserPatrol(止めるときの片づけ)', () => {
     expect(proc.listenerCount('SIGINT')).toBe(0)
     expect(proc.listenerCount('SIGTERM')).toBe(0)
     expect(calls.sort()).toEqual(['browser.close', 'server.stop'])
+  })
+})
+
+describe('runBrowserPatrol(シグナルの時間帯)', () => {
+  const baseArgs = (extra = {}) => ({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }, { classroomId: ROOM_B, label: 'B', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {}, ...extra })
+  const makeProc = () => {
+    const proc = new EventEmitter()
+    proc.exitCalls = []
+    proc.exited = new Promise((resolve) => { proc.exit = (code) => { proc.exitCalls.push(code); resolve() } })
+    return proc
+  }
+
+  it('片づけの最中の 2 回目のシグナルは無視する(片づけは 1 回・終了も 1 回)。止めている最中は次の教室のブラウザを起動しない', async () => {
+    const proc = makeProc()
+    const calls = []
+    let releaseStop
+    const deps = {
+      process: proc,
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: () => { calls.push('server.stop'); return new Promise((resolve) => { releaseStop = resolve }) } }),
+      launchPatrolBrowser: async () => { calls.push('launch'); return { browser: { close: async () => { calls.push('browser.close') } } } },
+      closePatrolBrowser: async (session) => { await session?.browser?.close() },
+      // 1 教室目は、ブラウザが閉じられたら(シグナルの片づけ)例外で戻る
+      runClassroomPatrol: () => new Promise((_resolve, reject) => { setTimeout(() => reject(new Error('閉じられた')), 30) }),
+    }
+    const running = runBrowserPatrol(baseArgs(), deps)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    proc.emit('SIGINT')
+    proc.emit('SIGINT')
+    proc.emit('SIGTERM')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    releaseStop()
+    await proc.exited
+    await running.catch(() => {})
+    expect(proc.exitCalls).toEqual([130])
+    expect(calls.filter((call) => call === 'server.stop')).toHaveLength(1)
+    expect(calls.filter((call) => call === 'launch')).toHaveLength(1)
+  })
+
+  it('開発用サーバーの起動待ちの最中のシグナルでも、起こした子を止める', async () => {
+    const proc = makeProc()
+    const calls = []
+    const deps = {
+      process: proc,
+      // 子を起こした直後に onSpawn で止め方を知らせ、起動(HTTP が返る)は終わらない
+      startDevServer: ({ onSpawn }) => { onSpawn(async () => { calls.push('child.stop') }); return new Promise(() => {}) },
+      launchPatrolBrowser: async () => { throw new Error('呼ばれない') },
+      closePatrolBrowser: async () => {},
+      runClassroomPatrol: async () => { throw new Error('呼ばれない') },
+    }
+    void runBrowserPatrol(baseArgs(), deps)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    proc.emit('SIGTERM')
+    await proc.exited
+    expect(proc.exitCalls).toEqual([130])
+    expect(calls).toEqual(['child.stop'])
+  })
+
+  it('シグナルの片づけで esbuild の束ね先も消す(extraCleanup)', async () => {
+    const proc = makeProc()
+    const calls = []
+    const deps = {
+      process: proc,
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => { calls.push('server.stop') } }),
+      launchPatrolBrowser: async () => ({ browser: { close: async () => {} } }),
+      closePatrolBrowser: async () => {},
+      runClassroomPatrol: () => new Promise(() => {}),
+    }
+    void runBrowserPatrol(baseArgs({ extraCleanup: async () => { calls.push('bundle.cleanup') } }), deps)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    proc.emit('SIGINT')
+    await proc.exited
+    expect(calls.sort()).toEqual(['bundle.cleanup', 'server.stop'])
+  })
+})
+
+describe('loadApp の束ね先の後始末', () => {
+  it('1 時間より古い ui-patrol-* の残りは消し、新しいもの・別の名前は残す', async () => {
+    const { removeStaleBundles } = await import('./ui-patrol/loadApp.mjs')
+    const root = mkdtempSync(path.join(tmpdir(), 'patrol-cache-'))
+    try {
+      const { mkdirSync: mk, utimesSync } = await import('node:fs')
+      for (const name of ['ui-patrol-old', 'ui-patrol-new', 'other-old']) mk(path.join(root, name))
+      const now = Date.now()
+      const twoHoursAgo = (now - 2 * 60 * 60 * 1000) / 1000
+      utimesSync(path.join(root, 'ui-patrol-old'), twoHoursAgo, twoHoursAgo)
+      utimesSync(path.join(root, 'other-old'), twoHoursAgo, twoHoursAgo)
+      await removeStaleBundles(root, now)
+      expect(readdirSync(root).sort()).toEqual(['other-old', 'ui-patrol-new'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

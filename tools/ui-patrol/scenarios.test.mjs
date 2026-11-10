@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
 import {
   MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, collectTemplateTeacherlessKeys,
-  createSeededRandom, pickMoveCandidates, pickMoveCandidatesFromWeeks, runClassroomPatrol,
+  createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
@@ -182,13 +182,8 @@ describe('変わってよい範囲', () => {
 })
 
 describe('候補の週・テンプレ自体の講師なし', () => {
-  it('来週に候補が無ければ、その先の週を 3 週まで順に探す', () => {
-    const later = factsOf([cell('2026-11-24', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
-    const found = pickMoveCandidatesFromWeeks(later, { mondayKey: '2026-11-16', todayKey: TODAY, count: 6, seed: 1 })
-    expect(found.weekStart).toBe('2026-11-23')
-    expect(found.candidates.map((candidate) => candidate.kind)).toEqual(['regular-same-slot'])
-    const tooFar = factsOf([cell('2026-12-14', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
-    expect(pickMoveCandidatesFromWeeks(tooFar, { mondayKey: '2026-11-16', todayKey: TODAY, count: 6, seed: 1 })).toEqual({ weekStart: null, candidates: [], searchedWeeks: ['2026-11-16', '2026-11-23', '2026-11-30', '2026-12-07'] })
+  it('候補を探す週は来週の月曜から 3 週先まで(4 週)', () => {
+    expect(weekStartsFrom('2026-11-16')).toEqual(['2026-11-16', '2026-11-23', '2026-11-30', '2026-12-07'])
   })
 
   it('テンプレ自体が講師なしの授業の鍵(曜日|時限|生徒キー)を集める', () => {
@@ -242,7 +237,8 @@ function makeFakeDriver(initialPayload, behavior = {}) {
     readSaveState: async () => 'clean',
     clickSave: async () => false,
     reloadApp: async () => {},
-    gotoWeekOf: async (_session, dateKey) => { state.gotoWeeks.push(dateKey) },
+    // アプリは週を開いたときに初めてその週を作る(createBoardWeek)。behavior.onGoto で「開いたあとの盤面」を作れる。
+    gotoWeekOf: async (_session, dateKey) => { state.gotoWeeks.push(dateKey); if (behavior.onGoto) state.payload = behavior.onGoto(clone(state.payload), dateKey) },
     dragStudent: async (_session, from, to) => {
       state.dragCount += 1
       const result = (behavior.drag ?? (() => 'move'))(state.dragCount, from, to)
@@ -325,12 +321,34 @@ describe('runClassroomPatrol(台本 b のつなぎ)', () => {
     expect(none.report.aborted).toContain('効いた移動が 1 回もありません')
   })
 
-  it('来週に候補が無く再来週にあれば、再来週へ移って使う(使った週を notes に出す)', async () => {
-    const payload = patrolPayload([cell('2026-11-24', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
-    const { report, fake } = await runPatrol(payload, { scenarios: ['boot', 'b'], moves: 1 })
+  it('週を開く前のデータにその週が無く、開いたあとの読み取りで初めて机が現れる → 開いたあとの事実で候補を選んで移動まで進む', async () => {
+    const onGoto = (payload, dateKey) => {
+      if (dateKey === '2026-11-16') payload.boardState.weeks.push([cell('2026-11-17', 1, [desk('n0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('n1', '講師B')])])
+      return payload
+    }
+    const { report, fake } = await runPatrol(patrolPayload([]), { scenarios: ['boot', 'b'], moves: 1, behavior: { onGoto } })
     expect(report.aborted).toBeNull()
-    expect(fake.state.gotoWeeks).toEqual(['2026-11-23'])
-    expect(stepsOf(report, 'b')[0].notes.join('\n')).toContain('2026-11-23 の週')
+    expect(fake.state.gotoWeeks).toEqual(['2026-11-16'])
+    const steps = stepsOf(report, 'b')
+    expect(steps[0].operations).toBe(0)
+    expect(steps[1].operations).toBe(4)
+    expect(steps[1].findings.filter((finding) => finding.level === 'stop')).toEqual([])
+  })
+
+  it('来週は開いても候補が無く、再来週を開くと候補がある → 再来週を使う(使った週を notes に出す)', async () => {
+    const onGoto = (payload, dateKey) => {
+      if (dateKey === '2026-11-16') payload.boardState.weeks.push([cell('2026-11-17', 1, [desk('n0', '講師A')])])
+      if (dateKey === '2026-11-23') payload.boardState.weeks.push([cell('2026-11-24', 1, [desk('x0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('x1', '講師B')])])
+      return payload
+    }
+    const { report, fake } = await runPatrol(patrolPayload([]), { scenarios: ['boot', 'b'], moves: 1, behavior: { onGoto } })
+    expect(report.aborted).toBeNull()
+    expect(fake.state.gotoWeeks).toEqual(['2026-11-16', '2026-11-23'])
+    expect(stepsOf(report, 'b')[0].notes.join('\n')).toContain('使った週: 2026-11-23 の週')
+    // 4 週とも候補が無ければ、効いた移動 0 で中断(4 週とも開く)
+    const none = await runPatrol(patrolPayload([]), { scenarios: ['boot', 'b'], moves: 1 })
+    expect(none.fake.state.gotoWeeks).toEqual(['2026-11-16', '2026-11-23', '2026-11-30', '2026-12-07'])
+    expect(none.report.aborted).toContain('効いた移動が 1 回もありません')
   })
 
   it('移動が効いたのに元に戻すが押せなければ stop undo-not-restored(押せなかったボタンは数えない)', async () => {

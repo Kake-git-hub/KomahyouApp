@@ -44,7 +44,10 @@ async function waitForHttp(url, timeoutMs, isAlive) {
   throw new Error(`開発用サーバーが ${Math.round(timeoutMs / 1000)} 秒で起動しませんでした。`)
 }
 
-export async function startDevServer({ port, repoRoot, env = process.env }) {
+/**
+ * onSpawn(stop): 子を起こした直後に止め方を知らせる(起動を待っている間にシグナルを受けても、呼び出し側が子を止められるように・作業 5 修正 2)。
+ */
+export async function startDevServer({ port, repoRoot, env = process.env, onSpawn }) {
   if (!(await isPortFree(port))) throw new Error(`ポート ${port} は使用中です(--port で別のポートを指定してください)。`)
   const viteBin = path.join(repoRoot, 'node_modules', 'vite', 'bin', 'vite.js')
   const child = spawn(process.execPath, [viteBin, '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
@@ -73,6 +76,7 @@ export async function startDevServer({ port, repoRoot, env = process.env }) {
     clearTimeout(timer)
   }
 
+  onSpawn?.(stop)
   const baseUrl = `http://127.0.0.1:${port}`
   try {
     await waitForHttp(`${baseUrl}/`, START_TIMEOUT_MS, () => !exited)

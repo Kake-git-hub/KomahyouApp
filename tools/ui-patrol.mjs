@@ -240,7 +240,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
       if (!allPrepared) return 2
     }
     const runPatrol = deps.runPatrol ?? runBrowserPatrol
-    const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn })
+    const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup })
     const reportFile = path.join(options.out, 'report.json')
     const reportText = formatPatrolReportText(report)
     mkdirSync(options.out, { recursive: true })
@@ -258,20 +258,25 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
   }
 }
 
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
+
 /**
- * Ctrl+C(SIGINT)・SIGTERM を受けたら、片づけ(ブラウザ・開発用サーバー)を済ませてから終了コード 130 で終わる。
+ * Ctrl+C(SIGINT)・SIGTERM・SIGHUP を受けたら、片づけ(ブラウザ・開発用サーバー)を済ませてから終了コード 130 で終わる。
  * 開発用サーバーは別のプロセスグループ(devServer.mjs の detached)なので端末の Ctrl+C が届かず、Node は SIGINT で finally を通らずに
  * 終わるため、ここで止めないとサーバーが残る(作業 5 修正 1)。戻り値でハンドラを外す。
  */
-function installSignalCleanup(proc, cleanup) {
+function installSignalCleanup(proc, cleanup, onStopping = () => {}) {
+  // on で受ける(once だと片づけ中の 2 回目の Ctrl+C が Node の既定の処理で即終了し、vite が残る)。2 回目以降は無視する。
+  let handled = false
   const handler = () => {
+    if (handled) return
+    handled = true
+    onStopping()
     void cleanup().catch(() => {}).finally(() => proc.exit(130))
   }
-  proc.once('SIGINT', handler)
-  proc.once('SIGTERM', handler)
+  for (const signal of SIGNALS) proc.on(signal, handler)
   return () => {
-    proc.removeListener('SIGINT', handler)
-    proc.removeListener('SIGTERM', handler)
+    for (const signal of SIGNALS) proc.removeListener(signal, handler)
   }
 }
 
@@ -279,7 +284,7 @@ function installSignalCleanup(proc, cleanup) {
  * 開発用サーバー → 教室ごとにブラウザ → 台本。ブラウザとサーバーは、流し終えたとき・例外・シグナルのどれでも 1 つの片づけで止める。
  * deps はテスト用(偽のサーバー・偽のブラウザ・偽の process)。
  */
-export async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say }, deps = {}) {
+export async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say, extraCleanup }, deps = {}) {
   const proc = deps.process ?? process
   const startServer = deps.startDevServer ?? startDevServer
   const launch = deps.launchPatrolBrowser ?? launchPatrolBrowser
@@ -287,8 +292,10 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
   const runClassroom = deps.runClassroomPatrol ?? runClassroomPatrol
   const known = readKnown(options.known)
   let report = createPatrolReport({ appVersion: readAppVersion(), backupKey })
-  let server = null
+  // 開発用サーバーの止め方。子を起こした直後(起動を待つ前)から持つ(起動待ちの最中のシグナルでも子を止める)。
+  let stopServer = null
   let session = null
+  let stopping = false
   let cleaned = null
   const cleanup = () => {
     // 何度呼ばれても 1 回だけ(シグナルと finally が重なっても二重に止めない)。
@@ -297,15 +304,20 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
         const current = session
         session = null
         await close(current).catch(() => {})
-        if (server) await server.stop().catch(() => {})
+        if (stopServer) await stopServer().catch(() => {})
+        // esbuild で束ねたアプリの一時フォルダ(シグナルで終わると main の finally を通らないので、ここでも消す)。
+        if (extraCleanup) await extraCleanup().catch(() => {})
       })()
     }
     return cleaned
   }
-  const removeSignalHandlers = installSignalCleanup(proc, cleanup)
+  const removeSignalHandlers = installSignalCleanup(proc, cleanup, () => { stopping = true })
   try {
-    server = await startServer({ port: options.port, repoRoot: REPO_ROOT, env })
+    const server = await startServer({ port: options.port, repoRoot: REPO_ROOT, env, onSpawn: (stop) => { stopServer = stop } })
+    stopServer = server.stop
     for (const { classroomId, label, key, seed } of seeds) {
+      // 止めている最中は次の教室のブラウザを起動しない。
+      if (stopping) break
       const started = Date.now()
       let classroomReport
       try {
@@ -326,7 +338,8 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
     }
   } finally {
     await cleanup()
-    removeSignalHandlers()
+    // シグナルで止めているときはハンドラを残す(片づけが終わると exit(130)。その間の 2 回目のシグナルも無視し続ける)。
+    if (!stopping) removeSignalHandlers()
   }
   return report
 }

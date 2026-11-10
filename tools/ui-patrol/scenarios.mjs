@@ -164,19 +164,9 @@ export function weekDateKeysFrom(mondayKey) {
   return Array.from({ length: 7 }, (_, index) => new Date(start + index * 86400000).toISOString().slice(0, 10))
 }
 
-/**
- * 来週の月曜の週から順に候補を探し、候補のある最初の週を使う(来週に候補が無ければ、その先の週を extraWeeks 週まで)。
- * → { weekStart(使った週の月曜・無ければ null), candidates, searchedWeeks }
- */
-export function pickMoveCandidatesFromWeeks(facts, { mondayKey, todayKey, count, seed, extraWeeks = 3 }) {
-  const searchedWeeks = []
-  for (let offset = 0; offset <= extraWeeks; offset += 1) {
-    const weekStart = new Date(Date.parse(`${mondayKey}T00:00:00Z`) + offset * 7 * 86400000).toISOString().slice(0, 10)
-    searchedWeeks.push(weekStart)
-    const candidates = pickMoveCandidates(facts, { weekDateKeys: weekDateKeysFrom(weekStart), todayKey, count, seed })
-    if (candidates.length > 0) return { weekStart, candidates, searchedWeeks }
-  }
-  return { weekStart: null, candidates: [], searchedWeeks }
+/** 生徒の移動の候補を探す週の月曜(来週の月曜から extraWeeks 週先まで)。 */
+export function weekStartsFrom(mondayKey, extraWeeks = 3) {
+  return Array.from({ length: extraWeeks + 1 }, (_, offset) => new Date(Date.parse(`${mondayKey}T00:00:00Z`) + offset * 7 * 86400000).toISOString().slice(0, 10))
 }
 
 /**
@@ -314,17 +304,30 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
     // ── (b) 生徒の移動: 長押しドラッグ → 元に戻す → やり直し → 元に戻す。変わってよいのは元と先の机だけ。
     if (scenarios.includes('b')) {
       lastScenario = 'b'
-      const found = pickMoveCandidatesFromWeeks(current.facts, { mondayKey: nextMonday, todayKey: today, count: options.moves, seed: options.seed })
-      const step = newStep(`生徒の移動の準備(${found.weekStart ?? nextMonday} の週)`)
-      const candidates = found.candidates
+      // 週ごとに「その週を開く → 読む → その週の事実で候補を選ぶ」を回し、候補のある最初の週を使う(来週＋3 週先まで)。
+      // ★アプリは週を開いたときに初めてその週を作る(ScheduleBoardScreen.tsx の週の移動・createBoardWeek)。開く前のデータで選ぶと、
+      //   保存済みのデータに来週以降の週が無い教室では候補が 0 になり、開いたときに作り直された席を選ぶこともある(作業 5 修正 2)。
+      // 週へ移るだけ(室長の操作だが盤面は変えない)なので操作に数えない。
+      const searchedWeeks = []
+      let weekStart = null
+      let candidates = []
+      let base = current
+      for (const monday of weekStartsFrom(nextMonday)) {
+        searchedWeeks.push(monday)
+        await d.gotoWeekOf(session, monday)
+        base = await timedRead()
+        candidates = pickMoveCandidates(base.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, count: options.moves, seed: options.seed })
+        if (candidates.length > 0) {
+          weekStart = monday
+          break
+        }
+      }
+      current = base
+      const step = newStep(`生徒の移動の準備(${weekStart ?? nextMonday} の週)`)
       const kinds = new Set(candidates.map((candidate) => candidate.kind))
-      if (found.weekStart) {
-        step.notes.push(`使った週: ${found.weekStart} の週${found.weekStart !== nextMonday ? `(来週 ${nextMonday} の週に候補が無かった)` : ''}`)
-        // 週へ移るだけ(室長の操作だが盤面は変えない)なので操作に数えない。
-        await d.gotoWeekOf(session, found.weekStart)
-      } else step.notes.push(`動かせる生徒と空いた席の組が見つかりませんでした(探した週: ${found.searchedWeeks.join('・')})。`)
+      if (weekStart) step.notes.push(`使った週: ${weekStart} の週${weekStart !== nextMonday ? `(${searchedWeeks.slice(0, -1).join('・')} の週は開いても候補が無かった)` : ''}`)
+      else step.notes.push(`動かせる生徒と空いた席の組が見つかりませんでした(開いた週: ${searchedWeeks.join('・')})。`)
       step.notes.push(`候補 ${candidates.length} か所(種類 ${kinds.size}/${MOVE_KINDS.length}: ${[...kinds].map((kind) => KIND_LABELS[kind]).join('・') || 'なし'})`)
-      const base = candidates.length > 0 ? await timedRead() : current
       await finish('b', step)
       const baseAudit = candidates.length > 0 ? timedAudit(base) : null
       let effectiveMoves = 0
