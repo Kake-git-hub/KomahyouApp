@@ -421,6 +421,43 @@ describe('runBrowserPatrol(シグナルの時間帯)', () => {
   })
 })
 
+describe('シグナルで止めたときの報告', () => {
+  it('シグナルで止めた巡回は stopped の印つきで返り、main は report.json・report.txt を書かない(途中までの報告を普通の報告と見分けられないため)', async () => {
+    const proc = new EventEmitter()
+    proc.exited = new Promise((resolve) => { proc.exit = () => resolve() })
+    const deps = {
+      process: proc,
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => {} }),
+      launchPatrolBrowser: async () => ({ browser: { close: async () => {} } }),
+      closePatrolBrowser: async () => {},
+      // 1 教室目はシグナルの片づけでブラウザが閉じられ、途中までの報告で戻る
+      runClassroomPatrol: () => new Promise((resolve) => { setTimeout(() => resolve({ classroomId: ROOM_A, label: 'A', backupKey: 'k', steps: [{ name: 'boot', title: '起動', durationMs: 1, operations: 1, findings: [], notes: [] }], knownCount: 0, aborted: null }), 30) }),
+    }
+    const running = runBrowserPatrol({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {} }, deps)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    proc.emit('SIGINT')
+    const stoppedReport = await running
+    await proc.exited
+    expect(stoppedReport.stopped).toBe(true)
+
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seedFile = path.join(out, 'in.seed.json')
+      writeFileSync(seedFile, JSON.stringify({ actingClassroomId: ROOM_A, classrooms: [{ id: ROOM_A, data: {} }] }))
+      const io = collect()
+      const code = await main({ argv: ['--out', out, '--seed-file', seedFile, '--classroom', ROOM_A], env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, {
+        loadApp: async () => ({ app: {}, cleanup: async () => {} }), loadPlaywright: () => ({}), runPatrol: async () => stoppedReport,
+      })
+      expect(code).toBe(130)
+      expect(existsSync(path.join(out, 'report.json'))).toBe(false)
+      expect(existsSync(path.join(out, 'report.txt'))).toBe(false)
+      expect(io.err.join('')).toContain('止めました')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('loadApp の束ね先の後始末', () => {
   it('1 時間より古い ui-patrol-* の残りは消し、新しいもの・別の名前は残す', async () => {
     const { removeStaleBundles } = await import('./ui-patrol/loadApp.mjs')

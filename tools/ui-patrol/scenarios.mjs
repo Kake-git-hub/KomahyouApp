@@ -9,6 +9,7 @@ import path from 'node:path'
 import { addStep, createClassroomReport } from './report.mjs'
 import * as realDriver from './driver.mjs'
 import { PatrolAbortError } from './driver.mjs'
+import { runRandomOps } from './randomOps.mjs'
 
 export const MOVE_KINDS = ['regular-same-slot', 'regular-other-day', 'makeup-same-slot', 'makeup-other-day', 'special-same-slot', 'special-other-day']
 const KIND_LABELS = {
@@ -217,6 +218,69 @@ function writeStopDiff(file, stops, before, after) {
 }
 
 /**
+ * 生徒の移動を 1 回: 長押しドラッグ → 読む → 点検。台本 b とでたらめ操作の両方から呼ぶ(点検の組み合わせを 1 か所にする)。
+ * before は操作の前の状態({ payload, facts, auditResult })、read は状態を読む関数、audit は状態の保証台帳(状態にためて使い回す)。
+ * 戻り値 outcome: 'moved'(状態が変わった・点検した)/ 'blocked'(状態が変わらずステータスの文が変わった＝アプリが断った・info move-blocked)/
+ * 'nothing'(状態も文も変わらない＝押しても何も起きないか台本が画面に合っていない。呼んだ側が中断する・作業 5 修正 1)。
+ * 元に戻す・やり直しは押さない(呼んだ側の手順で決める)。
+ */
+export async function attemptStudentMove({ session, driver, app, before, candidate, read, audit }) {
+  const notes = [describeCandidate(candidate)]
+  const findings = []
+  const dialogsBefore = session.dialogs.length
+  const statusBefore = await driver.readStatusText(session)
+  const status = await driver.dragStudent(session, candidate.from, candidate.to)
+  const moved = await read()
+  notes.push(`ステータス: ${status}`)
+  for (const dialog of session.dialogs.slice(dialogsBefore)) notes.push(`ダイアログ: ${dialog}`)
+  const diff = app.diffBoardFacts(before.facts, moved.facts)
+  if (diff.desks.length === 0 && diff.sections.length === 0) {
+    // 状態が変わらない。ステータスの文が変わっていればアプリが断った移動(出席済み・メモ・同じコマに同じ生徒・休校日など)。
+    // 文も変わらなければ「押しても何も起きない」か「台本が画面に合っていない」ので、黙って通さず中断する(作業 5 修正 1)。
+    if (status === statusBefore) {
+      return { outcome: 'nothing', notes, findings, moved, diff: null, message: `移動しても盤面もステータスの文も変わらず、何も起きません: ${describeCandidate(candidate)}` }
+    }
+    findings.push({ level: 'info', code: 'move-blocked', message: `アプリが移動を断った: ${describeSeat(candidate.from)} → ${describeSeat(candidate.to)}(${status})` })
+    return { outcome: 'blocked', notes, findings, moved, diff: null }
+  }
+  const deskOf = (seat) => before.facts.desks.get(`${seat.cellId}#${seat.deskIndex}`)
+  const hasDisplacedStatuses = [deskOf(candidate.from), deskOf(candidate.to)].some((desk) => (desk?.statuses.length ?? 0) > 0)
+  const allowed = buildMoveAllowedChange(candidate, { hasDisplacedStatuses })
+  const exclude = { excludeDeskKeys: allowed.deskKeys }
+  findings.push(
+    ...app.checkOutsideAllowedRange(before.facts, moved.facts, allowed),
+    ...app.checkManualStudentsKeepTeacher(before.facts, moved.facts, exclude),
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, moved.facts, exclude),
+    ...app.checkManualInputsNotLost(before.facts, moved.facts, exclude),
+    ...app.checkAuditNotWorse(audit(before), audit(moved)),
+  )
+  const landed = moved.facts.desks.get(`${candidate.to.cellId}#${candidate.to.deskIndex}`)?.students[candidate.to.seat]
+  if (!landed || landed.key !== candidate.studentId) {
+    findings.push({ level: 'stop', code: 'move-not-applied', message: `動かした生徒が先の席にいない: ${describeCandidate(candidate)}`, studentId: candidate.studentId })
+  }
+  return { outcome: 'moved', notes, findings, moved, diff: { before: before.facts, after: moved.facts } }
+}
+
+/**
+ * 生徒の移動の候補がある最初の週を探す(来週＋3 週先まで)。週ごとに「その週を開く → 読む → その週の事実で候補を選ぶ」。
+ * ★アプリは週を開いたときに初めてその週を作る(ScheduleBoardScreen.tsx の週の移動・createBoardWeek)。開く前のデータで選ぶと、
+ *   保存済みのデータに来週以降の週が無い教室では候補が 0 になり、開いたときに作り直された席を選ぶこともある(作業 5 修正 2)。
+ * 週へ移るだけ(室長の操作だが盤面は変えない)なので操作に数えない。base は最後に開いた週で読んだ状態。
+ */
+export async function searchMoveWeek({ session, driver, read, nextMonday, today, count, seed }) {
+  const searchedWeeks = []
+  let base = null
+  for (const monday of weekStartsFrom(nextMonday)) {
+    searchedWeeks.push(monday)
+    await driver.gotoWeekOf(session, monday)
+    base = await read()
+    const candidates = pickMoveCandidates(base.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, count, seed })
+    if (candidates.length > 0) return { searchedWeeks, weekStart: monday, candidates, base }
+  }
+  return { searchedWeeks, weekStart: null, candidates: [], base }
+}
+
+/**
  * 教室 1 つぶんの台本を流し、教室の報告(report.mjs の形)を返す。driver は差し替えられる(テストの偽の driver・既定は driver.mjs)。
  * 操作の数え方: 実際に押せた/効いたものだけ(断られた移動は 1、押せなかった元に戻す・やり直しは 0。週へ移るだけの準備は数えない)。
  */
@@ -261,6 +325,8 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   const newStep = (title) => ({ title, started: Date.now(), operations: 0, findings: [], notes: [] })
 
   let current = null
+  // 台本 b が使った週(でたらめ操作も同じ週で動かす)。
+  let moveWeekStart = null
   try {
     // ── 起動: 種データ(伏せ字の payload)を「前」、開いた直後を「後」とする。手入力は変わってはいけない。
     {
@@ -304,24 +370,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
     // ── (b) 生徒の移動: 長押しドラッグ → 元に戻す → やり直し → 元に戻す。変わってよいのは元と先の机だけ。
     if (scenarios.includes('b')) {
       lastScenario = 'b'
-      // 週ごとに「その週を開く → 読む → その週の事実で候補を選ぶ」を回し、候補のある最初の週を使う(来週＋3 週先まで)。
-      // ★アプリは週を開いたときに初めてその週を作る(ScheduleBoardScreen.tsx の週の移動・createBoardWeek)。開く前のデータで選ぶと、
-      //   保存済みのデータに来週以降の週が無い教室では候補が 0 になり、開いたときに作り直された席を選ぶこともある(作業 5 修正 2)。
-      // 週へ移るだけ(室長の操作だが盤面は変えない)なので操作に数えない。
-      const searchedWeeks = []
-      let weekStart = null
-      let candidates = []
-      let base = current
-      for (const monday of weekStartsFrom(nextMonday)) {
-        searchedWeeks.push(monday)
-        await d.gotoWeekOf(session, monday)
-        base = await timedRead()
-        candidates = pickMoveCandidates(base.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, count: options.moves, seed: options.seed })
-        if (candidates.length > 0) {
-          weekStart = monday
-          break
-        }
-      }
+      // 候補のある最初の週を使う(来週＋3 週先まで・searchMoveWeek)。
+      const { searchedWeeks, weekStart, candidates, base } = await searchMoveWeek({ session, driver: d, read: timedRead, nextMonday, today, count: options.moves, seed: options.seed })
+      moveWeekStart = weekStart
       current = base
       const step = newStep(`生徒の移動の準備(${weekStart ?? nextMonday} の週)`)
       const kinds = new Set(candidates.map((candidate) => candidate.kind))
@@ -329,48 +380,25 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       else step.notes.push(`動かせる生徒と空いた席の組が見つかりませんでした(開いた週: ${searchedWeeks.join('・')})。`)
       step.notes.push(`候補 ${candidates.length} か所(種類 ${kinds.size}/${MOVE_KINDS.length}: ${[...kinds].map((kind) => KIND_LABELS[kind]).join('・') || 'なし'})`)
       await finish('b', step)
-      const baseAudit = candidates.length > 0 ? timedAudit(base) : null
       let effectiveMoves = 0
       for (const [index, candidate] of candidates.entries()) {
         const moveStep = newStep(`生徒の移動 ${index + 1}(${KIND_LABELS[candidate.kind]})`)
-        moveStep.notes.push(describeCandidate(candidate))
-        const dialogsBefore = session.dialogs.length
-        const statusBefore = await d.readStatusText(session)
-        const status = await d.dragStudent(session, candidate.from, candidate.to)
+        const attempt = await attemptStudentMove({ session, driver: d, app, before: base, candidate, read: timedRead, audit: timedAudit })
         moveStep.operations += 1
-        const moved = await timedRead()
-        moveStep.notes.push(`ステータス: ${status}`)
-        for (const dialog of session.dialogs.slice(dialogsBefore)) moveStep.notes.push(`ダイアログ: ${dialog}`)
-        const diff = app.diffBoardFacts(base.facts, moved.facts)
-        if (diff.desks.length === 0 && diff.sections.length === 0) {
-          // 状態が変わらない。ステータスの文が変わっていればアプリが断った移動(出席済み・メモ・同じコマに同じ生徒・休校日など)。
-          // 文も変わらなければ「押しても何も起きない」か「台本が画面に合っていない」ので、黙って通さず中断する(作業 5 修正 1)。
-          if (status === statusBefore) {
-            await finish('b', moveStep)
-            throw new PatrolAbortError(`移動しても盤面もステータスの文も変わらず、何も起きません: ${describeCandidate(candidate)}`)
-          }
-          // 元に戻すは押さない(履歴が積まれていない)。
-          moveStep.findings.push({ level: 'info', code: 'move-blocked', message: `アプリが移動を断った: ${describeSeat(candidate.from)} → ${describeSeat(candidate.to)}(${status})` })
+        moveStep.notes.push(...attempt.notes)
+        moveStep.findings.push(...attempt.findings)
+        if (attempt.outcome === 'nothing') {
+          await finish('b', moveStep)
+          throw new PatrolAbortError(attempt.message)
+        }
+        // 断られた移動: 元に戻すは押さない(履歴が積まれていない)。
+        if (attempt.outcome === 'blocked') {
           await finish('b', moveStep)
           continue
         }
         effectiveMoves += 1
-        const deskOf = (seat) => base.facts.desks.get(`${seat.cellId}#${seat.deskIndex}`)
-        const hasDisplacedStatuses = [deskOf(candidate.from), deskOf(candidate.to)].some((desk) => (desk?.statuses.length ?? 0) > 0)
-        const allowed = buildMoveAllowedChange(candidate, { hasDisplacedStatuses })
-        const exclude = { excludeDeskKeys: allowed.deskKeys }
-        moveStep.diff = { before: base.facts, after: moved.facts }
-        moveStep.findings.push(
-          ...app.checkOutsideAllowedRange(base.facts, moved.facts, allowed),
-          ...app.checkManualStudentsKeepTeacher(base.facts, moved.facts, exclude),
-          ...app.checkTeacherlessStudentsNotAdded(base.facts, moved.facts, exclude),
-          ...app.checkManualInputsNotLost(base.facts, moved.facts, exclude),
-          ...app.checkAuditNotWorse(baseAudit, timedAudit(moved)),
-        )
-        const landed = moved.facts.desks.get(`${candidate.to.cellId}#${candidate.to.deskIndex}`)?.students[candidate.to.seat]
-        if (!landed || landed.key !== candidate.studentId) {
-          moveStep.findings.push({ level: 'stop', code: 'move-not-applied', message: `動かした生徒が先の席にいない: ${describeCandidate(candidate)}`, studentId: candidate.studentId })
-        }
+        const { moved } = attempt
+        moveStep.diff = attempt.diff
         // 元に戻す・やり直しが押せないのは、移動が効いたあとの室長にとって「変」(戻せない)。押せなかったボタンは操作に数えない。
         const cannotPress = (label, code) => ({ level: 'stop', code, message: `${label}が押せない(ボタンが無効): ${describeCandidate(candidate)}`, studentId: candidate.studentId })
         if (!(await d.clickUndo(session))) {
@@ -402,6 +430,35 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       // 効いた移動が 1 回も無い台本 b は、中身が無いまま緑になる。台本 b を指定しているなら中断(作業 5 修正 1)。
       if (effectiveMoves === 0) throw new PatrolAbortError('台本 b で効いた移動が 1 回もありません(候補が無い・全部断られた)。')
       current = await timedRead()
+    }
+
+    // ── でたらめ操作(試験的・--random n が 1 以上のときだけ): 台本 b のあと・a の前。b が無くても流す(週は b と同じ探し方)。
+    // 移動・元に戻す・やり直し・保存・読み込み直しを種つきの乱数で組み合わせる(tools/ui-patrol/randomOps.mjs)。
+    if ((options.random ?? 0) > 0) {
+      lastScenario = 'random'
+      let weekStart = moveWeekStart
+      if (!weekStart) {
+        const searched = await searchMoveWeek({ session, driver: d, read: timedRead, nextMonday, today, count: options.moves, seed: options.seed })
+        weekStart = searched.weekStart ?? nextMonday
+        current = searched.base
+      }
+      const step = newStep(`でたらめ操作 ${options.random} 回(試験的・${weekStart} の週)`)
+      let result
+      try {
+        result = await runRandomOps({
+          session, app, options, today, driver: d, start: current, weekStart, read: timedRead, audit: timedAudit,
+          onFinding: (finding) => step.findings.push(finding), onNote: (note) => step.notes.push(note),
+        })
+      } catch (error) {
+        // driver の時間切れなどで抜けても、手順の 1 行(runRandomOps が notes へ出す)を報告に残してから中断する。
+        await finish('random', step)
+        throw error
+      }
+      step.operations = result.operations
+      step.diff = result.diff
+      await finish('random', step)
+      if (result.aborted) throw new PatrolAbortError(result.aborted)
+      current = result.current
     }
 
     // ── (a) テンプレ保存: テンプレ編集を開く → 反映日を来週の月曜 → 何も変えずに保存 → 保存 → 読み込み直し。

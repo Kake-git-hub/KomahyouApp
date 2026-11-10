@@ -357,7 +357,21 @@ export async function takeScreenshot(session, file) {
   }
 }
 
-export async function closePatrolBrowser(session) {
+/** ブラウザを閉じるのを待つ上限。超えたら諦めて先へ進む(Playwright は Node の終了時に子のブラウザを止める)。 */
+export const BROWSER_CLOSE_TIMEOUT_MS = 5000
+
+/**
+ * ブラウザを閉じる。閉じる処理が返らなくても timeoutMs で先へ進む: 片づけ(シグナル・finally)がここで止まると、
+ * 2 回目以降の Ctrl+C は無視する作り(tools/ui-patrol.mjs の installSignalCleanup)なので、抜けられなくなる(作業 5 の再レビュー)。
+ */
+export async function closePatrolBrowser(session, { timeoutMs = BROWSER_CLOSE_TIMEOUT_MS } = {}) {
   if (!session?.browser) return
-  await session.browser.close().catch(() => {})
+  let timer = null
+  // タイマーは unref しない(unref すると、閉じる処理だけが残ったとき Node が片づけの途中で終わり、終了コード 130 を返せない)。
+  const giveUp = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
+  try {
+    await Promise.race([Promise.resolve().then(() => session.browser.close()).catch(() => {}), giveUp])
+  } finally {
+    clearTimeout(timer)
+  }
 }

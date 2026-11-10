@@ -241,6 +241,12 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     }
     const runPatrol = deps.runPatrol ?? runBrowserPatrol
     const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup })
+    // シグナルで止めた巡回は書き出さない: 途中までの report.json・report.txt は普通の報告と見分けにくく、前回の報告を
+    // 上書きして「変なし」に見えることもある(作業 5 の再レビュー)。片づけのあと exit(130) で終わる。
+    if (report?.stopped) {
+      warn('止めました(シグナル)。報告は書き出しません。')
+      return 130
+    }
     const reportFile = path.join(options.out, 'report.json')
     const reportText = formatPatrolReportText(report)
     mkdirSync(options.out, { recursive: true })
@@ -341,7 +347,8 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
     // シグナルで止めているときはハンドラを残す(片づけが終わると exit(130)。その間の 2 回目のシグナルも無視し続ける)。
     if (!stopping) removeSignalHandlers()
   }
-  return report
+  // 止めた印(main が報告を書き出さない)。
+  return stopping ? { ...report, stopped: true } : report
 }
 
 // import しただけでは何も実行しない(テストから main を呼ぶため・tools/invoked-directly.mjs)。
