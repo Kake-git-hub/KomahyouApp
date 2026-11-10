@@ -87,7 +87,9 @@ function resolveReal(target) {
 /** 出力先がリポジトリの中(リポジトリそのものを含む)なら throw。伏せ字のデータをリポジトリへ置かないため。 */
 export function assertOutDirOutsideRepo(outDir, repoRoot) {
   const relative = path.relative(resolveReal(repoRoot), resolveReal(outDir))
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+  // 「外」は '..' そのもの・'../' で始まる・別ドライブ等の絶対パスだけ。'..foo' のような名前の場所は中。
+  const isOutside = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+  if (!isOutside) {
     throw new Error('--out がリポジトリの中です。伏せ字のデータもリポジトリへ置かないため、スクラッチ領域(リポジトリの外)を指定してください。')
   }
 }

@@ -83,7 +83,8 @@ function httpError(what, status) {
 /** 最新の時点の key を引く。教室別の形(per-classroom-v1)でなければ止まる。 */
 export async function fetchLatestBackupKey({ token, fetchImpl = fetch }) {
   const response = await sendReadOnly(buildLatestBackupKeyRequest(), token, fetchImpl)
-  if (!response.ok) throw httpError('最新のバックアップの時点', response.status)
+  // 200 だけを成功とする(206 部分取得・204 空応答を黙って通さない)。
+  if (response.status !== 200) throw httpError('最新のバックアップの時点', response.status)
   const latest = parseLatestBackupKey(await response.json())
   if (!latest) throw new Error('最新のバックアップの時点が見つかりません(結果が空です)。')
   if (latest.layout !== EXPECTED_LAYOUT) throw new Error(`最新のバックアップ(${latest.key})は教室別の形ではありません(layout=${latest.layout || '不明'})。`)
@@ -94,6 +95,6 @@ export async function fetchLatestBackupKey({ token, fetchImpl = fetch }) {
 export async function fetchClassroomBackup({ token, classroomId, key, fetchImpl = fetch }) {
   const resolvedKey = key || await fetchLatestBackupKey({ token, fetchImpl })
   const response = await sendReadOnly(buildClassroomBackupRequest(resolvedKey, classroomId), token, fetchImpl)
-  if (!response.ok) throw httpError(`教室 ${classroomId} のバックアップ(${resolvedKey})`, response.status)
+  if (response.status !== 200) throw httpError(`教室 ${classroomId} のバックアップ(${resolvedKey})`, response.status)
   return { key: resolvedKey, buffer: Buffer.from(await response.arrayBuffer()) }
 }

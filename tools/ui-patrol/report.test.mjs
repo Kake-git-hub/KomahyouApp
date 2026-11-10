@@ -26,6 +26,23 @@ describe('終了コード', () => {
     expect(resolveExitCode(patrol([]))).toBe(2)
   })
 
+  it('2 校のうち 1 校だけ手順 0 本は 2・手順はあるが操作の合計 0 も 2', () => {
+    expect(resolveExitCode(patrol([classroom([step()]), classroom([])]))).toBe(2)
+    expect(resolveExitCode(patrol([classroom([step({ operations: 0 })])]))).toBe(2)
+    expect(resolveExitCode(patrol([classroom([step({ operations: 0 }), step({ operations: 0 })])]))).toBe(2)
+  })
+
+  it('全校に手順と操作があれば、変なし 0・変あり 1。操作 0 の校が混ざっても合計が正なら手順と中断で決まる', () => {
+    const stopFinding = { level: 'stop', code: 'page-error', message: 'x' }
+    expect(resolveExitCode(patrol([classroom([step()]), classroom([step()])]))).toBe(0)
+    expect(resolveExitCode(patrol([classroom([step()]), classroom([step({ findings: [stopFinding] })])]))).toBe(1)
+  })
+
+  it('中断と変が両方あれば 2(流せなかった巡回の「変なし」「変あり」を信用させない)', () => {
+    const stopFinding = { level: 'stop', code: 'page-error', message: 'x' }
+    expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding] })], { aborted: '止まった' })]))).toBe(2)
+  })
+
   it('変があっても中断が優先で 2', () => {
     const stopStep = step({ findings: [{ level: 'stop', code: 'page-error', message: 'x' }] })
     expect(resolveExitCode(patrol([classroom([stopStep]), classroom([step()], { aborted: '止まった' })]))).toBe(2)

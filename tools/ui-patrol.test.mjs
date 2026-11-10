@@ -3,7 +3,8 @@
 // 漏れ・結果の食い違いがあれば終了コード 2 で、種データを書かない。
 import { describe, it, expect } from 'vitest'
 import { gzipSync } from 'node:zlib'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { generateKeyPairSync } from 'node:crypto'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { main } from './ui-patrol.mjs'
@@ -124,27 +125,118 @@ describe('ui-patrol --prepare-only', () => {
     }
   }, 120000)
 
-  it('保証台帳の結果が食い違うときは終了コード 2 で、種データを書かない', async () => {
+  // 束ねたアプリの関数の一部だけを差し替える loadApp(自己点検の (b) だけ・(c) だけを単独で食い違わせるため)。
+  function loadAppWith(overrides) {
+    return async () => {
+      const loaded = await loadPatrolApp()
+      return { cleanup: loaded.cleanup, app: { ...loaded.app, ...overrides } }
+    }
+  }
+
+  async function runSingleRoom({ loadApp, out, argvExtra = [], payload = makePayload(), fetchImpl: customFetch }) {
+    const fetchImpl = customFetch ?? makeFakeFetch({ [ROOM_A]: payload }).fetchImpl
+    const io = collect()
+    const code = await main({ argv: ['--out', out, '--classroom', ROOM_A, '--prepare-only', ...argvExtra], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl, ...io }, loadApp ? { loadApp } : {})
+    return { code, io, shown: io.out.join('') + io.err.join('') }
+  }
+
+  it('(c) だけ食い違う(保証台帳の結果)と終了コード 2 で、種データを書かない', async () => {
     const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
     try {
-      const { fetchImpl } = makeFakeFetch({ [ROOM_A]: makePayload() })
-      const io = collect()
-      const broken = async () => {
-        const app = await loadPatrolApp()
-        // 伏せ字のあとの盤面から生徒を 1 人消して、保証台帳の結果(INV-14 でなく名前引き)を変える。
-        return { cleanup: app.cleanup, app: { ...app.app, anonymizeClassroomPayload: (payload) => {
-          const result = app.app.anonymizeClassroomPayload(payload)
-          return { ...result, payload: { ...result.payload, students: [] } }
-        } } }
-      }
-      const code = await main({ argv: ['--out', out, '--classroom', ROOM_A, '--prepare-only'], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl, ...io }, { loadApp: broken })
+      const { code, shown } = await runSingleRoom({ out, loadApp: loadAppWith({ compareAuditForParity: () => ['件数 X: 伏せ字の前 0 → 後 1'] }) })
       expect(code).toBe(2)
-      expect(existsSync(path.join(out, `${ROOM_A}.seed.json`))).toBe(false)
-      expect(io.out.join('') + io.err.join('')).toMatch(/食い違い|一致しません/)
+      expect(readdirSync(out)).toEqual([])
+      expect(shown).toContain('保証台帳の結果の食い違い')
+      expect(shown).not.toContain('名前引きの食い違い')
+      expect(shown).not.toContain('実名が残っている')
     } finally {
       rmSync(out, { recursive: true, force: true })
     }
   }, 120000)
+
+  it('(b) だけ食い違う(名前引きと鍵の対応)と終了コード 2 で、種データを書かない', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const { code, shown } = await runSingleRoom({ out, loadApp: loadAppWith({ compareNameResolutionForParity: () => ['名前引きの食い違い boardState.x: 1 件'] }) })
+      expect(code).toBe(2)
+      expect(readdirSync(out)).toEqual([])
+      expect(shown).toContain('名前引きの食い違い')
+      expect(shown).not.toContain('保証台帳の結果の食い違い')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('自己点検に落ちた教室の前回の種データは消す(古い種データを次の作業が読まない)', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      writeFileSync(path.join(out, `${ROOM_A}.seed.json`), '{"old":true}')
+      writeFileSync(path.join(out, 'other.txt'), 'keep')
+      const { code } = await runSingleRoom({ out, loadApp: loadAppWith({ compareAuditForParity: () => ['x'] }) })
+      expect(code).toBe(2)
+      expect(existsSync(path.join(out, `${ROOM_A}.seed.json`))).toBe(false)
+      expect(existsSync(path.join(out, 'other.txt'))).toBe(true)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('取得に失敗した教室の前回の種データも消す', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      writeFileSync(path.join(out, `${ROOM_A}.seed.json`), '{"old":true}')
+      const fetchImpl = async (url) => (String(url).endsWith(':runQuery')
+        ? { ok: true, status: 200, json: async () => [{ document: { name: 'x/2026-11-10T23-45', fields: { layout: { stringValue: 'per-classroom-v1' } } } }] }
+        : { ok: false, status: 403, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) })
+      const { code, shown } = await runSingleRoom({ out, fetchImpl })
+      expect(code).toBe(2)
+      expect(shown).toContain('403')
+      expect(existsSync(path.join(out, `${ROOM_A}.seed.json`))).toBe(false)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('壊れた教室データ(架空の名前入りの壊れた JSON)でも、出力に名前や元の文の断片が出ない', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const broken = gzipSync(Buffer.from('{"students":[{"name":"甲野　一郎",,}]'))
+      const fetchImpl = async (url) => (String(url).endsWith(':runQuery')
+        ? { ok: true, status: 200, json: async () => [{ document: { name: 'x/2026-11-10T23-45', fields: { layout: { stringValue: 'per-classroom-v1' } } } }] }
+        : { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => broken.buffer.slice(broken.byteOffset, broken.byteOffset + broken.byteLength) })
+      const { code, shown } = await runSingleRoom({ out, fetchImpl })
+      expect(code).toBe(2)
+      expect(shown).toContain('SyntaxError')
+      for (const name of NAMES) expect(shown).not.toContain(name)
+      expect(shown).not.toContain('"students"')
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('トークンを作れない理由を分類して出す(環境変数なし／認証サーバーの状態コード／通信できない)。中身は出さない', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const key = { client_email: 'sa@example.invalid', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), private_key_id: 'k1' }
+    const b64 = Buffer.from(JSON.stringify(key)).toString('base64')
+    const run = async (env, fetchImpl) => {
+      const io = collect()
+      const code = await main({ argv: ['--out', '/tmp/patrol-never', '--prepare-only'], env, fetchImpl, ...io })
+      return { code, shown: io.err.join('') }
+    }
+    const noEnv = await run({}, async () => { throw new Error('x') })
+    expect(noEnv.code).toBe(2)
+    expect(noEnv.shown).toContain('環境変数')
+    const rejected = await run({ KOMAHYOU_READONLY_SA_JSON_B64: b64 }, async () => ({ ok: false, status: 401, json: async () => ({ error: 'invalid_grant' }) }))
+    expect(rejected.shown).toContain('認証サーバーが状態コード 401')
+    const offline = await run({ KOMAHYOU_READONLY_SA_JSON_B64: b64 }, async () => { throw new Error('ECONNRESET secret-detail') })
+    expect(offline.shown).toContain('通信できません')
+    for (const result of [noEnv, rejected, offline]) {
+      expect(result.shown).toContain('読み取り専用トークンを作れません')
+      expect(result.shown).not.toContain(b64)
+      expect(result.shown).not.toContain('secret-detail')
+      expect(result.shown).not.toContain('PRIVATE KEY')
+    }
+  })
 
   it('出力先がリポジトリの中・引数の誤り・トークンなしは終了コード 2 で、通信しない', async () => {
     const repoRoot = path.resolve(import.meta.dirname, '..')

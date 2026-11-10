@@ -11,7 +11,7 @@
 //   (a) 伏せ字のあとに実名が残っていない(findNameLeaks) (b) 名前引きと鍵の対応が前後で同じ(compareNameResolutionForParity)
 //   (c) 保証台帳の結果が前後で同じ(compareAuditForParity)
 // 終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { isInvokedDirectly } from './invoked-directly.mjs'
 import { fetchReadonlyAccessToken } from './prod-readonly-token.mjs'
@@ -34,6 +34,22 @@ function guardTokenFetch(fetchImpl) {
   }
 }
 
+/** トークン作成の失敗を理由の分類だけにする(例外の文にはサービスアカウントや認証サーバーの応答が混ざりうるので出さない)。 */
+function describeTokenFailure(error) {
+  const message = error instanceof Error ? error.message : ''
+  if (message.includes('KOMAHYOU_READONLY_SA_JSON_B64') || message.includes('サービスアカウント鍵')) {
+    return '環境変数 FIRESTORE_ACCESS_TOKEN か KOMAHYOU_READONLY_SA_JSON_B64 が無いか、読めません'
+  }
+  const status = /アクセストークンを取得できません\((\d{3})/.exec(message)?.[1]
+  if (status) return `認証サーバーが状態コード ${status} を返しました`
+  return '認証サーバーと通信できませんでした'
+}
+
+/** 教室ごとの出力: 前回の種データを消す(自己点検や取得に落ちたとき、古い種データを次の作業が読まないように)。 */
+function removeStaleSeed(out, classroomId) {
+  rmSync(path.join(out, `${classroomId}.seed.json`), { force: true })
+}
+
 function readAppVersion() {
   try {
     return JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version ?? ''
@@ -50,20 +66,32 @@ function labelOf(classroomId) {
  * 1 教室ぶんの取得 → 伏せ字 → 自己点検。通れば伏せ字のあとの種データの中身を、引っかかれば problems を返す。
  * 元の payload はここから外へ出さない。
  */
+/** 取得のあとの段の例外は、元データの断片が文に混ざりうる(JSON.parse など)ので「段の名前＋例外の種類」だけにする。 */
+function inStage(stage, fn) {
+  try {
+    return fn()
+  } catch (error) {
+    const kind = error instanceof Error && error.name ? error.name : 'Error'
+    throw new Error(`教室データを処理できませんでした(${stage}・${kind})`)
+  }
+}
+
 function prepareClassroom({ app, classroomId, buffer, today }) {
-  const snapshot = extractClassroomSnapshot(decodeJsonBuffer(buffer), { file: `${classroomId}.json.gz`, classroomId })
+  const doc = inStage('復号', () => decodeJsonBuffer(buffer))
+  const snapshot = inStage('取り出し', () => extractClassroomSnapshot(doc, { file: `${classroomId}.json.gz`, classroomId }))
   const original = snapshot.payload
-  const anonymized = app.anonymizeClassroomPayload(original)
+  const anonymized = inStage('伏せ字', () => app.anonymizeClassroomPayload(original))
   const problems = []
   // (a) 漏れ検査。返るのは経路だけ(値は出さない)。
-  const leaks = app.findNameLeaks(anonymized.payload, anonymized.nameMap.keys())
+  const leaks = inStage('自己点検(漏れ)', () => app.findNameLeaks(anonymized.payload, anonymized.nameMap.keys()))
   if (leaks.length > 0) problems.push({ kind: '漏れ', lines: leaks.slice(0, 20).map((route) => `実名が残っている項目: ${route}`), total: leaks.length })
   // (b) 名前引きと鍵の対応が前後で同じ。
-  const resolution = app.compareNameResolutionForParity(original, anonymized.payload)
+  const resolution = inStage('自己点検(名前引き)', () => app.compareNameResolutionForParity(original, anonymized.payload))
   if (resolution.length > 0) problems.push({ kind: '名前引きの食い違い', lines: resolution.slice(0, 20), total: resolution.length })
   // (c) 保証台帳の結果が前後で同じ(今日は JST の今日)。
+  // known は渡さない: 前後の比較なので既知の除外を引くと、片側だけ除外されて食い違いに見えたり、食い違いを隠したりする。
   const audit = (payload) => app.auditClassroomSnapshot({ classroomId, payload, today, known: [] })
-  const parity = app.compareAuditForParity(audit(original), audit(anonymized.payload))
+  const parity = inStage('自己点検(保証台帳)', () => app.compareAuditForParity(audit(original), audit(anonymized.payload)))
   if (parity.length > 0) problems.push({ kind: '保証台帳の結果の食い違い', lines: parity.slice(0, 20), total: parity.length })
   const savedAt = snapshot.times?.find((time) => time.key === 'savedAt')?.iso
   return {
@@ -115,8 +143,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
   if (!token) {
     try {
       token = (await fetchReadonlyAccessToken(env, guardTokenFetch(fetchImpl))).accessToken
-    } catch {
-      warn('エラー: 読み取り専用トークンを作れません(環境変数 FIRESTORE_ACCESS_TOKEN か KOMAHYOU_READONLY_SA_JSON_B64 が必要です)。')
+    } catch (error) {
+      warn(`エラー: 読み取り専用トークンを作れません(${describeTokenFailure(error)})。`)
       return 2
     }
   }
@@ -126,8 +154,10 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
   const results = []
   try {
     loaded = await loadApp()
-    const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
     mkdirSync(options.out, { recursive: true })
+    // 前回の種データは最初に全部消す。今回通った教室だけが残るので、途中で止まっても古い種データを次の作業が読まない。
+    for (const classroomId of options.classrooms) removeStaleSeed(options.out, classroomId)
+    const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
     const today = jstToday()
     for (const classroomId of options.classrooms) {
       const started = Date.now()

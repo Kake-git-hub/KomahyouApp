@@ -1,6 +1,8 @@
 // tools/ui-patrol/options.mjs(引数・出力先の検査)を固定する。
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './options.mjs'
 
 const OUT = ['--out', '/tmp/patrol-out']
@@ -50,8 +52,30 @@ describe('assertOutDirOutsideRepo', () => {
     expect(() => assertOutDirOutsideRepo(repo, repo)).toThrow()
     expect(() => assertOutDirOutsideRepo(path.join(repo, 'docs', 'x'), repo)).toThrow()
     expect(() => assertOutDirOutsideRepo(`${repo}/../repo/tmp`, repo)).toThrow()
+    expect(() => assertOutDirOutsideRepo(path.join(repo, '..foo'), repo)).toThrow()
+    expect(() => assertOutDirOutsideRepo(path.join(repo, '..foo', 'x'), repo)).toThrow()
     expect(() => assertOutDirOutsideRepo('/work/repo-other/out', repo)).not.toThrow()
     expect(() => assertOutDirOutsideRepo('/tmp/patrol', repo)).not.toThrow()
+  })
+})
+
+describe('assertOutDirOutsideRepo(シンボリックリンク)', () => {
+  it('リポジトリの中を指すリンクの下は throw(リンクの外から見ても中)', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'patrol-link-'))
+    try {
+      const fakeRepo = path.join(base, 'repo')
+      mkdirSync(path.join(fakeRepo, 'docs'), { recursive: true })
+      const link = path.join(base, 'link')
+      try {
+        symlinkSync(fakeRepo, link)
+      } catch {
+        return // リンクを作れない環境は飛ばす
+      }
+      expect(() => assertOutDirOutsideRepo(path.join(link, 'docs', 'new'), fakeRepo)).toThrow()
+      expect(() => assertOutDirOutsideRepo(path.join(base, 'elsewhere'), fakeRepo)).not.toThrow()
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })
 

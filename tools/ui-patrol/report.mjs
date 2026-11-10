@@ -41,10 +41,17 @@ export function summarizeReport(report) {
   return { stop, info, stepsRun, operations, aborted }
 }
 
-/** 0=変なし／1=変あり／2=中断または 1 本も流れていない。 */
+/**
+ * 0=変なし／1=変あり／2=流せなかった。教室ごとに見る: 中断、または手順が 0 本の教室が 1 つでもあれば 2。
+ * 全体の操作が 0 回でも 2(何も操作していない巡回の「変なし」を信用させない)。2 が先で、そのあと変があれば 1。
+ * --prepare-only はこの関数を通さない(自己点検が通れば 0・tools/ui-patrol.mjs)。
+ */
 export function resolveExitCode(report) {
+  const rooms = classroomsOf(report)
+  if (rooms.length === 0) return 2
+  if (rooms.some((room) => room.aborted || (room.steps ?? []).length === 0)) return 2
   const summary = summarizeReport(report)
-  if (summary.aborted || summary.stepsRun === 0) return 2
+  if (summary.operations === 0) return 2
   return summary.stop > 0 ? 1 : 0
 }
 
