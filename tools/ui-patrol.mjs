@@ -165,6 +165,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     for (const error of errors) warn(`  - ${error}`)
     return 2
   }
+  // 相対の --out は最初に絶対 path にする(git・tar・開発用サーバーの子プロセスは cwd が違うので、以降どこでも絶対 path で扱う)。
+  options.out = path.resolve(options.out)
   try {
     assertOutDirOutsideRepo(options.out, REPO_ROOT)
   } catch (error) {
@@ -298,11 +300,13 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
       let baseRun = await runPatrol({
         app: loaded.app, seeds, options: { ...options, out: baselineOut }, backupKey, today, env, say, warn,
         // シグナルで止めたときも、展開したアプリと束ねたアプリを消す(runBrowserPatrol の片づけが呼ぶ)。
-        extraCleanup: async () => { await baselineApp.cleanup(); await loaded.cleanup() }, repoRoot: baselineApp.appDir,
+        // 普通に終わったときは展開したアプリだけ片づける(束ねたアプリは今回も使う)。シグナルのときは全部(下の stopped 側)。
+        extraCleanup: async () => { await baselineApp.cleanup() }, repoRoot: baselineApp.appDir,
       })
       // 展開したアプリは使い終わったらすぐ消す(今回の巡回の間は要らない)。
       await baselineApp.cleanup()
       if (baseRun?.stopped) {
+        await loaded.cleanup()
         warn('止めました(シグナル)。報告は書き出しません。')
         return 130
       }

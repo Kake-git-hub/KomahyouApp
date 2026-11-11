@@ -53,7 +53,9 @@ async function showFile(repoRoot, sha, file) {
  * 断る(BaselineRefusal): ref が解決できない／ref の package-lock.json が今の作業ツリーと違う(依存が違うので node_modules を共有できない)／
  * ref に src/utils/uiPatrolHook.ts が無い(巡回の読み口が入る v1.5.718 より前の版)。
  */
-export async function prepareBaselineApp({ repoRoot, ref, outDir }) {
+export async function prepareBaselineApp({ repoRoot, ref, outDir: outDirInput }) {
+  // git(cwd=repoRoot)と Node(cwd=呼び出し側)で相対 path の基準が違うので、最初に絶対 path にする(tar がリポジトリ側に書かれ、片づけが届かなくなるのを防ぐ)。
+  const outDir = path.resolve(outDirInput)
   const sha = await resolveRef(repoRoot, ref)
   const refLock = await showFile(repoRoot, sha, 'package-lock.json')
   const nowLockFile = path.join(repoRoot, 'package-lock.json')

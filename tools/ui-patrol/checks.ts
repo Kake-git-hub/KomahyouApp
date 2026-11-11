@@ -254,6 +254,14 @@ export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: Boar
       beforeCounts.set(key, (beforeCounts.get(key) ?? 0) + 1)
     }
   }
+  // コマ(cellId)ごとの、室長が講師を消した記録のある机の数(操作の前・後)。
+  const deletedCountOf = (facts: BoardFacts) => {
+    const counts = new Map<string, number>()
+    for (const fact of facts.desks.values()) if (fact.teacherDeleted) counts.set(fact.cellId, (counts.get(fact.cellId) ?? 0) + 1)
+    return counts
+  }
+  const deletedBefore = deletedCountOf(before)
+  const deletedAfter = deletedCountOf(after)
   const findings: PatrolFinding[] = []
   const afterDesks = [...after.desks.values()].sort((left, right) => left.dateKey.localeCompare(right.dateKey) || left.slotNumber - right.slotNumber || left.deskIndex - right.deskIndex)
   for (const desk of afterDesks) {
@@ -277,7 +285,9 @@ export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: Boar
       }
       // 講師を消した机(室長がその日その講師を消した記録)に置かれたテンプレの生徒は仕様どおり(講師は置かない・生徒は置く・講師なしの赤字)。
       // 手入力の生徒・消した記録の無い机は今までどおり stop。テンプレ自体が講師なし(上)に当たれば、そちらを優先する。
-      if (desk.teacherDeleted && student.origin === 'template') {
+      // 操作が削除記録を増やしていないこと(コマ単位・下の deletedCountOf)。操作そのものが記録を作ったのは「室長が消した」と言えないので stop のまま。
+      // 机単位(同じ机番号)にしないのは、テンプレ保存の机の並べ直しで削除記録ごと別の机の番号へ動くため(実データで確認・机番号の移動は仕様の範囲)。
+      if (desk.teacherDeleted && student.origin === 'template' && (deletedAfter.get(desk.cellId) ?? 0) <= (deletedBefore.get(desk.cellId) ?? 0)) {
         findings.push({
           level: 'info', code: 'teacherless-student-at-deleted-teacher-desk',
           message: `講師を消した机にテンプレの生徒が置かれた(仕様どおり): ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,

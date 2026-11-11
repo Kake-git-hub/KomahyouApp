@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { BaselineRefusal, prepareBaselineApp } from './baselineApp.mjs'
 
-const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_TERMINAL_PROMPT: '0' }
+// git の hook の中から走ったとき、環境の GIT_DIR などでこのリポジトリを触らないよう消す。
+const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'].includes(key)))
+const GIT_ENV = { ...CLEAN_ENV, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_TERMINAL_PROMPT: '0' }
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, env: GIT_ENV, encoding: 'utf8' })
 
 const dirs = []
@@ -137,6 +139,28 @@ describe('prepareBaselineApp', () => {
     git(repo, 'commit', '-q', '-m', 'no lock')
     writeFileSync(path.join(repo, 'package-lock.json'), 'lock-A')
     await expect(prepareBaselineApp({ repoRoot: repo, ref: 'HEAD', outDir: out })).rejects.toThrow('package-lock.json')
+  })
+
+  it('outDir が相対 path で、cwd がリポジトリと違っても、tar も展開先も outDir の位置にでき、リポジトリ側に何もできない', async () => {
+    const repo = makeRepo()
+    const base = tempDir()
+    const before = snapshotState(repo)
+    const originalCwd = process.cwd()
+    process.chdir(base)
+    try {
+      const { appDir, cleanup } = await prepareBaselineApp({ repoRoot: repo, ref: 'HEAD', outDir: './rel-out' })
+      expect(path.isAbsolute(appDir)).toBe(true)
+      expect(realpathSync(appDir)).toBe(realpathSync(path.join(base, 'rel-out', 'baseline-app')))
+      expect(existsSync(path.join(appDir, 'src', 'app.ts'))).toBe(true)
+      expect(existsSync(path.join(repo, 'rel-out'))).toBe(false)
+      expect(existsSync(path.join(appDir, '..', 'baseline-app.tar'))).toBe(false)
+      await cleanup()
+      expect(existsSync(path.join(base, 'rel-out', 'baseline-app'))).toBe(false)
+    } finally {
+      process.chdir(originalCwd)
+    }
+    expect(snapshotState(repo)).toEqual(before)
+    expect(existsSync(path.join(repo, 'rel-out'))).toBe(false)
   })
 
   it('node_modules のリンクは絶対パスの実体を指す', async () => {

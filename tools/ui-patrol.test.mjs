@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { gzipSync } from 'node:zlib'
 import { generateKeyPairSync } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -461,12 +461,36 @@ describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流
       // 展開したアプリは変更前を流し終えたらすぐ消す(今回を流す前)。終わりにも(2 回目の片づけ)呼ばれても落ちない。
       expect(events.indexOf('app-cleanup')).toBeGreaterThan(events.indexOf('run:baseline'))
       expect(events.indexOf('app-cleanup')).toBeLessThan(events.indexOf('run:current'))
+      // 束ねたアプリは今回も使うので、変更前が普通に終わった時点では片づけない(今回のあとの main の finally で消える)
+      expect(events.indexOf('bundle-cleanup')).toBeGreaterThan(events.indexOf('run:current'))
       // 変更前の報告は <out>/baseline に残る
       expect(JSON.parse(readFileSync(path.join(env.dir, 'out', 'baseline', 'report.json'), 'utf8')).classrooms[0].seedFingerprint).toMatch(/^[0-9a-f]{16}$/)
       expect(readFileSync(path.join(env.dir, 'out', 'baseline', 'report.txt'), 'utf8')).toContain('■ 画面の自動巡回')
       expect(io.out.join('')).toContain('前から 1')
       expect(JSON.parse(readFileSync(path.join(env.dir, 'out', 'report.json'), 'utf8')).baseline).toMatchObject({ newStops: 0, carriedStops: 1, resolvedStops: 0 })
     } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('相対の --out は最初に絶対 path にして渡す(変更前・今回の両方・展開先も)', async () => {
+    const env = setup()
+    const originalCwd = process.cwd()
+    process.chdir(env.dir)
+    try {
+      const calls = []
+      const io = collect()
+      const code = await main({ argv: ['--out', './rel-out', '--seed-file', env.seedFile, '--classroom', ROOM_A, '--baseline-ref', 'HEAD'], env: {}, ...io }, {
+        loadApp: fakeApp, loadPlaywright: () => ({}),
+        prepareBaselineApp: async ({ outDir }) => { calls.push(['prepare', outDir]); return { appDir: path.join(outDir, 'baseline-app'), cleanup: async () => {} } },
+        runPatrol: async (args) => { calls.push(['run', args.options.out]); return reportOf([]) },
+      })
+      expect(code).toBe(0)
+      const abs = path.join(realpathSync(env.dir), 'rel-out')
+      const real = (p) => path.join(realpathSync(path.dirname(p)), path.basename(p))
+      expect(calls.map(([kind, out]) => [kind, path.isAbsolute(out), real(out)])).toEqual([['prepare', true, abs], ['run', true, path.join(abs, 'baseline')], ['run', true, abs]])
+    } finally {
+      process.chdir(originalCwd)
       rmSync(env.dir, { recursive: true, force: true })
     }
   })
@@ -517,6 +541,7 @@ describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流
       expect(stopped.calls).toHaveLength(1)
       expect(existsSync(path.join(env.dir, 'out', 'report.json'))).toBe(false)
       expect(events).toContain('app-cleanup')
+      expect(events).toContain('bundle-cleanup')
     } finally {
       rmSync(env.dir, { recursive: true, force: true })
     }
