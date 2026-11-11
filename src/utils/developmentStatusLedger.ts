@@ -98,17 +98,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
   // ── オーナー判断待ち ───────────────────────────────────────────────────────
   {
-    id: 'template-save-teacher-detached',
-    title: 'テンプレ保存で講師と生徒が離れる形が残っている',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '先の反映日のテンプレが保存済みの教室で、反映日を手前へ動かして保存すると、手で入れた講師が生徒から離れ、生徒が講師なしで残る(日大前校の形で 29 机)。講師を消した机に生徒が戻る形もある。',
-    nextAction: 'オーナーが直し方を決める。それまで日大前校は、テンプレを保存するとき反映開始日を手前へ動かさない。',
-    notes: '2026-11-11 に画面の自動巡回(tools/ui-patrol.mjs)が見つけた。形 A(不具合の疑い): 別の講師の授業に手で入れた講師 X の机で、新しいテンプレも同じ X をその机に置くのに、保存で X だけが空き机へ移り、テンプレの生徒が講師なしで残る。確認の画面に出ない。仕様 spec-template-conflict-v2 の 2-1(講師が新しいテンプレにいない机は空き机へ)と 2-3/9-15(合流の対象外)の組み合わせの穴。v1.5.717 の合流が効かない。日大前校 29 机(11/17〜1/28 の火・木・月の 3 限)。形 B(仕様の穴): 室長が講師を消した机(削除記録)へ、同じ日の中で別の講師へ動かしていたテンプレの生徒が講師なしで戻る・全部消した日に新しいテンプレの生徒が現れる。日大前校 10 机・緑が丘校の 11/10 朝の形で 9 件。加えて、先の版を手前の日付で当てているのに確認の画面が「テンプレの中身に変更はありません」と出す。再現と件数は docs/runbooks/ui-patrol.md の 7・9。直したら巡回の該当の所見が消えることで確かめる。',
-    references: ['docs/runbooks/ui-patrol.md', 'docs/spec-template-conflict-v2.md', 'src/components/schedule-board/templateDeskOrderRestore.ts'],
-    updatedOn: '2026-11-11',
-  },
-  {
     id: 'ui-patrol-stage2',
     title: '画面の自動巡回の次の段(台本を足す・毎晩回す)',
     stage: 'awaiting-owner',
