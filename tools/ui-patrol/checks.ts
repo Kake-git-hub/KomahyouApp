@@ -18,6 +18,8 @@ export const PATROL_FINDING_CODES = [
   'orphaned-makeup-removed-announced',
   // 作業 5 修正 1: テンプレ自体がその授業を講師なしにしている(テンプレの机の teacherId が空)。テンプレどおりの結果なので info。
   'teacherless-student-by-template',
+  // 室長が講師を消した机(講師の削除記録)にテンプレの生徒が置かれた。仕様どおり(オーナー決定 2026-11-11・Issue #85・spec-template-conflict-v2)なので info。
+  'teacherless-student-at-deleted-teacher-desk',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -269,6 +271,16 @@ export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: Boar
         findings.push({
           level: 'info', code: 'teacherless-student-by-template',
           message: `テンプレ自体が講師なしの授業を講師のいない机に置いた: ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
+          ...locationOf(desk), studentId: student.key,
+        })
+        continue
+      }
+      // 講師を消した机(室長がその日その講師を消した記録)に置かれたテンプレの生徒は仕様どおり(講師は置かない・生徒は置く・講師なしの赤字)。
+      // 手入力の生徒・消した記録の無い机は今までどおり stop。テンプレ自体が講師なし(上)に当たれば、そちらを優先する。
+      if (desk.teacherDeleted && student.origin === 'template') {
+        findings.push({
+          level: 'info', code: 'teacherless-student-at-deleted-teacher-desk',
+          message: `講師を消した机にテンプレの生徒が置かれた(仕様どおり): ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
           ...locationOf(desk), studentId: student.key,
         })
         continue
