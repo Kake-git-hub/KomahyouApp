@@ -301,7 +301,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
         app: loaded.app, seeds, options: { ...options, out: baselineOut }, backupKey, today, env, say, warn,
         // シグナルで止めたときも、展開したアプリと束ねたアプリを消す(runBrowserPatrol の片づけが呼ぶ)。
         // 普通に終わったときは展開したアプリだけ片づける(束ねたアプリは今回も使う)。シグナルのときは全部(下の stopped 側)。
-        extraCleanup: async () => { await baselineApp.cleanup() }, repoRoot: baselineApp.appDir,
+        // stopping(止めている最中)は runBrowserPatrol の cleanup が渡す。本物のシグナルは片づけの直後に exit(130) するので、main の続きに頼れない。
+        extraCleanup: async ({ stopping } = {}) => { await baselineApp.cleanup(); if (stopping) await loaded.cleanup() }, repoRoot: baselineApp.appDir,
       })
       // 展開したアプリは使い終わったらすぐ消す(今回の巡回の間は要らない)。
       await baselineApp.cleanup()
@@ -407,7 +408,7 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
         await close(current).catch(() => {})
         if (stopServer) await stopServer().catch(() => {})
         // esbuild で束ねたアプリの一時フォルダ(シグナルで終わると main の finally を通らないので、ここでも消す)。
-        if (extraCleanup) await extraCleanup().catch(() => {})
+        if (extraCleanup) await extraCleanup({ stopping }).catch(() => {})
       })()
     }
     return cleaned

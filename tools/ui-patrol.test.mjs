@@ -520,6 +520,36 @@ describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流
     }
   })
 
+  it('変更前の巡回の最中のシグナル: exit(130) の時点で、展開先も束ねたアプリも片づいている(exit のあとの main の続きに頼らない)', async () => {
+    const env = setup()
+    try {
+      const proc = new EventEmitter()
+      const exited = new Promise((resolve) => { proc.exit = (code) => { events.push(`exit:${code}`); resolve(code) } })
+      const deps = {
+        process: proc,
+        startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => { events.push('server.stop') } }),
+        launchPatrolBrowser: async () => ({}),
+        closePatrolBrowser: async () => {},
+        runClassroomPatrol: () => new Promise(() => {}),
+      }
+      const io = collect()
+      void main({ argv: ['--out', path.join(env.dir, 'out'), '--seed-file', env.seedFile, '--classroom', ROOM_A, '--baseline-ref', 'HEAD'], env: {}, ...io }, {
+        loadApp: fakeApp, loadPlaywright: () => ({}),
+        prepareBaselineApp: async ({ outDir }) => ({ appDir: path.join(outDir, 'baseline-app'), cleanup: async () => { events.push('app-cleanup') } }),
+        runPatrol: (args) => runBrowserPatrol(args, deps),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      proc.emit('SIGINT')
+      await exited
+      const atExit = events.slice(0, events.indexOf('exit:130'))
+      expect(atExit).toContain('app-cleanup')
+      expect(atExit).toContain('bundle-cleanup')
+      expect(atExit).toContain('server.stop')
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
   it('用意で断られたら(ref が解決できない・依存が違う・読み口が無い)2。何も流さず・取得もしない', async () => {
     const env = setup()
     try {
