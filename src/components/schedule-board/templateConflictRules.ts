@@ -424,9 +424,10 @@ function applyRulesToDesk(params: {
   const templateTeacher = templateDesk.teacher.trim() && !params.isTeacherOnRest(cell, templateDesk) ? templateDesk : null
   const claimedAt = templateTeacher ? findManualTeacherDeskElsewhere(deskIndex, templateTeacher, params.teacherBlockers, params.aliases) : -1
   const placeableTemplateTeacher = templateTeacher && claimedAt < 0 ? templateTeacher : null
-  if (templateTeacher && claimedAt >= 0) {
-    params.teacherNotes.push({ kind: 'teacher-elsewhere', teacherName: templateTeacher.teacher, templateTeacher: String(claimedAt + 1), dateKey: cell.dateKey, slotNumber: cell.slotNumber })
-  }
+  const elsewhereNote: TemplateDiffTeacherNote | null = templateTeacher && claimedAt >= 0
+    ? { kind: 'teacher-elsewhere', teacherName: templateTeacher.teacher, templateTeacher: String(claimedAt + 1), dateKey: cell.dateKey, slotNumber: cell.slotNumber }
+    : null
+  if (elsewhereNote) params.teacherNotes.push(elsewhereNote)
   // 下段の講師が埋め草（既に保存された誤った保留・2026-11-07）は手置きの講師ではない＝外す（下段に講師を残さない）。
   const manualTeacher: TemplatePendingLowerTeacher | null = hasRealDeskTeacher(pending?.lower.teacher?.teacher)
     ? pending!.lower.teacher!
@@ -439,8 +440,12 @@ function applyRulesToDesk(params: {
   const declinedHere = !hasRealDeskTeacher(pending?.lower.teacher?.teacher) && isTemplateTeacherDeclinedAtDesk(desk, templateDesk, params.aliases)
   if (manualTeacher) {
     // 埋め草（講師の居ない行）は「テンプレに講師なし」＝手置き講師のまま 1 行（講師欄 2 行にしない・2026-11-07）。
-    if (!placeableTemplateTeacher || isDeskTeacherPlaceholder(placeableTemplateTeacher.teacher) || declinedHere || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) upperTeacher = pickTeacher(manualTeacher)
-    else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases, (templateDesk) => params.isTeacherOnRest(cell, templateDesk))) {
+    if (!placeableTemplateTeacher || isDeskTeacherPlaceholder(placeableTemplateTeacher.teacher) || declinedHere || isSameTeacherByAliases(placeableTemplateTeacher.teacher, manualTeacher.teacher, params.aliases)) {
+      upperTeacher = pickTeacher(manualTeacher)
+      // 2026-11-11 オーナー決定「文を事実に合わせる」: テンプレの講師を置かなかった机（teacher-elsewhere）に手で置いた講師が残るときは、確認画面の文を
+      // 「講師欄は手で置いた講師 Y のままです」にする（動きは変えない・埋め草は講師ではない＝空のままの文）。
+      if (elsewhereNote && hasRealDeskTeacher(upperTeacher.teacher)) elsewhereNote.deskTeacherName = upperTeacher.teacher
+    } else if (isManualTeacherAlsoInTemplateElsewhere(deskIndex, manualTeacher, params.cellTemplateTeachers, params.aliases, (templateDesk) => params.isTeacherOnRest(cell, templateDesk))) {
       // §9-15: X がテンプレの別の机にも居る → この机は X のまま（W を置かない・講師欄は 1 行）。別の机の X は §2-3 で置かない。
       upperTeacher = pickTeacher(manualTeacher)
       params.teacherNotes.push({ kind: 'teacher-kept', teacherName: placeableTemplateTeacher.teacher, templateTeacher: manualTeacher.teacher, dateKey: cell.dateKey, slotNumber: cell.slotNumber })

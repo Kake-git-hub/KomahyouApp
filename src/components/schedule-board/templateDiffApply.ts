@@ -2628,7 +2628,10 @@ export type TemplateDiffStudentNote = {
   formerTeacherName?: string
   /** teacher-left-moved（2026-11-10）: 机と一緒に移る手置きの講師（無ければ講師なしの机になる）。 */
   movedTeacherName?: string
-  /** teacher-left-no-desk（2026-11-10）: 入った机の新しいテンプレの講師（無ければ undefined）。 */
+  /**
+   * teacher-left-no-desk（2026-11-10）: 入った机の新しいテンプレの講師（無ければ undefined）。
+   * teacher-elsewhere（2026-11-11 オーナー決定「文を事実に合わせる」）: テンプレの講師を置かなかったこの机に残る、手で置いた講師（無ければ講師欄は空）。
+   */
   deskTeacherName?: string
 }
 
@@ -2644,6 +2647,8 @@ export type TemplateDiffTeacherNote = {
   keptStudentNames?: string[]
   /** teacher-pending（2026-11-01・旧 A-7）: テンプレのこの机が講師だけ（生徒なし）。 */
   templateTeacherOnly?: boolean
+  /** teacher-elsewhere（2026-11-11）: この机の講師欄に残る手で置いた講師（無ければ講師欄は空）。 */
+  deskTeacherName?: string
 }
 
 const TEMPLATE_DIFF_STUDENT_NOTE_LIMIT = 12
@@ -2682,7 +2687,10 @@ function describeTemplateDiffStudentNote(rawNote: TemplateDiffStudentNote) {
     // 決定記録 66（2026-11-05・tp-59）: detail＝テンプレがこの講師を置く机の番号。
     case 'teacher-elsewhere': {
       // 第 2 版 §2-3（講師の一意・手置き講師が勝つ・§9-1）: studentName＝テンプレの講師・detail＝手置きの机の番号（1 始まり）。
-      return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は空のままです）。`
+      // 2026-11-11 オーナー決定「文を事実に合わせる」: この机に手で置いた別の講師が残るときは「講師欄は手で置いた講師 Y のままです」（空のときは従来の文）。
+      const keptTeacher = formatDeskTeacherLabel(note.deskTeacherName)
+      const teacherField = keptTeacher ? `手で置いた講師 ${keptTeacher} のまま` : '空のまま'
+      return `${where} ${who}: 同じコマの${note.detail ? `机 ${note.detail} ` : '別の机'}に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は${teacherField}です）。`
     }
     // 2026-11-10（オーナー決定「手入力は講師について行く」・spec §2-1）: 講師が新しいテンプレのそのコマにいない机の手入力の生徒を、テンプレが使わない机へ移した。
     case 'teacher-left-moved': {

@@ -58,6 +58,7 @@ import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './temp
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
 import { collectManualFirstBlockedLessons } from './templateConflictRules'
 import { auditTemplateLessonAccounting } from './templateLessonAccountingOracle'
+import { DESK_TEACHER_PLACEHOLDER_LABELS, formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { resolveStudentOrigin } from './placementOrigin'
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import * as wd from './wholeDayTransferPair.fixture'
@@ -1709,6 +1710,70 @@ describe('第 2 版の規則表（§2-1 席・§2-2 生徒の一意・§2-3 講�
     expect(liveNames(deskOf(saved.nextWeeks, 0))).toEqual(['sA'])
     expect(cellOf(saved.nextWeeks).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
     expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => note.detail)).toEqual(['3'])
+    // 講師欄が本当に空の机は今の文のまま（2026-11-11 オーナー決定「文を事実に合わせる」の対照）。
+    expect(buildTemplateDiffStudentNoteLines(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere'))[1])
+      .toBe('・10/7 5限 講師 佐藤: 同じコマの机 3 に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は空のままです）。')
+  })
+
+  // 2026-11-11 オーナー決定「文を事実に合わせる」: テンプレの佐藤の机（机 1）に別の講師 高木を手で置き、佐藤を同じコマの別の机（机 3）に手で置いた形。
+  // 机 1 の講師欄は高木のまま（動きは今のまま）なので、確認画面の文は「講師欄は空のままです」ではなく「手で置いた講師 高木 のままです」。
+  it('【差分反映単体の保険】§2-3: テンプレの佐藤の机に手で置いた講師 高木が居て、佐藤は別の机に手で置いた → 机は高木のまま・確認画面の文は「講師欄は手で置いた講師 高木 のままです」（種類と件数は変えない）', () => {
+    const week = mutateDesk(
+      mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, teacher: '高木', manualTeacher: true, teacherAssignmentSource: 'manual' })),
+      2, (desk) => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3' }),
+    )
+    const saved = saveStable(week, [row('r0', 't3', 'sA', '数'), row('r1', 't2', 'sB', '数')])
+    expect([deskOf(saved.nextWeeks, 0).teacher, deskOf(saved.nextWeeks, 0).manualTeacher]).toEqual(['高木', true])
+    expect(liveNames(deskOf(saved.nextWeeks, 0))).toEqual(['sA'])
+    expect(cellOf(saved.nextWeeks).desks.filter((desk) => desk.teacher === '佐藤')).toHaveLength(1)
+    const elsewhere = saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')
+    expect(elsewhere.map((note) => [note.studentName, note.detail])).toEqual([['佐藤', '3']])
+    expect(buildTemplateDiffStudentNoteLines(elsewhere)[1])
+      .toBe('・10/7 5限 講師 佐藤: 同じコマの机 3 に手で置いた同じ講師が先にあるため、テンプレのこの机には置きません（テンプレの生徒は置き、講師欄は手で置いた講師 高木 のままです）。')
+  })
+
+  // 同じ決定の兄弟（2026-11-11）: 保存前の行を渡す本番の保存（並べ直しを通る）・§9-25 のあとの形（鈴木の机に代わりの高木を手で置き、鈴木を空の机 4 に手で置いた）。
+  it('§9-25 のあとの形（本番の保存・並べ直しを通る）: 鈴木の机 2 は高木のまま・鈴木は空いていた机 3・確認画面の文は「講師欄は手で置いた講師 高木 のままです」', () => {
+    const ROWS_TWO = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数')]
+    const week = mutateDesk(
+      mutateDesk(buildWeek(ROWS_TWO), 1, (desk) => ({ ...desk, teacher: '高木', manualTeacher: true, teacherAssignmentSource: 'manual' })),
+      2, (desk) => ({ ...desk, teacher: '鈴木', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't2' }),
+    )
+    const saved = saveStable(week, ROWS_TWO, { previousRows: ROWS_TWO })
+    expect(cellOf(saved.nextWeeks).desks.map((desk) => desk.teacher)).toEqual(['田中', '高木', '鈴木'])
+    expect(liveNames(deskOf(saved.nextWeeks, 1))).toEqual(['sB'])
+    expect(saved.nextPendingDesks).toEqual({})
+    const elsewhere = saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')
+    expect(elsewhere.map((note) => [note.studentName, note.detail])).toEqual([['鈴木', '3']])
+    expect(buildTemplateDiffStudentNoteLines(elsewhere)[1]).toContain('（テンプレの生徒は置き、講師欄は手で置いた講師 高木 のままです）。')
+  })
+
+  // 同じ決定の兄弟（2026-11-11）: 講師欄 2 行の机（下の行＝手で置いた高木）。テンプレの鈴木は別の机に手で置いた鈴木が先にあるので置かず、高木が 1 行で講師欄に残る。
+  it('講師欄 2 行の机（下の行に手で置いた高木）: テンプレの鈴木を置かず高木が 1 行で残る → 文は「講師欄は手で置いた講師 高木 のままです」', () => {
+    const ROWS_TWO = [row('r0', 't1', 'sA', '数'), row('r1', 't2', 'sB', '数')]
+    const base = mutateDesk(buildWeek(ROWS_TWO), 2, (desk) => ({ ...desk, teacher: '鈴木', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't2' }))
+    const pending: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(CELL_ID, deskOf([base], 1).id)]: { lower: { teacher: { teacher: '高木', manualTeacher: true, teacherAssignmentSource: 'manual' } }, effectiveStartDate: EFFECTIVE, createdAt: '2026-09-28T10:00:00.000Z' },
+    }
+    const saved = applyDiff({ week: base, newRows: ROWS_TWO, pending })
+    expect([deskOf(saved.nextWeeks, 1).teacher, deskOf(saved.nextWeeks, 1).manualTeacher]).toEqual(['高木', true])
+    expect(lowerOf(saved, 1)?.teacher).toBeUndefined()
+    const elsewhere = saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')
+    expect(elsewhere.map((note) => [note.studentName, note.detail])).toEqual([['鈴木', '3']])
+    expect(buildTemplateDiffStudentNoteLines(elsewhere)[1]).toContain('講師欄は手で置いた講師 高木 のままです')
+  })
+
+  // 同じ決定の兄弟（2026-11-11）: 机の講師が埋め草「講師未割当」（講師ではない）なら講師欄は空＝今の文のまま。
+  it('机の講師が埋め草（手置きの印つき）の机: テンプレの佐藤を置かず講師欄は空 → 文は今のまま「講師欄は空のままです」', () => {
+    const week = mutateDesk(
+      mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, teacher: DESK_TEACHER_PLACEHOLDER_LABELS[0], manualTeacher: true, teacherAssignmentSource: 'manual' })),
+      2, (desk) => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3' }),
+    )
+    const saved = applyDiff({ week, newRows: [row('r0', 't3', 'sA', '数'), row('r1', 't2', 'sB', '数')] })
+    expect(formatDeskTeacherLabel(deskOf(saved.nextWeeks, 0).teacher)).toBe('')
+    const elsewhere = saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere')
+    expect(elsewhere.map((note) => [note.studentName, note.detail])).toEqual([['佐藤', '3']])
+    expect(buildTemplateDiffStudentNoteLines(elsewhere)[1]).toContain('講師欄は空のままです')
   })
 
   // ── §4-2 会計の 3 規則（解決操作は今のメニューのまま・templatePendingResolution.test.ts／inv06 マトリクスで在庫まで固定）
