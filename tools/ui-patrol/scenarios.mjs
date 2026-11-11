@@ -1,5 +1,5 @@
 // 画面の自動巡回(tools/ui-patrol.mjs・docs/test-strategy.md 層 5「台本(第 1 段)」)の台本。
-// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (e) 出欠 → (a) テンプレ保存 → (d) テンプレを実際に変えて保存 の順で、室長と同じ画面操作をし、
+// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (e) 出欠 → (f) 講師の移動・入れ替え・休み → (a) テンプレ保存 → (d) テンプレを実際に変えて保存 の順で、室長と同じ画面操作をし、
 // 操作のたびに「前の状態を読む → 操作 → 後の状態を読む → 点検 → 既知を外す → 報告へ足す」。
 // ★点検は tools/ui-patrol/checks.ts、盤面の事実は boardFacts.ts(どちらも esbuild で束ねた app から呼ぶ)。ここで規則を書き直さない。
 // ★報告に出すのは仮名・ID・件数・経路だけ(所見の message は checks.ts が作る。ここで足す注も ID と件数だけ)。
@@ -340,6 +340,124 @@ function describeAttendanceOp(op) {
   return `${op.label}: ${describeSeat(op.seat)} ${person} ${op.subject}`
 }
 
+// ── 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)。盤面の講師欄の長押しドラッグ(同じコマの中だけ)・講師メニュー
+// (講師を選んで「保存」・「休み」／「休みを解除する(講師名)」)。入口は ScheduleBoardScreen.tsx の handleTeacherMouseDown → computeTeacherMove
+// (生徒が絡むと「講師だけ入れ替え／生徒ごと席を入れ替え」を選ぶ画面 → executePendingTeacherMove)・handleConfirmTeacher → setManualTeacherAssignment・
+// handleToggleTeacherRest → computeToggleDeskTeacherRest。§9-25(休みの講師を同じコマへ手で置いたらそのコマの休みを全部消す)は releaseTeacherRestInCellIfSameTeacherPlaced。
+
+/** 台本 f の操作の並び(この順に流す)。休みの流れは 休み → 代わりの講師 → 休みの講師を別の机へ手で置く → 元に戻す の 4 手順。 */
+export const TEACHER_OPS = [
+  { name: 'move', label: '講師の移動(講師の居ない机へ・長押しドラッグ)' },
+  { name: 'teacher-swap', label: '講師だけ入替(長押しドラッグ)' },
+  { name: 'seat-swap', label: '生徒ごと席入替(長押しドラッグ)' },
+  { name: 'menu-teacher', label: '講師メニューで講師を替える' },
+  { name: 'rest-flow', label: '講師の休み → 代わりの講師 → 休みの講師を同じコマの別の机へ手で置く(§9-25) → 元に戻す' },
+  { name: 'rest-toggle', label: '講師の休み → 同じボタンで解除' },
+]
+
+/** ドラッグで休みの講師を置く形を作らない理由(要件は「できればもう 1 か所はドラッグ」・報告の注に出す)。 */
+export const TEACHER_REST_DRAG_NOTE = '休みの講師を置くのは講師メニューだけ: ドラッグは同じコマの机に居る講師しか掴めず、休みにした講師はそのコマのどの机にも居ないので、ドラッグで休みの講師を同じコマへ置く形は画面で作れない。'
+
+/**
+ * 台本 f の操作を選ぶ(種つきの乱数・操作ごとに別のコマ)。対象＝その週で今日以降の開いている日のコマで、保留の机・休みの記録・講師の削除記録の机が 1 つも無いコマ
+ * (前からある保留・休みと混ざらないように)。講師の机＝本物の講師がいて出欠記録の無い机(記録のある机は上書きの確定〔Issue #57〕が混ざる・台本 e の机も避ける)。
+ * 空き机＝講師も生徒も出欠記録もメモも無い机。
+ * - 講師の移動・休みの流れ: 講師の机＋空き机のあるコマ(休みの流れは生徒のいる講師の机を優先＝「生徒は残る」を確かめる)。
+ * - 講師だけ入替・生徒ごと席入替: 講師の机が 2 つ以上で、どちらかに生徒がいるコマ(生徒が絡むと選ぶ画面が出る)。
+ * - 講師メニューで替える・休みと解除: 講師の机のあるコマ。
+ * 空き机が要る操作から先に選ぶ(残りのコマを取り合わないように)。候補の無い操作は飛ばし、skipped に理由。
+ */
+export function pickTeacherPlan(facts, { weekDateKeys, todayKey, seed }) {
+  const week = new Set(weekDateKeys)
+  const byCell = new Map()
+  for (const desk of [...facts.desks.values()].filter((item) => week.has(item.dateKey) && item.dateKey >= todayKey && item.cellOpen).sort(comparePosition)) {
+    const list = byCell.get(desk.cellId) ?? []
+    list.push(desk)
+    byCell.set(desk.cellId, list)
+  }
+  const cells = [...byCell.entries()]
+    .filter(([, desks]) => desks.every((desk) => !isPendingDesk(desk) && !desk.pendingRecorded && !desk.teacherRest && !desk.teacherDeleted))
+    .map(([cellId, desks]) => ({ cellId, desks }))
+  const hasStudents = (desk) => desk.students.some(Boolean)
+  const teacherDesks = (entry) => entry.desks.filter((desk) => desk.teacher !== '' && desk.statuses.length === 0)
+  const emptyDesks = (entry) => entry.desks.filter((desk) => desk.teacher === '' && !hasStudents(desk) && desk.statuses.length === 0 && desk.memos.length === 0)
+  const random = createSeededRandom(seed)
+  const pickOne = (list) => list[Math.floor(random() * list.length)]
+  const usedCells = new Set()
+  const chosen = new Map()
+  const base = (desk, label, name) => ({ name, label, cellId: desk.cellId, dateKey: desk.dateKey, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher })
+  const pickFor = (name) => {
+    const label = TEACHER_OPS.find((op) => op.name === name).label
+    const options = []
+    for (const entry of cells) {
+      if (usedCells.has(entry.cellId)) continue
+      const sources = teacherDesks(entry)
+      if (name === 'move' || name === 'rest-flow') {
+        const empties = emptyDesks(entry)
+        if (empties.length === 0) continue
+        const withStudents = sources.filter(hasStudents)
+        for (const source of name === 'rest-flow' && withStudents.length > 0 ? withStudents : sources) for (const target of empties) options.push({ source, target })
+      } else if (name === 'teacher-swap' || name === 'seat-swap') {
+        for (const source of sources) for (const target of sources) {
+          if (source.deskIndex >= target.deskIndex || !(hasStudents(source) || hasStudents(target))) continue
+          // 生徒ごと席入替は中身が違う 2 机だけ(同じなら講師だけ入替と見分けが付かない)。
+          if (name === 'seat-swap' && JSON.stringify([source.students, source.memos]) === JSON.stringify([target.students, target.memos])) continue
+          options.push({ source, target })
+        }
+      } else {
+        for (const source of sources) options.push({ source, target: null })
+      }
+    }
+    if (options.length === 0) return
+    const { source, target } = pickOne(options)
+    usedCells.add(source.cellId)
+    chosen.set(name, { ...base(source, label, name), ...(target ? { targetDeskIndex: target.deskIndex, targetTeacher: target.teacher } : {}) })
+  }
+  for (const name of ['rest-flow', 'move', 'teacher-swap', 'seat-swap', 'menu-teacher', 'rest-toggle']) pickFor(name)
+  const ops = []
+  const skipped = []
+  for (const { name, label } of TEACHER_OPS) {
+    const op = chosen.get(name)
+    if (op) ops.push(op)
+    else skipped.push(`${label}: ${name === 'move' || name === 'rest-flow' ? '講師の机と空き机のある別のコマが無い' : name.endsWith('swap') ? '講師が 2 人以上いて生徒のいる別のコマが無い' : '講師の机のある別のコマが無い'}`)
+  }
+  return { ops, skipped }
+}
+
+/** 講師の操作で変わってよい範囲: 操作した机(入れ替え・移動は 2 机)。部分は無し(講師の操作は commitWeeks へ今の台帳をそのまま渡す)。 */
+export function buildTeacherOpAllowedChange(op, extraDeskKeys = []) {
+  const keys = [`${op.cellId}#${op.deskIndex}`]
+  if (op.targetDeskIndex !== undefined) keys.push(`${op.cellId}#${op.targetDeskIndex}`)
+  return { deskKeys: new Set([...keys, ...extraDeskKeys]), sections: new Set() }
+}
+
+/**
+ * 同じコマ(cellId)で、休みの記録が消えただけの机(講師・講師の出自・中身は前と同じ)。休みの講師を同じコマへ手で置いたとき(§9-25)に変わってよい机。
+ * 休みの記録のほかに何か変わった机は入れない(範囲の外として「変」に出る)。
+ */
+export function collectRestReleasedDeskKeys(before, after, cellId) {
+  const keys = new Set()
+  for (const desk of before.desks.values()) {
+    if (desk.cellId !== cellId || !desk.teacherRest) continue
+    const next = after.desks.get(desk.key)
+    if (!next || next.teacherRest) continue
+    const same = JSON.stringify([desk.teacher, desk.teacherOrigin, desk.students, desk.statuses, desk.memos, desk.pendingStudents, desk.pendingTeacher, desk.pendingStatuses, desk.pendingMemos])
+      === JSON.stringify([next.teacher, next.teacherOrigin, next.students, next.statuses, next.memos, next.pendingStudents, next.pendingTeacher, next.pendingStatuses, next.pendingMemos])
+    if (same) keys.add(desk.key)
+  }
+  return keys
+}
+
+/** そのコマに居る講師の名前(講師欄・保留の下段・休みの記録)。講師メニューで「そのコマに居ない講師」を選ぶのに使う。 */
+function teachersInCell(facts, cellId) {
+  const names = new Set()
+  for (const desk of facts.desks.values()) {
+    if (desk.cellId !== cellId) continue
+    for (const name of [desk.teacher, desk.pendingTeacher, desk.teacherRestName]) if (name) names.add(name)
+  }
+  return names
+}
+
 /** dateKey(YYYY-MM-DD)から 7 日分。 */
 export function weekDateKeysFrom(mondayKey) {
   const start = Date.parse(`${mondayKey}T00:00:00Z`)
@@ -420,6 +538,8 @@ export function collectTemplateSaveFindings({ app, before, after, fromDateKey, c
     ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
     // 台本 e(出欠)が先に流れていれば、出欠記録のあるコマに生徒を置き直さないか(§2-4 記録が勝つ)もここで見える。
     ...app.checkAttendanceRecordsHold(before.facts, after.facts, { fromDateKey }),
+    // 講師のコマの形(どの台本のあとでも): 休みの講師をテンプレが置かない・手で置いた講師がテンプレで 2 机にならない(§9-25・INV-01)。
+    ...app.checkTeacherCellIntegrity(before.facts, after.facts),
     ...app.checkAuditNotWorse(audit(before), audit(after)),
     ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage, { fromDateKey }),
     ...app.summarizeChanges(before.facts, after.facts),
@@ -477,6 +597,7 @@ export async function attemptStudentMove({ session, driver, app, before, candida
     ...app.checkManualStudentsKeepTeacher(before.facts, moved.facts, exclude),
     ...app.checkTeacherlessStudentsNotAdded(before.facts, moved.facts, exclude),
     ...app.checkManualInputsNotLost(before.facts, moved.facts, exclude),
+    ...app.checkTeacherCellIntegrity(before.facts, moved.facts),
     ...app.checkAuditNotWorse(audit(before), audit(moved)),
   )
   const landed = moved.facts.desks.get(`${candidate.to.cellId}#${candidate.to.deskIndex}`)?.students[candidate.to.seat]
@@ -513,7 +634,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   const d = driver
   const { classroomId } = classroom
   let report = createClassroomReport(classroom)
-  const scenarios = options.scenarios ?? ['boot', 'c', 'b', 'e', 'a', 'd']
+  const scenarios = options.scenarios ?? ['boot', 'c', 'b', 'e', 'f', 'a', 'd']
   const nextMonday = app.resolveNextMondayDateKey(today)
   let shotCount = 0
   let lastScenario = 'boot'
@@ -577,6 +698,8 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         ...app.checkManualStudentsKeepTeacher(before.facts, current.facts),
         ...app.checkTeacherlessStudentsNotAdded(before.facts, current.facts),
         ...app.checkManualInputsNotLost(before.facts, current.facts),
+        // 前からある講師のコマの形(種データにある休みの講師・2 机の講師)は知らせるだけ。開いたときに新しくできたら「変」。
+        ...app.checkTeacherCellIntegrity(before.facts, current.facts, { reportExisting: true }),
         ...app.checkAuditNotWorse(timedAudit(before), timedAudit(current)),
         ...app.summarizeChanges(before.facts, current.facts),
       )
@@ -776,6 +899,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
           ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
           ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+          ...app.checkTeacherCellIntegrity(before.facts, after.facts),
           ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
           ...app.checkAttendanceApplied(before.facts, after.facts, op),
           ...app.checkStockDeltas(stockOf(before), stockOf(after), expectedStockDeltas(op)),
@@ -818,6 +942,193 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       persistStep.findings.push(...sameState(saved, reloaded, 'reload-changed'), ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }))
       current = reloaded
       await finish('e', persistStep)
+    }
+
+    // ── (f) 講師の移動・入れ替え・休み: 講師欄の長押しドラッグ(移動・講師だけ入替・生徒ごと席入替)・講師メニュー(替える・休み・解除)と、
+    // 休みの流れ(休み → 代わりの講師 → 休みの講師を同じコマの別の机へ手で置く〔§9-25〕→ 元に戻す)。TEACHER_OPS の順に 1 回ずつ・別々のコマ。
+    // a の前に流す(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも a・d の点検で見える)。最後に 保存→読み込み直し。
+    if (scenarios.includes('f')) {
+      lastScenario = 'f'
+      const searchedWeeks = []
+      let plan = { ops: [], skipped: [] }
+      let weekStart = null
+      for (const monday of weekStartsFrom(nextMonday)) {
+        searchedWeeks.push(monday)
+        await d.gotoWeekOf(session, monday)
+        current = await timedRead()
+        plan = pickTeacherPlan(current.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, seed: (Number(options.seed) || 0) + 0xf6 })
+        if (plan.ops.length > 0) {
+          weekStart = monday
+          break
+        }
+      }
+      const prepStep = newStep(`講師の操作の準備(${weekStart ?? nextMonday} の週)`)
+      if (weekStart) prepStep.notes.push(`使った週: ${weekStart} の週${weekStart !== nextMonday ? `(${searchedWeeks.slice(0, -1).join('・')} の週は開いても候補が無かった)` : ''}`)
+      else prepStep.notes.push(`講師を動かせる机が見つかりませんでした(開いた週: ${searchedWeeks.join('・')})。`)
+      prepStep.notes.push(`操作 ${plan.ops.length} 個(${plan.ops.map((op) => op.label.split('(')[0]).join('・') || 'なし'})`)
+      for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
+      prepStep.notes.push(TEACHER_REST_DRAG_NOTE)
+      await finish('f', prepStep)
+
+      const teacherIdOf = (name) => (name ? (app.resolveTeacherIdByDisplayName?.(current.payload?.teachers, name) || 'ID なし') : '')
+      const who = (name) => (name ? `${name}(${teacherIdOf(name)})` : '講師なし')
+      const at = (cellId, deskIndex) => `${cellId} 机${deskIndex + 1}`
+      // 講師の操作を 1 回: 画面で押す → 読む → 点検(範囲・講師のコマの形・中身・在庫・保証台帳)。戻り値 { outcome: 'applied' | 'blocked' | 'nothing', after }。
+      const runTeacherOp = async (step, op, press) => {
+        const before = current
+        const dialogsBefore = session.dialogs.length
+        const statusBefore = await d.readStatusText(session)
+        const pressed = await press()
+        if (pressed.skip) {
+          step.notes.push(`飛ばした: ${pressed.skip}`)
+          return { outcome: 'skipped', after: before }
+        }
+        step.operations += 1
+        step.notes.push(`ステータス: ${pressed.status ?? ''}`)
+        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
+        const after = await timedRead()
+        const diff = app.diffBoardFacts(before.facts, after.facts)
+        if (diff.desks.length === 0 && diff.sections.length === 0) {
+          if ((pressed.status ?? '') === statusBefore) {
+            await finish('f', step)
+            throw new PatrolAbortError(`講師の操作をしても盤面もステータスの文も変わらず、何も起きません: ${step.title}`)
+          }
+          step.findings.push({ level: 'info', code: 'teacher-op-blocked', message: `アプリが講師の操作を断った: ${step.title}(${pressed.status ?? ''})` })
+          return { outcome: 'blocked', after }
+        }
+        step.diff = { before: before.facts, after: after.facts }
+        const released = op.kind === 'place-rested' ? [...collectRestReleasedDeskKeys(before.facts, after.facts, op.cellId)] : []
+        const allowed = buildTeacherOpAllowedChange(op, released)
+        const exclude = { excludeDeskKeys: allowed.deskKeys }
+        step.findings.push(
+          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+          ...app.checkTeacherCellIntegrity(before.facts, after.facts),
+          ...app.checkTeacherOpApplied(before.facts, after.facts, op),
+          ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '講師の操作で在庫が変わった' }),
+          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
+        )
+        current = after
+        return { outcome: 'applied', after }
+      }
+      const menuRandom = createSeededRandom((Number(options.seed) || 0) + 0xf7)
+      // 講師メニューの選択肢から、そのコマに居ない講師(講師欄・保留の下段・休みの記録)を種つきの乱数で選ぶ。無ければ null(その操作は飛ばす)。
+      const pickMenuTeacher = (cellId, exclude) => (choices) => {
+        const present = teachersInCell(current.facts, cellId)
+        const options = choices.filter((choice) => choice.value && !present.has(choice.value) && !exclude.has(choice.value))
+        return options.length > 0 ? options[Math.floor(menuRandom() * options.length)].value : null
+      }
+      let effectiveOps = 0
+      for (const [index, planned] of plan.ops.entries()) {
+        const label = planned.label.split('(')[0]
+        if (planned.name === 'move' || planned.name === 'teacher-swap' || planned.name === 'seat-swap') {
+          const swapMode = planned.name === 'seat-swap' ? 'seat' : 'teacher'
+          const step = newStep(`講師 ${index + 1}(${label})`)
+          step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${at(planned.cellId, planned.targetDeskIndex)} ${who(planned.targetTeacher)}`)
+          const op = { kind: planned.name, cellId: planned.cellId, deskIndex: planned.deskIndex, targetDeskIndex: planned.targetDeskIndex }
+          const result = await runTeacherOp(step, op, async () => {
+            const dragged = await d.dragTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, swapMode)
+            step.notes.push(dragged.modal ? `選ぶ画面: ${swapMode === 'seat' ? '生徒ごと席を入れ替え' : '講師だけ入れ替え'} を押した` : '選ぶ画面は出なかった(どちらの机にも生徒がいない)')
+            return dragged
+          })
+          if (result.outcome === 'applied') effectiveOps += 1
+          await finish('f', step)
+          continue
+        }
+        if (planned.name === 'menu-teacher') {
+          const step = newStep(`講師 ${index + 1}(${label})`)
+          const op = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
+          const result = await runTeacherOp(step, op, async () => {
+            const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId, new Set([planned.teacher])))
+            if (!set.teacher) return { skip: `${at(planned.cellId, planned.deskIndex)} で選べる講師(そのコマに居ない講師)が講師メニューにありません。` }
+            op.teacher = set.teacher
+            step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${who(set.teacher)}`)
+            return set
+          })
+          if (result.outcome === 'applied') effectiveOps += 1
+          await finish('f', step)
+          continue
+        }
+        if (planned.name === 'rest-toggle') {
+          const step = newStep(`講師 ${index + 1}(${label})`)
+          step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)}`)
+          const rest = await runTeacherOp(step, { kind: 'rest', cellId: planned.cellId, deskIndex: planned.deskIndex }, () => d.toggleTeacherRest(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }))
+          if (rest.outcome === 'applied') {
+            effectiveOps += 1
+            // 解除で盤面が前に保存した形へ戻ると、ローカルモードは自動保存を飛ばし、編集のたびの控え(IndexedDB)に休みの形が残って
+            // 読み込み直しで休みが戻る(本番は起動時にサーバーを読むので起きない・2026-11-11 の実走で分かった)。先に保存してから解除する。
+            if (await d.clickSave(session)) step.operations += 1
+            const release = await runTeacherOp(step, { kind: 'release', cellId: planned.cellId, deskIndex: planned.deskIndex }, async () => {
+              const toggled = await d.toggleTeacherRest(session, { cellId: planned.cellId, deskIndex: planned.deskIndex })
+              if (toggled.label) step.notes.push(`2 回目のボタン: ${toggled.label}`)
+              return toggled
+            })
+            if (release.outcome === 'applied') step.notes.push(`休みを解除した(記録が消えた。講師欄: ${who(current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)?.teacher ?? '')}・解除のあとの再マージでテンプレの講師が戻るのは仕様どおり・§2-4)。`)
+          }
+          await finish('f', step)
+          continue
+        }
+        // 休みの流れ(rest-flow): 1) 休み 2) 代わりの講師 Y 3) 休みの講師 X を同じコマの空き机へ講師メニューで置く 4) 元に戻す。
+        const X = planned.teacher
+        const restStep = newStep(`講師 ${index + 1}(休みの流れ 1: 講師の休み)`)
+        restStep.notes.push(`休み: ${at(planned.cellId, planned.deskIndex)} ${who(X)}(机の生徒は残る)`)
+        const rested = await runTeacherOp(restStep, { kind: 'rest', cellId: planned.cellId, deskIndex: planned.deskIndex }, () => d.toggleTeacherRest(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }))
+        await finish('f', restStep)
+        if (rested.outcome !== 'applied') continue
+        effectiveOps += 1
+        const restedName = current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)?.teacherRestName || X
+        const subStep = newStep(`講師 ${index + 1}(休みの流れ 2: 休みの机に代わりの講師を置く)`)
+        const subOp = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
+        const substituted = await runTeacherOp(subStep, subOp, async () => {
+          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId, new Set([X, restedName])))
+          if (!set.teacher) return { skip: `${at(planned.cellId, planned.deskIndex)} で代わりに置ける講師(そのコマに居ない講師)が講師メニューにありません。` }
+          subOp.teacher = set.teacher
+          subStep.notes.push(`代わりの講師: ${at(planned.cellId, planned.deskIndex)} ${who(set.teacher)}(休み ${who(X)} の記録は残る・§2-4)`)
+          return set
+        })
+        await finish('f', subStep)
+        if (substituted.outcome !== 'applied') continue
+        const baseBeforePlace = current
+        const placeStep = newStep(`講師 ${index + 1}(休みの流れ 3: 休みの講師を同じコマの別の机へ手で置く・§9-25)`)
+        const placeOp = { kind: 'place-rested', cellId: planned.cellId, deskIndex: planned.targetDeskIndex, teacher: X, restedName }
+        const placed = await runTeacherOp(placeStep, placeOp, async () => {
+          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, (choices) => (choices.find((choice) => choice.value === X)?.value ?? null))
+          if (!set.teacher) return { skip: `${at(planned.cellId, planned.targetDeskIndex)} の講師メニューに休みの講師 ${who(X)} がありません。` }
+          placeStep.notes.push(`休みの講師を置く: ${at(planned.cellId, planned.targetDeskIndex)} ← ${who(X)}(代わりの講師 ${who(subOp.teacher)} と ${at(planned.cellId, planned.deskIndex)} の生徒はそのまま)`)
+          return set
+        })
+        if (placed.outcome === 'applied') {
+          // 元に戻す 1 回で、X の配置と休みの記録が戻る(代わりの講師を置いたあとと同じ)。前に保存した形へ戻る操作なので、先に保存する(解除と同じ理由)。
+          if (await d.clickSave(session)) placeStep.operations += 1
+          if (await d.clickUndo(session)) {
+            placeStep.operations += 1
+            const undone = await timedRead()
+            placeStep.findings.push(...sameState(baseBeforePlace, undone, 'undo-not-restored'))
+            current = undone
+            placeStep.notes.push('元に戻す: 休みの講師の配置と休みの記録が戻るかを確かめた。')
+          } else {
+            placeStep.findings.push({ level: 'stop', code: 'undo-not-restored', message: `休みの講師を置いたあと元に戻すが押せない(ボタンが無効): ${at(planned.cellId, planned.targetDeskIndex)} ${X}` })
+          }
+        }
+        await finish('f', placeStep)
+      }
+      // 効いた操作が 1 回も無い台本 f は、中身が無いまま緑になる。台本 f を指定しているなら中断(台本 b・d・e と同じ扱い)。
+      if (effectiveOps === 0) throw new PatrolAbortError('台本 f で効いた講師の操作が 1 回もありません(候補が無い・全部断られた)。')
+
+      const persistStep = newStep('講師の操作のあと 保存→読み込み直し')
+      if (await d.clickSave(session)) persistStep.operations += 1
+      else persistStep.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
+      const saved = await timedRead()
+      persistStep.findings.push(...sameState(current, saved, 'save-changed'))
+      await d.reloadApp(session)
+      persistStep.operations += 1
+      const reloaded = await timedRead()
+      persistStep.findings.push(...sameState(saved, reloaded, 'reload-changed'), ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts))
+      persistStep.diff = { before: saved.facts, after: reloaded.facts }
+      current = reloaded
+      await finish('f', persistStep)
     }
 
     // ── (a) テンプレ保存: テンプレ編集を開く → 反映日を来週の月曜 → 何も変えずに保存 → 保存 → 読み込み直し。

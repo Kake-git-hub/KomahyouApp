@@ -9,7 +9,7 @@
 import type { InvAuditFinding, InvAuditResult } from '../invAuditEntry'
 import { isTemplateBlockingRecordStatus } from '../../src/components/schedule-board/templateConflictRules'
 import type { StudentStatusKind } from '../../src/components/schedule-board/types'
-import { countPendingDesksFrom, diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact } from './boardFacts'
+import { countPendingDesksFrom, diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact, type TeacherCellAnomaly } from './boardFacts'
 
 export const PATROL_FINDING_CODES = [
   'outside-allowed-range', 'manual-student-teacher-changed', 'manual-student-teacher-changed-announced', 'manual-student-lost',
@@ -28,6 +28,10 @@ export const PATROL_FINDING_CODES = [
   // 台本 e(出欠・2026-11-11 第 2 段の 2 本目): 在庫の増減が仕様(INV-06)と合わない(stop)／出欠記録が付かない・振替先に置かれない(stop)／
   // アプリが出欠の操作を断った(info)／テンプレ保存が出欠記録のあるコマにその生徒を置き直した(stop・§2-4 記録が勝つ)。
   'stock-delta-mismatch', 'attendance-not-applied', 'attendance-blocked', 'attendance-record-overridden',
+  // 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)と、どの台本のあとでも当てる講師のコマの点検:
+  // 休みの記録があるコマにその講師が居る(stop・§9-25)／同じ講師が 1 コマに 2 机(stop・INV-01)／前からある同じ形(info・起動のときだけ)／
+  // 講師の操作が盤面に効いていない・別の所まで変わった(stop)／アプリが講師の操作を断った(info)。
+  'teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -776,4 +780,122 @@ export function checkAttendanceRecordsHold(before: BoardFacts, after: BoardFacts
     }
   }
   return limitDeskFindings(findings, 'stop', 'attendance-record-overridden', '出欠記録のあるコマに生徒が置き直された')
+}
+
+// ── 台本 f(講師の移動・入れ替え・休み)と、講師のコマの点検 ───────────────────────────────────────
+
+const TEACHER_ANOMALY_LABELS: Record<TeacherCellAnomaly['kind'], { code: PatrolFindingCode; label: string }> = {
+  'rested-present': { code: 'teacher-rested-but-present', label: '休みの記録があるコマにその講師が居る(§9-25)' },
+  duplicate: { code: 'teacher-duplicated-in-cell', label: '同じ講師が 1 コマに 2 机(INV-01)' },
+}
+
+/**
+ * どの台本のあとでも当てる講師のコマの点検(boardFacts.ts の teacherAnomalies・判定はアプリの権威関数)。
+ * 操作の前に無かった形(種類×コマ×講師・数で突き合わせる)が操作のあとにできたら stop。前からある形は止めない
+ * (種データに最初からある形＝丸ごと振替の付け替えでできうる休みの講師〔§9-25 の対象外〕など)。reportExisting なら前からある形を info で知らせる(起動のときだけ使う)。
+ */
+export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts, options: { reportExisting?: boolean } = {}): PatrolFinding[] {
+  const keyOf = (item: TeacherCellAnomaly) => `${item.kind}\u0000${item.cellId}\u0000${item.teacher}`
+  const left = new Map<string, number>()
+  for (const item of before?.teacherAnomalies ?? []) left.set(keyOf(item), (left.get(keyOf(item)) ?? 0) + 1)
+  const stops: PatrolFinding[] = []
+  const existing: PatrolFinding[] = []
+  for (const item of after?.teacherAnomalies ?? []) {
+    const { code, label } = TEACHER_ANOMALY_LABELS[item.kind]
+    const location = { dateKey: item.dateKey, slotNumber: item.slotNumber, deskIndex: item.deskIndex }
+    const where = `${formatPlace(item.dateKey, item.slotNumber, item.deskIndex)} ${item.teacher}`
+    const count = left.get(keyOf(item)) ?? 0
+    if (count > 0) {
+      left.set(keyOf(item), count - 1)
+      if (options.reportExisting) existing.push({ level: 'info', code: 'teacher-cell-anomaly-existing', message: `前からある形: ${label}: ${where}`, ...location })
+      continue
+    }
+    stops.push({ level: 'stop', code, message: `${label}: ${where}`, ...location })
+  }
+  return [...limitDeskFindings(stops, 'stop', 'teacher-duplicated-in-cell', '講師のコマの形が変'), ...limitDeskFindings(existing, 'info', 'teacher-cell-anomaly-existing', '前からある講師のコマの形')]
+}
+
+/**
+ * 台本 f の 1 つの操作(tools/ui-patrol/scenarios.mjs の pickTeacherPlan が選ぶ)。deskIndex / targetDeskIndex は 0 始まり・同じコマ。
+ * - move / teacher-swap: 長押しドラッグで deskIndex の講師を targetDeskIndex へ(講師だけ入替・移動は相手が講師なし)。
+ * - seat-swap: 同じく「生徒ごと席入替」。
+ * - menu-teacher: deskIndex の講師を講師メニューで teacher に替える。
+ * - rest / release: deskIndex の講師を「休み」にする／「休みを解除する」。
+ * - place-rested: 休みにした講師 teacher(休みの記録の名前 restedName)を、同じコマの deskIndex へ講師メニューで置く。
+ */
+export type TeacherOp = {
+  kind: 'move' | 'teacher-swap' | 'seat-swap' | 'menu-teacher' | 'rest' | 'release' | 'place-rested'
+  cellId: string
+  deskIndex: number
+  targetDeskIndex?: number
+  teacher?: string
+  restedName?: string
+}
+
+const deskContentJson = (fact: DeskFact | undefined) => JSON.stringify(fact ? [fact.students, fact.statuses, fact.memos, fact.pendingStudents, fact.pendingTeacher, fact.pendingStatuses, fact.pendingMemos] : null)
+
+type TeacherDeskExpectation = { deskIndex: number; teacher: string; manual: boolean; teacherRest: boolean; restName: string; contentFrom: number }
+
+/**
+ * 講師の操作が盤面に効いたか(操作した机ごと)。机ごとに 講師・講師の出自(入った講師は手入力)・休みの記録・中身(生徒・出欠記録・メモ・保留の下段)を
+ * 仕様の形と比べ、違えば stop teacher-op-not-applied(机ごとに 1 件・違った所を並べる)。根拠(ScheduleBoardScreen.tsx・teacherRest.ts):
+ * - 講師だけ入替・移動(computeTeacherMove swapMode='teacher'): 講師ブロックだけ入れ替わり、中身は机に残る。講師が入った机は manualTeacher=true(手入力)。
+ * - 生徒ごと席入替(swapMode='seat'): 講師と中身が一緒に入れ替わる。
+ * - 講師メニューの保存(setManualTeacherAssignment): その机の講師が替わり手入力に。休みの記録は残る(§2-4「別の講師を手で置いて上書きできる」)。
+ * - 休み(restDeskTeacher): 講師なし・休みの記録(休みにした講師の名前)・中身は残る(§9-7)。解除(releaseDeskTeacherRest): 記録だけ消える(講師欄は今のまま。
+ *   続く再マージでテンプレの講師が戻るのは認める)。
+ * - 休みの講師を手で置く(§9-25): 置いた机にその講師・そのコマにその講師の休みの記録が 1 つも残らない(ほかの机の記録の消え方は呼んだ側が範囲で見る)。
+ */
+export function checkTeacherOpApplied(before: BoardFacts, after: BoardFacts, op: TeacherOp): PatrolFinding[] {
+  const deskAt = (facts: BoardFacts, deskIndex: number) => facts.desks.get(`${op.cellId}#${deskIndex}`)
+  const a = deskAt(before, op.deskIndex)
+  const b = op.targetDeskIndex === undefined ? undefined : deskAt(before, op.targetDeskIndex)
+  const keep = (fact: DeskFact | undefined, deskIndex: number) => ({ teacherRest: fact?.teacherRest ?? false, restName: fact?.teacherRestName ?? '', contentFrom: deskIndex })
+  const expectations: TeacherDeskExpectation[] = []
+  if ((op.kind === 'move' || op.kind === 'teacher-swap' || op.kind === 'seat-swap') && op.targetDeskIndex !== undefined) {
+    const seat = op.kind === 'seat-swap'
+    expectations.push(
+      { deskIndex: op.deskIndex, teacher: b?.teacher ?? '', manual: Boolean(b?.teacher), ...keep(a, op.deskIndex), contentFrom: seat ? op.targetDeskIndex : op.deskIndex },
+      { deskIndex: op.targetDeskIndex, teacher: a?.teacher ?? '', manual: Boolean(a?.teacher), ...keep(b, op.targetDeskIndex), contentFrom: seat ? op.deskIndex : op.targetDeskIndex },
+    )
+  } else if (op.kind === 'menu-teacher' || op.kind === 'place-rested') {
+    expectations.push({ deskIndex: op.deskIndex, teacher: op.teacher ?? '', manual: true, ...keep(a, op.deskIndex) })
+  } else if (op.kind === 'rest') {
+    expectations.push({ deskIndex: op.deskIndex, teacher: '', manual: false, teacherRest: true, restName: a?.teacher ?? '', contentFrom: op.deskIndex })
+  } else if (op.kind === 'release') {
+    // 解除は記録を消すだけ(講師欄は今のまま)。そのあとの再マージでテンプレの講師が戻ってよい(§2-4「次の反映でテンプレの講師が戻る」・
+    // 2026-11-11 の実走で、解除した直後に同じ画面のうちにテンプレの講師が戻ることを確かめた)。戻った講師はテンプレ由来のときだけ認める。
+    const got = deskAt(after, op.deskIndex)
+    const templateReturned = (a?.teacher ?? '') === '' && got !== undefined && got.teacher !== '' && got.teacherOrigin === 'template'
+    expectations.push({ deskIndex: op.deskIndex, teacher: templateReturned ? got.teacher : (a?.teacher ?? ''), manual: !templateReturned && a?.teacherOrigin === 'manual', teacherRest: false, restName: '', contentFrom: op.deskIndex })
+  }
+  const findings: PatrolFinding[] = []
+  for (const expected of expectations) {
+    const got = deskAt(after, expected.deskIndex)
+    const source = deskAt(before, expected.contentFrom)
+    const place = got ?? deskAt(before, expected.deskIndex)
+    if (!got) {
+      findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `講師の操作のあと机が無い: ${op.cellId} 机${expected.deskIndex + 1}`, ...(place ? locationOf(place) : {}) })
+      continue
+    }
+    const wrong: string[] = []
+    if (got.teacher !== expected.teacher) wrong.push(`講師 ${teacherText(got.teacher)}(仕様では ${teacherText(expected.teacher)})`)
+    else if (expected.teacher !== '' && expected.manual && got.teacherOrigin !== 'manual') wrong.push(`講師 ${got.teacher} が手入力になっていない(${got.teacherOrigin ?? 'なし'})`)
+    if (got.teacherRest !== expected.teacherRest || (expected.teacherRest && got.teacherRestName !== expected.restName)) {
+      wrong.push(`休みの記録 ${got.teacherRest ? got.teacherRestName : 'なし'}(仕様では ${expected.teacherRest ? expected.restName : 'なし'})`)
+    }
+    if (deskContentJson(got) !== deskContentJson(source)) {
+      wrong.push(expected.contentFrom === expected.deskIndex ? '生徒・出欠記録・メモが変わった(机に残るはず)' : `生徒・出欠記録・メモが机${expected.contentFrom + 1}の中身になっていない(生徒ごと入れ替わるはず)`)
+    }
+    if (wrong.length === 0) continue
+    findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `講師の操作が仕様どおりに効いていない: ${placeOf(got)} ${wrong.join('・')}`, ...locationOf(got) })
+  }
+  if (op.kind === 'place-rested') {
+    const restedName = op.restedName ?? op.teacher ?? ''
+    for (const fact of after.desks.values()) {
+      if (fact.cellId !== op.cellId || !fact.teacherRest || fact.teacherRestName !== restedName) continue
+      findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `休みの講師を同じコマへ手で置いたのに、休みの記録が残った(§9-25): ${placeOf(fact)} 休 ${restedName}`, ...locationOf(fact) })
+    }
+  }
+  return findings
 }

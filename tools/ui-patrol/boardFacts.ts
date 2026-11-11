@@ -11,12 +11,12 @@
 // ★読み取り専用。入力は書き換えない。ネットワークにもファイルにも触れない。
 // ★性能: 1 教室で机が約 2 万・操作ごとに 2 回呼ぶ。署名の JSON 化は机ごとに 1 回だけ。
 import { resolveDeskTeacherOrigin, resolveStudentOrigin } from '../../src/components/schedule-board/placementOrigin'
-import { hasDeskTeacherRest } from '../../src/components/schedule-board/teacherRest'
+import { hasDeskTeacherRest, isTeacherRestedInCell } from '../../src/components/schedule-board/teacherRest'
 import { normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, type TemplatePendingLower } from '../../src/components/schedule-board/templatePendingDesks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from '../../src/components/schedule-board/types'
 import type { AppSnapshotPayload } from '../../src/types/appState'
 import { hasRealDeskTeacher } from '../../src/utils/deskTeacherLabel'
-import { isTemplateDiffTeacherTombstone } from '../../src/components/schedule-board/templateDiffApply'
+import { buildTeacherAliasResolver, isTeacherElsewhereInCell, isTemplateDiffTeacherTombstone, type TeacherAliasResolver } from '../../src/components/schedule-board/templateDiffApply'
 
 /** key＝managedStudentId、無ければ 'name:' + name(盤面の比べ方と同じく、名簿に結べない生徒は名前で数える)。 */
 export type StudentFact = { key: string; name: string; subject: string; lessonType: string; origin: 'template' | 'manual' }
@@ -73,7 +73,16 @@ export type DeskFact = {
   signature: string
 }
 
-export type BoardFacts = { desks: Map<string, DeskFact>; sections: Record<string, string>; pendingDeskCount: number }
+/**
+ * 講師のコマの形のうち、点検が「変」として見る 2 つ(台本 f・2026-11-11)。机の事実(署名)の外の注釈(比べる中身を変えない)。
+ * - rested-present: 休みの記録があるコマに、その講師本人が居る(spec-template-conflict-v2 §9-25「手で置いたらそのコマの休みを全部消す」の裏返し)。
+ *   判定は teacherRest.ts の isTeacherRestedInCell(呼び名の対応表は buildTeacherAliasResolver)。道具の側に別の照合を作らない。
+ * - duplicate: 同じ講師が 1 コマに 2 机(INV-01)。判定は templateDiffApply.ts の isTeacherElsewhereInCell(Q41-6/-7 と同じ)。
+ * 休校のコマ・埋め草(講師未割当)の机は数えない。teacher は居る机の講師欄の名前(伏せ字のあとの仮名)。
+ */
+export type TeacherCellAnomaly = { kind: 'rested-present' | 'duplicate'; cellId: string; dateKey: string; slotNumber: number; deskIndex: number; teacher: string }
+
+export type BoardFacts = { desks: Map<string, DeskFact>; sections: Record<string, string>; pendingDeskCount: number; teacherAnomalies: TeacherCellAnomaly[] }
 
 /** 盤面の机以外で比べる部分(並びは差分の返す順)。 */
 export const BOARD_FACT_SECTIONS: readonly string[] = [
@@ -241,6 +250,24 @@ function collectSections(payload: Partial<AppSnapshotPayload>, unmatchedPending:
   return sections
 }
 
+function collectTeacherCellAnomalies(weeks: SlotCell[][], aliases: TeacherAliasResolver): TeacherCellAnomaly[] {
+  const anomalies: TeacherCellAnomaly[] = []
+  for (const week of weeks) {
+    for (const cell of week) {
+      if (!isPlainObject(cell) || typeof cell.id !== 'string' || cell.isOpenDay === false) continue
+      const desks = asArray<DeskCell>(cell.desks).filter((desk) => isPlainObject(desk) && typeof desk.teacher === 'string')
+      const hasRest = desks.some((desk) => hasDeskTeacherRest(desk))
+      asArray<DeskCell>(cell.desks).forEach((desk, deskIndex) => {
+        if (!isPlainObject(desk) || typeof desk.teacher !== 'string' || !hasRealDeskTeacher(desk.teacher)) return
+        const base = { cellId: cell.id, dateKey: cell.dateKey, slotNumber: cell.slotNumber, deskIndex, teacher: desk.teacher.trim() }
+        if (hasRest && isTeacherRestedInCell({ desks }, desk, aliases)) anomalies.push({ kind: 'rested-present', ...base })
+        if (isTeacherElsewhereInCell({ desks }, desk.id, desk, aliases)) anomalies.push({ kind: 'duplicate', ...base })
+      })
+    }
+  }
+  return anomalies
+}
+
 export function collectBoardFacts(payload: AppSnapshotPayload): BoardFacts {
   const safePayload = (isPlainObject(payload) ? payload : {}) as Partial<AppSnapshotPayload>
   const boardState = isPlainObject(safePayload.boardState) ? safePayload.boardState : null
@@ -273,7 +300,15 @@ export function collectBoardFacts(payload: AppSnapshotPayload): BoardFacts {
     if (parsed && matchedCellDesks.has(`${parsed.cellId}\u0000${parsed.deskId}`)) continue
     unmatchedPending[pendingKey] = toUnmatchedPendingFact(entry.lower)
   }
-  return { desks, sections: collectSections(safePayload, unmatchedPending), pendingDeskCount: Object.keys(pendingMap).length }
+  const teachers = asArray<{ id?: unknown; name?: unknown; displayName?: unknown }>(safePayload.teachers)
+    .filter((row) => isPlainObject(row) && typeof row.id === 'string')
+    .map((row) => ({ id: row.id as string, name: typeof row.name === 'string' ? row.name : '', ...(typeof row.displayName === 'string' ? { displayName: row.displayName } : {}) }))
+  return {
+    desks,
+    sections: collectSections(safePayload, unmatchedPending),
+    pendingDeskCount: Object.keys(pendingMap).length,
+    teacherAnomalies: collectTeacherCellAnomalies(weeks, buildTeacherAliasResolver(teachers)),
+  }
 }
 
 /**

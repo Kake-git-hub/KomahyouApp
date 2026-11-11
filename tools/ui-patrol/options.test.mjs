@@ -8,12 +8,13 @@ import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } fro
 const OUT = ['--out', '/tmp/patrol-out']
 
 describe('parseArgs / validateArgs', () => {
-  it('既定: 教室は本番 2 校・台本は boot,c,b,e,a,d・移動 6・種 1・でたらめ 0・ポート 5199', () => {
+  it('既定: 教室は本番 2 校・台本は boot,c,b,e,f,a,d・移動 6・種 1・でたらめ 0・ポート 5199', () => {
     const options = parseArgs(OUT)
     expect(options.classrooms).toEqual(['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh'])
     // 台本 d(テンプレを実際に変えて保存)は a(何も変えない保存)のあとに流れる(テンプレを変える台本は最後)。
     // 台本 e(出欠)は a の前(付けた出欠記録のコマにテンプレ保存が生徒を置き直さないかを a で見る)。
-    expect(options.scenarios).toEqual(['boot', 'c', 'b', 'e', 'a', 'd'])
+    // 台本 f(講師の移動・入れ替え・休み)は e のあと・a の前(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも見える)。
+    expect(options.scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd'])
     expect(options.moves).toBe(6)
     expect(options.seed).toBe(1)
     expect(options.random).toBe(0)
@@ -43,7 +44,7 @@ describe('parseArgs / validateArgs', () => {
     expect(validateArgs(parseArgs([...OUT, '--seed-file', '/x/1.json'])).join('\n')).toContain('--seed-file')
     expect(validateArgs(parseArgs([...OUT, '--key', 'yesterday'])).join('\n')).toContain('--key')
     expect(validateArgs(parseArgs([...OUT, '--scenario', 'zzz'])).join('\n')).toContain('--scenario')
-    expect(validateArgs(parseArgs([...OUT, '--scenario', 'zzz'])).join('\n')).toContain('boot,c,b,e,a,d')
+    expect(validateArgs(parseArgs([...OUT, '--scenario', 'zzz'])).join('\n')).toContain('boot,c,b,e,f,a,d')
     expect(validateArgs(parseArgs([...OUT, '--scenario', 'd']))).toEqual([])
     expect(parseArgs([...OUT, '--scenario', 'd']).scenarios).toEqual(['boot', 'd'])
     expect(validateArgs(parseArgs([...OUT, '--scenario', 'e']))).toEqual([])

@@ -5,7 +5,7 @@ import { DEFAULT_CLASSROOMS } from './fetchData.mjs'
 
 export const USAGE = [
   '使い方: node tools/ui-patrol.mjs --out <出力先(リポジトリの外)> [--classroom <id>]... [--key <YYYY-MM-DDTHH-mm>] [--seed-file <path>]...',
-  '          [--scenario boot,c,b,e,a,d] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
+  '          [--scenario boot,c,b,e,f,a,d] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
   '          [--baseline <前に流した report.json> | --baseline-ref <git の ref>]',
   '  --prepare-only: 取得・伏せ字・自己点検・種データの書き出しまで(ブラウザは動かさない)。',
   '  --baseline <report.json>: 前に流した報告と突き合わせ、「変」を 新しい／前から／消えた に分ける。同じ種データ(指紋が同じ)でないと比べない(2)。',
@@ -16,9 +16,10 @@ export const USAGE = [
   '  終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。',
 ].join('\n')
 
-// 流れる順は tools/ui-patrol/scenarios.mjs の runClassroomPatrol が決める(boot → c → b → でたらめ → e → a → d)。d はテンプレを変えるので最後。
+// 流れる順は tools/ui-patrol/scenarios.mjs の runClassroomPatrol が決める(boot → c → b → でたらめ → e → f → a → d)。d はテンプレを変えるので最後。
 // e(出欠)は a の前(付けた出欠記録のコマに、a・d のテンプレ保存が生徒を置き直さないかも見える)。
-export const SCENARIO_NAMES = ['boot', 'c', 'b', 'e', 'a', 'd']
+// f(講師の移動・入れ替え・休み)も a の前(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも見える)。
+export const SCENARIO_NAMES = ['boot', 'c', 'b', 'e', 'f', 'a', 'd']
 const VALUE_FLAGS = {
   '--out': 'out', '--classroom': 'classroom', '--key': 'key', '--seed-file': 'seedFile', '--scenario': 'scenario',
   '--moves': 'moves', '--seed': 'seed', '--random': 'random', '--known': 'known', '--port': 'port',
