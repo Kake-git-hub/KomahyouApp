@@ -105,14 +105,14 @@ describe('§9-19 講師メニューの「保存」（手で置く経路）: 休�
     expect(BOARD_TSX).not.toContain('function setManualTeacherAssignment(')
     const setter = DESK_TEACHER_ASSIGNMENT_TS.slice(DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function setManualTeacherAssignment('), DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function resolveManualTeacherAssignmentSource('))
     // 監査 要確認-6: 呼び名の対応表（buildTeacherAliasResolver）を通す（D&D と同じ）。
-    expect(setter).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(cell?.desks ?? [desk], desk, teacherAliases)')
+    expect(setter).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(cell.desks.includes(desk) ? cell.desks : [...cell.desks, desk], desk, teacherAliases)')
     expect(setter).not.toContain('releaseTeacherRestIfSameTeacherPlaced(')
     // §9-25: 講師メニューの保存と確認リストの準備はコマ（机を含むセル）を渡す（渡さないと別の机の休みの記録が残る）。
-    expect(BOARD_TSX).toContain('setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers), targetCell)')
-    expect(CHECKLIST_PREP_TS).toContain('setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases, nextCell)')
+    expect(BOARD_TSX).toContain('setManualTeacherAssignment(targetCell, targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))')
+    expect(CHECKLIST_PREP_TS).toContain('setManualTeacherAssignment(nextCell, desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases)')
     expect(BOARD_TSX).not.toContain('releaseTeacherRestIfSameTeacherPlaced(')
     const confirm = BOARD_TSX.slice(BOARD_TSX.indexOf('const handleConfirmTeacher = () => {'), BOARD_TSX.indexOf('const handleToggleTeacherRest = () => {'))
-    expect(confirm).toContain('setManualTeacherAssignment(targetDesk')
+    expect(confirm).toContain('setManualTeacherAssignment(targetCell, targetDesk')
     const move = BOARD_TSX.slice(BOARD_TSX.indexOf('export function computeTeacherMove('), BOARD_TSX.indexOf('export type WholeDayTransferSummary'))
     expect(move).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, sourceDesk, restAliases)')
     expect(move).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, targetDesk, restAliases)')

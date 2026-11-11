@@ -6,9 +6,9 @@ import { releaseTeacherRestInCellIfSameTeacherPlaced } from './teacherRest'
 import type { TeacherAliasResolver } from './templateDiffApply'
 import type { DeskCell, SlotCell } from './types'
 
-// cell は desk を含むコマ（§9-25: 置いた講師の休みの記録をコマ全体から消すため・机はその場で書き換える写し）。
-// 省略すると机 1 つだけを見る（§9-19 の形）。盤面の講師メニューと確認リストの準備は必ずコマを渡す（teacherRest.wiring.test.ts が字面で固定）。
-export function setManualTeacherAssignment(desk: DeskCell, teacherName: string, teacherId?: string, assignmentSource: 'manual' | 'manual-replaced' = 'manual', teacherAliases?: TeacherAliasResolver, cell?: Pick<SlotCell, 'desks'>) {
+// cell は desk を含むコマ（§9-25: 置いた講師の休みの記録をコマ全体から消すため・机はその場で書き換える写し）。必須（渡し忘れると黙って机 1 つだけを
+// 見る形に戻るため・regression-reviewer M-1）。盤面の講師メニューと確認リストの準備はそのコマを渡す（teacherRest.wiring.test.ts が字面でも固定）。
+export function setManualTeacherAssignment(cell: Pick<SlotCell, 'desks'>, desk: DeskCell, teacherName: string, teacherId?: string, assignmentSource: 'manual' | 'manual-replaced' = 'manual', teacherAliases?: TeacherAliasResolver) {
   desk.teacher = teacherName
   desk.manualTeacher = true
   desk.teacherAssignmentSource = assignmentSource
@@ -19,7 +19,8 @@ export function setManualTeacherAssignment(desk: DeskCell, teacherName: string, 
   delete desk.checklistPrepTeacher
   // §9-19・§9-25: 休んだ講師本人を同じコマのどこかへ手で置いたら、そのコマのその講師の休みを全部解除する（別の講師なら残す）。
   // 呼び名（ID・登録名・表示名）の対応表は D&D と同じ（監査 要確認-6）。
-  releaseTeacherRestInCellIfSameTeacherPlaced(cell?.desks ?? [desk], desk, teacherAliases)
+  // 机がコマの並びに入っていない呼び出し（写しの取り違え）でも、置いた机そのものの記録は見る（§9-19 を落とさない）。
+  releaseTeacherRestInCellIfSameTeacherPlaced(cell.desks.includes(desk) ? cell.desks : [...cell.desks, desk], desk, teacherAliases)
 }
 
 // 講師メニューの「保存」と同じ出自の決め方: 授業の無い机のテンプレ講師を替える＝manual-replaced、それ以外＝manual。

@@ -236,7 +236,7 @@ export function selectVerificationChecklistItems(
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.722'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.711'
 
 /**
  * Claude が対応済みにしたフリーメモの受付番号(2026-11-03 オーナー指示「フリーメモは送信して Claude で処理されるまでは
@@ -597,7 +597,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       check: ['講師Xはそのコマで1つの机だけにいる', 'その生徒は講師Xの机にいる(講師なしになっていない)', '講師Xだけが空いた机へ移っていない'],
       introducedIn: 'v1.5.719',
     },
-    // 第135版(2026-11-11・v1.5.722): オーナー決定(§9-25・案 1・INV-02／INV-01／INV-03)。講師 X を休みにして代わりの講師 Y を置いたあと、X を同じコマの
+    // 第135版(2026-11-11・v1.5.722 で入る・版は v1.5.711 据え置き＝確認中の版へ項目を足しただけ): オーナー決定(§9-25・案 1・INV-02／INV-01／INV-03)。講師 X を休みにして代わりの講師 Y を置いたあと、X を同じコマの
     // 別の机に手で置くと、休みの記録が Y の机に残っていた(X は休みなのに盤面に居る)。手で置いたら(講師メニューの保存・長押しの移動と入れ替え・
     // 保留の下の行の採用)、そのコマの X の休みの記録を全部消す。Y の机はもともとグレーを出さないので、Y のメニューのボタンの字で見る。開発用教室だけ。
     {

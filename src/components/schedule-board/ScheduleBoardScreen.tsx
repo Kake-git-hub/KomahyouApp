@@ -13501,7 +13501,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const selectedTeacher = teacherOptions.find((option) => option.name === currentTeacherMenu.selectedTeacherName)
     // 出自（授業の無い机のテンプレ講師を替える＝manual-replaced）は確認リストの準備と同じ権威関数 1 本で決める。
     const teacherAssignmentSource = resolveManualTeacherAssignmentSource(targetDesk)
-    setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers), targetCell)
+    setManualTeacherAssignment(targetCell, targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`)

@@ -934,7 +934,7 @@ describe('講師欄の採用の記録の兄弟（regression-reviewer 2026-11-07�
     const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, ...MANUAL_TEACHER_B }))
     const saved = save(week, NEW_ROWS)
     const manual = adoptManualAt(saved.nextWeeks, saved.nextPendingDesks)
-    const replaced = mutateDesk(manual.nextWeeks[0], 0, (desk) => { const next = structuredClone(desk); setManualTeacherAssignment(next, '後藤', 'tG'); return next })
+    const replaced = mutateDesk(manual.nextWeeks[0], 0, (desk) => { const next = structuredClone(desk); setManualTeacherAssignment({ desks: [next] }, next, '後藤', 'tG'); return next })
     const again = save(replaced, NEW_ROWS, manual.nextTemplatePendingDesks)
     expect([desk0(again.nextWeeks).teacher, desk0(again.nextWeeks).manualTeacher]).toEqual(['田村', false])
     expect(again.nextPendingDesks[key0(again.nextWeeks)]?.lower.teacher).toMatchObject({ teacher: '後藤', teacherAssignmentTeacherId: 'tG' })

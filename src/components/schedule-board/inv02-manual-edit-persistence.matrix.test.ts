@@ -2674,7 +2674,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
         const menuPlace = (week: SlotCell[], deskIndex: number, name: string, id: string) => {
           const next = cloneWeeks([week])
           const cell = next[0].find((item) => item.id === CELL)!
-          setManualTeacherAssignment(cell.desks[deskIndex], name, id, resolveManualTeacherAssignmentSource(cell.desks[deskIndex]), aliases, cell)
+          setManualTeacherAssignment(cell, cell.desks[deskIndex], name, id, resolveManualTeacherAssignmentSource(cell.desks[deskIndex]), aliases)
           return next[0]
         }
         const restAt = (week: SlotCell[], deskIndex: number) => {
@@ -3668,7 +3668,7 @@ describe('INV-02 × 確認リストの後片づけ（列「後片づけ」）: �
     const weeks = [[slotCell([prepDesk(), { id: 'd1', teacher: '', lesson: { id: 'lb', studentSlots: [student('s002'), null] } }])]]
     const moved = computeTeacherMove({ weeks, weekIndex: 0, cellId: CELL, sourceDeskIndex: 0, targetDeskIndex: 1 })
     if (moved.status !== 'moved') throw new Error(moved.message)
-    setManualTeacherAssignment(moved.nextWeeks[0][0].desks[0], '講師E', 't5')
+    setManualTeacherAssignment(moved.nextWeeks[0][0], moved.nextWeeks[0][0].desks[0], '講師E', 't5')
     const result = cleanupChecklistPrepBoard(moved.nextWeeks, null)
     expect(result.removed.teachers).toBe(0)
     expect(teacherOf(result.weeks, 'd0')).toBe('講師E')
@@ -3690,7 +3690,7 @@ describe('INV-02 × 確認リストの後片づけ（列「後片づけ」）: �
     const weeks = [[slotCell([prepDesk()])]]
     const desk = weeks[0][0].desks[0]
     applyUserDeletedTeacherTombstone(desk)
-    setManualTeacherAssignment(desk, '講師E', 't5')
+    setManualTeacherAssignment(weeks[0][0], desk, '講師E', 't5')
     const result = cleanupChecklistPrepBoard(weeks, null)
     expect(result.removed.teachers).toBe(0)
     expect(teacherOf(result.weeks, 'd0')).toBe('講師E')
