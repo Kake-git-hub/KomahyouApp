@@ -133,17 +133,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
 
   // ── やること(オーナー) ──────────────────────────────────────────────────────
   {
-    id: 'finished-issues-cleanup',
-    title: '対応が済んだ Issue を閉じる(8 件)',
-    stage: 'awaiting-owner',
-    who: 'owner',
-    summary: '中身は済んでいて記録のために開いたままの Issue。確認リストの古い自動起票(#62〜#66)、LINE で回答済みの質問(#69・#70)、修正済みの不具合(#76)。',
-    nextAction: 'オーナーがこのカードの「#N を閉じる」か GitHub で閉じる(Claude に頼んでもよい)。済んだらこの行を消す。',
-    notes: '#62〜#66 は 2026-09-13 に「確認リストは Issue を起票しない」へ変える前の自動起票。#69・#70 はオーナーから「今日までの質問はすべて LINE で対応済み」(2026-09-28)。#76(生徒を削除して並べ替えると講師の名前が消える)は v1.5.600 で全教室修正・確認 tp-52 OK(2026-10-15)。閉じたら開発者画面「質問への回答」で該当の報告を「解決済みにする」。',
-    references: ['Issue #62', 'Issue #63', 'Issue #64', 'Issue #65', 'Issue #66', 'Issue #69', 'Issue #70', 'Issue #76'],
-    updatedOn: '2026-11-03',
-  },
-  {
     id: 'template-duplicate-save-guard',
     title: '日大前校のテンプレで同じ生徒が 2 か所にいる(金曜 3限)',
     stage: 'awaiting-owner',
