@@ -32,7 +32,7 @@ import {
   summarizeHolidayReleaseSkips,
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
-import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey, resolveDeletedLessonSuppressionOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, resolveDeletedLessonSuppressionOrigin } from './makeupStock'
 import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 import * as FX from './templateTransferFollow.fixture'
@@ -702,7 +702,7 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
   // 休日設定ハンドラと同じ順序（在庫戻し → 記録変換）で 1 日分を休日にする。
   // `includeManualAddedLessons` はハンドラが常に true を渡す(2026-10-07・Issue #73)。省略時(false)は「この改定より前の休日設定」
   // の形＝手動追加に 'none' の控えが付く旧記録を作るのに使う(行(k))。
-  function runHolidaySet(params: { weeks: SlotCell[][]; ledgers: Ledgers; enabled?: boolean; ledgerOriginDatesByKey?: Record<string, string[]>; includeManualAddedLessons?: boolean }) {
+  function runHolidaySet(params: { weeks: SlotCell[][]; ledgers: Ledgers; enabled?: boolean; ledgerOriginDatesByKey?: Record<string, string[]>; includeManualAddedLessons?: boolean; skipLedgerBackedMakeupPlacements?: boolean }) {
     const nextWeeks = structuredClone(params.weeks)
     let ledgers = params.ledgers
     for (const week of nextWeeks) {
@@ -719,6 +719,8 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
             resolveStockId,
             ledgerOriginDatesByKey: params.ledgerOriginDatesByKey ?? {},
             includeManualAddedLessons: params.includeManualAddedLessons,
+            // Issue #86: 休日設定ハンドラは常に true を渡す(在庫由来の振替の配置は台帳へ積まない)。
+            skipLedgerBackedMakeupPlacements: params.skipLedgerBackedMakeupPlacements ?? true,
           })
           ledgers = result.ledgers
           convertHolidayDeskEntriesToRecords({ desk, cell, enabled: params.enabled ?? true, stockReturns: result.stockReturnStamps })
@@ -1573,6 +1575,148 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
     expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
     expect(released.ledgers).toEqual(ledgers) // 在庫中立(±0)
+  })
+
+  // 行(v)〜(aa): Issue #86(2026-11-11・画面の自動巡回の台本 g が発見)。**在庫由来の振替の配置**(台帳に振替元がある)を休日にすると、
+  //   従来は配置の側が台帳を見ずに同じ振替元をもう 1 つ積み、控えに 'makeup' を付けていた。同じ画面のまま解除すれば 1 つ外れて合うが、
+  //   保存 → 読み込み直し(normalizeMakeupOriginMapKeys が同じ振替元を 1 つに畳む)を挟むと、解除が残りの 1 つまで外して台帳から振替元が消えた。
+  //   直し方: 出欠記録の側(resolveMakeupStatusOriginToMaterialize)と同じく、台帳に振替元日がある振替の配置は積まない＝再浮上に任せ、控えは 'none'。
+  //   解除は 'none' の在庫由来の振替を「別日に組んだコマ」まで検査して席へ戻す(行(i)(j)(m)と同じ経路・台帳は触らない)。
+  describe('Issue #86: 在庫由来の振替の配置を休日にして、読み込み直してから解除しても台帳が一致する', () => {
+    const SRC_DATE = '2026-09-30'
+    const STOCK_STUDENTS = [{ id: 'student-1', name: '大槻 太郎', displayName: '大槻 太郎', entryDate: '2020-01-01', withdrawDate: '', birthDate: '2012-05-01' } as unknown as StudentRow]
+    const stockBalance = (weeks: SlotCell[][], manualAdjustments: Ledgers['manualMakeupAdjustments']) => buildMakeupStockEntries({
+      students: STOCK_STUDENTS,
+      teachers: [],
+      regularLessons: [],
+      classroomSettings: { holidayDates: [], forceOpenDates: [], closedWeekdays: [] } as unknown as ClassroomSettings,
+      weeks,
+      manualAdjustments,
+      resolveStudentKey: resolveStockId,
+      today: new Date('2026-10-01T00:00:00'),
+    }).find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+    // 保存 → 読み込み直し(初期状態の normalizeMakeupOriginMapKeys)と同じ畳み方。
+    const reload = (ledgers: Ledgers): Ledgers => ({ ...ledgers, manualMakeupAdjustments: normalizeMakeupOriginMapKeys(ledgers.manualMakeupAdjustments, STOCK_STUDENTS) })
+    const placementWeeks = (entry: StudentEntry) => [[cellOn(RELEASE_DATE, 1, [managedDesk([entry, null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    // 台帳の振替元の形 2 つ(時限なし＝Issue #86 の実例・時限つき)。
+    const SHAPES = [
+      { label: '時限なしの振替元', origin: { dateKey: SRC_DATE }, token: SRC_DATE, sourceLabel: '2026/9/30(水)' },
+      { label: '時限つきの振替元', origin: { dateKey: SRC_DATE, slotNumber: 1 }, token: `${SRC_DATE}#1`, sourceLabel: '2026/9/30(水) 1限' },
+    ] as const
+    const inStockMakeup = (sourceLabel: string, overrides: Partial<StudentEntry> = {}) => regularStudent({
+      id: `sA_${RELEASE_DATE}_振`, lessonType: 'makeup', makeupSourceDate: SRC_DATE, makeupSourceLabel: sourceLabel, ...overrides,
+    })
+
+    for (const shape of SHAPES) {
+      it(`★(v) ${shape.label}: 休日にしても台帳へ積まず(控え none)、残は 0 → 1。同じ画面のまま解除で席へ戻り、台帳・残とも休日の前と一致`, () => {
+        const before = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ ...shape.origin }] } })
+        const weeks = placementWeeks(inStockMakeup(shape.sourceLabel))
+        expect(stockBalance(weeks, before.manualMakeupAdjustments)).toBe(0)
+
+        const set = runHolidaySet({ weeks, ledgers: before, ledgerOriginDatesByKey: { [STOCK_KEY]: [shape.token] } })
+        expect(set.ledgers).toEqual(before) // ★同じ振替元をもう 1 つ積まない
+        expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]).toMatchObject({ status: 'holiday', holidayStockReturn: { kind: 'none' } })
+        expect(stockBalance(set.weeks, set.ledgers.manualMakeupAdjustments)).toBe(1) // 休日で席から外れた振替は未消化に 1(修正前と同じ見え方)
+
+        const released = runHolidayRelease(set.weeks, set.ledgers)
+        expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', makeupSourceDate: SRC_DATE })
+        expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
+        expect(released.ledgers).toEqual(before)
+        expect(stockBalance(released.nextWeeks, released.ledgers.manualMakeupAdjustments)).toBe(0)
+      })
+
+      it(`★(w) ${shape.label}: 休日 → 保存 → 読み込み直し → 解除でも台帳・残が休日の前と一致(修正前は時限なしで振替元が消えた)`, () => {
+        const before = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ ...shape.origin }] } })
+        const weeks = placementWeeks(inStockMakeup(shape.sourceLabel))
+        const set = runHolidaySet({ weeks, ledgers: before, ledgerOriginDatesByKey: { [STOCK_KEY]: [shape.token] } })
+        const reloaded = reload(set.ledgers)
+        expect(stockBalance(set.weeks, reloaded.manualMakeupAdjustments)).toBe(1)
+
+        const released = runHolidayRelease(set.weeks, reloaded)
+        expect(released.ledgers).toEqual(before)
+        expect(stockBalance(released.nextWeeks, released.ledgers.manualMakeupAdjustments)).toBe(0)
+        // 解除のあと、その振替を席から外すと未消化へ 1 つ戻る(修正前は振替元が消えていて 0 だった)。
+        const removed = structuredClone(released.nextWeeks)
+        findDesk(removed, RELEASE_DATE).lesson = undefined
+        expect(stockBalance(removed, released.ledgers.manualMakeupAdjustments)).toBe(1)
+      })
+    }
+
+    it('★(w-2) 在庫由来の振替を別日へ組み直してから、読み込み直して解除: 別日のコマを消して席へ戻し、台帳は休日の前と一致(1 振替元に 2 コマにしない)', () => {
+      const before = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: SRC_DATE }] } })
+      const set = runHolidaySet({ weeks: placementWeeks(inStockMakeup('2026/9/30(水)')), ledgers: before, ledgerOriginDatesByKey: { [STOCK_KEY]: [SRC_DATE] } })
+      findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [makeupOnAltDate({ makeupSourceDate: SRC_DATE, makeupSourceLabel: '2026/9/30(水)' }), null] }
+      expect(stockBalance(set.weeks, set.ledgers.manualMakeupAdjustments)).toBe(0)
+
+      const released = runHolidayRelease(set.weeks, reload(set.ledgers))
+      expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined()
+      expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'makeup' }])
+      expect(released.ledgers).toEqual(before)
+      expect(stockBalance(released.nextWeeks, released.ledgers.manualMakeupAdjustments)).toBe(0)
+    })
+
+    it('対照(x) 移動由来の振替(台帳に振替元が無い)の配置は従来どおり振替元日で積み(控え makeup)、読み込み直しを挟んだ往復でも台帳が一致', () => {
+      const before = emptyLedgers()
+      const set = runHolidaySet({ weeks: placementWeeks(inStockMakeup('2026/9/30(水) 1限')), ledgers: before, ledgerOriginDatesByKey: {} })
+      expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: SRC_DATE }] })
+      expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'makeup', originDateKey: SRC_DATE, fallbackAdded: false })
+      expect(stockBalance(set.weeks, set.ledgers.manualMakeupAdjustments)).toBe(1)
+      const released = runHolidayRelease(set.weeks, reload(set.ledgers))
+      expect(released.ledgers).toEqual(before)
+    })
+
+    it('対照(y) 通常授業の配置(日大前に残る控え 53 件の形): 休日設定が積んだ 1 件は読み込み直しのあとの解除でも 1 件外れて台帳が一致(修正の前後で不変)', () => {
+      const before = emptyLedgers()
+      const set = runHolidaySet({ weeks: placementWeeks(regularStudent()), ledgers: before, ledgerOriginDatesByKey: {} })
+      expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: RELEASE_DATE }] })
+      expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'makeup', originDateKey: RELEASE_DATE, fallbackAdded: false })
+      const released = runHolidayRelease(set.weeks, reload(set.ledgers))
+      expect(released.ledgers).toEqual(before)
+    })
+
+    it('対照(z) 手動追加の振替は台帳に同じ日付があっても従来どおり振替元日＋時限で積む(在庫を経由していない・Issue #73)', () => {
+      const before = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: SRC_DATE }] } })
+      const set = runHolidaySet({ weeks: placementWeeks(inStockMakeup('2026/9/30(水) 1限', { manualAdded: true })), ledgers: before, ledgerOriginDatesByKey: { [STOCK_KEY]: [SRC_DATE] }, includeManualAddedLessons: true })
+      expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: SRC_DATE }, { dateKey: SRC_DATE, slotNumber: 1 }] })
+      expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'makeup', originDateKey: SRC_DATE, originSlotNumber: 1, fallbackAdded: false })
+      const released = runHolidayRelease(set.weeks, reload(set.ledgers))
+      expect(released.ledgers).toEqual(before)
+    })
+
+    it('対照: 休日設定以外の呼び出し(skipLedgerBackedMakeupPlacements なし＝全コマ削除・丸ごと振替の振替先の処分・テンプレ保留の採用)は従来どおり積む(残は同じなので挙動を変えない)', () => {
+      const before = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: SRC_DATE }] } })
+      const set = runHolidaySet({ weeks: placementWeeks(inStockMakeup('2026/9/30(水)')), ledgers: before, ledgerOriginDatesByKey: { [STOCK_KEY]: [SRC_DATE] }, skipLedgerBackedMakeupPlacements: false })
+      expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: SRC_DATE }, { dateKey: SRC_DATE }] })
+      expect(stockBalance(set.weeks, set.ledgers.manualMakeupAdjustments)).toBe(1) // 重なりは未消化の計算で 1 つに畳まれる＝残は正しい
+    })
+
+    it('既知の残り(aa・裁定 2026-11-11「解除の側の守りは作らない」・本番 2 校は 0 件): 修正前の版で作った控え(makeup)は、読み込み直しで畳まれたあと解除すると振替元を 1 つ外す', () => {
+      // 修正前の版の休日設定が作った形: 台帳は読み込みで 1 つに畳まれ、記録の控えは 'makeup'。
+      const ledgers = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: SRC_DATE }] } })
+      const weeks = placementWeeks(inStockMakeup('2026/9/30(水)'))
+      const set = runHolidaySet({ weeks, ledgers, ledgerOriginDatesByKey: { [STOCK_KEY]: [SRC_DATE] } })
+      const legacyRecord = findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]
+      if (!legacyRecord) throw new Error('holiday record not found')
+      findDesk(set.weeks, RELEASE_DATE).statusSlots = [{ ...legacyRecord, holidayStockReturn: { kind: 'makeup', originDateKey: SRC_DATE, fallbackAdded: false } }, null]
+      const released = runHolidayRelease(set.weeks, ledgers)
+      expect(released.ledgers.manualMakeupAdjustments).toEqual({}) // 振替元が 1 つも無くなる(1 つ足りない)
+      // 席へ戻った振替は「台帳に振替元の無い振替」(移動由来と同じ形)になる。格納・休み・休日設定・全コマ削除は移動由来として振替元日を積むので、残は正しく戻る。
+      const restored = findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]
+      expect(restored).toMatchObject({ lessonType: 'makeup', makeupSourceDate: SRC_DATE })
+      if (!restored) throw new Error('restored placement not found')
+      expect(stockBalance(released.nextWeeks, released.ledgers.manualMakeupAdjustments)).toBe(0) // 解除の直後の残は同じ
+      // 格納(未消化振替へ戻す)は台帳に振替元が無いので振替元日を積み直し、残は 1(正しい値)。
+      const stored = computeStoredLessonMakeupLedgers({
+        student: restored, cellDateKey: RELEASE_DATE, cellSlotNumber: 1,
+        manualMakeupAdjustments: released.ledgers.manualMakeupAdjustments, suppressedMakeupOrigins: {}, makeupOriginDatesByKey: {}, resolveStockId,
+      })
+      const storedWeeks = structuredClone(released.nextWeeks)
+      findDesk(storedWeeks, RELEASE_DATE).lesson = undefined
+      expect(stockBalance(storedWeeks, stored.nextManualMakeupAdjustments)).toBe(1)
+      // もう一度休日にしても移動由来として振替元日を積むので、残は 1(正しい値)。
+      const again = runHolidaySet({ weeks: released.nextWeeks, ledgers: released.ledgers, ledgerOriginDatesByKey: {} })
+      expect(stockBalance(again.weeks, again.ledgers.manualMakeupAdjustments)).toBe(1)
+    })
   })
 
   it('★控えが無い記録(この改定より前のデータ)は復元しない: 巻き戻し量が決められないので安全側', () => {
