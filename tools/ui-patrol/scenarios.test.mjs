@@ -2,11 +2,13 @@
 // フィクスチャはこのファイル内の架空データだけ(生徒A〜E・講師A〜C)。盤面の事実は boardFacts.ts で作る(台本と同じ入り口)。
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
+import { PatrolAbortError } from './driver.mjs'
 import {
   ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
   TEACHER_OPS, buildTeacherOpAllowedChange, collectRestReleasedDeskKeys, isTeacherInCell, pickTeacherPlan,
   HOLIDAY_ALLOWED_SECTIONS, HOLIDAY_RELEASE_ALLOWED_SECTIONS, WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, mondayOf, summarizeSectionDiff,
+  AUTO_ASSIGN_ALLOWED_SECTIONS,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
@@ -16,6 +18,7 @@ import * as templateEditModule from './templateEdit.ts'
 import { isActiveOnDate } from '../../src/components/basic-data/basicDataModel.ts'
 import { findMakeupOriginLabel } from './stock.ts'
 import * as dayOpsModule from './dayOps.ts'
+import * as autoAssignModule from './autoAssign.ts'
 
 const WEEK = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']
 const TODAY = '2026-11-17'
@@ -1154,5 +1157,182 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     expect(report.aborted).toMatch(/^g: /)
     const order = (await runG(gPayload(), { scenarios: ['boot', 'g', 'c'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
     expect(order.indexOf('g')).toBeGreaterThan(order.indexOf('c'))
+  })
+})
+
+describe('台本 h(講習の自動割振)の範囲', () => {
+  it('変わってよい部分は盤面の事実が知っている名前だけ。講習の在庫の台帳(数と振替元)だけ(振替の台帳・抑止キー・回数の調整は入れない)', () => {
+    for (const name of AUTO_ASSIGN_ALLOWED_SECTIONS) expect(BOARD_FACT_SECTIONS).toContain(name)
+    expect(AUTO_ASSIGN_ALLOWED_SECTIONS).toEqual(['boardState.manualLectureStockCounts', 'boardState.manualLectureStockOrigins'])
+  })
+})
+
+describe('runClassroomPatrol(台本 h のつなぎ)', () => {
+  const P = ['2026-12-14', '2026-12-15', '2026-12-16']
+  /** 偽の在庫: boardState.__stock をそのまま読む(lectureRows の残は lecture の数)。 */
+  const fakeStock = (payload) => {
+    const stock = payload.boardState.__stock ?? { makeup: {}, lecture: {}, rows: [] }
+    const lectureRows = (stock.rows ?? []).map((row) => ({ ...row, count: stock.lecture[row.key] ?? 0 })).filter((row) => row.count > 0)
+    return { makeup: { ...stock.makeup }, lecture: { ...stock.lecture }, makeupRows: [], lectureRows }
+  }
+  const appH = { ...app, ...dayOpsModule, ...autoAssignModule, collectStockBalances: (payload) => fakeStock(payload) }
+  const row = (sid, count) => ({ key: `${sid}__winter`, studentKey: sid, studentId: sid, sessionId: 'winter', count, periodStart: P[0], periodEnd: P[2], items: [] })
+  const roster = (id) => ({ id, name: `生徒${id}`, displayName: `生徒${id}`, email: '', entryDate: '', withdrawDate: '', birthDate: '2012-05-01', memo: '' })
+
+  /** 期間 3 日の 3 限に、講師の机 2 つ(片方に手入力の生徒 sM)と講師のいない机。11/18 は期間の外(置いてはいけない)。 */
+  const hPayload = () => {
+    const payload = patrolPayload([
+      ...P.map((dateKey, index) => cell(dateKey, 3, [
+        desk(`a${index}`, '講師A', [student(`m${index}`, 'sM', 'makeup', { makeupSourceDate: '2026-11-01' }), null]),
+        desk(`b${index}`, '講師B'),
+        desk(`c${index}`, ''),
+      ])),
+      cell('2026-11-18', 3, [desk('z0', '講師A')]),
+    ])
+    payload.students = ['s1', 's2', 'sM'].map(roster)
+    payload.specialSessions = [{ id: 'winter', label: '冬期講習', startDate: P[0], endDate: P[2], createdAt: '', updatedAt: '', studentInputs: {}, teacherInputs: {} }]
+    payload.boardState.__stock = { makeup: { 's2__数': 1 }, lecture: { s1__winter: 2, s2__winter: 1 }, rows: [row('s1', 2), row('s2', 1)] }
+    return payload
+  }
+
+  /** 講習の自動割振を盤面へ当てる偽のアプリ(期間の講師の机の空いた席へ 1 コマ 1 席・残の数だけ)。broken で壊し方を作る。 */
+  function makeAutoAssignDriver(payload, broken = {}) {
+    const fake = makeFakeDriver(payload, {})
+    const presses = []
+    Object.assign(fake.driver, {
+      runLectureAutoAssign: async (_session, { entryKey, includeMakeup }) => {
+        presses.push({ entryKey, includeMakeup })
+        const stock = fakeStock(fake.state.payload)
+        if (!stock.lectureRows.some((item) => item.key === entryKey)) return { found: false, status: fake.state.status }
+        const sid = entryKey.split('__')[0]
+        const next = clone(fake.state.payload)
+        const cells = next.boardState.weeks.flat().filter((item) => P.includes(item.dateKey) && !item.desks.some((target) => (target.lesson?.studentSlots ?? []).some((entry) => entry?.managedStudentId === sid)))
+        const placeInto = (lessonType, subject) => {
+          for (const boardCell of cells) {
+            if (boardCell.desks.some((target) => (target.lesson?.studentSlots ?? []).some((entry) => entry?.managedStudentId === sid))) continue
+            for (const target of boardCell.desks) {
+              if (!target.teacher) continue
+              const slots = target.lesson.studentSlots
+              // 壊し方: 手入力の生徒の席を上書きする(INV-02)
+              const seat = broken.overwrite ? slots.findIndex((entry) => entry?.managedStudentId === 'sM') : slots.indexOf(null)
+              if (seat < 0) continue
+              slots[seat] = student(`x-${boardCell.id}-${seat}`, sid, lessonType, { subject, ...(lessonType === 'makeup' ? { makeupSourceDate: '2026-11-02' } : {}) })
+              return true
+            }
+          }
+          return false
+        }
+        const remaining = (next.boardState.__stock.lecture[entryKey] ?? 0) - (broken.firstRunShort && presses.filter((item) => item.entryKey === entryKey).length === 1 ? 1 : 0)
+        let placedLecture = 0
+        for (let index = 0; index < remaining; index += 1) if (placeInto('special', '数')) placedLecture += 1
+        let placedMakeup = 0
+        if (includeMakeup) {
+          const key = `${sid}__数`
+          for (let index = 0; index < (next.boardState.__stock.makeup[key] ?? 0); index += 1) if (placeInto('makeup', '数')) placedMakeup += 1
+          if (placedMakeup > 0) next.boardState.__stock.makeup[key] -= placedMakeup
+        }
+        if (placedLecture + placedMakeup === 0) {
+          fake.state.status = `生徒${sid} は条件に合う空きコマが見つからず、自動割振できませんでした。`
+          return { found: true, status: fake.state.status, debugText: '割り当て不可コマ数' }
+        }
+        if (!broken.noStock) next.boardState.__stock.lecture[entryKey] -= placedLecture * (broken.doubleStock ? 2 : 1)
+        if (broken.otherStudentStock) next.boardState.__stock.makeup['sM__数'] = 5
+        fake.state.undo.push(fake.state.payload)
+        fake.state.redo = []
+        fake.state.payload = next
+        fake.state.status = includeMakeup ? `生徒${sid} を自動割振しました（講習${placedLecture}・振替${placedMakeup}コマ）。` : `生徒${sid} を自動割振しました（${broken.wrongCount ? placedLecture + 1 : placedLecture}コマ）。`
+        return { found: true, status: fake.state.status, debugText: 'ルール対応率' }
+      },
+    })
+    return { ...fake, presses }
+  }
+
+  async function runH(payload, { broken, scenarios = ['boot', 'h'] } = {}) {
+    const fake = makeAutoAssignDriver(payload, broken)
+    const report = await runClassroomPatrol({
+      session: fake.session, app: appH, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
+      options: { scenarios, moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    return { report, fake }
+  }
+  const stopsOf = (report) => stepsOf(report, 'h').flatMap((step) => step.findings).filter((finding) => finding.level === 'stop').map((finding) => finding.code)
+
+  it('仕様どおりに効けば止める所見 0。講習だけ → 未消化振替も同時に(別の生徒)を 1 回ずつ、2 回目を押しても変わらない、元に戻す・やり直し、最後に保存→読み込み直し', async () => {
+    const { report, fake } = await runH(hPayload())
+    expect(report.aborted).toBeNull()
+    expect(stopsOf(report)).toEqual([])
+    // 1 回目は講習だけ、2 回目は振替も同時に(振替の残がある s2)。それぞれ 2 回押す(2 回目は何も変えない)。
+    expect(fake.presses.map((press) => `${press.entryKey}:${press.includeMakeup}`)).toEqual(['s1__winter:false', 's1__winter:false', 's2__winter:true', 's2__winter:true'])
+    const titles = stepsOf(report, 'h').map((step) => step.title)
+    expect(titles[0]).toContain('講習の自動割振の準備')
+    expect(titles.at(-1)).toBe('講習の自動割振のあと 保存→読み込み直し')
+    const notes = stepsOf(report, 'h').map((step) => step.notes.join('\n')).join('\n')
+    expect(notes).toContain('全員まとめての入口は無い')
+    expect(notes).toContain('講師は置かない')
+    expect(notes).toContain('s1__winter')
+    // 期間の週を開いてから押す(アプリは週を開いたときに初めてその週を作る)
+    expect(fake.state.gotoWeeks).toContain('2026-12-14')
+    // 期間の外(11/18)には置かない
+    expect(findDesk(fake.state.payload, '2026-11-18_3', 0).lesson.studentSlots).toEqual([null, null])
+  })
+
+  it('わざと壊す: 在庫を減らさない・2 減らす・対象でない生徒の在庫が動く → stop stock-delta-mismatch(INV-06)／件数の文が違う → stop auto-assign-count-mismatch', async () => {
+    expect(stopsOf((await runH(hPayload(), { broken: { noStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runH(hPayload(), { broken: { doubleStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runH(hPayload(), { broken: { otherStudentStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runH(hPayload(), { broken: { wrongCount: true } })).report)).toContain('auto-assign-count-mismatch')
+  })
+
+  it('わざと壊す: 手入力の生徒の席を上書きする → stop auto-assign-outside-placement(INV-02)／1 回目で置き切らず 2 回目で置く → stop auto-assign-rerun-changed(INV-03)', async () => {
+    expect(stopsOf((await runH(hPayload(), { broken: { overwrite: true } })).report)).toContain('auto-assign-outside-placement')
+    expect(stopsOf((await runH(hPayload(), { broken: { firstRunShort: true } })).report)).toContain('auto-assign-rerun-changed')
+  })
+
+  it('割り振れる未消化講習の行が無ければ中断(台本 g と同じ扱い)。理由(期間が今日より前など)を注に残す。台本 h は g のあとに流れ、既定では流れない', async () => {
+    const past = hPayload()
+    past.boardState.__stock.rows = past.boardState.__stock.rows.map((item) => ({ ...item, periodStart: '2026-07-21', periodEnd: '2026-08-31' }))
+    const { report } = await runH(past)
+    expect(report.aborted).toMatch(/^h: /)
+    expect(stepsOf(report, 'h').flatMap((step) => step.notes).join('\n')).toContain('期間が今日より前')
+    const order = (await runH(hPayload(), { scenarios: ['boot', 'h', 'c'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
+    expect(order.indexOf('h')).toBeGreaterThan(order.indexOf('c'))
+  })
+
+  it('講習の期間の週が開けない(データに無い間の週)ときは注に出して続ける。1 週も開けなければ中断(画面が変わった疑い)', async () => {
+    const runWith = async (failing) => {
+      const local = makeAutoAssignDriver(hPayload())
+      const original = local.driver.gotoWeekOf
+      local.driver.gotoWeekOf = async (session, monday) => { if (failing(monday)) throw new PatrolAbortError(`${monday} の週が盤面に出ませんでした。`); return original(session, monday) }
+      return runClassroomPatrol({
+        session: local.session, app: appH, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+        seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(hPayload()) }] },
+        options: { scenarios: ['boot', 'h'], moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: local.driver,
+      })
+    }
+    const all = await runWith(() => true)
+    expect(all.aborted).toMatch(/^h: .*週を 1 つも開けません/)
+    // 期間が 2 週にまたがり、片方だけ開けない → 注に出して続ける
+    const twoWeeks = hPayload()
+    twoWeeks.boardState.__stock.rows = twoWeeks.boardState.__stock.rows.map((item) => ({ ...item, periodEnd: '2026-12-22' }))
+    const local = makeAutoAssignDriver(twoWeeks)
+    const original = local.driver.gotoWeekOf
+    local.driver.gotoWeekOf = async (session, monday) => { if (monday === '2026-12-21') throw new PatrolAbortError('2026-12-21 の週が盤面に出ませんでした。'); return original(session, monday) }
+    const partial = await runClassroomPatrol({
+      session: local.session, app: appH, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(twoWeeks) }] },
+      options: { scenarios: ['boot', 'h'], moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: local.driver,
+    })
+    expect(partial.aborted).toBeNull()
+    expect(partial.steps.flatMap((step) => step.notes).join('\n')).toContain('開けなかった週 2026-12-21')
+  })
+
+  it('アプリが割り振らなかった(空きコマが無い)は info auto-assign-blocked。1 回も割り振れなければ中断', async () => {
+    const full = hPayload()
+    for (const boardCell of full.boardState.weeks.flat()) for (const item of boardCell.desks) if (item.teacher) item.lesson.studentSlots = item.lesson.studentSlots.map((entry, index) => entry ?? student(`f-${boardCell.id}-${item.id}-${index}`, 'sF', 'regular'))
+    const { report } = await runH(full)
+    const findings = stepsOf(report, 'h').flatMap((step) => step.findings)
+    expect(findings.map((finding) => `${finding.level}:${finding.code}`)).toContain('info:auto-assign-blocked')
+    expect(report.aborted).toMatch(/^h: /)
   })
 })

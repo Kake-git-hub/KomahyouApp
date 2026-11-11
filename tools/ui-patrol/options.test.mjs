@@ -17,6 +17,8 @@ describe('parseArgs / validateArgs', () => {
     expect(options.scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd'])
     // 台本 g は既定の並びに入れない(所要時間がオーナー決定を超えて決め直し待ち・2026-11-11 の裁定)。
     expect(options.scenarios).not.toContain('g')
+    // 台本 h(講習の自動割振)も既定の並びに入れない(2026-11-11 オーナー決定: 既定は約 10 分のまま)。
+    expect(options.scenarios).not.toContain('h')
     expect(options.moves).toBe(6)
     expect(options.seed).toBe(1)
     expect(options.random).toBe(0)
@@ -55,6 +57,10 @@ describe('parseArgs / validateArgs', () => {
     expect(validateArgs(parseArgs([...OUT, '--scenario', 'g']))).toEqual([])
     expect(parseArgs([...OUT, '--scenario', 'g']).scenarios).toEqual(['boot', 'g'])
     expect(parseArgs([...OUT, '--scenario', 'c,b,e,f,a,d,g']).scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd', 'g'])
+    // 台本 h(講習の自動割振)も --scenario で挙げたときだけ。
+    expect(validateArgs(parseArgs([...OUT, '--scenario', 'h']))).toEqual([])
+    expect(parseArgs([...OUT, '--scenario', 'h']).scenarios).toEqual(['boot', 'h'])
+    expect(USAGE).toContain('h(講習の自動割振)')
     expect(validateArgs(parseArgs([...OUT, '--moves', 'abc'])).join('\n')).toContain('--moves')
     expect(validateArgs(parseArgs([...OUT, 'stray'])).join('\n')).toContain('stray')
   })

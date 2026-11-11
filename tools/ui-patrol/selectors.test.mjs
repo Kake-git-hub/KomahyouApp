@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { CLASS_SELECTORS, DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, PROP_TESTIDS, dayHeaderTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { CLASS_SELECTORS, DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, PROP_TESTIDS, dayHeaderTestId, lectureStockEntryTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -86,6 +86,20 @@ describe('selectors', () => {
     expect(CLASS_SELECTORS.dayHeaderMenu).toBe('.day-header-menu')
     expect(CLASS_SELECTORS.dayHeaderMenuBackdrop).toBe('.day-header-menu-backdrop')
     expect(screen).toContain('if (isHoliday || isForceOpen || isClosedWeekday) {\n      handleToggleHolidayDate(dateKey)')
+  })
+
+  it('台本 h(講習の自動割振)が使う 未消化講習の一覧・生徒の行・自動割振の画面(振替も同時に・自動割振のボタン)・結果の画面の testid がアプリと同じ', () => {
+    for (const name of ['lectureStockChip', 'lectureStockPanel', 'lectureStockClose', 'stockActionModalIncludeMakeup', 'stockActionModalAuto', 'autoAssignDebugPanel', 'autoAssignDebugClose']) expect(TESTIDS[name]).toBeTruthy()
+    const screen = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    // 一覧の行は 未消化講習の行の鍵(生徒キー__講習 ID)の記号だけ - に直した名前・押すと自動割振の画面(stock-action-modal)が開く
+    expect(screen).toContain("data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}")
+    expect(screen).toContain("onClick={() => setStockActionModal({ type: 'lecture', entryKey: entry.key })}")
+    expect(lectureStockEntryTestId('s091__session_abc')).toBe('lecture-stock-entry-s091__session_abc')
+    expect(lectureStockEntryTestId('name:生徒A__-')).toBe('lecture-stock-entry-name---A__-')
+    // 「未消化振替も同時に自動割り当てする」は label の中の checkbox(label に testid)
+    expect(screen).toContain('<label className="auto-assign-include-makeup" data-testid="stock-action-modal-include-makeup">')
+    // 自動割振は、割り振れたときも割り振れなかったときも結果の画面を出す(待ちの目印)
+    expect(screen.split('setAutoAssignDebugReport(').length - 1).toBeGreaterThanOrEqual(3)
   })
 
   it('長押しの長さと取り消しの距離がアプリと合っている', () => {

@@ -9,6 +9,9 @@ import {
   checkAttendanceApplied,
   checkAttendanceRecordsHold,
   checkAuditNotWorse,
+  checkAutoAssignApplied,
+  collectAutoAssignPlacements,
+  parseAutoAssignAnnouncedCounts,
   checkHolidayApplied,
   checkHolidayRoundTrip,
   checkManualInputsNotLost,
@@ -92,7 +95,9 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   // 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)と講師のコマの点検
   for (const code of ['teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked']) expect(PATROL_FINDING_CODES).toContain(code)
   // 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目)の 4 つ
-  expect(PATROL_FINDING_CODES).toHaveLength(41)
+  // 台本 h(講習の自動割振・2026-11-11 第 2 段の 5 本目)の 5 つ
+  for (const code of ['auto-assign-outside-placement', 'auto-assign-rule-violated', 'auto-assign-count-mismatch', 'auto-assign-blocked', 'auto-assign-rerun-changed']) expect(PATROL_FINDING_CODES).toContain(code)
+  expect(PATROL_FINDING_CODES).toHaveLength(46)
 })
 
 describe('変わってよい範囲', () => {
@@ -948,9 +953,81 @@ describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
     expect(codes(found)).toEqual(['info:teacher-rested-present-by-whole-day-transfer'])
     expect(found[0].message).toContain('丸ごと振替')
     expect(found[0].message).toContain('講師A')
+    // オーナー決定(2026-11-11): 今のまま(講師の休みが本番で使われ始めてから見直す)。「判断待ち」とは書かない。
+    expect(found[0].message).toContain('今のまま')
+    expect(found[0].message).not.toContain('判断待ち')
     const duplicated = tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2', [null, null], { teacher: '講師B' })])
     expect(codes(checkTeacherCellIntegrity(tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2')]), duplicated, { restedPresentAsInfoDates: new Set([H, T]) }))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
     // 振替元・振替先でない日にできた「休みなのに居る」は止める(手直し 1 M-1)
     expect(codes(checkTeacherCellIntegrity(clean, rested, { restedPresentAsInfoDates: new Set([H, '2026-12-03']) }))).toEqual(['stop:teacher-rested-but-present'])
+  })
+})
+
+describe('台本 h(講習の自動割振)の点検', () => {
+  const P1 = '2026-12-14' // 期間の初日(月)
+  const P2 = '2026-12-20'
+  const op = { studentKey: 's1', entryKey: 's1__winter', includeMakeup: false, periodStart: P1, periodEnd: P2 }
+  const special = (overrides = {}) => student({ id: 'x1', lessonType: 'special', specialSessionId: 'winter', ...overrides })
+  const base = () => [
+    cell(P1, 3, [
+      desk('a0', [studentB({ origin: 'template' }), null], { teacher: '講師A' }),
+      desk('a1', [null, null], { teacher: '講師B' }),
+      desk('a2', [null, null], { teacher: '' }),
+    ]),
+    cell(P1, 4, [desk('b0', [null, null], { teacher: '講師A', memoSlots: [null, null] })]),
+  ]
+  const withSeat = (cells, cellIndex, deskIndex, seat, entry) => {
+    const next = structuredClone(cells)
+    next[cellIndex].desks[deskIndex].lesson.studentSlots[seat] = entry
+    return next
+  }
+
+  it('空いた席へその生徒の講習が座っただけなら所見 0。置いた席を数える(講習・振替)', () => {
+    const before = facts(base())
+    const after = facts(withSeat(withSeat(base(), 0, 0, 1, special()), 1, 0, 0, special({ id: 'x2', subject: '英' })))
+    const placements = collectAutoAssignPlacements(before, after, 's1')
+    expect(placements.map((item) => `${item.cellId}#${item.deskIndex}/${item.seat}:${item.lessonType}:${item.subject}`)).toEqual([`${P1}_3#0/1:special:数`, `${P1}_4#0/0:special:英`])
+    expect(checkAutoAssignApplied(before, after, { ...op, announced: '生徒A を自動割振しました（2コマ）。' })).toEqual([])
+  })
+
+  it('置いた席のほかが変わった(ほかの生徒が消えた・講師が変わった・別の生徒が座った)は stop auto-assign-outside-placement(INV-02)', () => {
+    const before = facts(base())
+    const replaced = facts(withSeat(base(), 0, 0, 0, special()))
+    expect(codes(checkAutoAssignApplied(before, replaced, op))).toContain('stop:auto-assign-outside-placement')
+    const teacherChanged = structuredClone(withSeat(base(), 0, 1, 0, special()))
+    teacherChanged[0].desks[1].teacher = '講師C'
+    expect(codes(checkAutoAssignApplied(before, facts(teacherChanged), op))).toContain('stop:auto-assign-outside-placement')
+    const someoneElse = facts(withSeat(base(), 0, 1, 0, studentB({ id: 'y', lessonType: 'special' })))
+    expect(codes(checkAutoAssignApplied(before, someoneElse, op))).toContain('stop:auto-assign-outside-placement')
+  })
+
+  it('振替を同時に割り当てない設定で振替が座った・講習の期間の外・講師のいない机・休校のコマ・同じコマに同じ生徒が 2 席は stop auto-assign-rule-violated', () => {
+    const before = facts(base())
+    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, makeupA({ id: 'm1' }))), op))).toContain('stop:auto-assign-outside-placement')
+    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, makeupA({ id: 'm1' }))), { ...op, includeMakeup: true }))).toEqual([])
+    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, special())), { ...op, periodStart: '2026-12-15' }))).toEqual(['stop:auto-assign-rule-violated'])
+    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 2, 0, special())), op))).toEqual(['stop:auto-assign-rule-violated'])
+    const closed = structuredClone(withSeat(base(), 0, 1, 0, special()))
+    closed[0].isOpenDay = false
+    expect(codes(checkAutoAssignApplied(facts(base()), facts(closed), op))).toContain('stop:auto-assign-rule-violated')
+    const twice = facts(withSeat(withSeat(base(), 0, 1, 0, special()), 0, 1, 1, special({ id: 'x2', subject: '英' })))
+    expect(codes(checkAutoAssignApplied(before, twice, op))).toContain('stop:auto-assign-rule-violated')
+  })
+
+  it('画面の文の件数と置いた席の数が違えば stop auto-assign-count-mismatch(講習だけ・振替も同時)', () => {
+    const before = facts(base())
+    const after = facts(withSeat(base(), 0, 1, 0, special()))
+    expect(codes(checkAutoAssignApplied(before, after, { ...op, announced: '生徒A を自動割振しました（2コマ）。' }))).toEqual(['stop:auto-assign-count-mismatch'])
+    expect(checkAutoAssignApplied(before, after, { ...op, announced: '生徒A を自動割振しました（1コマ・候補なしで残り 2コマ）。' })).toEqual([])
+    const both = facts(withSeat(withSeat(base(), 0, 1, 0, special()), 1, 0, 1, makeupA({ id: 'm1' })))
+    expect(checkAutoAssignApplied(before, both, { ...op, includeMakeup: true, announced: '生徒A を自動割振しました（講習1・振替1コマ）。' })).toEqual([])
+    expect(codes(checkAutoAssignApplied(before, both, { ...op, includeMakeup: true, announced: '生徒A を自動割振しました（講習1・振替0コマ）。' }))).toEqual(['stop:auto-assign-count-mismatch'])
+  })
+
+  it('画面の文から置いた数を読む(読めなければ null)', () => {
+    expect(parseAutoAssignAnnouncedCounts('生徒A を自動割振しました（3コマ・候補なしで残り 1コマ）。')).toEqual({ lecture: 3, makeup: 0 })
+    expect(parseAutoAssignAnnouncedCounts('生徒A を自動割振しました（講習2・振替1コマ・候補なしで残り 振替2）。')).toEqual({ lecture: 2, makeup: 1 })
+    expect(parseAutoAssignAnnouncedCounts('生徒A は条件に合う空きコマが見つからず、自動割振できませんでした。')).toBeNull()
+    expect(parseAutoAssignAnnouncedCounts('')).toBeNull()
   })
 })
