@@ -7,6 +7,8 @@
 // ★所見の message は日本語 1 行。場所は「11/19(木) 3限 机5」、人は仮名(伏せ字のあとの名前)と生徒 ID だけ。
 // ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
 import type { InvAuditFinding, InvAuditResult } from '../invAuditEntry'
+import { isTemplateBlockingRecordStatus } from '../../src/components/schedule-board/templateConflictRules'
+import type { StudentStatusKind } from '../../src/components/schedule-board/types'
 import { countPendingDesksFrom, diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact } from './boardFacts'
 
 export const PATROL_FINDING_CODES = [
@@ -23,6 +25,9 @@ export const PATROL_FINDING_CODES = [
   // 台本 d(テンプレを実際に変えて保存・2026-11-11 第 2 段): 変えたテンプレの机で起きるはずの変化が盤面に起きない(stop)／
   // 保存したテンプレにその変更が入っていない(stop)／§2 の規則(手入力・出欠記録・講師の休みが勝つ・在籍していない日)で置かれない(info)。
   'template-edit-not-applied', 'template-edit-not-saved', 'template-edit-held-by-rule',
+  // 台本 e(出欠・2026-11-11 第 2 段の 2 本目): 在庫の増減が仕様(INV-06)と合わない(stop)／出欠記録が付かない・振替先に置かれない(stop)／
+  // アプリが出欠の操作を断った(info)／テンプレ保存が出欠記録のあるコマにその生徒を置き直した(stop・§2-4 記録が勝つ)。
+  'stock-delta-mismatch', 'attendance-not-applied', 'attendance-blocked', 'attendance-record-overridden',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -616,4 +621,159 @@ export function checkTemplateEditSaved(template: unknown, edit: TemplateEdit): P
   }
   const empty = !desk || (!desk.teacherId && students.every((student) => !student?.studentId))
   return empty ? [] : fail('講師か生徒が残っている')
+}
+
+// ── 台本 e(出欠)の点検 ───────────────────────────────────────────────────────────────
+
+/** 在庫の残(tools/ui-patrol/stock.ts の collectStockBalances の makeup・lecture)。鍵ごとの残。無い鍵は 0。 */
+export type StockBalanceMaps = { makeup: Record<string, number>; lecture: Record<string, number> }
+export type StockDeltaCode = 'stock-delta-mismatch' | 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed'
+
+const signed = (value: number) => (value > 0 ? `+${value}` : String(value))
+
+/**
+ * 在庫の増減が仕様どおりか。expected は鍵ごとの増減(書いていない鍵は 0＝変わらない)。数え方はアプリの権威関数(stock.ts)の結果をそのまま比べる
+ * (道具の側に別の数え方を作らない・INV-06)。合わない鍵ごとに 1 件(20 件まで＋「ほか n 件」)。
+ * 元に戻す・読み込み直しでも使う(expected を空にし、code と label を渡す)。
+ */
+export function checkStockDeltas(before: StockBalanceMaps, after: StockBalanceMaps, expected: { makeup?: Record<string, number>; lecture?: Record<string, number> }, options: { code?: StockDeltaCode; label?: string } = {}): PatrolFinding[] {
+  const code = options.code ?? 'stock-delta-mismatch'
+  const label = options.label ?? '在庫の増減が仕様と違う'
+  const findings: PatrolFinding[] = []
+  for (const [part, partLabel] of [['makeup', '未消化振替'], ['lecture', '未消化講習']] as const) {
+    const left = before?.[part] ?? {}
+    const right = after?.[part] ?? {}
+    const want = expected[part] ?? {}
+    const keys = [...new Set([...Object.keys(left), ...Object.keys(right), ...Object.keys(want)])].sort()
+    for (const key of keys) {
+      const delta = (right[key] ?? 0) - (left[key] ?? 0)
+      const wanted = want[key] ?? 0
+      if (delta === wanted) continue
+      // 未消化振替の鍵は「生徒キー__科目」。講習の鍵は在庫の行の鍵(生徒 ID・科目・講習 ID を含む)をそのまま出す(名前は入らない)。
+      const [studentKey = '', subject = ''] = part === 'makeup' ? key.split('__') : [key, '']
+      const what = part === 'makeup' ? `${studentIdText(studentKey)} ${subject}` : key
+      findings.push({
+        level: 'stop', code,
+        message: `${label}: ${partLabel} ${what} 残 ${left[key] ?? 0} → ${right[key] ?? 0}(増減 ${signed(delta)}・仕様では ${signed(wanted)})`,
+        ...(part === 'makeup' && studentKey && !studentKey.includes(':') ? { studentId: studentKey, subject } : {}),
+      })
+    }
+  }
+  return limitDeskFindings(findings, 'stop', code, label)
+}
+
+/** 台本 e の 1 つの操作(tools/ui-patrol/scenarios.mjs の pickAttendancePlan が選ぶ)。seat / to は { cellId, deskIndex(0 始まり), seat }。 */
+export type AttendanceSeat = { cellId: string; deskIndex: number; seat: number }
+export type AttendanceOp =
+  | { kind: 'mark'; status: 'absent' | 'absent-no-makeup' | 'attended'; seat: AttendanceSeat; studentKey: string; subject: string; lessonType: string }
+  | { kind: 'place'; to: AttendanceSeat; studentKey: string; subject: string }
+
+/**
+ * 出欠の操作が盤面に効いたか。
+ * - 休み・振無休・出席: その席からその生徒が外れ、その机にその生徒のその記録(生徒キー|状態|科目|種類)が 1 件増えた(buildStudentStatusEntry の形)。
+ * - 振替先へ置く: 先の席にその生徒の振替(同じ科目・種類 makeup)が座った(computeMakeupStockPlacement の形)。
+ * 効いていなければ stop attendance-not-applied(押したのに記録が付かない・置かれない)。
+ */
+export function checkAttendanceApplied(before: BoardFacts, after: BoardFacts, op: AttendanceOp): PatrolFinding[] {
+  return [...checkAttendanceSeatApplied(before, after, op), ...checkAttendanceDeskNeighbors(before, after, op)]
+}
+
+/**
+ * 変わってよい範囲は「操作した机」だが、机の中でも変わってよいのは操作した席(とその席の出欠記録 1 件)だけ。ほかの席の生徒・講師・メモ・保留の下段・
+ * ほかの出欠記録が変わったら stop outside-allowed-range(机の中の巻き込み。checkOutsideAllowedRange は机ごとにしか見ない)。
+ */
+function checkAttendanceDeskNeighbors(before: BoardFacts, after: BoardFacts, op: AttendanceOp): PatrolFinding[] {
+  const json = (value: unknown) => JSON.stringify(value)
+  const seat = op.kind === 'place' ? op.to : op.seat
+  const key = `${seat.cellId}#${seat.deskIndex}`
+  const left = before.desks.get(key)
+  const right = after.desks.get(key)
+  if (!left || !right) return []
+  const changed: string[] = []
+  const other = 1 - seat.seat
+  if (json(left.students[other] ?? null) !== json(right.students[other] ?? null)) changed.push(`席${other + 1}の生徒`)
+  if (json([left.teacher, left.teacherOrigin, left.teacherRest, left.teacherRestName]) !== json([right.teacher, right.teacherOrigin, right.teacherRest, right.teacherRestName])) changed.push('講師')
+  if (json(left.memos) !== json(right.memos)) changed.push('メモ')
+  if (json([left.pendingStudents, left.pendingTeacher, left.pendingStatuses, left.pendingMemos]) !== json([right.pendingStudents, right.pendingTeacher, right.pendingStatuses, right.pendingMemos])) changed.push('保留の下段')
+  // 出欠記録: ほかの生徒の記録は変わらない(操作した生徒の記録が付いたかは checkAttendanceSeatApplied が見る)。
+  const othersOf = (statuses: string[]) => statuses.filter((record) => record.split('|')[0] !== op.studentKey)
+  if (json(othersOf(left.statuses)) !== json(othersOf(right.statuses))) changed.push('ほかの生徒の出欠記録')
+  if (changed.length === 0) return []
+  return [{
+    level: 'stop', code: 'outside-allowed-range',
+    message: `出欠の操作で同じ机のほかの部分が変わった(${changed.join('・')}): ${placeOf(right)} 席${seat.seat + 1} ${studentIdText(op.studentKey)}`,
+    ...locationOf(right), studentId: op.studentKey,
+  }]
+}
+
+function checkAttendanceSeatApplied(before: BoardFacts, after: BoardFacts, op: AttendanceOp): PatrolFinding[] {
+  if (op.kind === 'place') {
+    const desk = after.desks.get(`${op.to.cellId}#${op.to.deskIndex}`)
+    const seated = desk?.students[op.to.seat]
+    if (seated && seated.key === op.studentKey && seated.subject === op.subject && seated.lessonType === 'makeup') return []
+    const place = desk ? placeOf(desk) : `${op.to.cellId} 机${op.to.deskIndex + 1}`
+    return [{
+      level: 'stop', code: 'attendance-not-applied',
+      message: `振替先に選んだ席に振替が置かれていない: ${place} 席${op.to.seat + 1} ${studentIdText(op.studentKey)} ${op.subject}${seated ? `(座っているのは ${personOf(seated)} ${lessonOf(seated)})` : ''}`,
+      ...(desk ? locationOf(desk) : {}), studentId: op.studentKey,
+    }]
+  }
+  const key = `${op.seat.cellId}#${op.seat.deskIndex}`
+  const beforeDesk = before.desks.get(key)
+  const afterDesk = after.desks.get(key)
+  const record = `${op.studentKey}|${op.status}|${op.subject}|${op.lessonType}`
+  const count = (desk: DeskFact | undefined) => (desk?.statuses ?? []).filter((item) => item === record).length
+  const stillSeated = afterDesk?.students[op.seat.seat]?.key === op.studentKey
+  const recorded = count(afterDesk) > count(beforeDesk)
+  if (!stillSeated && recorded) return []
+  const place = afterDesk ?? beforeDesk
+  const why = [recorded ? '' : `記録「${STATUS_LABELS[op.status] ?? op.status}」が付かない`, stillSeated ? '生徒が席に残った' : ''].filter(Boolean).join('・')
+  return [{
+    level: 'stop', code: 'attendance-not-applied',
+    message: `出欠を付けたのに盤面に効いていない(${why}): ${place ? placeOf(place) : key} 席${op.seat.seat + 1} ${studentIdText(op.studentKey)} ${op.subject} ${LESSON_TYPE_LABELS[op.lessonType] ?? op.lessonType}`,
+    ...(place ? locationOf(place) : {}), studentId: op.studentKey,
+  }]
+}
+
+/**
+ * 「記録が勝つ」の対象の記録(休み・振無休・出席・「移)」)。判定はテンプレ保存が同じ判断に使う権威関数 isTemplateBlockingRecordStatus
+ * (templateConflictRules.ts・§2-4)をそのまま使う(休日の表示専用の記録〔休)〕は入らない)。「移)」も入るので、台本 b が付けた記録も守る。
+ */
+const isRecordWinsStatus = (kind: string) => isTemplateBlockingRecordStatus(kind as StudentStatusKind)
+
+/**
+ * テンプレ保存が、出欠記録のあるコマにその生徒を置き直していないか(spec-template-conflict-v2 §2-4「生徒の記録が勝つ」)。
+ * 操作の前にそのコマ(上段の記録)に休み・振無休・出席・「移)」の記録があり、同じコマのどの席(上段・保留の下段)にもその生徒がいなかったのに、
+ * 操作のあと同じコマの上段の席に座ったら stop attendance-record-overridden。fromDateKey(反映日)より前のコマは見ない(テンプレ保存は触らない)。
+ * 生徒は生徒キーで見る(科目は見ない。同じコマに同じ生徒が 2 か所は INV-12 で別に止まる)。コマ×生徒ごとに 1 件。
+ */
+export function checkAttendanceRecordsHold(before: BoardFacts, after: BoardFacts, options: { fromDateKey?: string } = {}): PatrolFinding[] {
+  const afterByCell = groupByCell(after)
+  const findings: PatrolFinding[] = []
+  const cells = [...groupByCell(before).entries()].sort(([left], [right]) => left.localeCompare(right))
+  for (const [cellId, desks] of cells) {
+    const first = desks[0]
+    if (!first || (options.fromDateKey && first.dateKey < options.fromDateKey)) continue
+    const seatedBefore = new Set<string>()
+    const recordedKeys = new Map<string, DeskFact>()
+    for (const desk of desks) {
+      for (const student of [...desk.students, ...desk.pendingStudents]) if (student) seatedBefore.add(student.key)
+      for (const record of desk.statuses) {
+        const [studentKey = '', kind = ''] = record.split('|')
+        if (studentKey && isRecordWinsStatus(kind) && !recordedKeys.has(studentKey)) recordedKeys.set(studentKey, desk)
+      }
+    }
+    for (const [studentKey, recordDesk] of recordedKeys) {
+      if (seatedBefore.has(studentKey)) continue
+      const seated = (afterByCell.get(cellId) ?? []).flatMap((desk) => desk.students.filter((student): student is StudentFact => student?.key === studentKey).map((student) => ({ desk, student })))
+      if (seated.length === 0) continue
+      const { desk, student } = seated[0]
+      findings.push({
+        level: 'stop', code: 'attendance-record-overridden',
+        message: `出欠記録のあるコマに生徒が置き直された(記録が勝つ・§2-4): ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}(記録は机${recordDesk.deskIndex + 1})`,
+        ...locationOf(desk), studentId: studentKey,
+      })
+    }
+  }
+  return limitDeskFindings(findings, 'stop', 'attendance-record-overridden', '出欠記録のあるコマに生徒が置き直された')
 }

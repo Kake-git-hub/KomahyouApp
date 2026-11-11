@@ -15,13 +15,21 @@ export const TESTIDS = {
   templateClose: 'template-close-button', studentMenu: 'student-action-menu', menuOpenAdd: 'menu-open-add-existing-student-button',
   menuAddConfirm: 'menu-add-existing-student-confirm-button', menuDelete: 'menu-delete-button',
   teacherMenu: 'teacher-action-menu', teacherConfirm: 'teacher-select-confirm-button', teacherDelete: 'teacher-delete-button',
+  // 台本 e(出欠): 盤面の生徒メニューの出欠ボタン(ScheduleBoardScreen.tsx)と、未消化振替の一覧(ツールバーのボタン・一覧・振替元を選ぶ画面)。
+  menuAttendance: 'menu-attendance-button', menuAbsence: 'menu-absence-button', menuAbsenceNoMakeup: 'menu-absence-no-makeup-button',
+  makeupStockChip: 'makeup-stock-chip', makeupStockPanel: 'makeup-stock-panel', makeupStockClose: 'makeup-stock-close-button',
+  stockActionModal: 'stock-action-modal', stockActionModalCancel: 'stock-action-modal-cancel',
 }
+
+/** prop で渡して付く testid(ソースには data-testid="…" の字面で残らない・selectors.test.mjs が別に見張る)。選択の取り消し(AppMenu の actionButtonTestId)。 */
+export const PROP_TESTIDS = { cancelSelection: 'cancel-selection-button' }
 
 /** 虫眼鏡つきのプルダウン(SearchableSelect の testId の prop → <select> の data-testid)。台本 d が生徒・講師を選ぶ。 */
 export const SEARCHABLE_SELECT_TESTIDS = { templateAddStudent: 'template-add-student-select', teacherSelect: 'teacher-select-input' }
 
 // student-cell-{cellId}-{deskIndex}-{studentIndex}(BoardGrid.tsx)・week-jump-day-{dateKey}(BoardToolbar.tsx)
-export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-' }
+// makeup-stock-entry-{生徒キー__- の記号を - に}・stock-origin-item-{振替元の並び}(ScheduleBoardScreen.tsx の未消化振替の一覧)
+export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-' }
 
 export const SOURCE_FILES_WITH_TESTIDS = [
   'src/components/schedule-board/BoardToolbar.tsx',
@@ -41,4 +49,6 @@ export const studentCellTestId = ({ cellId, deskIndex, seat }) => `${TESTID_PREF
 export const teacherCellTestId = ({ cellId, deskIndex }) => `${TESTID_PREFIXES.teacherCell}${cellId}-${deskIndex}`
 export const studentNameTestId = ({ cellId, deskIndex, seat }) => `${TESTID_PREFIXES.studentName}${cellId}-${deskIndex}-${seat}`
 export const weekJumpDayTestId = (dateKey) => `${TESTID_PREFIXES.weekJumpDay}${dateKey}`
+// 未消化振替の一覧の生徒の行: 行の鍵は `${生徒キー}__-`(生徒ごとにまとめた行・makeupStockEntries)、testid は英数字・_・- 以外を - に直す(アプリと同じ)。
+export const makeupStockEntryTestId = (stockStudentKey) => `${TESTID_PREFIXES.makeupStockEntry}${`${stockStudentKey}__-`.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 export const byTestId = (testId) => `[data-testid="${testId}"]`

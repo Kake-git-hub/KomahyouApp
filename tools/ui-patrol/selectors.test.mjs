@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, PROP_TESTIDS, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -44,6 +44,20 @@ describe('selectors', () => {
     const toolbar = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardToolbar.tsx'), 'utf8')
     expect(toolbar).toMatch(/data-testid=\{`week-jump-day-\$\{cell\.dateKey\}`\}/)
     expect(weekJumpDayTestId('2026-11-16')).toBe('week-jump-day-2026-11-16')
+  })
+
+  it('台本 e(出欠)が使う 生徒メニューの出欠ボタン・未消化振替の一覧の testid がアプリと同じ(一覧の行は 生徒キー__- を記号だけ - に直した名前)', () => {
+    for (const name of ['menuAttendance', 'menuAbsence', 'menuAbsenceNoMakeup', 'makeupStockChip', 'makeupStockPanel', 'makeupStockClose', 'stockActionModal', 'stockActionModalCancel']) expect(TESTIDS[name]).toBeTruthy()
+    for (const name of ['makeupStockEntry', 'stockOriginItem']) expect(TESTID_PREFIXES[name]).toBeTruthy()
+    const screen = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    expect(screen).toContain("data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}")
+    expect(screen).toContain('key: `${stockStudentKey}__-`')
+    expect(screen).toContain('data-testid={`stock-origin-item-${index}`}')
+    expect(makeupStockEntryTestId('s091')).toBe('makeup-stock-entry-s091__-')
+    expect(makeupStockEntryTestId('name:生徒A')).toBe('makeup-stock-entry-name---A__-')
+    // 置けなかったときに選択を取り消すボタン(AppMenu の actionButtonTestId の prop で付く)
+    const toolbar = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardToolbar.tsx'), 'utf8')
+    expect(toolbar).toContain(`actionButtonTestId={hasSelectedStudent ? '${PROP_TESTIDS.cancelSelection}'`)
   })
 
   it('長押しの長さと取り消しの距離がアプリと合っている', () => {

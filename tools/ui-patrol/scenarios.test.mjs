@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
 import {
-  MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
+  ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
@@ -12,6 +12,7 @@ import * as checksModule from './checks.ts'
 import { resolveNextMondayDateKey } from '../../src/components/schedule-board/templateDefinitionDiff.ts'
 import * as templateEditModule from './templateEdit.ts'
 import { isActiveOnDate } from '../../src/components/basic-data/basicDataModel.ts'
+import { findMakeupOriginLabel } from './stock.ts'
 
 const WEEK = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']
 const TODAY = '2026-11-17'
@@ -552,5 +553,214 @@ describe('runClassroomPatrol(台本 d のつなぎ)', () => {
     expect(report.aborted).toMatch(/^d: /)
     expect(report.aborted).toContain('1 回もできませんでした')
     expect(stepsOf(report, 'd').map((step) => step.notes.join('\n')).join('\n')).toContain('飛ばした')
+  })
+})
+
+// ── 台本 e(出欠)。候補選び・変わってよい範囲・在庫の仕様の増減は純関数、つなぎは偽の driver と偽の在庫で確かめる。
+describe('台本 e(出欠)の候補選び・範囲', () => {
+  /** 11/17〜11/19 に通常 4 人・振替 1 人・講習 1 人と空いた講師の机。11/16(今日より前)・休校日・記録のある机・保留・講師の休みにも生徒を置く(選ばれてはいけない)。 */
+  function attendanceWeek() {
+    return [
+      cell('2026-11-16', 1, [desk('p0', '講師A', [student('ep', 'sP', 'regular'), null]), desk('p1', '講師B')]),
+      cell('2026-11-17', 1, [
+        desk('a0', '講師A', [student('e1', 'sA', 'regular'), student('e2', 'sB', 'regular')]),
+        desk('a1', '講師B', [student('e3', 'sC', 'regular'), null]),
+        desk('a2', '講師C'),
+        // 記録のある机・メモのある机・講師なしの机の生徒は選ばない。
+        desk('a3', '講師D', [student('e4', 'sX', 'regular'), null], { statusSlots: [null, { id: 'st', studentId: 'z', name: '生徒sZ', managedStudentId: 'sZ', subject: '英', lessonType: 'regular', status: 'absent', dateKey: '2026-11-17', slotNumber: 1 }] }),
+        desk('a4', '', [student('e5', 'sY', 'regular'), null]),
+      ]),
+      cell('2026-11-17', 2, [desk('b0', '講師A', [student('e6', 'sD', 'regular'), null]), desk('b1', '講師B', [student('e7', 'sM', 'makeup'), null]), desk('b2', '講師C')]),
+      cell('2026-11-18', 1, [desk('c0', '講師A', [student('e8', 'sS', 'special'), null]), desk('c1', '講師B'), desk('c2', '講師E', [student('e9', 'sR', 'regular'), null], { teacherRest: { teacher: '講師E' } })]),
+      { ...cell('2026-11-19', 1, [desk('h0', '講師A', [student('h1', 'sH', 'regular'), null]), desk('h1', '講師B')]), isOpenDay: false },
+      cell('2026-11-20', 1, [desk('n0', '講師A', [{ ...student('nn', 'x', 'regular'), managedStudentId: undefined, name: '名簿外' }, null]), desk('n1', '講師B')]),
+    ]
+  }
+  const planOf = (cells, seed = 1, options = {}) => pickAttendancePlan(factsOf(cells, options.board), { weekDateKeys: WEEK, todayKey: TODAY, seed, ...options })
+
+  it('6 つの操作(通常の休み → その振替先 → 通常の振無休 → 通常の出席 → 振替の休み → 講習の出席)を選ぶ。机も生徒も重ならない・同じ種なら同じ', () => {
+    const plan = planOf(attendanceWeek())
+    expect(plan.ops.map((op) => op.slot)).toEqual(ATTENDANCE_SLOTS.map((slot) => slot.name))
+    expect(planOf(attendanceWeek())).toEqual(plan)
+    const marks = plan.ops.filter((op) => op.kind === 'mark')
+    const deskKeys = [...marks.map((op) => deskKey(op.seat)), deskKey(plan.ops[1].to)]
+    expect(new Set(deskKeys).size).toBe(deskKeys.length)
+    expect(new Set(marks.map((op) => op.studentKey)).size).toBe(marks.length)
+    // 選んではいけない生徒(今日より前・記録のある机・講師なし・講師の休み・休校日・名簿外)は出ない
+    for (const op of marks) expect(['sA', 'sB', 'sC', 'sD', 'sM', 'sS']).toContain(op.studentKey)
+    expect(plan.ops.find((op) => op.slot === 'makeup-absent').studentKey).toBe('sM')
+    expect(plan.ops.find((op) => op.slot === 'special-attended').studentKey).toBe('sS')
+    // 振替先: 休みにした生徒の別のコマ(その生徒がいない)・本物の講師・空いた席。休みの生徒・科目を引き継ぐ。
+    const [absent, place] = plan.ops
+    expect(place).toMatchObject({ kind: 'place', studentKey: absent.studentKey, subject: absent.subject, sourceDateKey: absent.dateKey, sourceSlotNumber: absent.slotNumber })
+    expect(place.to.cellId).not.toBe(absent.seat.cellId)
+    const target = factsOf(attendanceWeek()).desks.get(deskKey(place.to))
+    expect(target.teacher).not.toBe('')
+    expect(target.students[place.to.seat]).toBeNull()
+    expect(target.dateKey >= TODAY).toBe(true)
+  })
+
+  it('候補の無い操作は飛ばして理由を残す(通常の休みが無ければ振替先も飛ばす)・除く席(手動追加など)は選ばない', () => {
+    const onlySpecial = [cell('2026-11-17', 1, [desk('c0', '講師A', [student('e8', 'sS', 'special'), null]), desk('c1', '講師B')])]
+    const plan = planOf(onlySpecial)
+    expect(plan.ops.map((op) => op.slot)).toEqual(['special-attended'])
+    expect(plan.skipped.join('\n')).toContain('通常・休み')
+    expect(plan.skipped.join('\n')).toContain('振替先')
+    const excluded = planOf(attendanceWeek(), 1, { excludeSeatKeys: new Set(['2026-11-17_2#1/0']) })
+    expect(excluded.ops.some((op) => op.slot === 'makeup-absent')).toBe(false)
+  })
+
+  it('手動追加・編集で振替にした生徒の席を集める(在庫の数え方が別なので台本 e は選ばない)', () => {
+    const payload = payloadOf([cell('2026-11-17', 1, [desk('a0', '講師A', [student('e1', 'sA', 'regular', { manualAdded: true }), student('e2', 'sB', 'makeup', { editedToMakeup: true })]), desk('a1', '講師B', [student('e3', 'sC', 'regular'), null])])])
+    expect([...collectStockIneligibleSeatKeys(payload)].sort()).toEqual(['2026-11-17_1#0/0', '2026-11-17_1#0/1'])
+  })
+
+  it('変わってよい範囲と在庫の仕様の増減(休み=+1・振無休=±0・出席=±0・振替先へ置く=−1・INV-06)', () => {
+    const seat = { cellId: '2026-11-17_1', deskIndex: 0, seat: 1 }
+    const mark = (status, lessonType = 'regular') => ({ kind: 'mark', status, seat, studentKey: 'sA', subject: '数', lessonType })
+    expect([...buildAttendanceAllowedChange(mark('absent')).deskKeys]).toEqual(['2026-11-17_1#0'])
+    expect([...buildAttendanceAllowedChange(mark('absent')).sections].sort()).toEqual([...ATTENDANCE_ALLOWED_SECTIONS.absent].sort())
+    expect(ATTENDANCE_ALLOWED_SECTIONS.absent).toEqual(expect.arrayContaining(['boardState.manualMakeupAdjustments', 'boardState.suppressedRegularLessonOccurrences']))
+    expect(ATTENDANCE_ALLOWED_SECTIONS['absent-no-makeup']).toEqual(['boardState.suppressedRegularLessonOccurrences'])
+    expect(ATTENDANCE_ALLOWED_SECTIONS.attended).toEqual(['boardState.suppressedRegularLessonOccurrences'])
+    expect(ATTENDANCE_ALLOWED_SECTIONS.place).toEqual([])
+    for (const sections of Object.values(ATTENDANCE_ALLOWED_SECTIONS)) for (const section of sections) expect(BOARD_FACT_SECTIONS).toContain(section)
+    // 在庫(講習)・名簿・講習の帳簿は範囲に入れない
+    for (const section of ['students', 'specialSessions', 'boardState.manualLectureStockCounts']) expect(buildAttendanceAllowedChange(mark('absent')).sections.has(section)).toBe(false)
+    expect(expectedStockDeltas(mark('absent'))).toEqual({ makeup: { 'sA__数': 1 }, lecture: {} })
+    expect(expectedStockDeltas(mark('absent', 'makeup'))).toEqual({ makeup: { 'sA__数': 1 }, lecture: {} })
+    expect(expectedStockDeltas(mark('absent-no-makeup'))).toEqual({ makeup: {}, lecture: {} })
+    expect(expectedStockDeltas(mark('attended', 'special'))).toEqual({ makeup: {}, lecture: {} })
+    const place = { kind: 'place', to: { cellId: '2026-11-18_1', deskIndex: 1, seat: 0 }, studentKey: 'sA', subject: '数' }
+    expect(expectedStockDeltas(place)).toEqual({ makeup: { 'sA__数': -1 }, lecture: {} })
+    expect([...buildAttendanceAllowedChange(place).deskKeys]).toEqual(['2026-11-18_1#1'])
+  })
+})
+
+describe('runClassroomPatrol(台本 e のつなぎ)', () => {
+  const STATUS_BY_KIND = { absent: 'absent', 'absent-no-makeup': 'absent-no-makeup', attended: 'attended' }
+  /** 偽の在庫: 台帳(manualMakeupAdjustments)の振替元の数 − 盤面の振替の数(生徒キー__科目)。 */
+  function fakeStock(payload) {
+    const makeup = {}
+    const makeupRows = []
+    for (const [key, origins] of Object.entries(payload.boardState.manualMakeupAdjustments ?? {})) {
+      makeup[key] = origins.length
+      makeupRows.push({ key, balance: origins.length, remainingOriginDates: origins.map((origin) => origin.dateKey), remainingOriginSlots: origins.map((origin) => origin.slotNumber), remainingOriginLabels: origins.map((origin) => `${origin.dateKey} ${origin.slotNumber}限`) })
+    }
+    for (const boardCell of payload.boardState.weeks.flat()) for (const item of boardCell.desks) for (const entry of item.lesson?.studentSlots ?? []) {
+      if (entry?.lessonType === 'makeup' && entry.makeupSourceDate) { const key = `${entry.managedStudentId}__${entry.subject}`; makeup[key] = (makeup[key] ?? 0) - 1 }
+    }
+    for (const key of Object.keys(makeup)) if (makeup[key] === 0) delete makeup[key]
+    return { makeup, lecture: {}, makeupRows }
+  }
+  const appE = { ...app, findMakeupOriginLabel, collectStockBalances: (payload) => fakeStock(payload) }
+
+  /** 出欠を付ける偽のアプリ。broken で「在庫を増やさない」「ほかの机も変える」「記録を付けない」を作る。 */
+  function makeAttendanceDriver(payload, broken = {}) {
+    const fake = makeFakeDriver(payload, {})
+    const marks = []
+    const commit = (next) => { fake.state.undo.push(fake.state.payload); fake.state.redo = []; fake.state.payload = next }
+    Object.assign(fake.driver, {
+      markStudentAttendance: async (_session, seat, status) => {
+        const next = clone(fake.state.payload)
+        const target = findDesk(next, seat.cellId, seat.deskIndex)
+        const entry = target.lesson.studentSlots[seat.seat]
+        const boardCell = next.boardState.weeks.flat().find((item) => item.id === seat.cellId)
+        target.lesson.studentSlots[seat.seat] = null
+        if (!broken.noRecord) {
+          target.statusSlots = target.statusSlots ?? [null, null]
+          target.statusSlots[seat.seat] = { id: `${entry.id}_${status}`, studentId: entry.id, name: entry.name, managedStudentId: entry.managedStudentId, subject: entry.subject, lessonType: entry.lessonType, status: STATUS_BY_KIND[status], dateKey: boardCell.dateKey, slotNumber: boardCell.slotNumber }
+        }
+        // アプリと同じく、通常の休みは振替元を台帳へ積む。振替の休みは積まない(消化が外れて元の振替元が戻る)。
+        if (status === 'absent' && entry.lessonType === 'regular' && !broken.noStock) {
+          const key = `${entry.managedStudentId}__${entry.subject}`
+          const ledger = next.boardState.manualMakeupAdjustments ?? {}
+          next.boardState.manualMakeupAdjustments = { ...ledger, [key]: [...(ledger[key] ?? []), { dateKey: boardCell.dateKey, slotNumber: boardCell.slotNumber }] }
+        }
+        if (broken.otherDesk) findDesk(next, '2026-11-17_1', 2).teacher = '講師Z'
+        marks.push({ seat, status })
+        commit(next)
+        fake.state.status = `${status} ${marks.length}`
+        return fake.state.status
+      },
+      placeMakeupFromStock: async (_session, { stockStudentKey, choose }, to) => {
+        const rows = fakeStock(fake.state.payload).makeupRows.filter((row) => row.key.startsWith(`${stockStudentKey}__`))
+        const items = rows.flatMap((row) => row.remainingOriginLabels.map((label) => `${row.key.split('__')[1]} ${label} (休み)`))
+        const index = choose(items)
+        if (index < 0) return { placed: false, status: fake.state.status }
+        const row = rows[0]
+        const next = clone(fake.state.payload)
+        findDesk(next, to.cellId, to.deskIndex).lesson.studentSlots[to.seat] = student('pm', stockStudentKey, 'makeup', { subject: row.key.split('__')[1], makeupSourceDate: row.remainingOriginDates[0] })
+        commit(next)
+        fake.state.status = '振替を置きました'
+        return { placed: true, status: fake.state.status }
+      },
+    })
+    return { ...fake, marks }
+  }
+
+  const eWeek = () => patrolPayload([
+    cell('2026-11-17', 1, [desk('a0', '講師A', [student('e1', 'sA', 'regular'), student('e2', 'sB', 'regular')]), desk('a1', '講師B', [student('e3', 'sC', 'regular'), null]), desk('a2', '講師C')]),
+    cell('2026-11-17', 2, [desk('b0', '講師A', [student('e7', 'sM', 'makeup'), null]), desk('b1', '講師B', [student('e8', 'sS', 'special'), null]), desk('b2', '講師C')]),
+  ], {})
+  // 振替の生徒 sM は台帳の振替元(11/10)を消化している(残 0)。
+  const eWeekWithLedger = () => { const payload = eWeek(); payload.boardState.manualMakeupAdjustments = { 'sM__数': [{ dateKey: '2026-11-10', slotNumber: 1 }] }; return payload }
+
+  async function runE(payload, { broken, scenarios = ['boot', 'e'], behavior } = {}) {
+    const fake = makeAttendanceDriver(payload, broken)
+    if (behavior?.templateApply) fake.driver.confirmTemplateSave = async () => { fake.state.payload = behavior.templateApply(clone(fake.state.payload)) }
+    const report = await runClassroomPatrol({
+      session: fake.session, app: appE, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
+      options: { scenarios, moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    return { report, fake }
+  }
+
+  it('仕様どおりに効けば止める所見 0。誰のどのコマに何をしたかを仮名と ID で残し、最初の休みで元に戻す・やり直しを確かめ、最後に保存→読み込み直し', async () => {
+    const { report, fake } = await runE(eWeekWithLedger())
+    expect(report.aborted).toBeNull()
+    const steps = stepsOf(report, 'e')
+    expect(steps[0].title).toContain('出欠の準備')
+    expect(steps.at(-1).title).toBe('出欠のあと 保存→読み込み直し')
+    const opSteps = steps.slice(1, -1)
+    expect(opSteps.length).toBeGreaterThanOrEqual(5)
+    for (const step of opSteps) expect([step.title, step.findings.filter((finding) => finding.level === 'stop')]).toEqual([step.title, []])
+    // 最初の休みは 押す・元に戻す・やり直す の 3 操作
+    expect(opSteps[0].title).toContain('通常・休み')
+    expect(opSteps[0].operations).toBe(3)
+    expect(opSteps[1].title).toContain('振替先')
+    expect(opSteps.map((step) => step.notes.join('\n')).join('\n')).toMatch(/生徒s[A-Z]\(s[A-Z]\)/)
+    expect(fake.marks.map((mark) => mark.status)).toEqual(expect.arrayContaining(['absent', 'absent-no-makeup', 'attended']))
+  })
+
+  it('わざと壊す: 休みで在庫が増えない → stop stock-delta-mismatch／ほかの机も変わる → stop outside-allowed-range／記録が付かない → stop attendance-not-applied', async () => {
+    const noStock = await runE(eWeekWithLedger(), { broken: { noStock: true } })
+    expect(stepsOf(noStock.report, 'e').flatMap((step) => step.findings).map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:stock-delta-mismatch')
+    const otherDesk = await runE(eWeekWithLedger(), { broken: { otherDesk: true } })
+    expect(stepsOf(otherDesk.report, 'e').flatMap((step) => step.findings).map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:outside-allowed-range')
+    const noRecord = await runE(eWeekWithLedger(), { broken: { noRecord: true } })
+    expect(stepsOf(noRecord.report, 'e').flatMap((step) => step.findings).map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:attendance-not-applied')
+  })
+
+  it('出欠を付けられる生徒がいなければ中断(台本 b・d と同じ扱い)', async () => {
+    const { report } = await runE(patrolPayload([cell('2026-11-17', 1, [desk('a0', '講師A')])]))
+    expect(report.aborted).toMatch(/^e: /)
+  })
+
+  it('台本 e は a の前に流れ、テンプレ保存が出欠記録のコマに生徒を置き直したら a で stop attendance-record-overridden', async () => {
+    // 偽のテンプレ保存: 休みにした生徒を同じコマの空いた机へ置き直す(記録が勝たない形)。
+    const templateApply = (payload) => {
+      for (const boardCell of payload.boardState.weeks.flat()) for (const item of boardCell.desks) (item.statusSlots ?? []).forEach((record) => {
+        if (record?.status !== 'absent' || record.lessonType !== 'regular') return
+        const free = boardCell.desks.find((other) => other.teacher && other.lesson.studentSlots.every((seat) => seat === null))
+        if (free) free.lesson.studentSlots[0] = student(`re-${record.studentId}`, record.managedStudentId, 'regular', { origin: 'template' })
+      })
+      return payload
+    }
+    const { report } = await runE(eWeekWithLedger(), { scenarios: ['boot', 'a', 'e'], behavior: { templateApply } })
+    const order = report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
+    expect(order.indexOf('e')).toBeLessThan(order.indexOf('a'))
+    expect(stepsOf(report, 'a')[0].findings.map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:attendance-record-overridden')
   })
 })
