@@ -6,7 +6,13 @@ import { DEFAULT_CLASSROOMS } from './fetchData.mjs'
 export const USAGE = [
   '使い方: node tools/ui-patrol.mjs --out <出力先(リポジトリの外)> [--classroom <id>]... [--key <YYYY-MM-DDTHH-mm>] [--seed-file <path>]...',
   '          [--scenario boot,c,b,a] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
+  '          [--baseline <前に流した report.json> | --baseline-ref <git の ref>]',
   '  --prepare-only: 取得・伏せ字・自己点検・種データの書き出しまで(ブラウザは動かさない)。',
+  '  --baseline <report.json>: 前に流した報告と突き合わせ、「変」を 新しい／前から／消えた に分ける。同じ種データ(指紋が同じ)でないと比べない(2)。',
+  '                 新しい変が 1 件でもあれば 1・新しい変が 0 なら前からの変が残っていても 0。',
+  '  --baseline-ref <ref>: その ref のアプリ(git archive を <out>/baseline-app へ展開)で同じ台本を先に流して <out>/baseline/ に残し、今の作業ツリーと比べる',
+  '                 (作業ツリー・index・ブランチには触らない。所要時間は約 2 倍。依存〔package-lock.json〕が違う・読み口が無い版の ref は断る)。',
+  '                 --baseline と同時には指定できず、--prepare-only とも併用できない。',
   '  終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。',
 ].join('\n')
 
@@ -14,12 +20,13 @@ export const SCENARIO_NAMES = ['boot', 'c', 'b', 'a']
 const VALUE_FLAGS = {
   '--out': 'out', '--classroom': 'classroom', '--key': 'key', '--seed-file': 'seedFile', '--scenario': 'scenario',
   '--moves': 'moves', '--seed': 'seed', '--random': 'random', '--known': 'known', '--port': 'port',
+  '--baseline': 'baseline', '--baseline-ref': 'baselineRef',
 }
 const NUMBER_FLAGS = ['moves', 'seed', 'random', 'port']
 
 export function parseArgs(argv) {
   const options = {
-    out: '', classrooms: [], key: '', seedFiles: [], scenarios: [], moves: 6, seed: 1, random: 0, known: 'tools/ui-patrol-known.json', port: 5199,
+    out: '', classrooms: [], key: '', seedFiles: [], scenarios: [], moves: 6, seed: 1, random: 0, known: 'tools/ui-patrol-known.json', port: 5199, baseline: '', baselineRef: '',
     headed: false, prepareOnly: false, json: false, help: false, unknown: [], missingValue: [], invalidNumber: [], stray: [],
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -67,6 +74,10 @@ export function validateArgs(options) {
   for (const name of options.scenarios ?? []) {
     if (!SCENARIO_NAMES.includes(name)) errors.push(`--scenario に知らない台本があります: ${name}(boot,c,b,a から選びます)。`)
   }
+  if (options.baseline && options.baselineRef) errors.push('--baseline と --baseline-ref は同時に指定できません(どちらか一方)。')
+  if ((options.baseline || options.baselineRef) && options.prepareOnly) errors.push('--baseline / --baseline-ref は --prepare-only と併用できません(--prepare-only は巡回しないため)。')
+  // git の引数として渡すので、先頭が - の値はオプションに読まれる。ref として使わない。
+  if (options.baselineRef && options.baselineRef.startsWith('-')) errors.push(`--baseline-ref は git の ref(ブランチ名・タグ・コミット)で指定してください: ${options.baselineRef}`)
   if ((options.seedFiles ?? []).length > 0 && options.seedFiles.length !== options.classrooms.length) {
     errors.push(`--seed-file(${options.seedFiles.length} 個)と --classroom(${options.classrooms.length} 個)は同じ数・同じ順で指定してください。`)
   }

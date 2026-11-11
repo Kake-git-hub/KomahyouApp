@@ -19,6 +19,8 @@ import { fetchReadonlyAccessToken } from './prod-readonly-token.mjs'
 import { decodeJsonBuffer, extractClassroomSnapshot } from './snapshot-diff.mjs'
 import { DEFAULT_CLASSROOMS, fetchClassroomBackup, fetchLatestBackupKey } from './ui-patrol/fetchData.mjs'
 import { loadPatrolApp } from './ui-patrol/loadApp.mjs'
+import { prepareBaselineApp } from './ui-patrol/baselineApp.mjs'
+import { checkBaselineUsable, compareWithBaseline, seedFingerprint } from './ui-patrol/baseline.mjs'
 import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './ui-patrol/options.mjs'
 import { buildPatrolWorkspaceSnapshot } from './ui-patrol/seed.mjs'
 import { startDevServer } from './ui-patrol/devServer.mjs'
@@ -55,9 +57,9 @@ function removeStaleSeed(out, classroomId) {
   rmSync(path.join(out, `${classroomId}.seed.json`), { force: true })
 }
 
-function readAppVersion() {
+function readAppVersion(root = REPO_ROOT) {
   try {
-    return JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version ?? ''
+    return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version ?? ''
   } catch {
     return ''
   }
@@ -119,6 +121,28 @@ function readSeedFiles(options) {
   })
 }
 
+/** 種データの教室ごとの指紋(tools/ui-patrol/baseline.mjs)。報告の教室に入れ、baseline と同じデータかを見る。 */
+function fingerprintsOf(seeds) {
+  return seeds.map(({ classroomId, seed }) => ({
+    classroomId, seedFingerprint: seedFingerprint(seed?.classrooms?.find((room) => room.id === classroomId)?.data),
+  }))
+}
+
+/** 報告の教室に種データの指紋を足す(巡回の実装には依存しない・ここ 1 か所)。 */
+function withFingerprints(report, fingerprints) {
+  if (!Array.isArray(report?.classrooms)) return report
+  return { ...report, classrooms: report.classrooms.map((room) => ({ ...room, seedFingerprint: fingerprints.find((item) => item.classroomId === room.classroomId)?.seedFingerprint })) }
+}
+
+/** --baseline の報告を読む。読めなければ throw(中身の断片は出さない)。 */
+function readBaselineReport(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'))
+  } catch (error) {
+    throw new Error(`--baseline を読めません(${path.basename(file)}・${error instanceof Error && error.code ? error.code : '壊れた JSON か読めないファイル'})。`)
+  }
+}
+
 /** 既知の所見(tools/ui-patrol-known.json・ID だけ・理由つき)。無ければ空。 */
 function readKnown(file) {
   const resolved = path.isAbsolute(file) ? file : path.join(REPO_ROOT, file)
@@ -148,6 +172,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     return 2
   }
   const usesSeedFiles = options.seedFiles.length > 0
+  const prepareApp = deps.prepareBaselineApp ?? prepareBaselineApp
   // 前回の種データは出力先の検査が通った直後に全部消す(取得するときだけ。--seed-file は入力を消さない)。今回通った教室だけが残るので、
   // トークンの失敗・アプリの読み込みの失敗・取得の途中で止まっても、古い種データを次の作業が読まない(作業 4 の再レビューの指摘)。
   if (!usesSeedFiles) for (const classroomId of options.classrooms) removeStaleSeed(options.out, classroomId)
@@ -174,8 +199,18 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
   let loaded = null
   let seeds = []
   let backupKey = ''
+  let baselineApp = null
   const today = jstToday()
   try {
+    // --baseline-ref: 断る条件(ref が解決できない・依存が違う・読み口が無い)は、取得より前に見る。
+    if (options.baselineRef) {
+      try {
+        baselineApp = await prepareApp({ repoRoot: REPO_ROOT, ref: options.baselineRef, outDir: options.out })
+      } catch (error) {
+        warn(`エラー: ${error instanceof Error ? error.message : String(error)}`)
+        return 2
+      }
+    }
     if (usesSeedFiles) {
       try {
         seeds = readSeedFiles(options)
@@ -239,13 +274,66 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
       // 自己点検に落ちた教室があれば流さない(伏せ字で挙動が変わったまま点検しても意味がない)。
       if (!allPrepared) return 2
     }
+    const fingerprints = fingerprintsOf(seeds)
+    // --baseline: 流す前に、同じデータか・中断した報告でないかを見る(違うものと比べて時間を使わない)。
+    let baselineReport = null
+    let baselineSource = ''
+    if (options.baseline) {
+      baselineReport = readBaselineReport(options.baseline)
+      baselineSource = path.resolve(options.baseline)
+      const unusable = checkBaselineUsable(baselineReport, fingerprints)
+      if (unusable.length > 0) {
+        for (const line of unusable) warn(`エラー: ${line}`)
+        return 2
+      }
+    }
     const runPatrol = deps.runPatrol ?? runBrowserPatrol
-    const report = await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup })
+    mkdirSync(options.out, { recursive: true }) // 画面写真を書けるように(--seed-file では取得の段で作られない)
+    // --baseline-ref: その ref のアプリで同じ台本を先に流し、<out>/baseline/ に残す。台本・点検・乱数の種・種データ・options は今回と同じ。
+    // (アプリだけが違う。点検と台本は今の作業ツリーの物。)
+    if (baselineApp) {
+      const baselineOut = path.join(options.out, 'baseline')
+      mkdirSync(baselineOut, { recursive: true })
+      say(`変更前(${options.baselineRef})のアプリで先に流します…`)
+      let baseRun = await runPatrol({
+        app: loaded.app, seeds, options: { ...options, out: baselineOut }, backupKey, today, env, say, warn,
+        // シグナルで止めたときも、展開したアプリと束ねたアプリを消す(runBrowserPatrol の片づけが呼ぶ)。
+        extraCleanup: async () => { await baselineApp.cleanup(); await loaded.cleanup() }, repoRoot: baselineApp.appDir,
+      })
+      // 展開したアプリは使い終わったらすぐ消す(今回の巡回の間は要らない)。
+      await baselineApp.cleanup()
+      if (baseRun?.stopped) {
+        warn('止めました(シグナル)。報告は書き出しません。')
+        return 130
+      }
+      baseRun = withFingerprints(baseRun, fingerprints)
+      mkdirSync(baselineOut, { recursive: true })
+      writeFileSync(path.join(baselineOut, 'report.json'), JSON.stringify(baseRun, null, 2))
+      writeFileSync(path.join(baselineOut, 'report.txt'), `${formatPatrolReportText(baseRun)}\n`)
+      const unusable = checkBaselineUsable(baseRun, fingerprints)
+      if (unusable.length > 0) {
+        warn(`エラー: 変更前(${options.baselineRef})のアプリの巡回が最後まで流れなかったので、比べられません。報告: ${path.join(baselineOut, 'report.txt')}`)
+        return 2
+      }
+      baselineReport = baseRun
+      baselineSource = path.join(baselineOut, 'report.json')
+      say(`変更前の巡回: ${formatPatrolReportText(baseRun).split('\n')[0]}`)
+      say('今の作業ツリーで流します…')
+    }
+    let report = withFingerprints(await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup }), fingerprints)
     // シグナルで止めた巡回は書き出さない: 途中までの report.json・report.txt は普通の報告と見分けにくく、前回の報告を
     // 上書きして「変なし」に見えることもある(作業 5 の再レビュー)。片づけのあと exit(130) で終わる。
     if (report?.stopped) {
       warn('止めました(シグナル)。報告は書き出しません。')
       return 130
+    }
+    if (baselineReport) {
+      const compared = compareWithBaseline(report, baselineReport, { source: baselineSource })
+      if (!compared.ok) {
+        for (const line of compared.errors) warn(`エラー: ${line}`)
+        return 2
+      }
+      report = compared.report
     }
     const reportFile = path.join(options.out, 'report.json')
     const reportText = formatPatrolReportText(report)
@@ -261,6 +349,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     return 2
   } finally {
     if (loaded) await loaded.cleanup()
+    if (baselineApp) await baselineApp.cleanup()
   }
 }
 
@@ -290,14 +379,14 @@ function installSignalCleanup(proc, cleanup, onStopping = () => {}) {
  * 開発用サーバー → 教室ごとにブラウザ → 台本。ブラウザとサーバーは、流し終えたとき・例外・シグナルのどれでも 1 つの片づけで止める。
  * deps はテスト用(偽のサーバー・偽のブラウザ・偽の process)。
  */
-export async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say, extraCleanup }, deps = {}) {
+export async function runBrowserPatrol({ app, seeds, options, backupKey, today, env, say, extraCleanup, repoRoot = REPO_ROOT }, deps = {}) {
   const proc = deps.process ?? process
   const startServer = deps.startDevServer ?? startDevServer
   const launch = deps.launchPatrolBrowser ?? launchPatrolBrowser
   const close = deps.closePatrolBrowser ?? closePatrolBrowser
   const runClassroom = deps.runClassroomPatrol ?? runClassroomPatrol
   const known = readKnown(options.known)
-  let report = createPatrolReport({ appVersion: readAppVersion(), backupKey })
+  let report = createPatrolReport({ appVersion: readAppVersion(repoRoot), backupKey })
   // 開発用サーバーの止め方。子を起こした直後(起動を待つ前)から持つ(起動待ちの最中のシグナルでも子を止める)。
   let stopServer = null
   let session = null
@@ -319,7 +408,7 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
   }
   const removeSignalHandlers = installSignalCleanup(proc, cleanup, () => { stopping = true })
   try {
-    const server = await startServer({ port: options.port, repoRoot: REPO_ROOT, env, onSpawn: (stop) => { stopServer = stop } })
+    const server = await startServer({ port: options.port, repoRoot, env, onSpawn: (stop) => { stopServer = stop } })
     stopServer = server.stop
     for (const { classroomId, label, key, seed } of seeds) {
       // 止めている最中は次の教室のブラウザを起動しない。
