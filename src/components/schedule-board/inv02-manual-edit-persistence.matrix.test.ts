@@ -2483,6 +2483,111 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
         expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], [], ['sB', 'sM'], []])
         expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
       })
+
+      // 2026-11-11 オーナー決定（§9-23・Issue #84・画面の自動巡回の所見 A・日大前の 29 机の型）: 別の講師 W（鈴木）の授業に手で X（高橋）を入れた机で、W が新しいテンプレの
+      // そのコマにいなくて X がいる → X の新しいテンプレの机へ合流する。改定前は W がいない机として高橋だけ下の空き机へ移り、テンプレの B が講師なし（赤字）で残っていた。
+      describe('Issue #84: 鈴木の授業に手で入れた高橋 × 新テンプレは鈴木を外し高橋に B → 高橋の机へ合流（§9-23）', () => {
+        const replacedOnSuzuki = (extra: (desk: DeskCell) => Partial<DeskCell> = () => ({})) => (desk: DeskCell): DeskCell => ({
+          ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 't4', ...extra(desk),
+        })
+        const withHandM = (desk: DeskCell): Partial<DeskCell> => ({ lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] } })
+
+        it.each([
+          ['同じ机番号（机2）・手入力なし', [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']] as Array<[string, string]>, () => ({}), ['田中', '高橋', '佐藤', ''], [['sA'], ['sB'], [], []]],
+          ['同じ机番号（机2）・手入力の M', [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']] as Array<[string, string]>, withHandM, ['田中', '高橋', '佐藤', ''], [['sA'], ['sB', 'sM'], [], []]],
+          ['別の机（机3）・手入力の M', [['t1', 'sA'], ['t3', ''], ['t4', 'sB'], ['', '']] as Array<[string, string]>, withHandM, ['田中', '佐藤', '高橋', ''], [['sA'], [], ['sB', 'sM'], []]],
+        ] as const)('%s → 高橋は 1 机（青字のまま）・B は高橋の机・講師なしの机が残らない・確認画面に新しい知らせは出ない・同じテンプレで再保存しても同じ（INV-03）', (_label, nextDesks, extra, teachers, ids) => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(extra))
+          const first = saveWith(week, [...nextDesks])
+          const { saved, cell } = first
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(teachers)
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual(ids)
+          const takahashi = cell.desks.find((desk) => desk.teacher === '高橋')!
+          expect(takahashi.manualTeacher).toBe(true)
+          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+          noTeacherlessDeskWithStudents(cell)
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept')).toEqual([])
+          // 同じテンプレでもう一度保存（保存前のテンプレ＝1 回目に保存した版）→ 盤面は変わらない
+          const again = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
+            weeks: saved.nextWeeks, classroomSettings: first.classroom, teachers: teacherRows, students: studentRows, regularLessons: rowsOf(first.savedTemplate),
+            effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: saved.nextPendingDesks, createdAt: '2026-09-29T11:00:00.000Z', manualMakeupAdjustments: {},
+            previousRegularLessons: rowsOf(first.savedTemplate), previousRegularLessonTemplateHistory: [CURRENT, first.savedTemplate],
+          })
+          expect(contentOf(again.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(cell))
+          expect(again.studentNotes.filter((note) => note.kind === 'teacher-left-moved')).toEqual([])
+        })
+
+        it('鈴木も高橋も新テンプレにいない → 今までどおり手置きの高橋ごと下の空き机へ（確認画面に「移した」の行が出る）', () => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM))
+          const { saved, cell } = saveWith(week, [['t1', 'sA'], ['t3', ''], ['', ''], ['', '']])
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '佐藤', '高橋', ''])
+          expect(liveIds(cell.desks[2].lesson)).toEqual(['sM'])
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved')).toHaveLength(1)
+        })
+
+        // 追加 1（2026-11-11 主セッションの裁定・§9-15 の例外・日大前 11/19・11/26 木 3限の型）: 新テンプレが高橋の机に机 A のテンプレの生徒 B を持たせている
+        // → 鈴木が居ても高橋の机へ合流する。鈴木は鈴木の机（新しい生徒 C）に置かれる。改定前は机 A が鈴木の番号へ行き、高橋が C を受け持ち、B は講師なしになっていた。
+        it('(0) 鈴木が居て、新テンプレの高橋の机（机4）に B → 高橋の机へ合流。鈴木は机2 に C と置かれる・講師なしの机なし・同じテンプレで再保存しても同じ（INV-03）', () => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM))
+          const first = saveWith(week, [['t1', 'sA'], ['t2', 'sC'], ['t3', ''], ['t4', 'sB']])
+          const { saved, cell } = first
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤', '高橋'])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC'], [], ['sB', 'sM']])
+          expect(cell.desks[3].manualTeacher).toBe(true)
+          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+          noTeacherlessDeskWithStudents(cell)
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept')).toEqual([])
+          const again = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
+            weeks: saved.nextWeeks, classroomSettings: first.classroom, teachers: teacherRows, students: studentRows, regularLessons: rowsOf(first.savedTemplate),
+            effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: saved.nextPendingDesks, createdAt: '2026-09-29T11:00:00.000Z', manualMakeupAdjustments: {},
+            previousRegularLessons: rowsOf(first.savedTemplate), previousRegularLessonTemplateHistory: [CURRENT, first.savedTemplate],
+          })
+          expect(contentOf(again.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(cell))
+        })
+
+        it('(0 の裏・§9-15 のまま) 鈴木が居て、新テンプレの高橋の机は別の生徒 C → 鈴木について行く（高橋は鈴木の机で B・M と 1 行）', () => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM))
+          const { saved, cell } = saveWith(week, [['t1', 'sA'], ['t4', 'sC'], ['t2', 'sB'], ['', '']])
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '', '高橋', ''])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC'], ['sB', 'sM'], []])
+        })
+
+        it('鈴木が新テンプレにいれば、高橋が居ても鈴木について行く（§9-15 のまま・高橋は 1 行で鈴木の授業の机）', () => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM))
+          const { saved, cell } = saveWith(week, [['t1', 'sA'], ['t4', ''], ['t2', 'sB'], ['', '']])
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '', '高橋', ''])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], [], ['sB', 'sM'], []])
+        })
+
+        it('隣の形（採用の記録）: 鈴木を取り下げて手入力の高橋を採用した机 × 新テンプレは鈴木を外し机3 に高橋＋B → 高橋の机へ合流。採用の記録は使い切りで残らない（§4-1）', () => {
+          const week = withDesk(boardOf(rowsOf(CURRENT)), 1, (desk) => ({
+            ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4',
+            templateTeacherDeclined: { teacher: '鈴木', teacherId: 't2', adopted: { teacher: '高橋', teacherId: 't4' } },
+            lesson: { id: 'hand', studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] },
+          }))
+          const { saved, cell, lowerOf } = saveWith(week, [['t1', 'sA'], ['t3', ''], ['t4', 'sB'], ['', '']])
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '佐藤', '高橋', ''])
+          expect([...liveIds(cell.desks[2].lesson), ...liveIds(lowerOf(2)?.lesson)].sort()).toEqual(['sB', 'sM'])
+          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+          expect(cell.desks[2].templateTeacherDeclined).toBeUndefined()
+          noTeacherlessDeskWithStudents(cell)
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved')).toEqual([])
+        })
+
+        it('高橋がそのコマで休み（§9-18＝いないもの）→ 合流しない。今までどおり高橋ごと下の空き机へ（確認画面に「移した」の行）・休みの机に高橋は置かない', () => {
+          // 机3（佐藤）を高橋の休みの机にする（講師欄は空・休みの記録）
+          const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, (desk) => ({ ...desk, teacher: '', teacherRest: { teacher: '高橋', teacherId: 't4' } }))
+          const { saved, cell } = saveWith(week, [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']])
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved')).toHaveLength(1)
+          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+          expect(cell.desks.find((desk) => desk.teacher === '高橋')!.manualTeacher).toBe(true)
+          expect(cell.desks.some((desk) => desk.teacherRest?.teacher === '高橋' && !desk.teacher)).toBe(true)
+        })
+      })
     })
 
     it('試し実行（createdAt 空）と保存本体で、移した机と確認画面の行が同じ（Q32-1）', () => {

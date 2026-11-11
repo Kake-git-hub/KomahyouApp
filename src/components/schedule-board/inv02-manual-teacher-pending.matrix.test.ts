@@ -699,6 +699,25 @@ describe('第 2 版 §2-3: 講師欄は講師だけで決まる（手置き講�
       expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => [note.studentName, note.detail])).toEqual([['倉島', '2']])
       expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
     })
+
+    // 2026-11-11 オーナー決定（§9-23・Issue #84）の兄弟: 別の講師 W（寺田＝tF）の授業に手で倉島を入れた机 1。新テンプレは W を外し、倉島を机 0（保留の机）に置く。
+    // 合流先が保留の机なので合流できない＝今までどおり（手置きが勝つ・B に倉島を置かない・理由の行が出る・既知の制約）。
+    it('Issue #84 の兄弟（合流先 B が保留の机）: W の授業に手で入れた倉島の机 1 × テンプレが W を外し保留の机 0 に倉島＋C → 合流しない。倉島は 1 机・B に倉島を置かない・理由の行が出る・再マージ 2 回で同じ', () => {
+      const firstRows = [row('r0', 'tD', 'sC'), row('r1', 'tF', 'sX')]
+      const first = save(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: 'hand_e', studentSlots: [entry('sE', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), entry('sA', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] } })), firstRows)
+      expect(Object.keys(first.nextPendingDesks)).toEqual([key0(first.nextWeeks)])
+      expect(ids(cellOf(first.nextWeeks).desks[1])).toEqual(['sX', null])
+      const rows = [row('r0', 'tB', 'sC')]
+      const week = mutateDesk(first.nextWeeks[0], 1, (desk) => ({ ...desk, teacher: '倉島', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 'tB' }))
+      const saved = saveProd(week, rows, firstRows, first.nextPendingDesks)
+      const cell = cellOf(saved.nextWeeks)
+      expect(cell.desks[0].id).toBe(desk0(first.nextWeeks).id)
+      expect(cell.desks[0].teacher).toBe('')
+      expect(cell.desks.filter((desk) => desk.teacher === '倉島')).toHaveLength(1)
+      expect([cell.desks[1].teacher, cell.desks[1].manualTeacher]).toEqual(['倉島', true])
+      expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere').map((note) => note.studentName)).toEqual(['倉島'])
+      expectFixpoint(saved.nextWeeks, saved.nextPendingDesks, rows, saved.addedSuppressedRegularLessonOccurrences)
+    })
   })
 
 })
