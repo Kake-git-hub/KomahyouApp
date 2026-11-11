@@ -15,6 +15,8 @@ describe('parseArgs / validateArgs', () => {
     // 台本 e(出欠)は a の前(付けた出欠記録のコマにテンプレ保存が生徒を置き直さないかを a で見る)。
     // 台本 f(講師の移動・入れ替え・休み)は e のあと・a の前(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも見える)。
     expect(options.scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd'])
+    // 台本 g は既定の並びに入れない(所要時間がオーナー決定を超えて決め直し待ち・2026-11-11 の裁定)。
+    expect(options.scenarios).not.toContain('g')
     expect(options.moves).toBe(6)
     expect(options.seed).toBe(1)
     expect(options.random).toBe(0)
@@ -49,6 +51,10 @@ describe('parseArgs / validateArgs', () => {
     expect(parseArgs([...OUT, '--scenario', 'd']).scenarios).toEqual(['boot', 'd'])
     expect(validateArgs(parseArgs([...OUT, '--scenario', 'e']))).toEqual([])
     expect(parseArgs([...OUT, '--scenario', 'e']).scenarios).toEqual(['boot', 'e'])
+    // 台本 g(休日設定と解除・丸ごと振替)は既定では流れない。--scenario で挙げたときだけ(全部＋g は c,b,e,f,a,d,g)。
+    expect(validateArgs(parseArgs([...OUT, '--scenario', 'g']))).toEqual([])
+    expect(parseArgs([...OUT, '--scenario', 'g']).scenarios).toEqual(['boot', 'g'])
+    expect(parseArgs([...OUT, '--scenario', 'c,b,e,f,a,d,g']).scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd', 'g'])
     expect(validateArgs(parseArgs([...OUT, '--moves', 'abc'])).join('\n')).toContain('--moves')
     expect(validateArgs(parseArgs([...OUT, 'stray'])).join('\n')).toContain('stray')
   })

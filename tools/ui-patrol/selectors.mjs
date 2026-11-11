@@ -22,7 +22,14 @@ export const TESTIDS = {
   // 台本 f(講師の移動・入れ替え・休み): 盤面の講師メニューの「休み」／「休みを解除する(講師名)」と、講師を生徒のいる机へ落としたときに選ぶ画面(ScheduleBoardScreen.tsx)。
   teacherRestButton: 'teacher-rest-button', teacherSeatMoveModal: 'teacher-seat-move-modal',
   teacherSeatMoveTeacher: 'teacher-seat-move-teacher-button', teacherSeatMoveSeat: 'teacher-seat-move-seat-button', teacherSeatMoveCancel: 'teacher-seat-move-cancel-button',
+  // 台本 g(休日設定と解除・丸ごと振替): 日付の見出しを押して出るメニューのボタンと、丸ごと振替の振替先を選ぶ状態の帯(取り消し)・断りの画面(ScheduleBoardScreen.tsx)。
+  dayHeaderMenuHoliday: 'day-header-menu-holiday', dayHeaderMenuTransfer: 'day-header-menu-transfer', dayHeaderMenuTransferRelease: 'day-header-menu-transfer-release',
+  wholeDayTransferBanner: 'whole-day-transfer-banner', wholeDayTransferCancel: 'whole-day-transfer-cancel',
+  wholeDayTransferBlockedModal: 'whole-day-transfer-blocked-modal', wholeDayTransferBlockedClose: 'whole-day-transfer-blocked-close-button',
 }
+
+/** testid の無い要素(class で待つ)。日付のメニュー(div.day-header-menu)とその外側(押すと閉じる)。selectors.test.mjs が className の字面を見張る。 */
+export const CLASS_SELECTORS = { dayHeaderMenu: '.day-header-menu', dayHeaderMenuBackdrop: '.day-header-menu-backdrop' }
 
 /** prop で渡して付く testid(ソースには data-testid="…" の字面で残らない・selectors.test.mjs が別に見張る)。選択の取り消し(AppMenu の actionButtonTestId)。 */
 export const PROP_TESTIDS = { cancelSelection: 'cancel-selection-button' }
@@ -32,8 +39,8 @@ export const SEARCHABLE_SELECT_TESTIDS = { templateAddStudent: 'template-add-stu
 
 // student-cell-{cellId}-{deskIndex}-{studentIndex}(BoardGrid.tsx)・week-jump-day-{dateKey}(BoardToolbar.tsx)
 // makeup-stock-entry-{生徒キー__- の記号を - に}・stock-origin-item-{振替元の並び}(ScheduleBoardScreen.tsx の未消化振替の一覧)
-// teacher-rest-{cellId}-{deskIndex}(BoardGrid.tsx の講師欄のグレーの「休」)
-export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-', teacherRest: 'teacher-rest-' }
+// teacher-rest-{cellId}-{deskIndex}(BoardGrid.tsx の講師欄のグレーの「休」)・day-header-{dateKey}(BoardGrid.tsx の日付の見出し)
+export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-', teacherRest: 'teacher-rest-', dayHeader: 'day-header-' }
 
 export const SOURCE_FILES_WITH_TESTIDS = [
   'src/components/schedule-board/BoardToolbar.tsx',
@@ -53,6 +60,7 @@ export const studentCellTestId = ({ cellId, deskIndex, seat }) => `${TESTID_PREF
 export const teacherCellTestId = ({ cellId, deskIndex }) => `${TESTID_PREFIXES.teacherCell}${cellId}-${deskIndex}`
 export const studentNameTestId = ({ cellId, deskIndex, seat }) => `${TESTID_PREFIXES.studentName}${cellId}-${deskIndex}-${seat}`
 export const weekJumpDayTestId = (dateKey) => `${TESTID_PREFIXES.weekJumpDay}${dateKey}`
+export const dayHeaderTestId = (dateKey) => `${TESTID_PREFIXES.dayHeader}${dateKey}`
 // 未消化振替の一覧の生徒の行: 行の鍵は `${生徒キー}__-`(生徒ごとにまとめた行・makeupStockEntries)、testid は英数字・_・- 以外を - に直す(アプリと同じ)。
 export const makeupStockEntryTestId = (stockStudentKey) => `${TESTID_PREFIXES.makeupStockEntry}${`${stockStudentKey}__-`.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 export const byTestId = (testId) => `[data-testid="${testId}"]`

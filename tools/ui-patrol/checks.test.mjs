@@ -9,6 +9,8 @@ import {
   checkAttendanceApplied,
   checkAttendanceRecordsHold,
   checkAuditNotWorse,
+  checkHolidayApplied,
+  checkHolidayRoundTrip,
   checkManualInputsNotLost,
   checkManualStudentsKeepTeacher,
   checkOutsideAllowedRange,
@@ -20,6 +22,7 @@ import {
   checkTemplateEditSaved,
   checkTeacherCellIntegrity,
   checkTeacherOpApplied,
+  checkWholeDayTransferApplied,
   parseAnnouncedOrphanedMakeupCount,
   parsePendingCountFromConfirm,
   summarizeChanges,
@@ -88,7 +91,8 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   for (const code of ['stock-delta-mismatch', 'attendance-not-applied', 'attendance-blocked', 'attendance-record-overridden']) expect(PATROL_FINDING_CODES).toContain(code)
   // 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)と講師のコマの点検
   for (const code of ['teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked']) expect(PATROL_FINDING_CODES).toContain(code)
-  expect(PATROL_FINDING_CODES).toHaveLength(34)
+  // 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目)の 4 つ
+  expect(PATROL_FINDING_CODES).toHaveLength(41)
 })
 
 describe('変わってよい範囲', () => {
@@ -786,5 +790,165 @@ describe('台本 f(講師の移動・入れ替え・休み)の点検', () => {
     const kept = checkTeacherOpApplied(substituted, placedKeptRest, placeOp)
     expect(codes(kept)).toEqual(['stop:teacher-op-not-applied'])
     expect(kept[0].message).toContain('休みの記録')
+  })
+})
+
+// ── 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目)
+describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
+  const H = '2026-11-19' // 木曜
+  const T = '2026-11-26' // 翌週の木曜(丸ごと振替の振替先)
+  const holidayRecord = (overrides = {}) => status({ dateKey: H, status: 'holiday', ...overrides })
+  const movedRecord = (overrides = {}) => status({ dateKey: H, status: 'moved', ...overrides })
+  const g = (cells, board) => collectBoardFacts(payload(cells, { board }))
+
+  it('所見の種類: 日付の操作が効かない(stop)・解除で元に戻らない(stop)・アプリが断った(info)・丸ごと振替でできた休みの講師(info)', () => {
+    for (const code of ['day-op-not-applied', 'round-trip-not-restored', 'day-op-blocked', 'teacher-rested-present-by-whole-day-transfer', 'holiday-memo-dropped', 'holiday-release-suppression-changed', 'holiday-teacher-dropped']) expect(PATROL_FINDING_CODES).toContain(code)
+  })
+
+  it('休日設定: その日の席が空になり、居た生徒ごとに同じ机へ「休)」の記録(holiday)が付けば所見なし。席に残る・記録が付かないは stop day-op-not-applied', () => {
+    const before = g([cell(H, 3, [desk('d1', [student({ origin: 'template' }), studentB({ origin: 'template' })], { teacher: '講師A' })])])
+    const after = g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [holidayRecord(), holidayRecord({ id: 'st2', studentId: 'e2', name: '生徒B', managedStudentId: 's2' })] })])])
+    expect(checkHolidayApplied(before, after, H)).toEqual([])
+    // 生徒が席に残った
+    const stayed = g([cell(H, 3, [desk('d1', [student({ origin: 'template' }), null], { teacher: '講師A', statusSlots: [null, holidayRecord({ id: 'st2', studentId: 'e2', name: '生徒B', managedStudentId: 's2' })] })])])
+    const found = checkHolidayApplied(before, stayed, H)
+    expect(codes(found)).toContain('stop:day-op-not-applied')
+    expect(found.map((finding) => finding.message).join('\n')).toContain('s1')
+    // 記録が付かない(生徒が消えただけ)
+    expect(codes(checkHolidayApplied(before, g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A' })])]), H))).toEqual(['stop:day-op-not-applied', 'stop:day-op-not-applied'])
+    // ほかの日の机は見ない(範囲の点検 checkOutsideAllowedRange が見る)
+    expect(checkHolidayApplied(before, after, '2026-11-20')).toEqual([])
+  })
+
+  it('丸ごと振替: 振替先の同じ時限・同じ机・同じ席に振替元の生徒(生徒と科目)と講師が乗り、振替元の席は空・テンプレの生徒には「休)」(moved)。違えば stop day-op-not-applied', () => {
+    const before = g([
+      cell(H, 3, [desk('d1', [student({ origin: 'template' }), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [studentB({ origin: 'template' }), null], { teacher: '講師B' }), desk('t2', [null, null])]),
+    ])
+    const after = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [movedRecord(), null] }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), null], { teacher: '講師A' }), desk('t2', [null, null])]),
+    ])
+    const op = { sourceDateKey: H, targetDateKey: T }
+    expect(checkWholeDayTransferApplied(before, after, op)).toEqual([])
+    // 振替先に振替元の生徒がいない(振替先のテンプレの生徒が残った)
+    const notMoved = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [movedRecord(), null] }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [studentB({ origin: 'template' }), null], { teacher: '講師B' }), desk('t2', [null, null])]),
+    ])
+    const found = checkWholeDayTransferApplied(before, notMoved, op)
+    expect(codes(found)).toContain('stop:day-op-not-applied')
+    // 振替元の席に生徒が残った・「休)」が無い
+    const stayed = g([
+      cell(H, 3, [desk('d1', [student({ origin: 'template' }), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), null], { teacher: '講師A' }), desk('t2', [null, null])]),
+    ])
+    expect(checkWholeDayTransferApplied(before, stayed, op).map((finding) => finding.message).join('\n')).toContain('振替元の席に生徒が残った')
+    const noRest = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), null], { teacher: '講師A' }), desk('t2', [null, null])]),
+    ])
+    expect(checkWholeDayTransferApplied(before, noRest, op).map((finding) => finding.message).join('\n')).toContain('「休)」が付かない')
+    // 講師が振替元の講師になっていない
+    const wrongTeacher = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [movedRecord(), null] }), desk('d2', [null, null], { teacher: '講師B' })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), null], { teacher: '講師B' }), desk('t2', [null, null])]),
+    ])
+    expect(checkWholeDayTransferApplied(before, wrongTeacher, op).map((finding) => finding.message).join('\n')).toContain('講師')
+  })
+
+  it('解除で元に戻らない: checkSameState の round-trip-not-restored(机ごと・部分ごと)。在庫も同じコードで比べられる', () => {
+    const before = g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' })])])
+    const lost = g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A' })])])
+    expect(codes(checkSameState(before, before, 'round-trip-not-restored'))).toEqual([])
+    const found = checkSameState(before, lost, 'round-trip-not-restored')
+    expect(codes(found)).toEqual(['stop:round-trip-not-restored'])
+    expect(found[0].message).toContain('解除')
+    expect(codes(checkStockDeltas({ makeup: { 's1__数': 0 }, lecture: {} }, { makeup: { 's1__数': 1 }, lecture: {} }, {}, { code: 'round-trip-not-restored', label: '解除で在庫が元に戻らない' }))).toEqual(['stop:round-trip-not-restored'])
+  })
+
+  it('休日の解除で元に戻るか: 休日の日のメモだけが消えたのは仕様(休日のコマはメモを持ち込まない)なので info holiday-memo-dropped。ほかの違い・ほかの日のメモは stop round-trip-not-restored', () => {
+    const base = g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A', memoSlots: ['自習', null] }), desk('d2', [null, null], { memoSlots: ['予約', 'メモ'] })]), cell('2026-11-20', 3, [desk('e1', [null, null], { memoSlots: ['別の日', null] })])])
+    const memoLost = g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' }), desk('d2', [null, null])]), cell('2026-11-20', 3, [desk('e1', [null, null], { memoSlots: ['別の日', null] })])])
+    const found = checkHolidayRoundTrip(base, memoLost, H)
+    expect(codes(found)).toEqual(['info:holiday-memo-dropped', 'info:holiday-memo-dropped'])
+    expect(found[1].message).toContain('メモ 2 件')
+    expect(checkHolidayRoundTrip(base, base, H)).toEqual([])
+    // 生徒が戻らない・ほかの日のメモが消えた・メモの中身が変わった
+    const studentLost = g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null])]), cell('2026-11-20', 3, [desk('e1', [null, null])])])
+    expect(codes(checkHolidayRoundTrip(base, studentLost, H))).toEqual(['stop:round-trip-not-restored', 'info:holiday-memo-dropped', 'stop:round-trip-not-restored'])
+    const memoChanged = g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A', memoSlots: ['ちがう', null] }), desk('d2', [null, null], { memoSlots: ['予約', 'メモ'] })]), cell('2026-11-20', 3, [desk('e1', [null, null], { memoSlots: ['別の日', null] })])])
+    expect(codes(checkHolidayRoundTrip(base, memoChanged, H))).toEqual(['stop:round-trip-not-restored'])
+  })
+
+  it('休日の解除で元に戻るか: 休日の日の生徒も記録も無い机の手入力の講師が消えた・テンプレの講師に替わったのは仕様(記録の無い机は講師を持ち込まない)なので info holiday-teacher-dropped。生徒の居る机・テンプレの講師が消えたのは stop', () => {
+    const base = g([cell(H, 3, [
+      desk('d1', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' }),
+      desk('d2', [null, null], { teacher: '講師B', manualTeacher: true, teacherAssignmentSource: 'manual', memoSlots: ['自習', null] }),
+      desk('d3', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual' }),
+      desk('d4', [null, null], { teacher: '講師D' }),
+    ])])
+    const after = g([cell(H, 3, [
+      desk('d1', [null, null]),
+      desk('d2', [null, null], { teacher: '講師B' }),
+      desk('d3', [student(), null]),
+      desk('d4', [null, null]),
+    ])])
+    const found = checkHolidayRoundTrip(base, after, H)
+    expect(codes(found)).toEqual(['info:holiday-teacher-dropped', 'info:holiday-teacher-dropped', 'info:holiday-memo-dropped', 'stop:round-trip-not-restored', 'stop:round-trip-not-restored'])
+    expect(found[0].message).toContain('講師A')
+  })
+
+  it('休日の解除で元に戻るか: その日の抑止キーの出入り(席へ戻した授業の鍵を外す・戻せなかった授業の鍵を積む)は仕様なので info。ほかの日の鍵・ほかの部分の違いは stop', () => {
+    const board = (keys, extra = {}) => g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' })])], { suppressedRegularLessonOccurrences: keys, ...extra })
+    const base = board(['s1__数__2026-11-19__3', 's9__英__2026-11-12__2'])
+    const found = checkHolidayRoundTrip(base, board(['s9__英__2026-11-12__2', 's2__英__2026-11-19__5']), H)
+    expect(codes(found)).toEqual(['info:holiday-release-suppression-changed'])
+    expect(found[0].message).toContain('外れた 1')
+    expect(found[0].message).toContain('増えた 1')
+    // ほかの日の鍵が外れた
+    expect(codes(checkHolidayRoundTrip(base, board(['s1__数__2026-11-19__3']), H))).toEqual(['stop:round-trip-not-restored'])
+    // 台帳(振替元)が違う
+    expect(codes(checkHolidayRoundTrip(base, board(['s1__数__2026-11-19__3', 's9__英__2026-11-12__2'], { manualMakeupAdjustments: { 's1__数': [{ dateKey: '2026-10-19' }] } }), H))).toEqual(['stop:round-trip-not-restored'])
+  })
+
+  it('丸ごと振替: 振替先の手入力(振替元の席と重ならない)は残る(D\' で置いた手入力は残す・§9-20)', () => {
+    const before = g([
+      cell(H, 3, [desk('d1', [student({ origin: 'template' }), null], { teacher: '講師A' })]),
+      cell(T, 3, [desk('t1', [studentB({ origin: 'template' }), makeupA({ id: 'm1', managedStudentId: 's9', name: '生徒C' })], { teacher: '講師B' })]),
+    ])
+    const after = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [movedRecord(), null] })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), makeupA({ id: 'm1', managedStudentId: 's9', name: '生徒C' })], { teacher: '講師A' })]),
+    ])
+    expect(checkWholeDayTransferApplied(before, after, { sourceDateKey: H, targetDateKey: T })).toEqual([])
+    const manualLost = g([
+      cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [movedRecord(), null] })]),
+      cell(T, 3, [desk('t1', [makeupA({ origin: 'template', makeupSourceDate: H }), null], { teacher: '講師A' })]),
+    ])
+    expect(codes(checkWholeDayTransferApplied(before, manualLost, { sourceDateKey: H, targetDateKey: T }))).toEqual(['stop:day-op-not-applied'])
+  })
+
+  it('在庫の増減: ignore に入れた鍵(数え方が別の決まりの生徒)は比べない。ほかの鍵は今までどおり', () => {
+    const before = { makeup: { 's1__数': 0, 's2__英': 0 }, lecture: { 's3__数__winter': 2, 's4__英__winter': 1 } }
+    const after = { makeup: { 's1__数': 1, 's2__英': 5 }, lecture: { 's3__数__winter': 9, 's4__英__winter': 1 } }
+    const ignore = { makeup: new Set(['s2__英']), lecturePrefixes: ['s3__'] }
+    expect(checkStockDeltas(before, after, { makeup: { 's1__数': 1 } }, { ignore })).toEqual([])
+    expect(codes(checkStockDeltas(before, after, { makeup: { 's1__数': 1 } }))).toEqual(['stop:stock-delta-mismatch', 'stop:stock-delta-mismatch'])
+    // ignore に無い鍵のずれは止める
+    expect(codes(checkStockDeltas(before, { ...after, lecture: { ...after.lecture, 's4__英__winter': 3 } }, { makeup: { 's1__数': 1 } }, { ignore }))).toEqual(['stop:stock-delta-mismatch'])
+  })
+
+  it('丸ごと振替でできた「休みの記録があるコマにその講師が居る」は知らせるだけ(restedPresentAsInfo)。同じ講師が 1 コマに 2 机は止める', () => {
+    const teachers = [{ id: 't1', name: '講師A' }, { id: 't2', name: '講師B' }]
+    const tf = (desks) => collectBoardFacts({ ...payload([cell(T, 3, desks)]), teachers })
+    const clean = tf([desk('t1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('t2')])
+    const rested = tf([desk('t1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('t2', [null, null], { teacher: '講師A' })])
+    const found = checkTeacherCellIntegrity(clean, rested, { restedPresentAsInfo: true })
+    expect(codes(found)).toEqual(['info:teacher-rested-present-by-whole-day-transfer'])
+    expect(found[0].message).toContain('丸ごと振替')
+    expect(found[0].message).toContain('講師A')
+    const duplicated = tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2', [null, null], { teacher: '講師B' })])
+    expect(codes(checkTeacherCellIntegrity(tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2')]), duplicated, { restedPresentAsInfo: true }))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
   })
 })

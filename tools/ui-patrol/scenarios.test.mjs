@@ -6,6 +6,7 @@ import {
   ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
   TEACHER_OPS, buildTeacherOpAllowedChange, collectRestReleasedDeskKeys, isTeacherInCell, pickTeacherPlan,
+  HOLIDAY_ALLOWED_SECTIONS, HOLIDAY_RELEASE_ALLOWED_SECTIONS, WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, mondayOf, summarizeSectionDiff,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
@@ -14,6 +15,7 @@ import { resolveNextMondayDateKey } from '../../src/components/schedule-board/te
 import * as templateEditModule from './templateEdit.ts'
 import { isActiveOnDate } from '../../src/components/basic-data/basicDataModel.ts'
 import { findMakeupOriginLabel } from './stock.ts'
+import * as dayOpsModule from './dayOps.ts'
 
 const WEEK = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']
 const TODAY = '2026-11-17'
@@ -942,5 +944,215 @@ describe('runClassroomPatrol(台本 f のつなぎ)', () => {
     expect(report.aborted).toMatch(/^f: /)
     const order = (await runF(fPayload(), { scenarios: ['boot', 'a', 'f'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
     expect(order.indexOf('f')).toBeLessThan(order.indexOf('a'))
+  })
+})
+
+// ── 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目)
+describe('台本 g(日付の操作)の範囲', () => {
+  it('変わってよい部分は盤面の事実が知っている名前だけ。休日は教室設定(休日の日付)と在庫の台帳、解除は抑止キーも、丸ごと振替は抑止キー(組の鍵)だけ', () => {
+    for (const name of [...HOLIDAY_ALLOWED_SECTIONS, ...HOLIDAY_RELEASE_ALLOWED_SECTIONS, ...WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS]) expect(BOARD_FACT_SECTIONS).toContain(name)
+    expect(HOLIDAY_ALLOWED_SECTIONS).toContain('classroomSettings.other')
+    expect(HOLIDAY_ALLOWED_SECTIONS).not.toContain('boardState.scheduleCountAdjustments')
+    expect(HOLIDAY_RELEASE_ALLOWED_SECTIONS).toContain('boardState.suppressedRegularLessonOccurrences')
+    expect(WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS).toEqual(['boardState.suppressedRegularLessonOccurrences'])
+    for (const name of ['students', 'teachers', 'regularLessons', 'classroomSettings.template']) {
+      expect([...HOLIDAY_ALLOWED_SECTIONS, ...HOLIDAY_RELEASE_ALLOWED_SECTIONS, ...WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS]).not.toContain(name)
+    }
+    expect(mondayOf('2026-11-19')).toBe('2026-11-16')
+    expect(mondayOf('2026-11-16')).toBe('2026-11-16')
+    expect(mondayOf('2026-11-22')).toBe('2026-11-16')
+  })
+})
+
+describe('summarizeSectionDiff(止めた所見の差分ファイルに部分の違いを残す)', () => {
+  it('配列は 増えた・減った要素、オブジェクトは 値の違う鍵(前と後)。40 件まで', () => {
+    expect(summarizeSectionDiff(JSON.stringify(['a', 'b', 'c']), JSON.stringify(['b', 'c', 'd']))).toEqual({ added: ['d'], removed: ['a'] })
+    // 同じ要素が 2 つになった(数で見る)
+    expect(summarizeSectionDiff(JSON.stringify(['a']), JSON.stringify(['a', 'a']))).toEqual({ added: ['a'], removed: [] })
+    expect(summarizeSectionDiff(JSON.stringify({ k1: [1], k2: [2], k3: [3] }), JSON.stringify({ k1: [1], k2: [2, 2], k4: [4] }))).toEqual({ changed: { k2: { before: [2], after: [2, 2] }, k3: { before: [3], after: null }, k4: { before: null, after: [4] } } })
+    expect(summarizeSectionDiff('null', JSON.stringify(['x']))).toEqual({ added: ['x'], removed: [] })
+    const many = summarizeSectionDiff(JSON.stringify([]), JSON.stringify(Array.from({ length: 50 }, (_, index) => `k${index}`)))
+    expect(many.added).toHaveLength(40)
+    expect(many.more).toBe(10)
+    // 大きい値(テンプレなど)は長さだけ
+    const big = summarizeSectionDiff(JSON.stringify({ t: 'x' }), JSON.stringify({ t: 'y'.repeat(5000) }))
+    expect(big.changed.t.after).toEqual({ clipped: true, length: 5002 })
+  })
+})
+
+describe('runClassroomPatrol(台本 g のつなぎ)', () => {
+  /** 偽の在庫: boardState.__stock(盤面の事実の部分に入らない名前)をそのまま読む。 */
+  const fakeStock = (payload) => ({ makeup: { ...(payload.boardState.__stock?.makeup ?? {}) }, lecture: { ...(payload.boardState.__stock?.lecture ?? {}) }, makeupRows: [] })
+  const appG = { ...app, ...dayOpsModule, collectStockBalances: (payload) => fakeStock(payload) }
+  const cellsOn = (payload, dateKey) => payload.boardState.weeks.flat().filter((item) => item.dateKey === dateKey)
+  const bump = (payload, key, delta) => {
+    const stock = payload.boardState.__stock ?? { makeup: {}, lecture: {} }
+    stock.makeup = { ...stock.makeup, [key]: (stock.makeup[key] ?? 0) + delta }
+    if (stock.makeup[key] === 0) delete stock.makeup[key]
+    payload.boardState.__stock = stock
+  }
+  const record = (entry, boardCell, status) => ({ id: `${entry.id}_${status}`, studentId: entry.id, name: entry.name, managedStudentId: entry.managedStudentId, subject: entry.subject, lessonType: entry.lessonType, status, dateKey: boardCell.dateKey, slotNumber: boardCell.slotNumber })
+
+  /** 休日設定・解除・丸ごと振替・解除を盤面へ当てる偽のアプリ。broken で壊し方を作る。 */
+  function makeDayDriver(payload, broken = {}) {
+    const fake = makeFakeDriver(payload, {})
+    const ops = []
+    let transferSource = null
+    let targetAttempts = 0
+    const commit = (next, status) => { fake.state.undo.push(fake.state.payload); fake.state.redo = []; fake.state.payload = next; fake.state.status = `${status} ${ops.length}`; return { status: fake.state.status, blocked: '' } }
+    const setHoliday = (dateKey) => {
+      const next = clone(fake.state.payload)
+      next.boardState.__stash = { ...(next.boardState.__stash ?? {}), [`holiday:${dateKey}`]: clone(cellsOn(next, dateKey)) }
+      for (const boardCell of cellsOn(next, dateKey)) {
+        boardCell.isOpenDay = false
+        for (const item of boardCell.desks) {
+          const slots = item.lesson?.studentSlots ?? [null, null]
+          item.statusSlots = slots.map((entry) => (entry ? record(entry, boardCell, 'holiday') : null))
+          for (const entry of slots) if (entry && !broken.holidayNoStock) bump(next, `${entry.managedStudentId}__${entry.subject}`, broken.holidayDoubleStock ? 2 : 1)
+          item.lesson = { ...item.lesson, studentSlots: [null, null] }
+        }
+      }
+      next.classroomSettings.holidayDates = [...next.classroomSettings.holidayDates, dateKey]
+      return commit(next, '休日に設定しました')
+    }
+    const releaseHoliday = (dateKey) => {
+      const next = clone(fake.state.payload)
+      const stashed = next.boardState.__stash[`holiday:${dateKey}`]
+      for (const week of next.boardState.weeks) week.forEach((boardCell, index) => {
+        const original = stashed.find((item) => item.id === boardCell.id)
+        if (original) week[index] = clone(original)
+      })
+      for (const item of stashed) for (const target of item.desks) for (const entry of target.lesson?.studentSlots ?? []) if (entry && !broken.releaseKeepsStock) bump(next, `${entry.managedStudentId}__${entry.subject}`, -1)
+      next.classroomSettings.holidayDates = next.classroomSettings.holidayDates.filter((value) => value !== dateKey)
+      return commit(next, '休日を解除しました')
+    }
+    const transfer = (sourceDateKey, targetDateKey) => {
+      const next = clone(fake.state.payload)
+      next.boardState.__stash = { ...(next.boardState.__stash ?? {}), [`pair:${sourceDateKey}`]: clone([...cellsOn(next, sourceDateKey), ...cellsOn(next, targetDateKey)]) }
+      for (const sourceCell of cellsOn(next, sourceDateKey)) {
+        const targetCell = cellsOn(next, targetDateKey).find((item) => item.slotNumber === sourceCell.slotNumber)
+        sourceCell.desks.forEach((item, deskIndex) => {
+          const slots = item.lesson?.studentSlots ?? [null, null]
+          targetCell.desks[deskIndex].teacher = item.teacher
+          targetCell.desks[deskIndex].lesson = { id: `pair-${deskIndex}`, studentSlots: slots.map((entry) => (entry ? { ...entry, lessonType: 'makeup', makeupSourceDate: sourceDateKey } : null)) }
+          item.statusSlots = slots.map((entry) => (entry ? record(entry, sourceCell, 'moved') : null))
+          item.lesson = { ...item.lesson, studentSlots: [null, null] }
+        })
+      }
+      if (broken.transferMovesStock) bump(next, 'sT__数', 1)
+      next.boardState.suppressedRegularLessonOccurrences = [...(next.boardState.suppressedRegularLessonOccurrences ?? []), `WHOLE_DAY_PAIR__${sourceDateKey}__${targetDateKey}__0`]
+      return commit(next, '丸ごと振替しました')
+    }
+    const releaseTransfer = () => {
+      const next = clone(fake.state.payload)
+      const key = (next.boardState.suppressedRegularLessonOccurrences ?? []).find((item) => item.startsWith('WHOLE_DAY_PAIR__'))
+      const sourceDateKey = key.split('__')[1]
+      const stashed = next.boardState.__stash[`pair:${sourceDateKey}`]
+      for (const week of next.boardState.weeks) week.forEach((boardCell, index) => {
+        const original = stashed.find((item) => item.id === boardCell.id)
+        if (!original) return
+        if (broken.transferReleaseNotRestored && boardCell.dateKey === sourceDateKey) return
+        week[index] = clone(original)
+      })
+      next.boardState.suppressedRegularLessonOccurrences = next.boardState.suppressedRegularLessonOccurrences.filter((item) => item !== key)
+      return commit(next, '丸ごと振替を解除しました')
+    }
+    Object.assign(fake.driver, {
+      chooseDayMenuItem: async (_session, dateKey, item) => {
+        ops.push({ kind: 'menu', dateKey, item })
+        if (item === 'holiday') return setHoliday(dateKey)
+        if (item === 'transfer') { transferSource = dateKey; fake.state.status = `振替元 ${dateKey} を選択`; return { status: fake.state.status, blocked: '' } }
+        if (item === 'transfer-release') return releaseTransfer()
+        return { missing: true, status: fake.state.status }
+      },
+      clickDayHeader: async (_session, dateKey) => {
+        ops.push({ kind: 'header', dateKey })
+        if (transferSource) {
+          const source = transferSource
+          transferSource = null
+          targetAttempts += 1
+          if (broken.blockFirstTarget && targetAttempts === 1) { transferSource = source; fake.state.status = '振替先に手入力'; return { status: fake.state.status, blocked: '振替先に手入力があるため丸ごと振替できません。' } }
+          return transfer(source, dateKey)
+        }
+        return releaseHoliday(dateKey)
+      },
+      cancelWholeDayTransfer: async () => { transferSource = null; fake.state.status = 'キャンセル'; return true },
+    })
+    return { ...fake, ops }
+  }
+
+  // 木曜 4 日(11/19・11/26・12/3・12/10)に同じ形のコマ。金曜 11/20 は休日の候補(振替先の候補でない日)。
+  const gPayload = () => patrolPayload([
+    ...['2026-11-19', '2026-11-26', '2026-12-03', '2026-12-10'].map((dateKey, index) => cell(dateKey, 3, [
+      desk(`a${index}`, '講師A', [student(`e${index}a`, `s${index}a`, 'regular', { origin: 'template' }), null]),
+      desk(`b${index}`, '講師B', [student(`e${index}b`, `s${index}b`, 'regular', { origin: 'template' }), null]),
+      desk(`c${index}`, ''),
+    ])),
+    cell('2026-11-20', 2, [desk('f0', '講師C', [student('ef', 'sF', 'regular', { origin: 'template' }), student('eg', 'sG', 'regular', { origin: 'template' })])]),
+  ])
+
+  async function runG(payload, { broken, scenarios = ['boot', 'g'] } = {}) {
+    const fake = makeDayDriver(payload, broken)
+    const report = await runClassroomPatrol({
+      session: fake.session, app: appG, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
+      options: { scenarios, moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    return { report, fake }
+  }
+  const stopsOf = (report) => stepsOf(report, 'g').flatMap((step) => step.findings).filter((finding) => finding.level === 'stop').map((finding) => finding.code)
+
+  it('仕様どおりに効けば止める所見 0。休日設定 → 元に戻す・やり直し → 保存→読み込み直し → 解除、丸ごと振替 → 保存→読み込み直し → 解除、最後に保存→読み込み直し。日付と人数を報告に残す', async () => {
+    const { report, fake } = await runG(gPayload())
+    expect(report.aborted).toBeNull()
+    expect(stopsOf(report)).toEqual([])
+    const titles = stepsOf(report, 'g').map((step) => step.title)
+    expect(titles[0]).toContain('日付の操作の準備')
+    expect(titles.join('\n')).toContain('休日設定')
+    expect(titles.join('\n')).toContain('休日を解除')
+    expect(titles.join('\n')).toContain('丸ごと振替を解除')
+    expect(titles.at(-1)).toBe('日付の操作のあと 保存→読み込み直し')
+    expect(fake.ops.map((op) => `${op.kind}:${op.item ?? ''}`)).toEqual(['menu:holiday', 'header:', 'menu:transfer', 'header:', 'menu:transfer-release'])
+    const notes = stepsOf(report, 'g').map((step) => step.notes.join('\n')).join('\n')
+    expect(notes).toContain('2026-11-20')
+    // 丸ごと振替は木曜から別の木曜へ(同じ曜日)
+    const pair = /丸ごと振替: (\d{4}-\d{2}-\d{2}) → (\d{4}-\d{2}-\d{2})/.exec(notes)
+    expect(pair).not.toBeNull()
+    expect(new Date(`${pair[1]}T00:00:00Z`).getUTCDay()).toBe(4)
+    expect(new Date(`${pair[2]}T00:00:00Z`).getUTCDay()).toBe(4)
+    expect(pair[1]).not.toBe(pair[2])
+    // 4 週を開いてから選ぶ(アプリは週を開いたときに初めてその週を作る)
+    expect(fake.state.gotoWeeks.slice(0, 4)).toEqual(['2026-11-16', '2026-11-23', '2026-11-30', '2026-12-07'])
+  })
+
+  it('わざと壊す: 休日で在庫を戻さない・二重に戻す → stop stock-delta-mismatch／解除で在庫が戻らない → stop round-trip-not-restored', async () => {
+    expect(stopsOf((await runG(gPayload(), { broken: { holidayNoStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runG(gPayload(), { broken: { holidayDoubleStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runG(gPayload(), { broken: { releaseKeepsStock: true } })).report)).toContain('round-trip-not-restored')
+  })
+
+  it('わざと壊す: 丸ごと振替で在庫が動く → stop stock-delta-mismatch／解除で振替元へ戻さない → stop round-trip-not-restored', async () => {
+    expect(stopsOf((await runG(gPayload(), { broken: { transferMovesStock: true } })).report)).toContain('stock-delta-mismatch')
+    expect(stopsOf((await runG(gPayload(), { broken: { transferReleaseNotRestored: true } })).report)).toContain('round-trip-not-restored')
+  })
+
+  it('振替先でアプリに断られたら info に理由を残して取り消し、次の振替先を試す', async () => {
+    const { report, fake } = await runG(gPayload(), { broken: { blockFirstTarget: true } })
+    expect(stopsOf(report)).toEqual([])
+    const findings = stepsOf(report, 'g').flatMap((step) => step.findings)
+    expect(findings.map((finding) => `${finding.level}:${finding.code}`)).toContain('info:day-op-blocked')
+    // 休日の解除(11/20)のあと、振替先を 2 つ試した(1 つ目は断られた)
+    const headers = fake.ops.filter((op) => op.kind === 'header').map((op) => op.dateKey)
+    expect(headers[0]).toBe('2026-11-20')
+    expect(headers).toHaveLength(3)
+    expect(new Set(headers.slice(1)).size).toBe(2)
+    expect(fake.ops.filter((op) => op.item === 'transfer')).toHaveLength(2)
+  })
+
+  it('日付の操作の候補が無ければ中断。台本 g は既定の台本(d)のあとに流れる', async () => {
+    const { report } = await runG(patrolPayload([cell('2026-11-19', 3, [desk('a0', '講師A')])]))
+    expect(report.aborted).toMatch(/^g: /)
+    const order = (await runG(gPayload(), { scenarios: ['boot', 'g', 'c'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
+    expect(order.indexOf('g')).toBeGreaterThan(order.indexOf('c'))
   })
 })
