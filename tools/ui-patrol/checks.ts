@@ -1043,16 +1043,44 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
   const label = SAME_STATE_LABELS['round-trip-not-restored']
   const findings: PatrolFinding[] = []
   const stops: PatrolFinding[] = []
+  /** 仕様で消えた手入力の講師(生徒も記録も無い机・休日にした日)か。 */
+  const isSpecDroppedTeacher = (left: DeskFact | null | undefined, right: DeskFact | null | undefined) => Boolean(left && right
+    && left.students.every((entry) => entry === null) && left.statuses.length === 0 && left.teacherOrigin === 'manual' && !left.teacherRest && !right.teacherRest
+    && (right.teacher === '' || right.teacherOrigin === 'template'))
+  const isMemoOrTeacherOnly = (change: (typeof diff.desks)[number]) => change.fields.every((field) => field === 'memos' || field === 'teacher')
+  // 消えた手入力の講師 X の兄弟(手直し 1・B-2): 同じコマの講師が居なかった机に、X がテンプレの講師として入った分(変わったのは講師だけ)は知らせるだけ。
+  // 解除のあとテンプレの X が置かれただけで、生徒と手入力は失われていない。数は消えた X の数まで(コマ×講師で数える)。
+  // 手入力のまま別の机へ動いた・別の講師・別のコマ・生徒の居る机は止めるまま。
+  const droppedByCellTeacher = new Map<string, number>()
+  for (const change of diff.desks) {
+    const left = change.before
+    if (left && left.dateKey === dateKey && change.fields.includes('teacher') && isMemoOrTeacherOnly(change) && isSpecDroppedTeacher(left, change.after) && left.teacher) {
+      const key = `${left.cellId}\u0000${left.teacher}`
+      droppedByCellTeacher.set(key, (droppedByCellTeacher.get(key) ?? 0) + 1)
+    }
+  }
+  const takeTemplatePlacedSibling = (left: DeskFact | null | undefined, right: DeskFact | null | undefined) => {
+    if (!left || !right || left.dateKey !== dateKey || left.teacher !== '' || !right.teacher || right.teacherOrigin !== 'template' || right.teacherRest || left.teacherRest) return false
+    // 机の中身(生徒・出欠記録・メモ)は変わっていない(呼ぶ側が「変わったのは講師だけ」の机に限る)。講師なしで座っていた生徒の机にテンプレの X が戻った形も含む
+    // (緑が丘 11/11 03:00 の台本 g の形)。
+    const key = `${right.cellId}\u0000${right.teacher}`
+    const left0 = droppedByCellTeacher.get(key) ?? 0
+    if (left0 <= 0) return false
+    droppedByCellTeacher.set(key, left0 - 1)
+    return true
+  }
   for (const change of diff.desks) {
     const fact = (change.after ?? change.before)!
     const left = change.before
     const right = change.after
+    if (change.fields.length === 1 && change.fields[0] === 'teacher' && takeTemplatePlacedSibling(left, right)) {
+      findings.push({ level: 'info', code: 'holiday-teacher-template-placed', message: `休日のまま読み込み直して消えた手入力の講師が、解除のあと同じコマの講師の居なかった机にテンプレの講師として入った(上の「消えて戻らない」の兄弟・生徒と手入力は失われていない): ${placeOf(fact)} 講師 ${teacherText(right?.teacher ?? '')}(テンプレ)`, ...locationOf(fact) })
+      continue
+    }
     // 休日にした日の机で、仕様で戻らないもの(メモ・生徒も記録も無い机の手入力の講師)だけが違う机は知らせるだけ。
     const memoDropped = !change.fields.includes('memos') || (right?.memos.length ?? 0) === 0
-    const teacherDropped = !change.fields.includes('teacher') || Boolean(left && right
-      && left.students.every((entry) => entry === null) && left.statuses.length === 0 && left.teacherOrigin === 'manual' && !left.teacherRest && !right.teacherRest
-      && (right.teacher === '' || right.teacherOrigin === 'template'))
-    if (fact.dateKey === dateKey && change.fields.every((field) => field === 'memos' || field === 'teacher') && memoDropped && teacherDropped) {
+    const teacherDropped = !change.fields.includes('teacher') || isSpecDroppedTeacher(left, right)
+    if (fact.dateKey === dateKey && isMemoOrTeacherOnly(change) && memoDropped && teacherDropped) {
       if (change.fields.includes('teacher')) {
         findings.push({ level: 'info', code: 'holiday-teacher-dropped', message: `休日のまま読み込み直すと生徒の居ない机の手入力の講師は消え、解除しても戻らない(仕様・休日にした時点では残るが、再マージで休日のコマは記録のある机の講師だけ引き継ぐ): ${placeOf(fact)} 講師 ${teacherText(left?.teacher ?? '')} → ${teacherText(right?.teacher ?? '')}${right?.teacher ? '(テンプレ)' : ''}`, ...locationOf(fact) })
       }
@@ -1096,6 +1124,7 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
     ...limitDeskFindings(stops, 'stop', 'round-trip-not-restored', label),
     ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-teacher-dropped'), 'info', 'holiday-teacher-dropped', '休日のまま読み込み直すと消えて戻らない手入力の講師'),
     ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-memo-dropped'), 'info', 'holiday-memo-dropped', '休日のまま読み込み直すと消えて戻らないメモ'),
+    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-teacher-template-placed'), 'info', 'holiday-teacher-template-placed', '消えた手入力の講師がテンプレの講師として入った机'),
   ].sort((left, right) => position(left).localeCompare(position(right)))
   return [...merged, ...sectionFindings]
 }

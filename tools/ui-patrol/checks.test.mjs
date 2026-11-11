@@ -905,6 +905,38 @@ describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
     expect(found[0].message).toContain('講師A')
   })
 
+  it('休日の解除で元に戻るか: 消えた手入力の講師 X が、同じコマの講師の居なかった机にテンプレの講師として入ったのは、消えた分の兄弟なので info(手直し 1・B-2)。手で別の机へ動いた・別の講師・生徒の居る机の講師は stop のまま', () => {
+    const before = (extra = []) => g([cell(H, 3, [
+      desk('d1', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' }),
+      desk('d2', [null, null]),
+      ...extra,
+    ])])
+    // テンプレの X が講師の居なかった机に置かれただけ → 2 つとも知らせるだけ
+    const templated = g([cell(H, 3, [desk('d1', [null, null]), desk('d2', [null, null], { teacher: '講師A' })])])
+    const found = checkHolidayRoundTrip(before(), templated, H)
+    expect(codes(found)).toEqual(['info:holiday-teacher-dropped', 'info:holiday-teacher-template-placed'])
+    expect(found[1].message).toContain('講師A')
+    // 講師なしで生徒が座っていた机に、テンプレの X が戻った(生徒はそのまま) → 知らせるだけ(緑が丘 11/11 03:00 の台本 g の形)
+    const seated = (teacher) => g([cell(H, 3, [desk('d1', [null, null], teacher === 'manual' ? { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' } : {}), desk('d2', [student(), null], teacher === 'template' ? { teacher: '講師A' } : {})])])
+    expect(codes(checkHolidayRoundTrip(seated('manual'), seated('template'), H))).toEqual(['info:holiday-teacher-dropped', 'info:holiday-teacher-template-placed'])
+    // 手入力のまま別の机へ動いた → stop
+    const movedByHand = g([cell(H, 3, [desk('d1', [null, null]), desk('d2', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })])])
+    expect(codes(checkHolidayRoundTrip(before(), movedByHand, H))).toContain('stop:round-trip-not-restored')
+    // 別の講師がテンプレで入った → stop
+    const otherTeacher = g([cell(H, 3, [desk('d1', [null, null]), desk('d2', [null, null], { teacher: '講師B' })])])
+    expect(codes(checkHolidayRoundTrip(before(), otherTeacher, H))).toEqual(['info:holiday-teacher-dropped', 'stop:round-trip-not-restored'])
+    // 別のコマに入った → stop
+    const otherSlot = g([cell(H, 3, [desk('d1', [null, null]), desk('d2', [null, null])]), cell(H, 4, [desk('e1', [null, null], { teacher: '講師A' })])])
+    expect(codes(checkHolidayRoundTrip(g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' }), desk('d2', [null, null])]), cell(H, 4, [desk('e1', [null, null])])]), otherSlot, H))).toContain('stop:round-trip-not-restored')
+    // 生徒の居る机の手入力の講師が消え、その講師が空き机にテンプレで入った → 消えた方は stop・入った方も兄弟にしない(stop)
+    const withStudent = g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' }), desk('d2', [null, null])])])
+    const studentDesk = g([cell(H, 3, [desk('d1', [student(), null]), desk('d2', [null, null], { teacher: '講師A' })])])
+    expect(codes(checkHolidayRoundTrip(withStudent, studentDesk, H))).toEqual(['stop:round-trip-not-restored', 'stop:round-trip-not-restored'])
+    // 1 人消えて 2 机に入った → 1 机だけ兄弟・もう 1 机は stop
+    const twice = g([cell(H, 3, [desk('d1', [null, null]), desk('d2', [null, null], { teacher: '講師A' }), desk('d3', [null, null], { teacher: '講師A' })])])
+    expect(codes(checkHolidayRoundTrip(before([desk('d3', [null, null])]), twice, H))).toEqual(['info:holiday-teacher-dropped', 'info:holiday-teacher-template-placed', 'stop:round-trip-not-restored'])
+  })
+
   it('休日の解除で元に戻るか: その日の抑止キーの出入り(席へ戻した授業の鍵を外す・戻せなかった授業の鍵を積む)は仕様なので info。ほかの日の鍵・ほかの部分の違いは stop', () => {
     const board = (keys, extra = {}) => g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' })])], { suppressedRegularLessonOccurrences: keys, ...extra })
     const base = board(['s1__数__2026-11-19__3', 's9__英__2026-11-12__2'])

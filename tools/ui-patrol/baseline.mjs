@@ -14,12 +14,69 @@ export function seedFingerprint(classroomData) {
 }
 
 /**
- * 所見の突き合わせの鍵: 教室 ID・手順の name・code・dateKey・slotNumber・deskIndex・studentId・message。
+ * 所見の突き合わせの鍵: 教室 ID・手順(name・題名・同じ題名の何本目か)・code・dateKey・slotNumber・deskIndex・studentId・message。
+ * step は手順の name(文字列・古い呼び方)か { name, title, occurrence }。題名で同じ台本の中の別の手順を見分ける
+ * (第 2 段の順 2 のついで: 今までは name〔台本の記号〕だけで、移動 1 の所見が直って移動 2 に同じ文の所見が出ても「前から」に数えていた)。
  * 区切りは \u0000(message に '|' が入っても別の鍵と混ざらない)。無い項目は空。
  */
-export function findingKey(classroomId, stepName, finding) {
-  return [classroomId, stepName, finding?.code, finding?.dateKey, finding?.slotNumber, finding?.deskIndex, finding?.studentId, finding?.message]
+export function findingKey(classroomId, step, finding) {
+  const stepPart = typeof step === 'object' && step !== null
+    ? [step.name, step.title ?? '', step.occurrence ?? 0].map((part) => String(part ?? '')).join('\u0001')
+    : [step, '', 0].map((part) => String(part ?? '')).join('\u0001')
+  return [classroomId, stepPart, finding?.code, finding?.dateKey, finding?.slotNumber, finding?.deskIndex, finding?.studentId, finding?.message]
     .map((part) => (part === undefined || part === null ? '' : String(part))).join('\u0000')
+}
+
+/** 教室の手順に「同じ name・題名の何本目か」を付ける(題名まで同じ手順を見分ける)。 */
+function identifySteps(steps) {
+  const counts = new Map()
+  return (steps ?? []).map((step) => {
+    const id = `${step.name}\u0001${step.title ?? ''}`
+    const occurrence = counts.get(id) ?? 0
+    counts.set(id, occurrence + 1)
+    return { step, identity: { name: step.name, title: step.title ?? '', occurrence } }
+  })
+}
+
+/**
+ * 比べる条件(--baseline の突き合わせ・報告の conditions に記録する)。台本は流れる順(SCENARIO_ORDER)にそろえる。
+ * backupKey はデータの時点(--seed-file なら 'seed-file')・today は JST の今日(台本は来週の月曜などを今日から決める)。
+ */
+const SCENARIO_ORDER = ['boot', 'c', 'b', 'e', 'f', 'a', 'd', 'g', 'h']
+export function buildPatrolConditions(options, { backupKey = '', today = '' } = {}) {
+  const order = (name) => { const index = SCENARIO_ORDER.indexOf(name); return index === -1 ? SCENARIO_ORDER.length : index }
+  return {
+    scenarios: [...new Set(options.scenarios ?? [])].sort((a, b) => order(a) - order(b)),
+    moves: options.moves, seed: options.seed, random: options.random,
+    backupKey, today, classrooms: [...(options.classrooms ?? [])],
+  }
+}
+
+const isRealBackupKey = (key) => typeof key === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}$/.test(key)
+
+/**
+ * --baseline の報告が今回と同じ条件で流れたか。問題の文の配列(空なら比べられる)。
+ * 条件が違えば「新しい変」と「消えた変」に意味が無くなる(違う操作をしたので所見が違って当たり前)。
+ * 条件の無い報告(この版より前の道具で作った報告)は断る(取り直す)。データの時点は両方が本物の時点のときだけ比べる
+ * (--seed-file で流した側は 'seed-file'。同じデータかは checkBaselineUsable の種データの指紋が見る)。
+ * 教室は「今回の教室が比べる報告にあるか」だけ(比べる報告にだけある教室はかまわない)。
+ */
+export function checkBaselineConditions(baselineReport, current) {
+  const base = baselineReport?.conditions
+  if (!base || typeof base !== 'object') return ['比べる報告には条件(台本・移動の数・乱数の種など)が記録されていません。条件が記録されていない報告とは比べられません(同じ引数で取り直してください)。']
+  const errors = []
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const differ = (label, a, b) => errors.push(`条件が違うので比べられません: ${label}(今回 ${a}・比べる報告 ${b})。`)
+  if (!same(base.scenarios, current.scenarios)) differ('台本', (current.scenarios ?? []).join(','), (base.scenarios ?? []).join(','))
+  if (base.moves !== current.moves) differ('移動の数', current.moves, base.moves)
+  if (base.seed !== current.seed) differ('乱数の種', current.seed, base.seed)
+  if (base.random !== current.random) differ('でたらめ操作の数', current.random, base.random)
+  if (base.today !== current.today) differ('今日の日付(台本が来週の月曜などを今日から決める)', current.today, base.today)
+  if (isRealBackupKey(base.backupKey) && isRealBackupKey(current.backupKey) && base.backupKey !== current.backupKey) differ('データの時点', current.backupKey, base.backupKey)
+  const baseRooms = new Set(base.classrooms ?? [])
+  const missing = (current.classrooms ?? []).filter((id) => !baseRooms.has(id))
+  if (missing.length > 0) errors.push(`条件が違うので比べられません: 教室(今回の ${missing.join(',')} が比べる報告に無い)。`)
+  return errors
 }
 
 const roomsOf = (report) => (Array.isArray(report?.classrooms) ? report.classrooms : null)
@@ -66,33 +123,49 @@ export function compareWithBaseline(currentReport, baselineReport, { source = ''
   let resolvedStops = 0
   const classrooms = currentRooms.map((room) => {
     const base = roomsOf(baselineReport).find((item) => item.classroomId === room.classroomId)
-    // baseline の stop を鍵ごとに数える(多重集合)。残ったものが「消えた」。
-    const left = new Map()
-    const order = []
-    for (const step of base.steps) {
+    // baseline の stop を鍵ごとに数える(多重集合)。2 段で突き合わせ、どちらでも組にならなかったものが「消えた」。
+    // 1 段目=厳しい鍵(手順の題名・何本目か込み)。2 段目=台本の記号＋所見の鍵だけ(手直し 1・Important-2: 題名には候補の通し番号と種類が入るので、
+    // 変更前と今で候補の数・順がずれると、同じ場所の同じ所見が別の手順に出る。それを「新しい」に数えると誤って終了コード 1 になる)。
+    const items = []
+    const strict = new Map()
+    const loose = new Map()
+    const push = (map, key, item) => { const list = map.get(key); if (list) list.push(item); else map.set(key, [item]) }
+    for (const { step, identity } of identifySteps(base.steps)) {
       for (const finding of step.findings ?? []) {
         if (finding.level !== 'stop') continue
-        const key = findingKey(room.classroomId, step.name, finding)
-        const entry = left.get(key)
-        if (entry) entry.items.push({ step, finding })
-        else { left.set(key, { items: [{ step, finding }] }); order.push(key) }
+        const item = { step, finding, used: false }
+        items.push(item)
+        push(strict, findingKey(room.classroomId, identity, finding), item)
+        push(loose, findingKey(room.classroomId, step.name, finding), item)
       }
     }
-    const steps = (room.steps ?? []).map((step) => ({
+    const take = (map, key) => {
+      const item = (map.get(key) ?? []).find((candidate) => !candidate.used)
+      if (item) item.used = true
+      return item ?? null
+    }
+    const identified = identifySteps(room.steps)
+    // 1 段目を全部の手順で先に済ませる(同じ手順どうしの組を、別の手順の 2 段目に取られないように)。
+    const marks = identified.map(({ step, identity }) => (step.findings ?? []).map((finding) => (
+      finding.level === 'stop' && take(strict, findingKey(room.classroomId, identity, finding)) ? 'same-step' : null
+    )))
+    const steps = identified.map(({ step }, stepIndex) => ({
       ...step,
-      findings: (step.findings ?? []).map((finding) => {
+      findings: (step.findings ?? []).map((finding, findingIndex) => {
         if (finding.level !== 'stop') return finding
-        const entry = left.get(findingKey(room.classroomId, step.name, finding))
-        if (entry && entry.items.length > 0) {
-          entry.items.shift()
+        if (marks[stepIndex][findingIndex] === 'same-step') {
           carriedStops += 1
           return { ...finding, baseline: 'carried' }
+        }
+        if (take(loose, findingKey(room.classroomId, step.name, finding))) {
+          carriedStops += 1
+          return { ...finding, baseline: 'carried', baselineMatch: 'other-step' }
         }
         newStops += 1
         return { ...finding, baseline: 'new' }
       }),
     }))
-    const resolved = order.flatMap((key) => left.get(key).items.map(({ step, finding }) => ({ step: step.name, title: step.title ?? step.name, finding })))
+    const resolved = items.filter((item) => !item.used).map(({ step, finding }) => ({ step: step.name, title: step.title ?? step.name, finding }))
     resolvedStops += resolved.length
     return { ...room, steps, resolved }
   })

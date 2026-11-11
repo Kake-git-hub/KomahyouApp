@@ -87,9 +87,12 @@ export function formatPatrolReportText(report) {
   const stopText = report.baseline
     ? `変 ${summary.stop} 件(新しい ${summary.newStops}・前から ${summary.carriedStops})・消えた変 ${summary.resolvedStops} 件`
     : `変 ${summary.stop} 件`
-  const lines = [`■ 画面の自動巡回 (アプリ ${version}・データ ${report.backupKey || '不明'}): ${stopText}・知らせるだけ ${summary.info} 件・操作 ${summary.operations} 回`]
+  // --incidents の件なら見出しに件の名前と時点(件ごとの報告を並べて読んだとき、どの件か分かるように)。
+  const incidentText = report.incident ? ` [事故の日の形 ${report.incident.name}・時点 ${report.incident.key}]` : ''
+  const lines = [`■ 画面の自動巡回${incidentText} (アプリ ${version}・データ ${report.backupKey || '不明'}): ${stopText}・知らせるだけ ${summary.info} 件・操作 ${summary.operations} 回`]
+  if (report.incident?.incident) lines.push(`  事故の形: ${report.incident.incident}`)
   if (report.baseline) lines.push(`  比べた報告: ${report.baseline.source}`)
-  const stopMark = (finding) => (finding.baseline === 'new' ? '[変・新]' : finding.baseline === 'carried' ? '[変・前]' : '[変]')
+  const stopMark = (finding) => (finding.baseline === 'new' ? '[変・新]' : finding.baseline === 'carried' ? (finding.baselineMatch === 'other-step' ? '[変・前・別の手順]' : '[変・前]') : '[変]')
   for (const room of classroomsOf(report)) {
     lines.push(`■ ${room.label || room.classroomId}(${room.classroomId}・データ ${room.backupKey})`)
     for (const step of room.steps ?? []) {

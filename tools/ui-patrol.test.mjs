@@ -648,6 +648,23 @@ describe('runBrowserPatrol(repoRoot・--baseline-ref)', () => {
   })
 })
 
+describe('runBrowserPatrol(時計の固定・--incidents の件の流す日)', () => {
+  it('options.clockTime をブラウザの起動へ渡す。無ければ渡さない(今までどおり本物の時計)', async () => {
+    const launched = []
+    const deps = {
+      process: new EventEmitter(),
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => {} }),
+      launchPatrolBrowser: async (args) => { launched.push(args.clockTime); return {} },
+      closePatrolBrowser: async () => {},
+      runClassroomPatrol: async ({ classroom }) => ({ classroomId: classroom.classroomId, label: 'A', backupKey: 'k', steps: [], knownCount: 0, aborted: null }),
+    }
+    const args = (options) => ({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true, ...options }, backupKey: 'k', today: '2026-11-10', env: {}, say: () => {} })
+    await runBrowserPatrol(args({ clockTime: '2026-11-10T09:00:00+09:00' }), deps)
+    await runBrowserPatrol(args({}), deps)
+    expect(launched).toEqual(['2026-11-10T09:00:00+09:00', undefined])
+  })
+})
+
 describe('runBrowserPatrol(シグナルの時間帯)', () => {
   const baseArgs = (extra = {}) => ({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }, { classroomId: ROOM_B, label: 'B', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {}, ...extra })
   const makeProc = () => {
@@ -772,6 +789,239 @@ describe('loadApp の束ね先の後始末', () => {
       expect(readdirSync(root).sort()).toEqual(['other-old', 'ui-patrol-new'])
     } finally {
       rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ui-patrol --incidents(過去の事故の日の形を決まった一覧で流す・第 2 段の順 2)', () => {
+  let shared = null
+  const sharedApp = async () => {
+    if (!shared) shared = await loadPatrolApp()
+    return { app: shared.app, cleanup: async () => {} }
+  }
+  const okReport = (classroomIds, { stops = 0, aborted = null } = {}) => ({
+    appVersion: 'x', backupKey: 'k',
+    classrooms: classroomIds.map((classroomId) => ({
+      classroomId, label: classroomId, backupKey: 'k', knownCount: 0, aborted,
+      steps: [{ name: 'a', title: 'テンプレ保存', durationMs: 1, operations: 2, findings: Array.from({ length: stops }, (_, index) => ({ level: 'stop', code: 'outside-allowed-range', message: `変 ${index}` })), notes: [] }],
+    })),
+  })
+
+  /** 要約の文書(時点ごとの layout)・教室ファイル・最新の時点を返す偽の fetch。出た通信を数える。 */
+  function incidentFetch(layoutByKey) {
+    const calls = []
+    const fetchImpl = async (url, init = {}) => {
+      const text = decodeURIComponent(String(url))
+      calls.push({ url: text, method: init.method ?? 'GET' })
+      const summary = /workspaceAutoBackupSummaries\/([0-9T-]+)$/.exec(text)
+      if (summary) {
+        const layout = layoutByKey[summary[1]]
+        if (layout === undefined) return { ok: false, status: 404, json: async () => ({}) }
+        return { ok: true, status: 200, json: async () => ({ fields: layout ? { layout: { stringValue: layout } } : {} }) }
+      }
+      if (text.endsWith(':runQuery')) throw new Error('--incidents は最新の時点を引かない')
+      const bytes = storedSnapshot(makePayload())
+      return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }
+    }
+    return { fetchImpl, calls }
+  }
+
+  function writeList(dir, list) {
+    const file = path.join(dir, 'incidents.json')
+    writeFileSync(file, JSON.stringify(list))
+    return file
+  }
+
+  const LIST = [
+    { name: 'room-b-template', key: '2026-11-10T03-00', classrooms: [ROOM_B], incident: '教室 B のテンプレ保存の事故', scenarios: ['a', 'd'], today: '2026-11-10' },
+    { name: 'both-rooms', key: '2026-11-11T03-00', classrooms: 'all', incident: '2 校の形' },
+  ]
+
+  it('一覧の件を順に流す: 件ごとに その時点・その教室・その台本・出力は <out>/<名前>。通信は要約の GET と教室ファイルの GET だけ', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const list = writeList(dir, LIST)
+      const { fetchImpl, calls } = incidentFetch({ '2026-11-10T03-00': 'per-classroom-v1', '2026-11-11T03-00': 'per-classroom-v1' })
+      const runs = []
+      const io = collect()
+      const code = await main({ argv: ['--out', path.join(dir, 'out'), '--incidents', '--incidents-file', list, '--moves', '3'], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl, ...io }, {
+        loadApp: sharedApp, loadPlaywright: () => ({}),
+        runPatrol: async (args) => { runs.push(args); return okReport(args.seeds.map((seed) => seed.classroomId)) },
+      })
+      expect(io.err.join('')).toBe('')
+      // 流す日のある件は、その日を今日として流し(台本の来週の月曜もその日から)・ブラウザの時計もその日から始める。無い件は本物の今日
+      expect(runs[0].today).toBe('2026-11-10')
+      expect(runs[0].options.clockTime).toBe('2026-11-10T09:00:00+09:00')
+      expect(runs[1].options.clockTime).toBe('')
+      expect(runs[1].today).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(code).toBe(0)
+      expect(runs.map((run) => [run.backupKey, run.seeds.map((seed) => seed.classroomId), run.options.scenarios, run.options.out, run.options.moves])).toEqual([
+        ['2026-11-10T03-00', [ROOM_B], ['boot', 'a', 'd'], path.join(dir, 'out', 'room-b-template'), 3],
+        ['2026-11-11T03-00', [ROOM_A, ROOM_B], ['boot', 'c', 'b', 'e', 'f', 'a', 'd'], path.join(dir, 'out', 'both-rooms'), 3],
+      ])
+      expect(calls.every((call) => call.method === 'GET')).toBe(true)
+      expect(calls.filter((call) => call.url.includes('workspaceAutoBackupSummaries/'))).toHaveLength(2)
+      // 件ごとの報告: 見出しに件の名前と時点・条件と件が記録される
+      const report = JSON.parse(readFileSync(path.join(dir, 'out', 'room-b-template', 'report.json'), 'utf8'))
+      expect(report.incident).toEqual({ name: 'room-b-template', key: '2026-11-10T03-00', incident: '教室 B のテンプレ保存の事故' })
+      expect(report.conditions).toMatchObject({ scenarios: ['boot', 'a', 'd'], moves: 3, backupKey: '2026-11-10T03-00', classrooms: [ROOM_B] })
+      expect(readFileSync(path.join(dir, 'out', 'room-b-template', 'report.txt'), 'utf8')).toContain('事故の日の形 room-b-template・時点 2026-11-10T03-00')
+      // 種データは件のフォルダの下に(伏せ字のあと・元の名前は無い)
+      expect(existsSync(path.join(dir, 'out', 'room-b-template', `${ROOM_B}.seed.json`))).toBe(true)
+      const summary = readFileSync(path.join(dir, 'out', 'incidents.txt'), 'utf8')
+      expect(summary).toContain('room-b-template(時点 2026-11-10T03-00・流す日 2026-11-10): 終了コード 0')
+      expect(summary).toContain('both-rooms(時点 2026-11-11T03-00): 終了コード 0')
+      expect(JSON.parse(readFileSync(path.join(dir, 'out', 'incidents.json'), 'utf8')).exitCode).toBe(0)
+      for (const name of NAMES) {
+        expect(io.out.join('')).not.toContain(name)
+        expect(summary).not.toContain(name)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('名前で選んだ件だけ流す。どれかに変があれば 1(流せなかった件があっても 1)・変が無くどれかが流せなければ 2', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const list = writeList(dir, LIST)
+      const runWith = async (argv, layouts, stopsFor = () => 0) => {
+        const runs = []
+        const io = collect()
+        const code = await main({ argv: ['--out', path.join(dir, 'out'), '--incidents-file', list, ...argv], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl: incidentFetch(layouts).fetchImpl, ...io }, {
+          loadApp: sharedApp, loadPlaywright: () => ({}),
+          runPatrol: async (args) => { runs.push(args.backupKey); return okReport(args.seeds.map((seed) => seed.classroomId), { stops: stopsFor(args.backupKey) }) },
+        })
+        return { code, runs, io }
+      }
+      const both = { '2026-11-10T03-00': 'per-classroom-v1', '2026-11-11T03-00': 'per-classroom-v1' }
+      const only = await runWith(['--incidents', 'both-rooms'], both)
+      expect(only.runs).toEqual(['2026-11-11T03-00'])
+      expect(only.code).toBe(0)
+      // 1 件目に変・2 件目は教室別の形でない(流せない) → 1(変を 2 に隠さない)
+      const mixed = await runWith(['--incidents'], { '2026-11-10T03-00': 'per-classroom-v1', '2026-11-11T03-00': '' }, (key) => (key === '2026-11-10T03-00' ? 1 : 0))
+      expect(mixed.runs).toEqual(['2026-11-10T03-00'])
+      expect(mixed.code).toBe(1)
+      expect(mixed.io.err.join('')).toContain('教室別の形ではありません')
+      expect(mixed.io.out.join('')).toContain('both-rooms(時点 2026-11-11T03-00): 終了コード 2')
+      // 変が無く 1 件が流せない(要約が無い) → 2
+      const missing = await runWith(['--incidents'], { '2026-11-10T03-00': 'per-classroom-v1' })
+      expect(missing.code).toBe(2)
+      expect(missing.io.out.join('')).toContain('404')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('一覧に無い名前・壊れた一覧・検査に落ちる一覧は、通信の前に 2', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const fetchImpl = async () => { throw new Error('通信しない') }
+      const run = async (argv) => {
+        const io = collect()
+        const code = await main({ argv: ['--out', path.join(dir, 'out'), ...argv], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl, ...io }, { loadApp: sharedApp, loadPlaywright: () => ({}), runPatrol: async () => { throw new Error('流さない') } })
+        return { code, err: io.err.join('') }
+      }
+      const list = writeList(dir, LIST)
+      const unknown = await run(['--incidents', 'nope', '--incidents-file', list])
+      expect(unknown.code).toBe(2)
+      expect(unknown.err).toContain('nope')
+      writeFileSync(path.join(dir, 'broken.json'), '{')
+      expect((await run(['--incidents', '--incidents-file', path.join(dir, 'broken.json')])).code).toBe(2)
+      const bad = writeList(dir, [{ ...LIST[0], incident: '生徒 s091 の机' }])
+      const badResult = await run(['--incidents', '--incidents-file', bad])
+      expect(badResult.code).toBe(2)
+      expect(badResult.err).toContain('生徒・講師の ID')
+      // 一緒に指定できない引数
+      const mixed = await run(['--incidents', '--key', '2026-11-10T03-00'])
+      expect(mixed.code).toBe(2)
+      expect(mixed.err).toContain('--incidents と --key は一緒に指定できません')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('--baseline-ref と一緒に使うと、件ごとに変更前のアプリを <out>/<名前>/ に用意して比べる', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const list = writeList(dir, LIST)
+      const prepared = []
+      const runs = []
+      const io = collect()
+      const code = await main({ argv: ['--out', path.join(dir, 'out'), '--incidents', '--incidents-file', list, '--baseline-ref', 'HEAD'], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl: incidentFetch({ '2026-11-10T03-00': 'per-classroom-v1', '2026-11-11T03-00': 'per-classroom-v1' }).fetchImpl, ...io }, {
+        loadApp: sharedApp, loadPlaywright: () => ({}),
+        prepareBaselineApp: async ({ outDir }) => { prepared.push(outDir); return { appDir: path.join(outDir, 'baseline-app'), cleanup: async () => {} } },
+        // 変更前(repoRoot あり)は変 1、今回は変 0 → 消えた変 1・新しい変 0 → 0
+        runPatrol: async (args) => { runs.push([args.backupKey, Boolean(args.repoRoot)]); return okReport(args.seeds.map((seed) => seed.classroomId), { stops: args.repoRoot ? 1 : 0 }) },
+      })
+      expect(code).toBe(0)
+      expect(prepared).toEqual([path.join(dir, 'out', 'room-b-template'), path.join(dir, 'out', 'both-rooms')])
+      expect(runs).toEqual([['2026-11-10T03-00', true], ['2026-11-10T03-00', false], ['2026-11-11T03-00', true], ['2026-11-11T03-00', false]])
+      const report = JSON.parse(readFileSync(path.join(dir, 'out', 'room-b-template', 'report.json'), 'utf8'))
+      expect(report.baseline).toMatchObject({ newStops: 0, resolvedStops: 1 })
+      expect(existsSync(path.join(dir, 'out', 'room-b-template', 'baseline', 'report.json'))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 120000)
+
+  it('--incidents を付けないときは一覧を読まず、今までどおり最新の時点を引く', async () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const { fetchImpl, calls } = makeFakeFetch({ [ROOM_A]: makePayload() })
+      const io = collect()
+      const code = await main({ argv: ['--out', out, '--prepare-only', '--classroom', ROOM_A, '--incidents-file', path.join(out, 'none.json')], env: { FIRESTORE_ACCESS_TOKEN: 'dummy' }, fetchImpl, ...io }, { loadApp: sharedApp })
+      expect(code).toBe(0)
+      expect(calls.map((call) => call.method)).toEqual(['POST', 'GET'])
+      expect(existsSync(path.join(out, 'incidents.txt'))).toBe(false)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  }, 120000)
+})
+
+describe('ui-patrol --baseline の条件の突き合わせ(第 2 段の順 2 のついで)', () => {
+  const fakeApp = async () => ({ app: {}, cleanup: async () => {} })
+  const reportOf = () => ({ appVersion: 'x', backupKey: 'seed-file', classrooms: [{ classroomId: ROOM_A, label: 'A', backupKey: 'seed-file', knownCount: 0, aborted: null, steps: [{ name: 'a', title: 'テンプレ保存', durationMs: 1, operations: 2, findings: [], notes: [] }] }] })
+  async function runWith(argv, calls = []) {
+    const io = collect()
+    const code = await main({ argv, env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, {
+      loadApp: fakeApp, loadPlaywright: () => ({}), runPatrol: async (args) => { calls.push(args); return reportOf() },
+    })
+    return { code, err: io.err.join('') }
+  }
+
+  it('報告に流した条件(台本・移動の数・乱数の種・でたらめの数・データの時点・今日・教室)が入り、条件の違う報告は流す前に 2 で断る', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seed = path.join(dir, 'one.seed.json')
+      writeFileSync(seed, JSON.stringify({ actingClassroomId: ROOM_A, classrooms: [{ id: ROOM_A, data: { n: 1 } }] }))
+      const common = ['--seed-file', seed, '--classroom', ROOM_A]
+      await runWith(['--out', path.join(dir, 'base'), ...common, '--scenario', 'a', '--moves', '3'])
+      const baseline = path.join(dir, 'base', 'report.json')
+      const recorded = JSON.parse(readFileSync(baseline, 'utf8')).conditions
+      expect(recorded).toMatchObject({ scenarios: ['boot', 'a'], moves: 3, seed: 1, random: 0, backupKey: 'seed-file', classrooms: [ROOM_A] })
+      expect(recorded.today).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      // 同じ条件なら比べる
+      expect((await runWith(['--out', path.join(dir, 'same'), ...common, '--scenario', 'a', '--moves', '3', '--baseline', baseline])).code).toBe(0)
+      const calls = []
+      const differentScenario = await runWith(['--out', path.join(dir, 'x1'), ...common, '--scenario', 'a,d', '--moves', '3', '--baseline', baseline], calls)
+      expect(differentScenario.code).toBe(2)
+      expect(differentScenario.err).toContain('条件が違うので比べられません: 台本')
+      const differentMoves = await runWith(['--out', path.join(dir, 'x2'), ...common, '--scenario', 'a', '--baseline', baseline], calls)
+      expect(differentMoves.code).toBe(2)
+      expect(differentMoves.err).toContain('移動の数')
+      expect(calls).toEqual([])
+      // 条件の無い古い報告
+      const old = JSON.parse(readFileSync(baseline, 'utf8'))
+      delete old.conditions
+      writeFileSync(path.join(dir, 'old.json'), JSON.stringify(old))
+      const oldResult = await runWith(['--out', path.join(dir, 'x3'), ...common, '--scenario', 'a', '--moves', '3', '--baseline', path.join(dir, 'old.json')], calls)
+      expect(oldResult.code).toBe(2)
+      expect(oldResult.err).toContain('条件が記録されていない報告とは比べられません')
+      expect(calls).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
