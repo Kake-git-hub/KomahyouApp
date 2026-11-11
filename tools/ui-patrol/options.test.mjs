@@ -143,3 +143,46 @@ describe('--baseline / --baseline-ref(第 2 段の 2)', () => {
     expect(USAGE).toContain('--baseline-ref <')
   })
 })
+
+describe('--incidents(過去の事故の日の形・第 2 段の順 2)', () => {
+  it('既定は流さない(false)。付けたときだけ。--incidents の次がオプション・末尾なら全部(true)', () => {
+    expect(parseArgs(OUT).incidents).toBe(false)
+    expect(parseArgs([...OUT, '--incidents']).incidents).toBe(true)
+    expect(parseArgs(['--incidents', ...OUT]).incidents).toBe(true)
+    expect(parseArgs(['--incidents', ...OUT]).out).toBe('/tmp/patrol-out')
+    expect(validateArgs(parseArgs([...OUT, '--incidents']))).toEqual([])
+  })
+
+  it('名前をカンマ区切りで挙げられる', () => {
+    expect(parseArgs([...OUT, '--incidents', 'one,two']).incidents).toEqual(['one', 'two'])
+    expect(parseArgs([...OUT, '--incidents', ' one , ']).incidents).toEqual(['one'])
+  })
+
+  it('一覧の場所は --incidents-file で変えられる(既定 tools/ui-patrol-incidents.json)', () => {
+    expect(parseArgs(OUT).incidentsFile).toBe('tools/ui-patrol-incidents.json')
+    expect(parseArgs([...OUT, '--incidents', '--incidents-file', '/x/list.json']).incidentsFile).toBe('/x/list.json')
+  })
+
+  it('件が決める引数(--key・--seed-file・--classroom・--scenario)と、件ごとに比べられない --baseline・出力が混ざる --json は一緒に指定できない', () => {
+    const errorsOf = (extra) => validateArgs(parseArgs([...OUT, '--incidents', ...extra])).join('\n')
+    expect(errorsOf(['--key', '2026-11-10T03-00'])).toContain('--incidents と --key')
+    expect(errorsOf(['--classroom', 'a1', '--seed-file', '/x/1.json'])).toContain('--incidents と --seed-file')
+    expect(errorsOf(['--classroom', 'a1'])).toContain('--incidents と --classroom')
+    expect(errorsOf(['--scenario', 'a'])).toContain('--incidents と --scenario')
+    expect(errorsOf(['--baseline', '/x/r.json'])).toContain('--incidents と --baseline')
+    expect(errorsOf(['--json'])).toContain('--incidents と --json')
+    // --baseline-ref・移動の数・種・--prepare-only は一緒に使える
+    expect(validateArgs(parseArgs([...OUT, '--incidents', '--baseline-ref', 'origin/main', '--moves', '3', '--seed', '2']))).toEqual([])
+    expect(validateArgs(parseArgs([...OUT, '--incidents', '--prepare-only']))).toEqual([])
+  })
+
+  it('--incidents を付けないときの --classroom・--scenario の扱いは今までと同じ', () => {
+    expect(validateArgs(parseArgs([...OUT, '--classroom', 'a1', '--scenario', 'a']))).toEqual([])
+    expect(parseArgs([...OUT, '--classroom', 'a1']).classrooms).toEqual(['a1'])
+  })
+
+  it('USAGE に --incidents がある(既定では流さないことも)', () => {
+    expect(USAGE).toContain('--incidents')
+    expect(USAGE).toContain('既定では流さない')
+  })
+})

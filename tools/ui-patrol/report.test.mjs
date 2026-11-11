@@ -139,3 +139,15 @@ describe('baseline ありの報告(第 2 段の 2)', () => {
     expect(lines).toContain('    [変] 11/19(木) 3限 机1: 変わった')
   })
 })
+
+describe('過去の事故の日の形(--incidents)の報告の見出し', () => {
+  it('報告に incident があれば、1 行目に件の名前と時点が出る。無ければ今までどおり', () => {
+    const plain = { ...createPatrolReport({ appVersion: '1.5.731', backupKey: '2026-11-10T03-00' }), classrooms: [classroom([step()])] }
+    expect(formatPatrolReportText(plain).split('\n')[0]).toBe('■ 画面の自動巡回 (アプリ v1.5.731・データ 2026-11-10T03-00): 変 0 件・知らせるだけ 0 件・操作 2 回')
+    const withIncident = { ...plain, incident: { name: 'room1-template-save', key: '2026-11-10T03-00', incident: 'テンプレ保存の事故' } }
+    const first = formatPatrolReportText(withIncident).split('\n')[0]
+    expect(first).toContain('事故の日の形 room1-template-save')
+    expect(first).toContain('時点 2026-11-10T03-00')
+    expect(formatPatrolReportText(withIncident).split('\n')[1]).toContain('テンプレ保存の事故')
+  })
+})

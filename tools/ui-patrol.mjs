@@ -3,6 +3,8 @@
 // 自動で行い、操作のたびに点検する。流れ: 引数 → 取得 → 伏せ字 → 自己点検 3 つ → 種データの書き出し(--prepare-only はここまで)
 // → 開発用サーバー(ローカルモード) → 教室ごとにブラウザ → 台本(起動・c・b・e・f・a・d〔g・h は --scenario で挙げたときだけ〕・tools/ui-patrol/scenarios.mjs) → 報告(<out>/report.json)。
 // --seed-file を渡すと取得・伏せ字を飛ばし、伏せ字済みの種データで流す。
+// --incidents を渡すと、過去の事故の日の形の一覧(tools/ui-patrol-incidents.json・tools/ui-patrol/incidents.mjs)の件ごとに、この流れを
+// その時点・教室・台本で 1 回ずつ流す(既定では流さない・出力は <out>/<名前>/・まとめは <out>/incidents.txt)。
 //
 // ★読み取り専用・実名を残さない(本番データ保護ルール)
 //   - 本番へは Storage の GET と Firestore の :runQuery(読み取り)だけ。通信は tools/ui-patrol/fetchData.mjs の 1 か所から出る。
@@ -17,10 +19,11 @@ import path from 'node:path'
 import { isInvokedDirectly } from './invoked-directly.mjs'
 import { fetchReadonlyAccessToken } from './prod-readonly-token.mjs'
 import { decodeJsonBuffer, extractClassroomSnapshot } from './snapshot-diff.mjs'
-import { DEFAULT_CLASSROOMS, fetchClassroomBackup, fetchLatestBackupKey } from './ui-patrol/fetchData.mjs'
+import { DEFAULT_CLASSROOMS, assertBackupKeyPerClassroom, fetchClassroomBackup, fetchLatestBackupKey } from './ui-patrol/fetchData.mjs'
 import { loadPatrolApp } from './ui-patrol/loadApp.mjs'
 import { prepareBaselineApp } from './ui-patrol/baselineApp.mjs'
-import { checkBaselineUsable, compareWithBaseline, seedFingerprint } from './ui-patrol/baseline.mjs'
+import { buildPatrolConditions, checkBaselineConditions, checkBaselineUsable, compareWithBaseline, seedFingerprint } from './ui-patrol/baseline.mjs'
+import { INCIDENTS_FILE, buildIncidentRunOptions, formatIncidentsSummary, parseIncidentList, resolveIncidentsExitCode, selectIncidents } from './ui-patrol/incidents.mjs'
 import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './ui-patrol/options.mjs'
 import { buildPatrolWorkspaceSnapshot } from './ui-patrol/seed.mjs'
 import { startDevServer } from './ui-patrol/devServer.mjs'
@@ -173,6 +176,77 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     warn(`エラー: ${error.message}`)
     return 2
   }
+  const context = { env, fetchImpl, say, warn, deps }
+  if (options.incidents) return runIncidents(options, context)
+  return (await runSingle(options, context)).exitCode
+}
+
+/**
+ * --incidents: 一覧(tools/ui-patrol-incidents.json)の件を順に流す。件ごとに runSingle(時点・教室・台本は件のもの・出力は <out>/<名前>)。
+ * 一覧が読めない・名前が一覧に無いときは、通信の前に 2。件ごとの結果を <out>/incidents.txt・incidents.json にまとめる。
+ * 止めた(130)ら残りの件は流さない。全体の終了コードは resolveIncidentsExitCode(変が 2 に隠れない)。
+ */
+async function runIncidents(options, context) {
+  const { say, warn } = context
+  const file = path.isAbsolute(options.incidentsFile) ? options.incidentsFile : path.join(REPO_ROOT, options.incidentsFile || INCIDENTS_FILE)
+  let list
+  try {
+    list = JSON.parse(readFileSync(file, 'utf8'))
+  } catch (error) {
+    warn(`エラー: 事故の日の一覧を読めません(${path.basename(file)}・${error instanceof Error && error.code ? error.code : '壊れた JSON か読めないファイル'})。`)
+    return 2
+  }
+  const parsed = parseIncidentList(list)
+  if (parsed.errors.length > 0) {
+    for (const line of parsed.errors) warn(`エラー: ${line}`)
+    return 2
+  }
+  const chosen = selectIncidents(parsed.incidents, options.incidents)
+  if (chosen.errors.length > 0) {
+    for (const line of chosen.errors) warn(`エラー: ${line}`)
+    return 2
+  }
+  mkdirSync(options.out, { recursive: true })
+  const results = []
+  for (const incident of chosen.selected) {
+    const runOptions = buildIncidentRunOptions(options, incident)
+    say(`━━ 事故の日の形 ${incident.name}(時点 ${incident.key}・教室 ${incident.classrooms.map(labelOf).join('・')}・台本 ${incident.scenarios.join(',')})`)
+    say(`   ${incident.incident}`)
+    const started = Date.now()
+    let outcome
+    try {
+      outcome = await runSingle(runOptions, context)
+    } catch (error) {
+      warn(`エラー: ${error instanceof Error ? error.message : String(error)}`)
+      outcome = { exitCode: 2 }
+    }
+    const report = outcome.report ?? null
+    results.push({
+      name: incident.name, key: incident.key, classrooms: incident.classrooms, exitCode: outcome.exitCode,
+      seconds: (Date.now() - started) / 1000, headline: report ? formatPatrolReportText(report).split('\n')[0] : '', reason: outcome.reason ?? '',
+      report: report ? path.join(runOptions.out, 'report.json') : '',
+    })
+    if (outcome.exitCode === 130) break
+  }
+  const summary = formatIncidentsSummary(results)
+  writeFileSync(path.join(options.out, 'incidents.txt'), `${summary}\n`)
+  writeFileSync(path.join(options.out, 'incidents.json'), JSON.stringify({ appVersion: readAppVersion(), exitCode: resolveIncidentsExitCode(results), results }, null, 2))
+  say(summary)
+  say(`まとめ: ${path.join(options.out, 'incidents.txt')}`)
+  return resolveIncidentsExitCode(results)
+}
+
+/**
+ * 1 回の巡回(--incidents なしの今までの流れ・--incidents の 1 件)。戻り値 { exitCode, report?, reason? }。
+ * options.incident があれば(--incidents の件)、取得の前に時点が教室別の形かを確かめ、報告に件の名前と時点を入れる。
+ */
+async function runSingle(options, context) {
+  const holder = { report: null, reason: '' }
+  const exitCode = await runSingleCore(options, context, holder)
+  return { exitCode, report: holder.report, reason: holder.reason }
+}
+
+async function runSingleCore(options, { env, fetchImpl, say, warn, deps }, holder) {
   const usesSeedFiles = options.seedFiles.length > 0
   const prepareApp = deps.prepareBaselineApp ?? prepareBaselineApp
   // 前回の種データは出力先の検査が通った直後に全部消す(取得するときだけ。--seed-file は入力を消さない)。今回通った教室だけが残るので、
@@ -233,6 +307,16 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
           return 2
         }
       }
+      // --incidents の件: 決まった時点が教室別の形か(切り替えの前の時点は置き場が違って読めない)を、教室ファイルを取る前に確かめる。
+      if (options.incident) {
+        try {
+          await assertBackupKeyPerClassroom({ token, key: options.key, fetchImpl })
+        } catch (error) {
+          holder.reason = error instanceof Error ? error.message : String(error)
+          warn(`エラー: ${holder.reason}`)
+          return 2
+        }
+      }
       loaded = await loadApp()
       mkdirSync(options.out, { recursive: true })
       const key = options.key || await fetchLatestBackupKey({ token, fetchImpl })
@@ -277,13 +361,20 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
       if (!allPrepared) return 2
     }
     const fingerprints = fingerprintsOf(seeds)
-    // --baseline: 流す前に、同じデータか・中断した報告でないかを見る(違うものと比べて時間を使わない)。
+    // 報告に足すもの: 種データの指紋・流した条件(--baseline の突き合わせ)・--incidents の件(見出しに名前と時点)。
+    const conditions = buildPatrolConditions(options, { backupKey, today })
+    const decorate = (patrolReport) => {
+      const withPrints = withFingerprints(patrolReport, fingerprints)
+      if (!withPrints || typeof withPrints !== 'object' || Array.isArray(withPrints)) return withPrints
+      return { ...withPrints, conditions, ...(options.incident ? { incident: options.incident } : {}) }
+    }
+    // --baseline: 流す前に、同じ条件・同じデータか・中断した報告でないかを見る(違うものと比べて時間を使わない)。
     let baselineReport = null
     let baselineSource = ''
     if (options.baseline) {
       baselineReport = readBaselineReport(options.baseline)
       baselineSource = path.resolve(options.baseline)
-      const unusable = checkBaselineUsable(baselineReport, fingerprints)
+      const unusable = [...checkBaselineConditions(baselineReport, conditions), ...checkBaselineUsable(baselineReport, fingerprints)]
       if (unusable.length > 0) {
         for (const line of unusable) warn(`エラー: ${line}`)
         return 2
@@ -311,7 +402,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
         warn('止めました(シグナル)。報告は書き出しません。')
         return 130
       }
-      baseRun = withFingerprints(baseRun, fingerprints)
+      baseRun = decorate(baseRun)
       mkdirSync(baselineOut, { recursive: true })
       writeFileSync(path.join(baselineOut, 'report.json'), JSON.stringify(baseRun, null, 2))
       writeFileSync(path.join(baselineOut, 'report.txt'), `${formatPatrolReportText(baseRun)}\n`)
@@ -327,7 +418,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
         say('今の作業ツリーで流します…')
       }
     }
-    let report = withFingerprints(await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup }), fingerprints)
+    let report = decorate(await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup }))
     // シグナルで止めた巡回は書き出さない: 途中までの report.json・report.txt は普通の報告と見分けにくく、前回の報告を
     // 上書きして「変なし」に見えることもある(作業 5 の再レビュー)。片づけのあと exit(130) で終わる。
     if (report?.stopped) {
@@ -350,9 +441,11 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     writeFileSync(path.join(options.out, 'report.txt'), `${reportText}\n`)
     say(options.json ? JSON.stringify(report, null, 2) : reportText)
     if (!options.json) say(`報告: ${reportFile}`)
+    holder.report = report
     return resolveExitCode(report)
   } catch (error) {
-    warn(`エラー: ${error instanceof Error ? error.message : String(error)}`)
+    holder.reason = error instanceof Error ? error.message : String(error)
+    warn(`エラー: ${holder.reason}`)
     return 2
   } finally {
     if (loaded) await loaded.cleanup()

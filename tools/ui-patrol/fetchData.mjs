@@ -91,6 +91,24 @@ export async function fetchLatestBackupKey({ token, fetchImpl = fetch }) {
   return latest.key
 }
 
+/** 決まった時点の要約の文書(workspaceAutoBackupSummaries/{key})を読む GET。 */
+export function buildBackupSummaryRequest(key) {
+  return { url: `https://${FIRESTORE_HOST}/v1/projects/${PROJECT_ID}/databases/(default)/documents/workspaces/${WORKSPACE_KEY}/workspaceAutoBackupSummaries/${key}`, method: 'GET' }
+}
+
+/**
+ * 決まった時点(--incidents の件)が教室別の形(per-classroom-v1)かを確かめる。違う・要約が無いなら throw。読み取り(GET 1 回)。
+ * 教室別の形への切り替え(2026-10-30・v1.5.663)より前の時点は、教室ファイルの置き場が違うので流せない。
+ */
+export async function assertBackupKeyPerClassroom({ token, key, fetchImpl = fetch }) {
+  if (typeof key !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}$/.test(key)) throw new Error('バックアップの時点は YYYY-MM-DDTHH-mm の形で指定してください。')
+  const response = await sendReadOnly(buildBackupSummaryRequest(key), token, fetchImpl)
+  if (response.status !== 200) throw httpError(`バックアップの時点 ${key} の要約`, response.status)
+  const json = await response.json()
+  const layout = json?.fields?.layout?.stringValue ?? ''
+  if (layout !== EXPECTED_LAYOUT) throw new Error(`バックアップ(${key})は教室別の形ではありません(layout=${layout || '不明'})。`)
+}
+
 /** 教室ファイル(gzip のまま)を取る。key 省略時は最新。取った中身はメモリの中だけ。 */
 export async function fetchClassroomBackup({ token, classroomId, key, fetchImpl = fetch }) {
   const resolvedKey = key || await fetchLatestBackupKey({ token, fetchImpl })

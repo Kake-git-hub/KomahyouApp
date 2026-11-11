@@ -2,7 +2,7 @@
 // ★最重要の保証: 道具が出す通信は GET と Firestore の :runQuery への POST だけ。偽の fetch に出た通信を数えて確かめる。
 import { describe, it, expect } from 'vitest'
 import {
-  DEFAULT_CLASSROOMS, assertReadOnlyRequest, buildClassroomBackupRequest, buildLatestBackupKeyRequest, fetchClassroomBackup, parseLatestBackupKey,
+  DEFAULT_CLASSROOMS, assertBackupKeyPerClassroom, assertReadOnlyRequest, buildBackupSummaryRequest, buildClassroomBackupRequest, buildLatestBackupKeyRequest, fetchClassroomBackup, parseLatestBackupKey,
 } from './fetchData.mjs'
 
 const RUN_QUERY = 'https://firestore.googleapis.com/v1/projects/komahyouapp-prod/databases/(default)/documents/workspaces/main:runQuery'
@@ -107,5 +107,26 @@ describe('最新の時点とバックアップの取得', () => {
     await expect(fetchClassroomBackup({ token: 't', classroomId: 'c', key: '2026-11-10T23-45', fetchImpl: noContent.fetchImpl })).rejects.toThrow('204')
     const empty = makeFakeFetch({ latest: [] })
     await expect(fetchClassroomBackup({ token: 't', classroomId: 'c', fetchImpl: empty.fetchImpl })).rejects.toThrow('最新')
+  })
+})
+
+describe('決まった時点の形の確かめ(--incidents・assertBackupKeyPerClassroom)', () => {
+  const summaryUrl = (key) => `https://firestore.googleapis.com/v1/projects/komahyouapp-prod/databases/(default)/documents/workspaces/main/workspaceAutoBackupSummaries/${key}`
+  it('要約の文書を GET 1 回だけで読む(読み取り)', async () => {
+    expect(buildBackupSummaryRequest('2026-11-10T03-00')).toEqual({ url: summaryUrl('2026-11-10T03-00'), method: 'GET' })
+    const calls = []
+    const fetchImpl = async (url, init = {}) => { calls.push({ url: String(url), method: init.method ?? 'GET' }); return jsonResponse({ fields: { layout: { stringValue: 'per-classroom-v1' } } }) }
+    await expect(assertBackupKeyPerClassroom({ token: 't', key: '2026-11-10T03-00', fetchImpl })).resolves.toBeUndefined()
+    expect(calls).toEqual([{ url: summaryUrl('2026-11-10T03-00'), method: 'GET' }])
+  })
+  it('教室別の形でない(切り替えの前)・要約が無い(404)は分かる文で throw', async () => {
+    const legacy = async () => jsonResponse({ fields: {} })
+    await expect(assertBackupKeyPerClassroom({ token: 't', key: '2026-10-20T03-00', fetchImpl: legacy })).rejects.toThrow('教室別の形ではありません')
+    const missing = async () => jsonResponse({ error: { status: 'NOT_FOUND' } }, 404)
+    await expect(assertBackupKeyPerClassroom({ token: 't', key: '2026-01-01T03-00', fetchImpl: missing })).rejects.toThrow('404')
+  })
+  it('時点の形が違う値は通信の前に断る', async () => {
+    const fetchImpl = async () => { throw new Error('通信してはいけない') }
+    await expect(assertBackupKeyPerClassroom({ token: 't', key: '../x', fetchImpl })).rejects.toThrow('YYYY-MM-DDTHH-mm')
   })
 })
