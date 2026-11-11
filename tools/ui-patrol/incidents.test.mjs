@@ -80,6 +80,16 @@ describe('リポジトリの一覧(tools/ui-patrol-incidents.json)', () => {
     expect(first.today).toBe('2026-11-10')
     expect(parsed.incidents.every((item) => item.today)).toBe(true)
   })
+  it('緑が丘校 2026-11-11T03-00 の台本 g(Issue #86・#87 の日)を流す', () => {
+    const dayOps = parsed.incidents.find((item) => item.name === 'midorigaoka-2026-11-11-day-ops')
+    expect(dayOps).toBeDefined()
+    expect(dayOps.key).toBe('2026-11-11T03-00')
+    expect(dayOps.today).toBe('2026-11-11')
+    expect(dayOps.classrooms).toEqual(['KzFnOQoTFLsCxwUp1tvh'])
+    expect(dayOps.scenarios).toEqual(['boot', 'g'])
+    expect(dayOps.incident).toContain('Issue #86')
+    expect(dayOps.incident).toContain('Issue #87')
+  })
 })
 
 describe('selectIncidents(--incidents の選び方)', () => {

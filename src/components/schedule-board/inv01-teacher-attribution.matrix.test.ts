@@ -18,6 +18,7 @@ import { restDeskTeacher } from './teacherRest'
 import { packSortCellDesks, seatSortCells } from './deskSort'
 import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries } from '../../utils/scheduleViewData'
+import * as wholeDay from './wholeDayTransferPair.fixture'
 
 /**
  * INV-01 操作マトリクステスト（台帳: docs/spec-invariants.md）
@@ -1299,5 +1300,57 @@ describe('INV-01 × 手で置いた講師 X とテンプレの別の机の X の
       expect(desks.filter((desk) => !desk.teacher && (desk.lesson?.studentSlots ?? []).some(Boolean))).toEqual([])
     }
     expect(cellOf(twice)).toEqual(cellOf(once))
+  })
+})
+
+// Issue #87（2026-11-12 オーナー決定「作る前に止める」・spec-template-conflict-v2 §3・§9-28）: 丸ごと振替（第 2 版の付け替え）の作成と解除は、
+// 結果の盤面でそのコマの同じ講師が新しく 2 机になるなら作らない／解除しない。結果が 1 机に収まる形（D' 自身のテンプレの X が処分で外れる・
+// D のテンプレの X が手置きの X に譲る）は止めない。経路テストは wholeDayTransferPairTeacherUnique.test.ts。
+describe('INV-01 × 丸ごと振替の付け替え（Issue #87）: 同じ講師が 1 コマに 2 机にならない', () => {
+  const cs = wholeDay.settings({ deskCount: 3 })
+  const SLOT4 = 4
+  const base = (rows = wholeDay.ROWS) => structuredClone(wholeDay.remerge(wholeDay.buildBoard(rows, cs), rows, [], cs))
+  const putManual = (weeks: SlotCell[][], dateKey: string, deskIndex: number, teacher = '高橋', teacherId = 't4') => {
+    const desk = wholeDay.cellAt(weeks, dateKey, SLOT4).desks[deskIndex]
+    Object.assign(desk, { teacher, manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: teacherId })
+    desk.lesson = { id: `hand-${dateKey}-${deskIndex}`, studentSlots: [{ id: `trial-${dateKey}`, name: '体験生', grade: '中1', subject: '数', lessonType: 'trial', teacherType: 'normal', manualAdded: true, origin: 'manual' }, null] }
+  }
+  const count = (weeks: SlotCell[][], dateKey: string, teacher: string) => wholeDay.cellAt(weeks, dateKey, SLOT4).desks.filter((desk) => desk.teacher === teacher).length
+
+  it('作成: D の手置き X（机 2）と D\' の別の机の手置き X（机 3）→ 止まる（盤面は変わらない）', () => {
+    const weeks = base()
+    putManual(weeks, wholeDay.D, 1)
+    putManual(weeks, wholeDay.D2, 2)
+    const board = wholeDay.remerge(weeks, wholeDay.ROWS, [], cs)
+    const before = wholeDay.snapshot(board)
+    const result = wholeDay.pairOf(board, { classroomSettings: cs })
+    expect(result.status).toBe('blocked')
+    expect(wholeDay.snapshot(board)).toBe(before)
+    expect(count(board, wholeDay.D2, '高橋')).toBe(1)
+  })
+
+  it.each([
+    ['D\' 自身のテンプレの X（別の机）は処分で外れる', 'target-template'],
+    ['D のテンプレの X は D\' の手置きの X（別の机）に譲る', 'source-template'],
+  ] as const)('作成して止めない形: %s → X は 1 机（作成・再マージ 2 回とも）', (_label, shape) => {
+    const rows = shape === 'target-template' ? [...wholeDay.ROWS, wholeDay.row('r9', 't4', '', '', { slotNumber: SLOT4, startDate: wholeDay.D2 })] : wholeDay.ROWS
+    const teacher = shape === 'target-template' ? '高橋' : '佐藤'
+    const weeks = base(rows)
+    if (shape === 'target-template') putManual(weeks, wholeDay.D, 2)
+    else putManual(weeks, wholeDay.D2, 1, '佐藤', 't3')
+    const paired = wholeDay.pairedOrThrow(wholeDay.pairOf(wholeDay.remerge(weeks, rows, [], cs), { classroomSettings: cs, rows }))
+    const once = wholeDay.remerge(paired.nextWeeks, rows, paired.nextSuppressedRegularLessonOccurrences, cs, paired.nextTemplatePendingDesks)
+    const twice = wholeDay.remerge(once, rows, paired.nextSuppressedRegularLessonOccurrences, cs, paired.nextTemplatePendingDesks)
+    for (const result of [paired.nextWeeks, once, twice]) expect(count(result, wholeDay.D2, teacher)).toBe(1)
+  })
+
+  it('解除: 作成で D\' へ移した手置き X を戻す D の同じ時限の別の机に、あとから X を手で置いた → 止まる', () => {
+    const weeks = base()
+    putManual(weeks, wholeDay.D, 1)
+    const paired = wholeDay.pairedOrThrow(wholeDay.pairOf(wholeDay.remerge(weeks, wholeDay.ROWS, [], cs), { classroomSettings: cs }))
+    const later = structuredClone(paired.nextWeeks)
+    Object.assign(wholeDay.cellAt(later, wholeDay.D, SLOT4).desks[2], { teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4' })
+    const result = wholeDay.releaseOf(later, paired.nextSuppressedRegularLessonOccurrences, { classroomSettings: cs, pendingDesks: paired.nextTemplatePendingDesks })
+    expect(result.status).toBe('blocked')
   })
 })

@@ -40,7 +40,7 @@ import type { DeskCell, DeskLesson, EditedFromRegular, GradeLabel, HolidayStockR
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { buildAutoAssignResultMessage, buildHolidayReleaseResultMessage, buildWholeDayTransferResultMessage, joinResultNotes } from './boardResultMessages'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveMovedTemplateLessonSubjectFromId, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, resolveTemplateReportMode, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, resolveMovedTemplateLessonSubjectFromId, resolveTemplateLessonSubjectFromId, resolveTemplateLessonSubjectVariants, isSameTemplateStudent, studentHasManualMark, collectEditedFromRegularOccurrenceKeys, buildTemplateDiffConfirmDetail, buildTemplateDiffConfirmHeadline, buildTemplateDiffSavedHeadline, describeWholeDayTransferStockReason, formatTemplateDiffMonthDay, type TemplateDiffStudentNote, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, isTemplateManagedLesson, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, shouldSeatSurviveRemerge, stripTemplateScaffoldTeacherDesk, studentSubjectKey, TEMPLATE_DIFF_PREVIEW_BUSY_MESSAGE, buildTeacherAliasResolver, buildScheduleRegistrationSupersession, canClearDeletedTeacherTombstone, resolveSupersededQrDeskTeacherFields, doesDeletedTeacherTombstoneBlock, findQrTeacherDesksSupersededByTemplate, isTemplateDiffTeacherTombstone, isTemplateTeacherDeclinedAtDesk, isTeacherElsewhereInCell, resolveTemplateReportMode, type TeacherAliasResolver, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import { appendTemplateTransferMakeupOrigin, buildWholeDayTransferHandledKey, collectOrphanedMakeups, collectOrphanedMakeupSuppressionKeys, collectReplacedTransferSeats, extendTemplateDiffSlotFilterWithCells, planSlotChangeTransferFollow, planFullDeskDisplacement, planWholeDayTransferPlacements, removeOrphanedMakeups, removeTemplateTransferMakeupOrigin, removeMovedSourceRecordsForWithdrawnMakeups } from './templateTransferFollow'
 import { buildTemplateDefinitionDiffLines, clampTemplateEffectiveStartDateToToday, describeTemplateDiffScope, diffRegularLessonRowsBySlot, diffTemplateDefinitions, isCellInTemplateDiffScope, resolveDefaultTemplateDiffApplyScope, resolveDefaultTemplateEffectiveStartDate, resolveTemplateDiffSlotFilter, resolveTemplateSchoolYear, type TemplateDefinitionDiff, type TemplateDiffApplyScope, type TemplateDiffScopeNote, type TemplateDiffSlotFilter } from './templateDefinitionDiff'
 import {
@@ -9045,6 +9045,54 @@ function resolveWholeDayTransferPairRangeBlock(params: Pick<WholeDayTransferPair
   return null
 }
 
+/**
+ * Issue #87（INV-01・2026-11-12 オーナー決定「作る前に止める」・spec-template-conflict-v2 §3・§9-28）: 丸ごと振替の作成／解除の結果の盤面で、
+ * そのコマ（日付×時限）の同じ講師が**新しく** 2 机以上になるコマを挙げる（操作の前から 2 机だった分は数えない＝この操作が作った形だけ）。
+ * 同じ講師かは講師の一意の権威 isTeacherElsewhereInCell（表示名・講師 ID・呼び名の対応表）で見る。講師として数えるのは本物の講師の机だけ
+ * （hasRealDeskTeacher: 空欄・埋め草「講師未割当」・休みの記録だけの机〔講師欄は空〕・削除記録〔講師欄は空〕は数えない）。保留の下段の講師は数えない（INV-13）。
+ */
+export function collectNewDuplicateTeachersInCells(beforeWeeks: SlotCell[][], afterWeeks: SlotCell[][], dateKeys: readonly string[], teachers: TeacherRow[]) {
+  const aliases = buildTeacherAliasResolver(teachers)
+  const dates = new Set(dateKeys)
+  const realTeacherDesks = (cell: SlotCell | undefined) => (cell?.desks ?? []).filter((desk) => hasRealDeskTeacher(desk.teacher))
+  // 机の id に使わない値を渡す＝その机自身も数える（isTeacherElsewhereInCell は渡した id の机を除く）。
+  const countSameTeacher = (desks: DeskCell[], teacher: DeskCell) => desks.filter((desk) => isTeacherElsewhereInCell({ desks: [desk] }, '\u0000', teacher, aliases)).length
+  const beforeBySlot = new Map(beforeWeeks.flat().filter((cell) => dates.has(cell.dateKey)).map((cell) => [`${cell.dateKey}_${cell.slotNumber}`, cell]))
+  const found: Array<{ dateKey: string; slotNumber: number; teacher: string }> = []
+  for (const cell of afterWeeks.flat()) {
+    if (!dates.has(cell.dateKey)) continue
+    const desks = realTeacherDesks(cell)
+    const listed: DeskCell[] = []
+    for (const desk of desks) {
+      if (listed.some((other) => countSameTeacher([other], desk) > 0)) continue
+      const afterCount = countSameTeacher(desks, desk)
+      if (afterCount < 2) continue
+      listed.push(desk)
+      if (afterCount > countSameTeacher(realTeacherDesks(beforeBySlot.get(`${cell.dateKey}_${cell.slotNumber}`)), desk)) {
+        found.push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: desk.teacher.trim() })
+      }
+    }
+  }
+  return found.sort((left, right) => dateKeys.indexOf(left.dateKey) - dateKeys.indexOf(right.dateKey) || left.slotNumber - right.slotNumber)
+}
+
+/** Issue #87: 丸ごと振替の作成（create）／解除（release）の結果で同じ講師が 1 コマに 2 机になるなら止める理由の文。ならなければ null。dateKeys の先頭が文の主の日。 */
+function resolveWholeDayTransferPairDuplicateTeacherBlock(beforeWeeks: SlotCell[][], afterWeeks: SlotCell[][], dateKeys: [string, string], teachers: TeacherRow[], mode: 'create' | 'release'): string | null {
+  const found = collectNewDuplicateTeachersInCells(beforeWeeks, afterWeeks, dateKeys, teachers)
+  if (found.length === 0) return null
+  const [mainDateKey] = dateKeys
+  if (mode === 'release') {
+    // 手直し 1（主セッション 2026-11-12）: 解除では片方の X は振替先に居て、もう片方は室長が振替元の日にあとから置いた X。何を外せばよいかを文に出す。
+    const releaseListed = found.map((entry) => `講師 ${entry.teacher} が${entry.dateKey === mainDateKey ? '振替元' : '振替先'}の ${formatTemplateDiffMonthDay(entry.dateKey)} ${entry.slotNumber}限`)
+    const releaseWhere = `${releaseListed.slice(0, 3).join('、')}${releaseListed.length > 3 ? `（ほか ${releaseListed.length - 3} か所）` : ''}`
+    return `丸ごと振替を解除できません。${releaseWhere}に居ます（同じ講師を 2 つの机に置けません）。振替元の日に後から置いた講師を外してから、解除してください。`
+  }
+  const listed = found.map((entry) => `${entry.dateKey === mainDateKey ? '' : `${entry.dateKey} の `}${entry.slotNumber}限（講師 ${entry.teacher}）`)
+  const where = `${listed.slice(0, 3).join('・')}${listed.length > 3 ? ` ほか ${listed.length - 3} か所` : ''}`
+  // 文の形は同じ番号の机どうしの重なりで止める文（「振替先 D' の … ため丸ごと振替できません。」）にそろえる。
+  return `振替先 ${mainDateKey} の ${where}で同じ講師が 2 つの机に居る形になるため、丸ごと振替できません（同じ講師を 1 コマの 2 つの机に置けません）。どちらかの講師を片づけてからやり直してください。`
+}
+
 export function computeWholeDayTransferPair(params: WholeDayTransferPairParams): ComputeWholeDayTransferPairResult {
   const { sourceDateKey, targetDateKey } = params
   if (sourceDateKey === targetDateKey) return { status: 'blocked', message: '同じ日へは振替できません。別の日付を選んでください。' }
@@ -9161,6 +9209,10 @@ export function computeWholeDayTransferPair(params: WholeDayTransferPairParams):
   const settled = settleWholeDayTransferPairDates({ ...params, weeks: nextWeeksBase, suppressedRegularLessonOccurrences: withPair, createdAt: params.createdAt ?? new Date().toISOString() })
   const expandedStudentCount = countLiveStudentsOnDate(settled.nextWeeks, settled.nextPendingDesks, targetDateKey, isWholeDayPairExpandedStudent)
   if (expandedStudentCount === 0 && movedManualCount === 0) return { status: 'blocked', message: '振替元の日に移動できる授業がありません。' }
+  // Issue #87（INV-01・2026-11-12 オーナー決定「作る前に止める」・spec-template-conflict-v2 §3・§9-28）: 上の重なりの検査は同じ番号の机どうししか見ない。
+  // D の手置き講師 X が D' の同じ時限の別の机にも居ると、作成の結果で X が 2 机になっていた。結果の盤面（差分反映＋再マージの後）で新しく 2 机になるなら作らない。
+  const duplicateBlock = resolveWholeDayTransferPairDuplicateTeacherBlock(params.weeks, settled.nextWeeks, [targetDateKey, sourceDateKey], params.teachers, 'create')
+  if (duplicateBlock) return { status: 'blocked', message: duplicateBlock }
   return {
     status: 'transferred',
     nextWeeks: settled.nextWeeks,
@@ -9194,6 +9246,9 @@ export function computeWholeDayTransferPairRelease(params: Omit<WholeDayTransfer
   const removedTargetTemplateCount = countLiveStudentsOnDate(params.weeks, params.templatePendingDesks, pair.targetDateKey, isWholeDayPairExpandedStudent)
   const withoutPair = removeWholeDayTransferPair(params.suppressedRegularLessonOccurrences, pair)
   const settled = settleWholeDayTransferPairDates({ ...params, sourceDateKey: pair.sourceDateKey, targetDateKey: pair.targetDateKey, weeks: nextWeeksBase, suppressedRegularLessonOccurrences: withoutPair, createdAt: params.createdAt ?? new Date().toISOString() })
+  // Issue #87 の兄弟（INV-01）: 作成で移した手置き講師を D へ戻すとき、D の同じ時限の別の机にあとから同じ講師を置いていると 2 机になる。作成と同じ考えで止める。
+  const duplicateBlock = resolveWholeDayTransferPairDuplicateTeacherBlock(params.weeks, settled.nextWeeks, [pair.sourceDateKey, pair.targetDateKey], params.teachers, 'release')
+  if (duplicateBlock) return { status: 'blocked', message: duplicateBlock }
   return {
     status: 'transferred',
     nextWeeks: settled.nextWeeks,

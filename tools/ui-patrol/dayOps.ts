@@ -3,17 +3,23 @@
 // ★日付の規則はアプリの権威関数を使う(丸ごと振替の組＝wholeDayTransferPair.ts の parseWholeDayTransferPairs)。ここで規則を書き直さない。
 //   アプリが断る条件(同じ曜日・反映日・出欠記録・保留・手入力の重なり・机の数など・ScheduleBoardScreen.tsx の computeWholeDayTransferPair)の
 //   うち、盤面の事実で分かるものは先に外す(断られたら台本はアプリの文を info に残し、次の候補を試す)。
+//   盤面の事実だけでは分からない断り(振替先の同じ時限の別の机に、振替元の手置きの講師と同じ講師が居る＝作ると同じ講師が 2 机・Issue #87・
+//   2026-11-12 オーナー決定「作る前に止める」)は、ここで講師の照合を作らずにアプリに断らせ、振替先も振替元も次の候補へ進む(otherSources)。
 // ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
 import { parseWholeDayTransferPairs } from '../../src/components/schedule-board/wholeDayTransferPair'
 import type { AppSnapshotPayload } from '../../src/types/appState'
 import type { BoardFacts, DeskFact } from './boardFacts'
 
 export type HolidayPlan = { dateKey: string; studentCount: number }
-export type WholeDayTransferPlan = { sourceDateKey: string; targetDateKeys: string[]; studentCount: number }
+export type WholeDayTransferCandidate = { sourceDateKey: string; targetDateKeys: string[]; studentCount: number }
+/** 先頭の振替元と、その振替先が全部断られたときに試す次の振替元(otherSources・Issue #87)。 */
+export type WholeDayTransferPlan = WholeDayTransferCandidate & { otherSources: WholeDayTransferCandidate[] }
 export type DayOpsPlan = { holiday: HolidayPlan | null; transfer: WholeDayTransferPlan | null; skipped: string[] }
 
 /** 振替先の候補の数の上限(近い順)。アプリに断られたら次を試す。 */
 const TRANSFER_TARGET_LIMIT = 3
+/** 振替元の候補の数の上限(選んだ 1 つ＋次の候補。日付の順)。振替先が全部断られたら次の振替元を試す(Issue #87)。 */
+const TRANSFER_SOURCE_LIMIT = 3
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -99,6 +105,8 @@ function isTargetCompatible(source: DateInfo, target: DateInfo): boolean {
  * 台本 g の日付を選ぶ(random は種つきの乱数・0 以上 1 未満)。dateKeys は開いた週の日付(今日より後だけ使う)。
  * - 丸ごと振替: 振替元 D＝授業のある、前からの記録の無い日(テンプレの反映日〔templateFreezeBeforeDate〕以降)。振替先＝D と同じ曜日の別の日で、
  *   前からの記録が無く、D の授業と重なる手入力が無く(isTargetCompatible)、D の時限がそろい机の数が足りる日(近い順に 3 つまで)。振替先のある D から選ぶ。
+ *   振替先が全部アプリに断られたときのため、ほかの振替元を日付の順に 2 つまで otherSources に入れる(Issue #87: 振替元の手置きの講師が振替先の
+ *   同じ時限の別の机にも居ると、アプリは作る前に止める。毎週同じ講師を手で置いている形では同じ振替元の振替先が全部断られる)。
  * - 休日設定: D と別の、授業のある前からの記録の無い日。D の振替先の候補でない日を先に選び、無ければ候補の日も使う
  *   (休日は丸ごと振替の前に解除して元の形へ戻すので、同じ日でも混ざらない)。
  * 候補の無い操作は null にし、skipped に理由。
@@ -123,8 +131,10 @@ export function pickDayOpsPlan(params: { facts: BoardFacts; payload: AppSnapshot
     .filter((entry) => entry.targets.length > 0)
   let transfer: WholeDayTransferPlan | null = null
   if (sources.length > 0) {
-    const { info, targets } = pickOne(sources)
-    transfer = { sourceDateKey: info.dateKey, targetDateKeys: targets.map((target) => target.dateKey), studentCount: info.studentCount }
+    const picked = pickOne(sources)
+    const toCandidate = ({ info, targets }: (typeof sources)[number]): WholeDayTransferCandidate => ({ sourceDateKey: info.dateKey, targetDateKeys: targets.map((target) => target.dateKey), studentCount: info.studentCount })
+    const otherSources = sources.filter((entry) => entry !== picked).slice(0, TRANSFER_SOURCE_LIMIT - 1).map(toCandidate)
+    transfer = { ...toCandidate(picked), otherSources }
   } else if (freezeDate && usable.length > 0 && usable.every((info) => info.dateKey < freezeDate)) {
     // 例: 日大前校の形(2026-11-11)は先の反映日 2027-02-01 のテンプレが保存済みで、開いた 4 週はすべて反映日より前(computeWholeDayTransferPair が断る)。
     skipped.push(`丸ごと振替: 開いた週の日はすべてテンプレの反映日(${freezeDate})より前で、アプリの決まりで丸ごと振替できない`)

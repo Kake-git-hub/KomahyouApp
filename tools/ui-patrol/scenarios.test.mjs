@@ -1003,6 +1003,7 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     const ops = []
     let transferSource = null
     let targetAttempts = 0
+    let firstSource = null
     const commit = (next, status) => { fake.state.undo.push(fake.state.payload); fake.state.redo = []; fake.state.payload = next; fake.state.status = `${status} ${ops.length}`; return { status: fake.state.status, blocked: '' } }
     const setHoliday = (dateKey) => {
       const next = clone(fake.state.payload)
@@ -1075,6 +1076,7 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
           const source = transferSource
           transferSource = null
           targetAttempts += 1
+          if (broken.blockFirstSource && (firstSource ??= source) === source) { transferSource = source; fake.state.status = '同じ講師が 2 机'; return { status: fake.state.status, blocked: '振替先 の 4限（講師 講師A）で、同じ講師が 2 つの机に居る形になるため丸ごと振替できません。' } }
           if (broken.blockFirstTarget && targetAttempts === 1) { transferSource = source; fake.state.status = '振替先に手入力'; return { status: fake.state.status, blocked: '振替先に手入力があるため丸ごと振替できません。' } }
           return transfer(source, dateKey)
         }
@@ -1151,6 +1153,21 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     expect(headers).toHaveLength(3)
     expect(new Set(headers.slice(1)).size).toBe(2)
     expect(fake.ops.filter((op) => op.item === 'transfer')).toHaveLength(2)
+  })
+
+  it('Issue #87: 振替元の振替先が全部アプリに断られたら、次の振替元を試す(info に理由・止める所見 0・作って解除まで流れる)', async () => {
+    const { report, fake } = await runG(gPayload(), { broken: { blockFirstSource: true } })
+    expect(report.aborted).toBeNull()
+    expect(stopsOf(report)).toEqual([])
+    const steps = stepsOf(report, 'g')
+    expect(steps.flatMap((step) => step.findings).filter((finding) => finding.code === 'day-op-blocked').length).toBeGreaterThan(0)
+    const menuSources = fake.ops.filter((op) => op.item === 'transfer').map((op) => op.dateKey)
+    expect(new Set(menuSources).size).toBe(2)
+    expect(fake.ops.filter((op) => op.item === 'transfer-release')).toHaveLength(1)
+    const notes = steps.map((step) => step.notes.join('\n')).join('\n')
+    expect(notes).toContain('次の振替元を試す')
+    // 段の題は効いた振替元
+    expect(steps.map((step) => step.title)).toContain(`丸ごと振替(振替元 ${menuSources.at(-1)})`)
   })
 
   it('日付の操作の候補が無ければ中断せず飛ばす(注に理由・g だけなら終了コード 2・前の台本に変があれば 1＝変を隠さない・手直し 1 I-1)。台本 g は既定の台本(d)のあとに流れる', async () => {

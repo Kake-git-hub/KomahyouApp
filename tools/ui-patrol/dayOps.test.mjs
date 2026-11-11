@@ -42,6 +42,9 @@ describe('pickDayOpsPlan(台本 g の日付の選び方)', () => {
     expect(plan.transfer.sourceDateKey).toBe('2026-11-19')
     expect(plan.transfer.targetDateKeys).toEqual(['2026-11-26', '2026-12-03', '2026-12-10'])
     expect(plan.transfer.studentCount).toBe(3)
+    // Issue #87: 振替先が全部断られたときに試す次の振替元(日付の順に 2 つまで・選んだ振替元は入れない)。
+    expect(plan.transfer.otherSources.map((other) => other.sourceDateKey)).toEqual(['2026-11-26', '2026-12-03'])
+    expect(plan.transfer.otherSources[0].targetDateKeys).toEqual(['2026-11-19', '2026-12-03', '2026-12-10'])
     // 休日は振替元と別の日。振替先の候補でない日を先に選び、無ければ振替先の候補の日も使う(休日は丸ごと振替の前に解除する)。
     expect(plan.holiday.dateKey).toBe('2026-11-26')
     expect(plan.holiday.studentCount).toBe(3)
