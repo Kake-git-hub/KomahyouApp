@@ -20,6 +20,7 @@ const { stripTemplatePendingLowerForPdf } = await import('../../utils/pdf')
 
 const BOARD_TSX = readFileSync(fileURLToPath(new NodeURL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
 const DESK_TEACHER_ASSIGNMENT_TS = readFileSync(fileURLToPath(new NodeURL('./deskTeacherAssignment.ts', import.meta.url)), 'utf8')
+const CHECKLIST_PREP_TS = readFileSync(fileURLToPath(new NodeURL('./checklistPrep.ts', import.meta.url)), 'utf8')
 
 const CELL_ID = '2026-10-07_5'
 function boardCell(desk0: Partial<DeskCell>): SlotCell {
@@ -97,21 +98,27 @@ describe('3-1・3-5 講師欄のメニューの「休み」ボタン（ScheduleB
 })
 
 describe('§9-19 講師メニューの「保存」（手で置く経路）: 休んだ講師本人を置くと休みを解除する', () => {
-  it('講師メニューの保存が通る setManualTeacherAssignment が releaseTeacherRestIfSameTeacherPlaced を呼ぶ。D&D（computeTeacherMove）も同じ', () => {
+  it('講師メニューの保存が通る setManualTeacherAssignment がコマ全体を見る releaseTeacherRestInCellIfSameTeacherPlaced を呼ぶ（§9-25）。D&D（computeTeacherMove）・確認リストの準備も同じ', () => {
     // 2026-11-06: 書き込みは deskTeacherAssignment.ts へ切り出した（確認リストの「準備する」と共有）。盤面はそれを import して呼ぶ。
     // 出自（manual / manual-replaced）の決め方も同じファイルの resolveManualTeacherAssignmentSource を通す（regression-reviewer 権威関数の一本化）。
     expect(BOARD_TSX).toContain("import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'")
     expect(BOARD_TSX).not.toContain('function setManualTeacherAssignment(')
     const setter = DESK_TEACHER_ASSIGNMENT_TS.slice(DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function setManualTeacherAssignment('), DESK_TEACHER_ASSIGNMENT_TS.indexOf('export function resolveManualTeacherAssignmentSource('))
     // 監査 要確認-6: 呼び名の対応表（buildTeacherAliasResolver）を通す（D&D と同じ）。
-    expect(setter).toContain('releaseTeacherRestIfSameTeacherPlaced(desk, teacherAliases)')
-    expect(BOARD_TSX).toContain('setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))')
+    expect(setter).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(cell?.desks ?? [desk], desk, teacherAliases)')
+    expect(setter).not.toContain('releaseTeacherRestIfSameTeacherPlaced(')
+    // §9-25: 講師メニューの保存と確認リストの準備はコマ（机を含むセル）を渡す（渡さないと別の机の休みの記録が残る）。
+    expect(BOARD_TSX).toContain('setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers), targetCell)')
+    expect(CHECKLIST_PREP_TS).toContain('setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases, nextCell)')
+    expect(BOARD_TSX).not.toContain('releaseTeacherRestIfSameTeacherPlaced(')
     const confirm = BOARD_TSX.slice(BOARD_TSX.indexOf('const handleConfirmTeacher = () => {'), BOARD_TSX.indexOf('const handleToggleTeacherRest = () => {'))
     expect(confirm).toContain('setManualTeacherAssignment(targetDesk')
     const move = BOARD_TSX.slice(BOARD_TSX.indexOf('export function computeTeacherMove('), BOARD_TSX.indexOf('export type WholeDayTransferSummary'))
-    expect(move).toContain('releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)')
+    expect(move).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, sourceDesk, restAliases)')
+    expect(move).toContain('releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, targetDesk, restAliases)')
     // 自動配置（QR の講師・再マージ）の経路では呼ばない
     const qr = BOARD_TSX.slice(BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment('), BOARD_TSX.indexOf('function setScheduleRegistrationTeacherAssignment(') + 400)
     expect(qr).not.toContain('releaseTeacherRestIfSameTeacherPlaced')
+    expect(qr).not.toContain('releaseTeacherRestInCellIfSameTeacherPlaced')
   })
 })

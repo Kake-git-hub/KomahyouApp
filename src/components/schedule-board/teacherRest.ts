@@ -93,15 +93,34 @@ export function releaseDeskTeacherRest(desk: DeskCell): DeskCell | null {
 }
 
 /**
- * §9-19（オーナー決定 2026-11-05）: 休みの机に、休んだ講師本人を**手で**置き直したら休みを自動で解除する（記録を消す・グレーが消える・次の反映でテンプレどおり）。
- * 別の講師を置いたときは記録を残す（§2-4）。呼ぶのは講師を手で置く経路だけ（講師メニューの「保存」・講師の D&D／入れ替え）。
- * 再マージ・差分反映の自動配置では呼ばない。机をその場で書き換え、解除したら true。
+ * §9-19（オーナー決定 2026-11-05）・§9-25（オーナー決定 2026-11-11・案 1）: 講師を**手で**置いたら、そのコマ（日付×時限）にある
+ * その講師本人の休みの記録を**全部**消す（休みにした机でも、代わりの講師 Y を置いた机でも、別の机でも。グレーが消える・次の反映でテンプレどおり）。
+ * §9-19（休みにした机へ本人を置き直す）はこの特別な場合。「X は休みなのに盤面に居る」形を手の操作で作れなくする
+ * （残るとテンプレ保存の合流〔§9-23・templateDeskOrderRestore.ts〕が 1 回目と 2 回目で食い違う穴になる＝INV-03）。
+ * ★休みの数え方はこの 1 本だけ（机単位とコマ単位の 2 つを作らない）。照合は doesTeacherRestMatch（呼び名の対応表）。
+ * ★別の講師を置いたときは記録を残す（§2-4「別の講師を手で置いて上書きできる。休みの記録は残る」）。Y の机のほかの項目（Y・生徒・メモ・出欠）は触らない。
+ * ★呼ぶのは講師を手で置く経路だけ（講師メニューの「保存」と確認リストの準備＝setManualTeacherAssignment・講師の D&D／入れ替え＝computeTeacherMove・
+ *   保留の下の行の講師の採用＝computePendingTeacherChoice）。再マージ・差分反映・講習の自動割振・QR 提出の反映・丸ごと振替の付け替えでは呼ばない（休みが勝つ）。
+ * ★desks（そのコマの机の並び・置いた机を含む）の机をその場で書き換える（teacherRest を消すだけ）。呼び出し側は書き換えてよい写しを渡す。
+ *   解除の知らせは出さない（§9-25）。元に戻す（Undo）は操作の前の週データの写しを戻すので記録も戻る。1 つでも消したら true。
+ */
+export function releaseTeacherRestInCellIfSameTeacherPlaced(desks: DeskCell[], placed: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'>, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
+  if (!placed.teacher.trim()) return false
+  let released = false
+  for (const desk of desks) {
+    if (!desk.teacherRest || !doesTeacherRestMatch(desk.teacherRest, placed, aliases)) continue
+    delete desk.teacherRest
+    released = true
+  }
+  return released
+}
+
+/**
+ * §9-19 の机 1 つだけを見る形（コマの机の並びを持たない呼び出しの包み）。中身は releaseTeacherRestInCellIfSameTeacherPlaced に机 1 つを渡すだけ。
+ * 盤面の手置きの経路はコマ全体を渡すこと（§9-25・この包みを使うと別の机の記録が残る）。机をその場で書き換え、解除したら true。
  */
 export function releaseTeacherRestIfSameTeacherPlaced(desk: DeskCell, aliases: TeacherAliasResolver = defaultTeacherAliases): boolean {
-  if (!desk.teacherRest || !desk.teacher.trim()) return false
-  if (!doesTeacherRestMatch(desk.teacherRest, desk, aliases)) return false
-  delete desk.teacherRest
-  return true
+  return releaseTeacherRestInCellIfSameTeacherPlaced([desk], desk, aliases)
 }
 
 export type ToggleDeskTeacherRestResult =

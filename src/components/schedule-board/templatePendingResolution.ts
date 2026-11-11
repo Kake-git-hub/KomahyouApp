@@ -13,7 +13,7 @@
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { formatDeskTeacherLabel } from '../../utils/deskTeacherLabel'
 import { alignTeacherIdentityWithRemerge, applyTemplatePendingLowerTeacherToDesk, buildTemplateTeacherDeclined, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult, isTeacherElsewhereInCell, type TeacherAliasResolver } from './templateDiffApply'
-import { releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
+import { releaseTeacherRestInCellIfSameTeacherPlaced } from './teacherRest'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -342,6 +342,10 @@ function replaceDesk(weeks: SlotCell[][], location: { weekIndex: number; cellInd
   ))))
 }
 
+function replaceCellDesks(weeks: SlotCell[][], location: { weekIndex: number; cellIndex: number }, nextDesks: DeskCell[]): SlotCell[][] {
+  return weeks.map((week, weekIndex) => (weekIndex !== location.weekIndex ? week : week.map((cell, cellIndex) => (cellIndex !== location.cellIndex ? cell : { ...cell, desks: nextDesks }))))
+}
+
 export type TemplatePendingSettleResult =
   | { status: 'unchanged' }
   /** teacherPending＝生徒の側は 1 行に戻ったが、講師の選択（下段の手置き講師）が残っているので保留は講師だけで残した（tp-64）。 */
@@ -518,14 +522,11 @@ export function computePendingTeacherChoice(params: {
     const declined = buildTemplateTeacherDeclined(location.desk, teacher, params.teacherAliases)
     if (declined) adopted.templateTeacherDeclined = declined
     else delete adopted.templateTeacherDeclined
-    // §9-19: 休んだ講師本人を「下段(手入力)の講師を採用する」で置き直したら休みを解除する（別の講師なら残す）。
-    if (adopted.teacherRest) {
-      const released = { ...adopted }
-      if (releaseTeacherRestIfSameTeacherPlaced(released, params.teacherAliases)) nextWeeks = replaceDesk(params.weeks, location, released)
-      else nextWeeks = replaceDesk(params.weeks, location, adopted)
-    } else {
-      nextWeeks = replaceDesk(params.weeks, location, adopted)
-    }
+    // §9-19・§9-25: 休んだ講師本人を「下段(手入力)の講師を採用する」で置いたら、そのコマのその講師の休みを全部解除する
+    // （採用した机に限らず、代わりの講師を置いた机などに残る記録も消す・別の講師なら残す）。入力は変えない＝記録のある机だけ写して書き換える。
+    const releasedDesks = location.cell.desks.map((desk, index) => (index === location.deskIndex ? { ...adopted } : desk.teacherRest ? { ...desk } : desk))
+    if (releaseTeacherRestInCellIfSameTeacherPlaced(releasedDesks, adopted, params.teacherAliases)) nextWeeks = replaceCellDesks(params.weeks, location, releasedDesks)
+    else nextWeeks = replaceDesk(params.weeks, location, adopted)
   }
   const restLower = cloneTemplatePendingLower(found.entry.lower)
   delete restLower.teacher

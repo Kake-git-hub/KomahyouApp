@@ -752,7 +752,7 @@ export function applyChecklistPrepOps(weeks: SlotCell[][], ops: readonly Checkli
         const desk = nextCell.desks[op.deskIndex]
         if (!desk) continue
         if (op.kind === 'manual-teacher') {
-          setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases)
+          setManualTeacherAssignment(desk, op.teacherName, op.teacherId, resolveManualTeacherAssignmentSource(desk), aliases, nextCell)
           // 準備で置いた講師の印（後片づけの見分け・§E-2-4-2）。setManualTeacherAssignment は印を外すので、その後で付ける。
           desk.checklistPrepTeacher = true
           applied += 1
