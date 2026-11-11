@@ -1452,7 +1452,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         return { outcome: 'applied', before, after }
       }
       // 日付の操作のあとに毎回当てる点検(範囲・手入力・講師のコマの形・保証台帳)。exclude は操作した日の机。
-      const dayOpFindings = (before, after, dateKeys, sections, { restedPresentAsInfo = false } = {}) => {
+      const dayOpFindings = (before, after, dateKeys, sections, { restedPresentAsInfoDates } = {}) => {
         const allowed = { deskKeys: app.collectDateDeskKeys([before.facts, after.facts], dateKeys), sections: new Set(sections) }
         const exclude = { excludeDeskKeys: allowed.deskKeys }
         return [
@@ -1460,12 +1460,12 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
           ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
           ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
-          ...app.checkTeacherCellIntegrity(before.facts, after.facts, { restedPresentAsInfo }),
+          ...app.checkTeacherCellIntegrity(before.facts, after.facts, { restedPresentAsInfoDates }),
           ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
         ]
       }
       // 保存 → 読み込み直し で盤面と在庫が変わらない(作った休日・丸ごと振替の組が保存を通って残るか)。
-      const persist = async (title, { restedPresentAsInfo = false } = {}) => {
+      const persist = async (title, { restedPresentAsInfoDates } = {}) => {
         const step = newStep(title)
         if (await d.clickSave(session)) step.operations += 1
         else step.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
@@ -1477,14 +1477,14 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         step.findings.push(
           ...sameState(saved, reloaded, 'reload-changed'),
           ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }),
-          ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts, { restedPresentAsInfo }),
+          ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts, { restedPresentAsInfoDates }),
         )
         step.diff = { before: saved.facts, after: reloaded.facts }
         current = reloaded
         await finish('g', step)
       }
       // 解除のあと、作る前(base)と盤面・部分・在庫が全部同じか(休日解除は逆操作・§9-20 作成→解除で元の形)。
-      // 休日は、休日にした日のメモが消えて戻らないのだけ仕様なので知らせるだけ(checkHolidayRoundTrip)。
+      // 休日は、休日のまま読み込み直す(再マージ)と消える休日の日のメモ・生徒の居ない机の手入力の講師と、その日の抑止キーの出入りだけ仕様なので知らせるだけ(checkHolidayRoundTrip)。
       const roundTripFindings = (base, after, what, holidayDateKey = null) => [
         ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey) : sameState(base, after, 'round-trip-not-restored')),
         ...app.checkStockDeltas(stockOf(base), stockOf(after), {}, { code: 'round-trip-not-restored', label: `${what}を解除しても在庫が元に戻らない` }),
@@ -1586,20 +1586,20 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           effectiveOps += 1
           const { T, before, after } = applied
           step.findings.push(
-            ...dayOpFindings(before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfo: true }),
+            ...dayOpFindings(before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
             ...app.checkWholeDayTransferApplied(before.facts, after.facts, { sourceDateKey: D, targetDateKey: T }),
             ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '丸ごと振替で在庫が動いた(移送は在庫中立)' }),
           )
           current = after
           await finish('g', step)
-          await persist(`丸ごと振替のあと 保存→読み込み直し(${D} → ${T})`, { restedPresentAsInfo: true })
+          await persist(`丸ごと振替のあと 保存→読み込み直し(${D} → ${T})`, { restedPresentAsInfoDates: new Set([D, T]) })
           await d.gotoWeekOf(session, mondayOf(T))
           const releaseStep = newStep(`丸ごと振替を解除(${D} → ${T})`)
           releaseStep.notes.push(`メニュー「丸ごと振替を解除」: ${T}(作成の前の盤面・在庫に戻るかを確かめる・§9-20)`)
           const released = await runDayOp(releaseStep, `${D} → ${T} の丸ごと振替を解除する`, () => d.chooseDayMenuItem(session, T, 'transfer-release'))
           if (released.outcome === 'applied') {
             releaseStep.findings.push(
-              ...dayOpFindings(released.before, released.after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfo: true }),
+              ...dayOpFindings(released.before, released.after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
               ...roundTripFindings(base, released.after, '丸ごと振替'),
             )
             releaseStep.diff = { before: base.facts, after: released.after.facts }

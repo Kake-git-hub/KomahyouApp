@@ -939,16 +939,18 @@ describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
     expect(codes(checkStockDeltas(before, { ...after, lecture: { ...after.lecture, 's4__英__winter': 3 } }, { makeup: { 's1__数': 1 } }, { ignore }))).toEqual(['stop:stock-delta-mismatch'])
   })
 
-  it('丸ごと振替でできた「休みの記録があるコマにその講師が居る」は知らせるだけ(restedPresentAsInfo)。同じ講師が 1 コマに 2 机は止める', () => {
+  it('丸ごと振替でできた「休みの記録があるコマにその講師が居る」は知らせるだけ(restedPresentAsInfoDates＝振替元・振替先の日だけ)。ほかの日にできた形・同じ講師が 1 コマに 2 机は止める', () => {
     const teachers = [{ id: 't1', name: '講師A' }, { id: 't2', name: '講師B' }]
     const tf = (desks) => collectBoardFacts({ ...payload([cell(T, 3, desks)]), teachers })
     const clean = tf([desk('t1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('t2')])
     const rested = tf([desk('t1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('t2', [null, null], { teacher: '講師A' })])
-    const found = checkTeacherCellIntegrity(clean, rested, { restedPresentAsInfo: true })
+    const found = checkTeacherCellIntegrity(clean, rested, { restedPresentAsInfoDates: new Set([H, T]) })
     expect(codes(found)).toEqual(['info:teacher-rested-present-by-whole-day-transfer'])
     expect(found[0].message).toContain('丸ごと振替')
     expect(found[0].message).toContain('講師A')
     const duplicated = tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2', [null, null], { teacher: '講師B' })])
-    expect(codes(checkTeacherCellIntegrity(tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2')]), duplicated, { restedPresentAsInfo: true }))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
+    expect(codes(checkTeacherCellIntegrity(tf([desk('t1', [null, null], { teacher: '講師B' }), desk('t2')]), duplicated, { restedPresentAsInfoDates: new Set([H, T]) }))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
+    // 振替元・振替先でない日にできた「休みなのに居る」は止める(手直し 1 M-1)
+    expect(codes(checkTeacherCellIntegrity(clean, rested, { restedPresentAsInfoDates: new Set([H, '2026-12-03']) }))).toEqual(['stop:teacher-rested-but-present'])
   })
 })

@@ -36,13 +36,15 @@ export const PATROL_FINDING_CODES = [
   // 操作の前の盤面・在庫に戻らない(stop・§9-20・休日解除は逆操作)／アプリが日付の操作を断った(info)／丸ごと振替の作成・解除でできた
   // 「休みの記録があるコマにその講師が居る」(info・§9-25 の対象外でオーナー判断待ちの既知の形・2026-11-11 の裁定)。
   'day-op-not-applied', 'round-trip-not-restored', 'day-op-blocked', 'teacher-rested-present-by-whole-day-transfer',
-  // 休日にするとそのコマのメモは消え、解除しても戻らない(info・仕様: 休日のコマは授業・講師・メモを持ち込まない＝spec-makeup-stock §B-2-2c・
+  // 休日のまま読み込み直す(再マージ)とそのコマのメモは消え、解除しても戻らない(休日にした時点では残る＝convertHolidayDeskEntriesToRecords は触らない)
+  // (info・仕様: 休日のコマは再マージで授業・講師・メモを持ち込まない＝spec-makeup-stock §B-2-2c・
   // inv06-holiday-record-retention.matrix.test.ts で固定)。室長から見ると手入力が消えるので知らせる。
   'holiday-memo-dropped',
   // 休日の解除で、その日の抑止キーが休日にする前と違う(info・仕様: 席へ戻した通常授業の鍵は外し、戻せなかった授業の鍵は積む＝
   // ScheduleBoardScreen.tsx の resolveHolidayReleaseSuppressedOccurrences。盤面の机が同じかは別に止める)。
   'holiday-release-suppression-changed',
-  // 休日にすると、その日の生徒も出欠記録も無い机の手入力の講師は消え、解除しても戻らない(テンプレの講師が戻ることはある)(info・仕様: 休日のコマは
+  // 休日のまま読み込み直す(再マージ)と、その日の生徒も出欠記録も無い机の手入力の講師は消え、解除しても戻らない(休日にした時点では残る・
+  // テンプレの講師が戻ることはある)(info・仕様: 休日のコマは再マージで
   // 記録のある机に限り講師を引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定)。
   'holiday-teacher-dropped',
 ] as const
@@ -818,7 +820,7 @@ const TEACHER_ANOMALY_LABELS: Record<TeacherCellAnomaly['kind'], { code: PatrolF
  * 操作の前に無かった形(種類×コマ×講師・数で突き合わせる)が操作のあとにできたら stop。前からある形は止めない
  * (種データに最初からある形＝丸ごと振替の付け替えでできうる休みの講師〔§9-25 の対象外〕など)。reportExisting なら前からある形を info で知らせる(起動のときだけ使う)。
  */
-export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts, options: { reportExisting?: boolean; restedPresentAsInfo?: boolean } = {}): PatrolFinding[] {
+export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts, options: { reportExisting?: boolean; restedPresentAsInfoDates?: ReadonlySet<string> } = {}): PatrolFinding[] {
   const keyOf = (item: TeacherCellAnomaly) => `${item.kind}\u0000${item.cellId}\u0000${item.teacher}`
   const left = new Map<string, number>()
   for (const item of before?.teacherAnomalies ?? []) left.set(keyOf(item), (left.get(keyOf(item)) ?? 0) + 1)
@@ -837,7 +839,8 @@ export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts,
     }
     // 台本 g: 丸ごと振替(付け替え)は講師の欄だけを別の日へ移し、休みの記録は元の日に残る(§9-25 の対象外・作成→解除で元の形 §9-20 と両立させるため)。
     // 作成・解除でできた「休みなのに居る」は仕様の範囲でできうる既知の形(オーナー判断待ち)なので知らせるだけ。同じ講師が 2 机は止める。
-    if (options.restedPresentAsInfo && item.kind === 'rested-present') {
+    // 知らせるだけにするのは、丸ごと振替の振替元・振替先の日のコマにできた形だけ(ほかの日にできたものは止める・手直し 1 M-1)。
+    if (options.restedPresentAsInfoDates?.has(item.dateKey) && item.kind === 'rested-present') {
       transferRested.push({ level: 'info', code: 'teacher-rested-present-by-whole-day-transfer', message: `丸ごと振替でできた形(知らせるだけ・オーナー判断待ち): ${label}: ${where}`, ...location })
       continue
     }
@@ -1021,7 +1024,8 @@ export function checkWholeDayTransferApplied(before: BoardFacts, after: BoardFac
 
 /**
  * 休日を解除したあと、休日にする前(base)と盤面・部分が同じか(休日解除は休日設定の逆操作・2026-09-20 オーナー確定)。checkSameState と同じに比べ、
- * 休日にした日の机で、仕様で戻らないものだけが違う机は知らせるだけにする(消えて戻らないことを室長目線で知らせる。休日のコマは授業・講師・メモを持ち込まず、
+ * 休日にした日の机で、仕様で戻らないものだけが違う机は知らせるだけにする(消えて戻らないことを室長目線で知らせる。休日にした時点では残るが、休日のまま読み込み直す
+ * 〔再マージ〕と、休日のコマは授業・講師・メモを持ち込まず、
  * 講師は記録のある机に限り引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定):
  * メモが消えた(holiday-memo-dropped)・生徒も出欠記録も無い机の手入力の講師が消えたかテンプレの講師に替わった(holiday-teacher-dropped)。
  * その日の抑止キーの出入りも知らせるだけ(holiday-release-suppression-changed)。
@@ -1043,10 +1047,10 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
       && (right.teacher === '' || right.teacherOrigin === 'template'))
     if (fact.dateKey === dateKey && change.fields.every((field) => field === 'memos' || field === 'teacher') && memoDropped && teacherDropped) {
       if (change.fields.includes('teacher')) {
-        findings.push({ level: 'info', code: 'holiday-teacher-dropped', message: `休日にすると生徒の居ない机の手入力の講師は消え、解除しても戻らない(仕様・休日のコマは記録のある机の講師だけ引き継ぐ): ${placeOf(fact)} 講師 ${teacherText(left?.teacher ?? '')} → ${teacherText(right?.teacher ?? '')}${right?.teacher ? '(テンプレ)' : ''}`, ...locationOf(fact) })
+        findings.push({ level: 'info', code: 'holiday-teacher-dropped', message: `休日のまま読み込み直すと生徒の居ない机の手入力の講師は消え、解除しても戻らない(仕様・休日にした時点では残るが、再マージで休日のコマは記録のある机の講師だけ引き継ぐ): ${placeOf(fact)} 講師 ${teacherText(left?.teacher ?? '')} → ${teacherText(right?.teacher ?? '')}${right?.teacher ? '(テンプレ)' : ''}`, ...locationOf(fact) })
       }
       if (change.fields.includes('memos')) {
-        findings.push({ level: 'info', code: 'holiday-memo-dropped', message: `休日にするとメモは消え、解除しても戻らない(仕様・休日のコマはメモを持ち込まない): ${placeOf(fact)} メモ ${left?.memos.length ?? 0} 件`, ...locationOf(fact) })
+        findings.push({ level: 'info', code: 'holiday-memo-dropped', message: `休日のまま読み込み直すとメモは消え、解除しても戻らない(仕様・休日にした時点では残るが、再マージで休日のコマはメモを持ち込まない): ${placeOf(fact)} メモ ${left?.memos.length ?? 0} 件`, ...locationOf(fact) })
       }
       continue
     }
@@ -1083,8 +1087,8 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
   const position = (finding: PatrolFinding) => `${finding.dateKey ?? '\uffff'}\u0000${String(finding.slotNumber ?? 0).padStart(3, '0')}\u0000${String(finding.deskIndex ?? 0).padStart(3, '0')}`
   const merged = [
     ...limitDeskFindings(stops, 'stop', 'round-trip-not-restored', label),
-    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-teacher-dropped'), 'info', 'holiday-teacher-dropped', '休日にすると消えて戻らない手入力の講師'),
-    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-memo-dropped'), 'info', 'holiday-memo-dropped', '休日にすると消えて戻らないメモ'),
+    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-teacher-dropped'), 'info', 'holiday-teacher-dropped', '休日のまま読み込み直すと消えて戻らない手入力の講師'),
+    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-memo-dropped'), 'info', 'holiday-memo-dropped', '休日のまま読み込み直すと消えて戻らないメモ'),
   ].sort((left, right) => position(left).localeCompare(position(right)))
   return [...merged, ...sectionFindings]
 }
