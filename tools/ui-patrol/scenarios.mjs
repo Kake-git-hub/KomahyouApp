@@ -432,13 +432,15 @@ export function buildTeacherOpAllowedChange(op, extraDeskKeys = []) {
 }
 
 /**
- * 同じコマ(cellId)で、休みの記録が消えただけの机(講師・講師の出自・中身は前と同じ)。休みの講師を同じコマへ手で置いたとき(§9-25)に変わってよい机。
- * 休みの記録のほかに何か変わった机は入れない(範囲の外として「変」に出る)。
+ * 同じコマ(cellId)で、置いた講師 placed({ teacher, teacherId })の休みの記録が消えただけの机(講師・講師の出自・中身は前と同じ)。
+ * 休みの講師を同じコマへ手で置いたとき(§9-25)に変わってよい机。照合はアプリの doesTeacherRestMatch(facts.restMatchesTeacher)。
+ * 別の講師の休みの記録が消えた机・休みの記録のほかに何か変わった机は入れない(範囲の外として「変」に出る)。
  */
-export function collectRestReleasedDeskKeys(before, after, cellId) {
+export function collectRestReleasedDeskKeys(before, after, cellId, placed) {
   const keys = new Set()
   for (const desk of before.desks.values()) {
-    if (desk.cellId !== cellId || !desk.teacherRest) continue
+    if (desk.cellId !== cellId || !desk.teacherRest || !desk.teacherRestRecord) continue
+    if (!placed || !before.restMatchesTeacher(desk.teacherRestRecord, placed)) continue
     const next = after.desks.get(desk.key)
     if (!next || next.teacherRest) continue
     const same = JSON.stringify([desk.teacher, desk.teacherOrigin, desk.students, desk.statuses, desk.memos, desk.pendingStudents, desk.pendingTeacher, desk.pendingStatuses, desk.pendingMemos])
@@ -448,14 +450,19 @@ export function collectRestReleasedDeskKeys(before, after, cellId) {
   return keys
 }
 
-/** そのコマに居る講師の名前(講師欄・保留の下段・休みの記録)。講師メニューで「そのコマに居ない講師」を選ぶのに使う。 */
-function teachersInCell(facts, cellId) {
-  const names = new Set()
+/**
+ * その講師(講師メニューの選択肢の名前)がそのコマに居るか(講師欄・保留の下段・休みの記録)。講師メニューで「そのコマに居ない講師」を選ぶのに使う。
+ * 照合はアプリの権威関数(facts.isSameTeacher＝isSameTeacherRecord・facts.restMatchesTeacher＝doesTeacherRestMatch・呼び名の対応表)。
+ */
+export function isTeacherInCell(facts, cellId, teacherName) {
+  const target = { teacher: teacherName }
   for (const desk of facts.desks.values()) {
     if (desk.cellId !== cellId) continue
-    for (const name of [desk.teacher, desk.pendingTeacher, desk.teacherRestName]) if (name) names.add(name)
+    if (desk.teacher && facts.isSameTeacher({ teacher: desk.teacher, teacherId: desk.teacherId || undefined }, target)) return true
+    if (desk.pendingTeacher && facts.isSameTeacher({ teacher: desk.pendingTeacher }, target)) return true
+    if (desk.teacherRestRecord && facts.restMatchesTeacher(desk.teacherRestRecord, target)) return true
   }
-  return names
+  return false
 }
 
 /** dateKey(YYYY-MM-DD)から 7 日分。 */
@@ -997,7 +1004,8 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           return { outcome: 'blocked', after }
         }
         step.diff = { before: before.facts, after: after.facts }
-        const released = op.kind === 'place-rested' ? [...collectRestReleasedDeskKeys(before.facts, after.facts, op.cellId)] : []
+        const placedDesk = op.kind === 'place-rested' ? after.facts.desks.get(`${op.cellId}#${op.deskIndex}`) : null
+        const released = placedDesk ? [...collectRestReleasedDeskKeys(before.facts, after.facts, op.cellId, { teacher: placedDesk.teacher || op.teacher, teacherId: placedDesk.teacherId || undefined })] : []
         const allowed = buildTeacherOpAllowedChange(op, released)
         const exclude = { excludeDeskKeys: allowed.deskKeys }
         step.findings.push(
@@ -1015,9 +1023,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       }
       const menuRandom = createSeededRandom((Number(options.seed) || 0) + 0xf7)
       // 講師メニューの選択肢から、そのコマに居ない講師(講師欄・保留の下段・休みの記録)を種つきの乱数で選ぶ。無ければ null(その操作は飛ばす)。
-      const pickMenuTeacher = (cellId, exclude) => (choices) => {
-        const present = teachersInCell(current.facts, cellId)
-        const options = choices.filter((choice) => choice.value && !present.has(choice.value) && !exclude.has(choice.value))
+      // 今の講師・休みの講師もそのコマに居る扱いなので、ここで別に外さない(照合を 2 つ作らない)。
+      const pickMenuTeacher = (cellId) => (choices) => {
+        const options = choices.filter((choice) => choice.value && !isTeacherInCell(current.facts, cellId, choice.value))
         return options.length > 0 ? options[Math.floor(menuRandom() * options.length)].value : null
       }
       let effectiveOps = 0
@@ -1041,7 +1049,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           const step = newStep(`講師 ${index + 1}(${label})`)
           const op = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
           const result = await runTeacherOp(step, op, async () => {
-            const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId, new Set([planned.teacher])))
+            const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId))
             if (!set.teacher) return { skip: `${at(planned.cellId, planned.deskIndex)} で選べる講師(そのコマに居ない講師)が講師メニューにありません。` }
             op.teacher = set.teacher
             step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${who(set.teacher)}`)
@@ -1078,11 +1086,13 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         await finish('f', restStep)
         if (rested.outcome !== 'applied') continue
         effectiveOps += 1
-        const restedName = current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)?.teacherRestName || X
+        const restedDesk = current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)
+        const restedName = restedDesk?.teacherRestName || X
+        const restRecord = restedDesk?.teacherRestRecord ?? { teacher: X }
         const subStep = newStep(`講師 ${index + 1}(休みの流れ 2: 休みの机に代わりの講師を置く)`)
         const subOp = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
         const substituted = await runTeacherOp(subStep, subOp, async () => {
-          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId, new Set([X, restedName])))
+          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId))
           if (!set.teacher) return { skip: `${at(planned.cellId, planned.deskIndex)} で代わりに置ける講師(そのコマに居ない講師)が講師メニューにありません。` }
           subOp.teacher = set.teacher
           subStep.notes.push(`代わりの講師: ${at(planned.cellId, planned.deskIndex)} ${who(set.teacher)}(休み ${who(X)} の記録は残る・§2-4)`)
@@ -1094,8 +1104,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         const placeStep = newStep(`講師 ${index + 1}(休みの流れ 3: 休みの講師を同じコマの別の机へ手で置く・§9-25)`)
         const placeOp = { kind: 'place-rested', cellId: planned.cellId, deskIndex: planned.targetDeskIndex, teacher: X, restedName }
         const placed = await runTeacherOp(placeStep, placeOp, async () => {
-          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, (choices) => (choices.find((choice) => choice.value === X)?.value ?? null))
+          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, (choices) => (choices.find((choice) => choice.value && current.facts.restMatchesTeacher(restRecord, { teacher: choice.value }))?.value ?? null))
           if (!set.teacher) return { skip: `${at(planned.cellId, planned.targetDeskIndex)} の講師メニューに休みの講師 ${who(X)} がありません。` }
+          placeOp.teacher = set.teacher
           placeStep.notes.push(`休みの講師を置く: ${at(planned.cellId, planned.targetDeskIndex)} ← ${who(X)}(代わりの講師 ${who(subOp.teacher)} と ${at(planned.cellId, planned.deskIndex)} の生徒はそのまま)`)
           return set
         })

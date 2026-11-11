@@ -5,7 +5,7 @@ import { collectBoardFacts } from './boardFacts.ts'
 import {
   ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
-  TEACHER_OPS, buildTeacherOpAllowedChange, collectRestReleasedDeskKeys, pickTeacherPlan,
+  TEACHER_OPS, buildTeacherOpAllowedChange, collectRestReleasedDeskKeys, isTeacherInCell, pickTeacherPlan,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
@@ -820,7 +820,24 @@ describe('台本 f(講師)の候補選び・範囲', () => {
     const before = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '講師A' } }), desk('a1', ''), desk('a2', '講師C', [null, null], { teacherRest: { teacher: '講師A' } })])])
     const after = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A'), desk('a2', '講師D')])])
     // 机0 は記録が消えただけ(範囲に入る)。机2 は講師も替わった(入らない)。
-    expect([...collectRestReleasedDeskKeys(before, after, '2026-11-17_1')]).toEqual(['2026-11-17_1#0'])
+    expect([...collectRestReleasedDeskKeys(before, after, '2026-11-17_1', { teacher: '講師A' })]).toEqual(['2026-11-17_1#0'])
+    // 別の講師 Z の休みの記録が消えた机は範囲に入れない(置いた講師の記録だけ・手直し 1 M-2)
+    const otherBefore = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '講師Z' } }), desk('a1', '')])])
+    const otherAfter = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A')])])
+    expect([...collectRestReleasedDeskKeys(otherBefore, otherAfter, '2026-11-17_1', { teacher: '講師A' })]).toEqual([])
+  })
+
+  it('講師の照合はアプリの権威関数(呼び名の対応表): 休みの記録が講師 ID だけ・講師欄が表示名だけでも同じ講師と分かる(手直し 1 M-2・M-3)', () => {
+    const teachers = [{ id: 't1', name: '講師A本名', displayName: '講師A' }, { id: 't2', name: '講師B' }]
+    const withTeachers = (cells) => collectBoardFacts({ ...payloadOf(cells), teachers })
+    const before = withTeachers([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '', teacherId: 't1' } }), desk('a1', '')])])
+    const after = withTeachers([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A')])])
+    expect([...collectRestReleasedDeskKeys(before, after, '2026-11-17_1', { teacher: '講師A' })]).toEqual(['2026-11-17_1#0'])
+    // 講師メニューの選択肢の名前で「そのコマに居る」: 講師欄の登録名・休みの記録の ID でも当たる
+    expect(isTeacherInCell(before, '2026-11-17_1', '講師A本名')).toBe(true)
+    expect(isTeacherInCell(before, '2026-11-17_1', '講師A')).toBe(true)
+    expect(isTeacherInCell(after, '2026-11-17_1', '講師A本名')).toBe(true)
+    expect(isTeacherInCell(after, '2026-11-17_1', '講師C')).toBe(false)
   })
 })
 

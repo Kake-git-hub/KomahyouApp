@@ -812,7 +812,12 @@ export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts,
     }
     stops.push({ level: 'stop', code, message: `${label}: ${where}`, ...location })
   }
-  return [...limitDeskFindings(stops, 'stop', 'teacher-duplicated-in-cell', '講師のコマの形が変'), ...limitDeskFindings(existing, 'info', 'teacher-cell-anomaly-existing', '前からある講師のコマの形')]
+  // まとめる行の code は種類ごと(休みの講師が居る形を「2 机」の code にまとめない・手直し 1 M-4)。
+  const limited = (['rested-present', 'duplicate'] as const).flatMap((kind) => {
+    const { code, label } = TEACHER_ANOMALY_LABELS[kind]
+    return limitDeskFindings(stops.filter((finding) => finding.code === code), 'stop', code, label)
+  })
+  return [...limited, ...limitDeskFindings(existing, 'info', 'teacher-cell-anomaly-existing', '前からある講師のコマの形')]
 }
 
 /**
@@ -891,10 +896,12 @@ export function checkTeacherOpApplied(before: BoardFacts, after: BoardFacts, op:
     findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `講師の操作が仕様どおりに効いていない: ${placeOf(got)} ${wrong.join('・')}`, ...locationOf(got) })
   }
   if (op.kind === 'place-rested') {
-    const restedName = op.restedName ?? op.teacher ?? ''
+    // 置いた講師(置いた机の講師欄の名前と講師 ID)の休みの記録がそのコマに残っていないか。照合はアプリの doesTeacherRestMatch(呼び名の対応表)。
+    const placedDesk = deskAt(after, op.deskIndex)
+    const placed = { teacher: placedDesk?.teacher || op.teacher || '', teacherId: placedDesk?.teacherId || undefined }
     for (const fact of after.desks.values()) {
-      if (fact.cellId !== op.cellId || !fact.teacherRest || fact.teacherRestName !== restedName) continue
-      findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `休みの講師を同じコマへ手で置いたのに、休みの記録が残った(§9-25): ${placeOf(fact)} 休 ${restedName}`, ...locationOf(fact) })
+      if (fact.cellId !== op.cellId || !fact.teacherRestRecord || !after.restMatchesTeacher(fact.teacherRestRecord, placed)) continue
+      findings.push({ level: 'stop', code: 'teacher-op-not-applied', message: `休みの講師を同じコマへ手で置いたのに、休みの記録が残った(§9-25): ${placeOf(fact)} 休 ${fact.teacherRestName}`, ...locationOf(fact) })
     }
   }
   return findings

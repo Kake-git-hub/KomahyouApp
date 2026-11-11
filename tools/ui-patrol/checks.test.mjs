@@ -701,6 +701,36 @@ describe('台本 f(講師の移動・入れ替え・休み)の点検', () => {
     const single = teacherFacts([desk('d1', [null, null], { teacher: '講師B' }), desk('d2')])
     expect(codes(checkTeacherCellIntegrity(single, duplicated))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
     expect(checkTeacherCellIntegrity(duplicated, duplicated)).toEqual([])
+    // 前から 1 件ある「休みなのに居る」形と同じコマ・同じ講師に 2 机目ができたら止まる(数で突き合わせる)
+    const restedTwice = teacherFacts([
+      desk('d1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }),
+      desk('d2', [null, null], { teacher: '講師A' }),
+      desk('d3', [null, null], { teacher: '講師A' }),
+    ])
+    expect(codes(checkTeacherCellIntegrity(rested, restedTwice))).toEqual(expect.arrayContaining(['stop:teacher-rested-but-present', 'stop:teacher-duplicated-in-cell']))
+    expect(codes(checkTeacherCellIntegrity(rested, restedTwice)).filter((code) => code === 'stop:teacher-rested-but-present')).toHaveLength(1)
+  })
+
+  it('まとめる行(ほか n 机)の code は種類ごと(休みの講師が居る形は teacher-rested-but-present のまま)', () => {
+    const cells = Array.from({ length: 22 }, (_, index) => cell(D, index + 1, [
+      desk(`r${index}`, [null, null], { teacher: '講師B', teacherRest: { teacher: '講師A' } }),
+      desk(`p${index}`, [null, null], { teacher: '講師A' }),
+    ]))
+    const clean = collectBoardFacts(payload(cells.map((item) => ({ ...item, desks: [item.desks[0]] }))))
+    const found = checkTeacherCellIntegrity(clean, collectBoardFacts(payload(cells)))
+    expect(found).toHaveLength(21)
+    expect(new Set(found.map((finding) => finding.code))).toEqual(new Set(['teacher-rested-but-present']))
+    expect(found.at(-1).message).toContain('ほか 2 机')
+  })
+
+  it('休みの講師を手で置いた: 休みの記録が講師 ID だけでも、残っていれば止める(照合は doesTeacherRestMatch)', () => {
+    const teachers = [{ id: 't1', name: '講師A本名', displayName: '講師A' }, { id: 't3', name: '講師C' }]
+    const before = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '', teacherId: 't1' } }), desk('d2')], teachers)
+    const kept = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '', teacherId: 't1' } }), desk('d2', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })], teachers)
+    const cleared = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual' }), desk('d2', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })], teachers)
+    const placeOp = { kind: 'place-rested', cellId: `${D}_3`, deskIndex: 1, teacher: '講師A' }
+    expect(codes(checkTeacherOpApplied(before, kept, placeOp))).toEqual(['stop:teacher-op-not-applied'])
+    expect(checkTeacherOpApplied(before, cleared, placeOp)).toEqual([])
   })
 
   const two = (first, second) => teacherFacts([desk('d1', first.slots ?? [null, null], first.desk), desk('d2', second.slots ?? [null, null], second.desk)])
