@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { gzipSync } from 'node:zlib'
 import { generateKeyPairSync } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -305,6 +305,279 @@ describe('ui-patrol --prepare-only', () => {
   })
 })
 
+describe('ui-patrol --baseline(変更前の報告と比べる・第 2 段の 2)', () => {
+  const stopOf = (message) => ({ level: 'stop', code: 'outside-allowed-range', message, dateKey: '2026-11-19', slotNumber: 3, deskIndex: 0 })
+  const reportOf = (messages, { aborted = null } = {}) => ({
+    appVersion: 'x', backupKey: 'seed-file',
+    classrooms: [{ classroomId: ROOM_A, label: 'A', backupKey: 'seed-file', knownCount: 0, aborted, steps: [{ name: 'a', title: 'テンプレ保存', durationMs: 1, operations: 2, findings: messages.map(stopOf), notes: [] }] }],
+  })
+  const fakeApp = async () => ({ app: {}, cleanup: async () => {} })
+
+  /** 種データを書く(data の中身で指紋が決まる)。 */
+  function writeSeed(dir, name, data) {
+    const file = path.join(dir, name)
+    writeFileSync(file, JSON.stringify({ actingClassroomId: ROOM_A, classrooms: [{ id: ROOM_A, data }] }))
+    return file
+  }
+
+  async function runWith(argv, report, calls = []) {
+    const io = collect()
+    const code = await main({ argv, env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, {
+      loadApp: fakeApp, loadPlaywright: () => ({}), runPatrol: async (args) => { calls.push(args); return report },
+    })
+    return { code, io, calls }
+  }
+
+  it('報告に教室ごとの種データの指紋(seedFingerprint)が入る。同じ data なら同じ・違えば違う', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seed1 = writeSeed(dir, 'one.seed.json', { n: 1 })
+      const seed2 = writeSeed(dir, 'two.seed.json', { n: 2 })
+      await runWith(['--out', path.join(dir, 'o1'), '--seed-file', seed1, '--classroom', ROOM_A], reportOf([]))
+      await runWith(['--out', path.join(dir, 'o2'), '--seed-file', seed1, '--classroom', ROOM_A], reportOf([]))
+      await runWith(['--out', path.join(dir, 'o3'), '--seed-file', seed2, '--classroom', ROOM_A], reportOf([]))
+      const fingerprint = (name) => JSON.parse(readFileSync(path.join(dir, name, 'report.json'), 'utf8')).classrooms[0].seedFingerprint
+      expect(fingerprint('o1')).toMatch(/^[0-9a-f]{16}$/)
+      expect(fingerprint('o2')).toBe(fingerprint('o1'))
+      expect(fingerprint('o3')).not.toBe(fingerprint('o1'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('新しい変 0・前から 3 → 終了コード 0(1 行目に前から 3 件)。新しい変 1 → 1。消えた変は [消えた] で出る', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seed = writeSeed(dir, 'one.seed.json', { n: 1 })
+      await runWith(['--out', path.join(dir, 'base'), '--seed-file', seed, '--classroom', ROOM_A], reportOf(['甲', '乙', '丙', '丁']))
+      const baseline = path.join(dir, 'base', 'report.json')
+      const argvFor = (name) => ['--out', path.join(dir, name), '--seed-file', seed, '--classroom', ROOM_A, '--baseline', baseline]
+      const carried = await runWith(argvFor('same'), reportOf(['甲', '乙', '丙']))
+      expect(carried.code).toBe(0)
+      const text = carried.io.out.join('')
+      expect(text).toContain('変 3 件(新しい 0・前から 3)・消えた変 1 件')
+      expect(text).toContain('[変・前]')
+      expect(text).toContain('[消えた] テンプレ保存: 丁')
+      expect(JSON.parse(readFileSync(path.join(dir, 'same', 'report.json'), 'utf8')).baseline).toMatchObject({ newStops: 0, carriedStops: 3, resolvedStops: 1 })
+      const added = await runWith(argvFor('added'), reportOf(['甲', '戊']))
+      expect(added.code).toBe(1)
+      expect(added.io.out.join('')).toContain('[変・新] ')
+      // baseline なしは今までどおり: stop があれば 1
+      expect((await runWith(['--out', path.join(dir, 'plain'), '--seed-file', seed, '--classroom', ROOM_A], reportOf(['甲']))).code).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('今回の巡回が中断したら、新しい変が 0 でも 2', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seed = writeSeed(dir, 'one.seed.json', { n: 1 })
+      await runWith(['--out', path.join(dir, 'base'), '--seed-file', seed, '--classroom', ROOM_A], reportOf(['甲']))
+      const result = await runWith(['--out', path.join(dir, 'cur'), '--seed-file', seed, '--classroom', ROOM_A, '--baseline', path.join(dir, 'base', 'report.json')], reportOf(['甲'], { aborted: 'a: 画面が開かない' }))
+      expect(result.code).toBe(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('データが違う(指紋が違う)・baseline が読めない・中断していた baseline は、流す前に 2 で断る(巡回を始めない)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    try {
+      const seed1 = writeSeed(dir, 'one.seed.json', { n: 1 })
+      const seed2 = writeSeed(dir, 'two.seed.json', { n: 2 })
+      await runWith(['--out', path.join(dir, 'base'), '--seed-file', seed1, '--classroom', ROOM_A], reportOf(['甲']))
+      const baseline = path.join(dir, 'base', 'report.json')
+      const calls = []
+      const different = await runWith(['--out', path.join(dir, 'x1'), '--seed-file', seed2, '--classroom', ROOM_A, '--baseline', baseline], reportOf(['甲']), calls)
+      expect(different.code).toBe(2)
+      expect(different.io.err.join('')).toContain('データが違うので比べられません')
+      const missing = await runWith(['--out', path.join(dir, 'x2'), '--seed-file', seed1, '--classroom', ROOM_A, '--baseline', path.join(dir, 'nothing.json')], reportOf(['甲']), calls)
+      expect(missing.code).toBe(2)
+      expect(missing.io.err.join('')).toContain('--baseline')
+      writeFileSync(path.join(dir, 'broken.json'), '{')
+      expect((await runWith(['--out', path.join(dir, 'x3'), '--seed-file', seed1, '--classroom', ROOM_A, '--baseline', path.join(dir, 'broken.json')], reportOf(['甲']), calls)).code).toBe(2)
+      // 中断していた baseline
+      await runWith(['--out', path.join(dir, 'abort'), '--seed-file', seed1, '--classroom', ROOM_A], reportOf(['甲'], { aborted: 'a: 止まった' }))
+      const aborted = await runWith(['--out', path.join(dir, 'x4'), '--seed-file', seed1, '--classroom', ROOM_A, '--baseline', path.join(dir, 'abort', 'report.json')], reportOf(['甲']), calls)
+      expect(aborted.code).toBe(2)
+      expect(aborted.io.err.join('')).toContain('中断')
+      expect(calls).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流す・第 2 段の 2)', () => {
+  const stopOf = (message) => ({ level: 'stop', code: 'outside-allowed-range', message, dateKey: '2026-11-19', slotNumber: 3, deskIndex: 0 })
+  const reportOf = (messages, extra = {}) => ({
+    appVersion: 'x', backupKey: 'seed-file',
+    classrooms: [{ classroomId: ROOM_A, label: 'A', backupKey: 'seed-file', knownCount: 0, aborted: null, steps: [{ name: 'a', title: 'テンプレ保存', durationMs: 1, operations: 2, findings: messages.map(stopOf), notes: [] }], ...extra }],
+  })
+  const fakeApp = async () => ({ app: {}, cleanup: async () => { events.push('bundle-cleanup') } })
+  let events = []
+
+  function setup() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'patrol-test-'))
+    const seedFile = path.join(dir, 'one.seed.json')
+    writeFileSync(seedFile, JSON.stringify({ actingClassroomId: ROOM_A, classrooms: [{ id: ROOM_A, data: { n: 1 } }] }))
+    events = []
+    return { dir, seedFile }
+  }
+
+  /** baselineReport・currentReport を順に返す偽の runPatrol と、偽の prepareBaselineApp。 */
+  async function run({ dir, seedFile }, reports, { extraArgs = [], prepare } = {}) {
+    const calls = []
+    const io = collect()
+    const prepareBaselineApp = prepare ?? (async ({ ref, outDir }) => {
+      events.push(`prepare:${ref}`)
+      return { appDir: path.join(outDir, 'baseline-app'), cleanup: async () => { events.push('app-cleanup') } }
+    })
+    const code = await main({ argv: ['--out', path.join(dir, 'out'), '--seed-file', seedFile, '--classroom', ROOM_A, '--moves', '3', '--seed', '7', '--random', '2', '--baseline-ref', 'origin/main', ...extraArgs], env: {}, fetchImpl: async () => { throw new Error('通信しない') }, ...io }, {
+      loadApp: fakeApp, loadPlaywright: () => ({}), prepareBaselineApp,
+      runPatrol: async (args) => { events.push(`run:${args.repoRoot ? 'baseline' : 'current'}`); calls.push(args); return reports[calls.length - 1] },
+    })
+    return { code, io, calls }
+  }
+
+  it('変更前 → 今回の順に 2 回流す。2 回とも同じ種データと同じ options(moves・seed・scenario・random)。変更前だけ repoRoot が展開先・出力先は <out>/baseline', async () => {
+    const env = setup()
+    try {
+      const { code, io, calls } = await run(env, [reportOf(['甲']), reportOf(['甲'])])
+      expect(code).toBe(0)
+      expect(calls).toHaveLength(2)
+      expect(calls[0].repoRoot).toBe(path.join(env.dir, 'out', 'baseline-app'))
+      expect(calls[1].repoRoot).toBeUndefined()
+      expect(calls[1].seeds).toEqual(calls[0].seeds)
+      const { out: baselineOut, ...baselineOptions } = calls[0].options
+      const { out: currentOut, ...currentOptions } = calls[1].options
+      expect(baselineOptions).toEqual(currentOptions)
+      expect([currentOptions.moves, currentOptions.seed, currentOptions.random, currentOptions.scenarios]).toEqual([3, 7, 2, ['boot', 'c', 'b', 'a']])
+      expect(baselineOut).toBe(path.join(env.dir, 'out', 'baseline'))
+      expect(currentOut).toBe(path.join(env.dir, 'out'))
+      expect(calls[1].backupKey).toBe(calls[0].backupKey)
+      expect(calls[1].today).toBe(calls[0].today)
+      // 展開したアプリは変更前を流し終えたらすぐ消す(今回を流す前)。終わりにも(2 回目の片づけ)呼ばれても落ちない。
+      expect(events.indexOf('app-cleanup')).toBeGreaterThan(events.indexOf('run:baseline'))
+      expect(events.indexOf('app-cleanup')).toBeLessThan(events.indexOf('run:current'))
+      // 束ねたアプリは今回も使うので、変更前が普通に終わった時点では片づけない(今回のあとの main の finally で消える)
+      expect(events.indexOf('bundle-cleanup')).toBeGreaterThan(events.indexOf('run:current'))
+      // 変更前の報告は <out>/baseline に残る
+      expect(JSON.parse(readFileSync(path.join(env.dir, 'out', 'baseline', 'report.json'), 'utf8')).classrooms[0].seedFingerprint).toMatch(/^[0-9a-f]{16}$/)
+      expect(readFileSync(path.join(env.dir, 'out', 'baseline', 'report.txt'), 'utf8')).toContain('■ 画面の自動巡回')
+      expect(io.out.join('')).toContain('前から 1')
+      expect(JSON.parse(readFileSync(path.join(env.dir, 'out', 'report.json'), 'utf8')).baseline).toMatchObject({ newStops: 0, carriedStops: 1, resolvedStops: 0 })
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('相対の --out は最初に絶対 path にして渡す(変更前・今回の両方・展開先も)', async () => {
+    const env = setup()
+    const originalCwd = process.cwd()
+    process.chdir(env.dir)
+    try {
+      const calls = []
+      const io = collect()
+      const code = await main({ argv: ['--out', './rel-out', '--seed-file', env.seedFile, '--classroom', ROOM_A, '--baseline-ref', 'HEAD'], env: {}, ...io }, {
+        loadApp: fakeApp, loadPlaywright: () => ({}),
+        prepareBaselineApp: async ({ outDir }) => { calls.push(['prepare', outDir]); return { appDir: path.join(outDir, 'baseline-app'), cleanup: async () => {} } },
+        runPatrol: async (args) => { calls.push(['run', args.options.out]); return reportOf([]) },
+      })
+      expect(code).toBe(0)
+      const abs = path.join(realpathSync(env.dir), 'rel-out')
+      const real = (p) => path.join(realpathSync(path.dirname(p)), path.basename(p))
+      expect(calls.map(([kind, out]) => [kind, path.isAbsolute(out), real(out)])).toEqual([['prepare', true, abs], ['run', true, path.join(abs, 'baseline')], ['run', true, abs]])
+    } finally {
+      process.chdir(originalCwd)
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('新しい変があれば 1・新しい変 0 で前からだけなら 0・変更前が中断していたら今回は流さず 2', async () => {
+    const env = setup()
+    try {
+      expect((await run(env, [reportOf(['甲']), reportOf(['甲', '乙'])])).code).toBe(1)
+      expect((await run(env, [reportOf(['甲', '乙']), reportOf(['甲'])])).code).toBe(0)
+      const aborted = await run(env, [reportOf(['甲'], { aborted: 'a: 止まった' }), reportOf(['甲'])])
+      expect(aborted.code).toBe(2)
+      expect(aborted.calls).toHaveLength(1)
+      expect(aborted.io.err.join('')).toContain('比べられません')
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('--json のときは標準出力が JSON だけ(進行の文を混ぜない)', async () => {
+    const env = setup()
+    try {
+      const { code, io } = await run(env, [reportOf(['甲']), reportOf(['甲'])], { extraArgs: ['--json'] })
+      expect(code).toBe(0)
+      expect(JSON.parse(io.out.join('')).baseline).toMatchObject({ carriedStops: 1 })
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('変更前の巡回の最中のシグナル: exit(130) の時点で、展開先も束ねたアプリも片づいている(exit のあとの main の続きに頼らない)', async () => {
+    const env = setup()
+    try {
+      const proc = new EventEmitter()
+      const exited = new Promise((resolve) => { proc.exit = (code) => { events.push(`exit:${code}`); resolve(code) } })
+      const deps = {
+        process: proc,
+        startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => { events.push('server.stop') } }),
+        launchPatrolBrowser: async () => ({}),
+        closePatrolBrowser: async () => {},
+        runClassroomPatrol: () => new Promise(() => {}),
+      }
+      const io = collect()
+      void main({ argv: ['--out', path.join(env.dir, 'out'), '--seed-file', env.seedFile, '--classroom', ROOM_A, '--baseline-ref', 'HEAD'], env: {}, ...io }, {
+        loadApp: fakeApp, loadPlaywright: () => ({}),
+        prepareBaselineApp: async ({ outDir }) => ({ appDir: path.join(outDir, 'baseline-app'), cleanup: async () => { events.push('app-cleanup') } }),
+        runPatrol: (args) => runBrowserPatrol(args, deps),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      proc.emit('SIGINT')
+      await exited
+      const atExit = events.slice(0, events.indexOf('exit:130'))
+      expect(atExit).toContain('app-cleanup')
+      expect(atExit).toContain('bundle-cleanup')
+      expect(atExit).toContain('server.stop')
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('用意で断られたら(ref が解決できない・依存が違う・読み口が無い)2。何も流さず・取得もしない', async () => {
+    const env = setup()
+    try {
+      const refusal = async () => { throw new Error('--baseline-ref origin/main の package-lock.json が今の作業ツリーと違う') }
+      const result = await run(env, [reportOf([]), reportOf([])], { prepare: refusal })
+      expect(result.code).toBe(2)
+      expect(result.io.err.join('')).toContain('package-lock.json')
+      expect(result.calls).toHaveLength(0)
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('途中で例外・シグナルで止めても、展開したアプリを片づける。変更前をシグナルで止めたら 130 で今回は流さず報告も書かない', async () => {
+    const env = setup()
+    try {
+      const stopped = await run(env, [{ ...reportOf([]), stopped: true }, reportOf([])])
+      expect(stopped.code).toBe(130)
+      expect(stopped.calls).toHaveLength(1)
+      expect(existsSync(path.join(env.dir, 'out', 'report.json'))).toBe(false)
+      expect(events).toContain('app-cleanup')
+      expect(events).toContain('bundle-cleanup')
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('runBrowserPatrol(止めるときの片づけ)', () => {
   it('流している途中で SIGINT/SIGTERM を受けたら、ブラウザと開発用サーバーを止めて終了コード 130 で終わる。流し終えたらハンドラを外す', async () => {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -346,6 +619,32 @@ describe('runBrowserPatrol(止めるときの片づけ)', () => {
     expect(proc.listenerCount('SIGINT')).toBe(0)
     expect(proc.listenerCount('SIGTERM')).toBe(0)
     expect(calls.sort()).toEqual(['browser.close', 'server.stop'])
+  })
+})
+
+describe('runBrowserPatrol(repoRoot・--baseline-ref)', () => {
+  it('repoRoot を渡すと開発用サーバーはそこを cwd に起動する(変更前のアプリ)。報告のアプリの版もそこの package.json から読む。渡さなければ今のリポジトリ', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'patrol-root-'))
+    try {
+      writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '9.9.9' }))
+      const roots = []
+      const deps = {
+        process: new EventEmitter(),
+        startDevServer: async ({ repoRoot }) => { roots.push(repoRoot); return { baseUrl: 'http://127.0.0.1:1', stop: async () => {} } },
+        launchPatrolBrowser: async () => ({}),
+        closePatrolBrowser: async () => {},
+        runClassroomPatrol: async ({ classroom }) => ({ classroomId: classroom.classroomId, label: 'A', backupKey: 'k', steps: [], knownCount: 0, aborted: null }),
+      }
+      const args = { app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {} }
+      const baseline = await runBrowserPatrol({ ...args, repoRoot: root }, deps)
+      const current = await runBrowserPatrol(args, deps)
+      expect(roots[0]).toBe(root)
+      expect(roots[1]).not.toBe(root)
+      expect(baseline.appVersion).toBe('9.9.9')
+      expect(current.appVersion).not.toBe('9.9.9')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

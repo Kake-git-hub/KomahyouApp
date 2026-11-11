@@ -38,7 +38,25 @@ export function summarizeReport(report) {
       }
     }
   }
-  return { stop, info, stepsRun, operations, aborted }
+  const summary = { stop, info, stepsRun, operations, aborted }
+  // baseline(変更前の報告)と比べた報告だけ、新しい/前から/消えたを足す(tools/ui-patrol/baseline.mjs)。数えるのは所見の印と resolved から。
+  if (report?.baseline) {
+    let newStops = 0
+    let carriedStops = 0
+    let resolvedStops = 0
+    for (const room of classroomsOf(report)) {
+      resolvedStops += (room.resolved ?? []).length
+      for (const step of room.steps ?? []) {
+        for (const finding of step.findings ?? []) {
+          if (finding.level !== 'stop') continue
+          if (finding.baseline === 'carried') carriedStops += 1
+          else newStops += 1
+        }
+      }
+    }
+    return { ...summary, newStops, carriedStops, resolvedStops }
+  }
+  return summary
 }
 
 /**
@@ -52,20 +70,28 @@ export function resolveExitCode(report) {
   if (rooms.some((room) => room.aborted || (room.steps ?? []).length === 0)) return 2
   const summary = summarizeReport(report)
   if (summary.operations === 0) return 2
+  // baseline ありは「新しい変」だけで決める(前からある変が残っていても、自分の変更が新しい変を生んでいなければ 0)。
+  if (report?.baseline) return summary.newStops > 0 ? 1 : 0
   return summary.stop > 0 ? 1 : 0
 }
 
 export function formatPatrolReportText(report) {
   const summary = summarizeReport(report)
   const version = report.appVersion ? (String(report.appVersion).startsWith('v') ? report.appVersion : `v${report.appVersion}`) : 'v不明'
-  const lines = [`■ 画面の自動巡回 (アプリ ${version}・データ ${report.backupKey || '不明'}): 変 ${summary.stop} 件・知らせるだけ ${summary.info} 件・操作 ${summary.operations} 回`]
+  const stopText = report.baseline
+    ? `変 ${summary.stop} 件(新しい ${summary.newStops}・前から ${summary.carriedStops})・消えた変 ${summary.resolvedStops} 件`
+    : `変 ${summary.stop} 件`
+  const lines = [`■ 画面の自動巡回 (アプリ ${version}・データ ${report.backupKey || '不明'}): ${stopText}・知らせるだけ ${summary.info} 件・操作 ${summary.operations} 回`]
+  if (report.baseline) lines.push(`  比べた報告: ${report.baseline.source}`)
+  const stopMark = (finding) => (finding.baseline === 'new' ? '[変・新]' : finding.baseline === 'carried' ? '[変・前]' : '[変]')
   for (const room of classroomsOf(report)) {
     lines.push(`■ ${room.label || room.classroomId}(${room.classroomId}・データ ${room.backupKey})`)
     for (const step of room.steps ?? []) {
       lines.push(`  ${step.title ?? step.name}(操作 ${step.operations ?? 0} 回・${Math.round((step.durationMs ?? 0) / 100) / 10} 秒)`)
-      for (const finding of step.findings ?? []) lines.push(`    ${finding.level === 'stop' ? '[変]' : '[知]'} ${finding.message}`)
+      for (const finding of step.findings ?? []) lines.push(`    ${finding.level === 'stop' ? stopMark(finding) : '[知]'} ${finding.message}`)
       for (const note of step.notes ?? []) lines.push(`    注: ${note}`)
     }
+    for (const item of room.resolved ?? []) lines.push(`    [消えた] ${item.title ?? item.step}: ${item.finding.message}`)
     if (room.knownCount > 0) lines.push(`  既知で外した ${room.knownCount} 件`)
     if (room.aborted) lines.push(`  [中断] ${room.aborted}`)
   }

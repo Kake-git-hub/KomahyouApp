@@ -72,7 +72,8 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('change-summary')
   expect(PATROL_FINDING_CODES).toContain('orphaned-makeup-removed-announced')
   expect(PATROL_FINDING_CODES).toContain('teacherless-student-by-template')
-  expect(PATROL_FINDING_CODES).toHaveLength(21)
+  expect(PATROL_FINDING_CODES).toContain('teacherless-student-at-deleted-teacher-desk')
+  expect(PATROL_FINDING_CODES).toHaveLength(22)
 })
 
 describe('変わってよい範囲', () => {
@@ -309,6 +310,58 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless }))).toEqual(['info:teacherless-student-by-template', 'stop:teacherless-student-added'])
     expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless: { keys: new Set(['4|3|s1']), fromDateKey: '2026-11-20' } }))).toEqual(['stop:teacherless-student-added', 'stop:teacherless-student-added'])
     expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless: { keys: new Set(['3|3|s1']), fromDateKey: '' } }))).toEqual(['stop:teacherless-student-added', 'stop:teacherless-student-added'])
+  })
+
+  it('操作の前後とも講師を消した記録の机にテンプレの生徒が置かれたら info。手入力の生徒・消した記録の無い机・操作が記録を作った机は stop(Issue #85)', () => {
+    const deleted = { teacherAssignmentSource: 'deleted' }
+    // 操作の前から、机2 に講師を消した記録がある(室長が消した)。
+    const before = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], deleted), desk('d3')])])
+    const templateAfter = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [student({ origin: 'template' }), null], deleted), desk('d3')])])
+    const findings = checkTeacherlessStudentsNotAdded(before, templateAfter)
+    expect(codes(findings)).toEqual(['info:teacherless-student-at-deleted-teacher-desk'])
+    expect(findings[0]).toMatchObject({ dateKey: D, slotNumber: 3, deskIndex: 1, studentId: 's1' })
+    expect(findings[0].message).toBe('講師を消した机にテンプレの生徒が置かれた(仕様どおり): 11/19(木) 3限 机2 生徒A(s1) 数 通常')
+    // 講師を消した机 + 手入力の生徒(振替) → stop
+    const manualAfter = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [makeupA(), null], deleted), desk('d3')])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, manualAfter))).toEqual(['stop:teacherless-student-added'])
+    // 消した記録の無い講師なしの机 + テンプレ由来の生徒 → stop
+    const plainAfter = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [student({ origin: 'template' }), null]), desk('d3')])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, plainAfter))).toEqual(['stop:teacherless-student-added'])
+    // 操作の前には削除記録が無かった(操作そのものが記録を作った)なら、後で記録があっても stop
+    const noRecordBefore = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2'), desk('d3')])])
+    expect(codes(checkTeacherlessStudentsNotAdded(noRecordBefore, templateAfter))).toEqual(['stop:teacherless-student-added'])
+    // 同じ机に 2 人: テンプレは info・手入力は stop(生徒ごとに分ける)
+    const mixedAfter = facts([cell(D, 3, [desk('d1'), desk('d2', [student({ origin: 'template' }), studentB({ lessonType: 'makeup', makeupSourceDate: '2026-11-12' })], deleted), desk('d3')])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, mixedAfter))).toEqual(['info:teacherless-student-at-deleted-teacher-desk', 'stop:teacherless-student-added'])
+  })
+
+  it('削除記録の判定はコマ単位: 机の並べ直しで記録ごと別の机の番号へ動いても info。操作が記録を増やしたら stop', () => {
+    const deleted = { teacherAssignmentSource: 'deleted' }
+    // 前: 机3 が削除記録。後: 並べ直しで机1 が削除記録(数は 1 → 1)で、テンプレの生徒が座る
+    const before = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' }), desk('d3', [null, null], deleted)])])
+    const moved = facts([cell(D, 3, [desk('d1', [student({ origin: 'template' }), null], deleted), desk('d2', [null, null], { teacher: '講師A' }), desk('d3', [null, null], { teacher: '講師B' })])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, moved))).toEqual(['info:teacherless-student-at-deleted-teacher-desk'])
+    // 2 → 1 に減ったのも増えていない
+    const twoBefore = facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], deleted), desk('d3', [null, null], deleted)])])
+    expect(codes(checkTeacherlessStudentsNotAdded(twoBefore, moved))).toEqual(['info:teacherless-student-at-deleted-teacher-desk'])
+    // 1 → 2 に増えた(操作が削除記録を作った)なら stop
+    const grown = facts([cell(D, 3, [desk('d1', [student({ origin: 'template' }), null], deleted), desk('d2', [null, null], deleted), desk('d3', [null, null], { teacher: '講師B' })])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, grown))).toEqual(['stop:teacherless-student-added'])
+    // 別のコマに前から削除記録があっても、このコマで増えたなら stop
+    const otherCell = facts([cell(D, 4, [desk('x1', [null, null], deleted)]), cell(D, 3, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2')])])
+    const otherAfter = facts([cell(D, 4, [desk('x1', [null, null], deleted)]), cell(D, 3, [desk('d1', [student({ origin: 'template' }), null], deleted), desk('d2')])])
+    expect(codes(checkTeacherlessStudentsNotAdded(otherCell, otherAfter))).toEqual(['stop:teacherless-student-added'])
+  })
+
+  it('テンプレ自体が講師なし(templateTeacherless)にも当たる机は teacherless-student-by-template を優先。前から居た生徒・除外の机は出さない', () => {
+    const deleted = { teacherAssignmentSource: 'deleted' }
+    const before = facts([cell(D, 3, [desk('d1'), desk('d2', [null, null], deleted)])])
+    const after = facts([cell(D, 3, [desk('d1'), desk('d2', [student({ origin: 'template' }), null], deleted)])])
+    const templateTeacherless = { keys: new Set(['4|3|s1']), fromDateKey: '2026-11-16' }
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after, { templateTeacherless }))).toEqual(['info:teacherless-student-by-template'])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after))).toEqual(['info:teacherless-student-at-deleted-teacher-desk'])
+    expect(checkTeacherlessStudentsNotAdded(after, after)).toEqual([])
+    expect(checkTeacherlessStudentsNotAdded(before, after, { excludeDeskKeys: new Set([`${C}#1`]) })).toEqual([])
   })
 
   it('メモ・出欠記録が同じコマから消えたら stop。同じコマの別の机へ移ったのは所見なし', () => {

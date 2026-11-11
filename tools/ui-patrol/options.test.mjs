@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './options.mjs'
+import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } from './options.mjs'
 
 const OUT = ['--out', '/tmp/patrol-out']
 
@@ -90,5 +90,36 @@ describe('jstToday', () => {
   it('UTC 15:00 以降は JST の翌日', () => {
     expect(jstToday(Date.parse('2026-11-10T14:59:00Z'))).toBe('2026-11-10')
     expect(jstToday(Date.parse('2026-11-10T15:00:00Z'))).toBe('2026-11-11')
+  })
+})
+
+describe('--baseline / --baseline-ref(第 2 段の 2)', () => {
+  it('既定は無し。値を読む', () => {
+    const none = parseArgs(OUT)
+    expect([none.baseline, none.baselineRef]).toEqual(['', ''])
+    expect(parseArgs([...OUT, '--baseline', '/x/report.json']).baseline).toBe('/x/report.json')
+    expect(parseArgs([...OUT, '--baseline-ref', 'origin/main']).baselineRef).toBe('origin/main')
+    expect(validateArgs(parseArgs([...OUT, '--baseline', '/x/report.json']))).toEqual([])
+    expect(validateArgs(parseArgs([...OUT, '--baseline-ref', 'HEAD']))).toEqual([])
+  })
+
+  it('値が無いのは断る', () => {
+    expect(validateArgs(parseArgs([...OUT, '--baseline'])).join('\n')).toContain('--baseline の値がありません')
+    expect(validateArgs(parseArgs([...OUT, '--baseline-ref'])).join('\n')).toContain('--baseline-ref の値がありません')
+  })
+
+  it('--baseline と --baseline-ref の同時指定・--prepare-only との併用は断る', () => {
+    expect(validateArgs(parseArgs([...OUT, '--baseline', '/x/r.json', '--baseline-ref', 'HEAD'])).join('\n')).toContain('同時に指定できません')
+    expect(validateArgs(parseArgs([...OUT, '--baseline', '/x/r.json', '--prepare-only'])).join('\n')).toContain('--prepare-only')
+    expect(validateArgs(parseArgs([...OUT, '--baseline-ref', 'HEAD', '--prepare-only'])).join('\n')).toContain('--prepare-only')
+  })
+
+  it('--baseline-ref の値は git のオプションに読まれない形だけ(先頭が - は断る)', () => {
+    expect(validateArgs(parseArgs([...OUT, '--baseline-ref', '-x'])).join('\n')).toContain('git の ref')
+  })
+
+  it('USAGE に 2 つの引数がある', () => {
+    expect(USAGE).toContain('--baseline <')
+    expect(USAGE).toContain('--baseline-ref <')
   })
 })

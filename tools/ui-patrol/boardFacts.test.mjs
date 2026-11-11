@@ -125,6 +125,25 @@ describe('盤面の事実(collectBoardFacts)', () => {
     expect(rested.teacherRest).toBe(true)
   })
 
+  it('講師を消した記録のある机は teacherDeleted。生徒が居ても・講師が居れば別。署名には入れない(Issue #85)', () => {
+    const payload = makePayload({
+      weeks: [[makeCell('2026-11-19', 3, [
+        makeDesk('d1', [makeStudentEntry(), null], { teacher: '', teacherAssignmentSource: 'deleted' }),
+        makeDesk('d2', [makeStudentEntry(), null], { teacher: '' }),
+        makeDesk('d3', [makeStudentEntry(), null], { teacher: '講師A', teacherAssignmentSource: 'deleted' }),
+        makeDesk('d4', [null, null], { teacher: '', teacherAssignmentSource: 'deleted', teacherAssignmentSessionId: 'sp1' }),
+      ])]],
+    })
+    const facts = collectBoardFacts(payload)
+    const flags = [0, 1, 2, 3].map((index) => facts.desks.get(`${CELL_ID}#${index}`).teacherDeleted)
+    expect(flags).toEqual([true, false, false, true])
+    // 比べる中身(署名)は変えない: 記録の有無だけが違う机は同じ署名。
+    const plain = collectBoardFacts(makePayload({ weeks: [[makeCell('2026-11-19', 3, [makeDesk('d1', [makeStudentEntry(), null], { teacher: '' })])]] }))
+    expect(plain.desks.get(`${CELL_ID}#0`).teacherDeleted).toBe(false)
+    expect(plain.desks.get(`${CELL_ID}#0`).signature).toBe(facts.desks.get(`${CELL_ID}#0`).signature)
+    expect(diffBoardFacts(plain, facts).desks.filter((change) => change.key === `${CELL_ID}#0`)).toEqual([])
+  })
+
   it('出自はアプリの権威関数どおり（印が無い振替は手入力・印が無い通常はテンプレ）', () => {
     const payload = makePayload({
       weeks: [[makeCell('2026-11-19', 3, [

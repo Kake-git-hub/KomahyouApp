@@ -1436,9 +1436,10 @@ describe('第134版(2026-11-11・版は v1.5.711 据え置き): 講師を替え�
   it('操作は 講師Wの机の講師を講師Xに替えて保存 → テンプレで X の机にその生徒(W は別の生徒か外す) → 来週の反映日で保存。確認は X が 1 机・生徒が X の机・X だけ空き机へ移らない', () => {
     expect(item.steps).toHaveLength(3)
     expect(item.steps[0]).toContain('講師Xに替えて')
-    expect(item.steps[1]).toContain('講師Xの机にその生徒を入れる')
+    // 追加 2(2026-11-11 レビュー): X がそのコマのテンプレに居ないこともあるので「無ければ足す」を添えた
+    expect(item.steps[1]).toContain('講師Xの机(無ければ足す)にその生徒を入れ')
     // 追加 1(2026-11-11・§9-15 の例外): W が残っていても(別の生徒にしても)合流する
-    expect(item.steps[1]).toContain('講師Wは別の生徒にするか外す')
+    expect(item.steps[1]).toContain('講師Wは外すか別の生徒に')
     expect(item.steps[2]).toContain('来週')
     expect(item.check).toEqual(['講師Xはそのコマで1つの机だけにいる', 'その生徒は講師Xの机にいる(講師なしになっていない)', '講師Xだけが空いた机へ移っていない'])
   })

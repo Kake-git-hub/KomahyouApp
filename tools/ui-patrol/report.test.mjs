@@ -78,3 +78,55 @@ describe('summarizeReport / formatPatrolReportText', () => {
     expect(next.steps).toHaveLength(1)
   })
 })
+
+describe('baseline ありの報告(第 2 段の 2)', () => {
+  const stopFinding = (extra = {}) => ({ level: 'stop', code: 'outside-allowed-range', message: '11/19(木) 3限 机1: 変わった', ...extra })
+  const infoFinding = { level: 'info', code: 'change-summary', message: '机 2 件が変わった' }
+  const withBaseline = (findings, { resolved = [], aborted = null, newStops, carriedStops, resolvedStops } = {}) => ({
+    ...patrol([classroom([step({ name: 'a', title: 'テンプレ保存', operations: 4, findings: [...findings, infoFinding] })], { aborted, resolved, seedFingerprint: 'a'.repeat(16) })]),
+    baseline: {
+      source: '/x/report.json',
+      newStops: newStops ?? findings.filter((f) => f.baseline === 'new').length,
+      carriedStops: carriedStops ?? findings.filter((f) => f.baseline === 'carried').length,
+      resolvedStops: resolvedStops ?? resolved.length,
+    },
+  })
+
+  it('終了コード: 新しい stop が 1 件でもあれば 1・新しい 0 で前からだけなら 0・中断は 2 が最優先', () => {
+    expect(resolveExitCode(withBaseline([stopFinding({ baseline: 'carried' }), stopFinding({ baseline: 'carried' }), stopFinding({ baseline: 'carried' })]))).toBe(0)
+    expect(resolveExitCode(withBaseline([stopFinding({ baseline: 'carried' }), stopFinding({ baseline: 'new' })]))).toBe(1)
+    expect(resolveExitCode(withBaseline([stopFinding({ baseline: 'new' })], { aborted: '止まった' }))).toBe(2)
+    expect(resolveExitCode(withBaseline([], { resolved: [{ step: 'a', title: 'x', finding: stopFinding() }] }))).toBe(0)
+  })
+
+  it('baseline なしは今までどおり(stop があれば 1)', () => {
+    expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding()] })])]))).toBe(1)
+  })
+
+  it('summarizeReport は baseline があれば 新しい/前から/消えた を足す(無ければ足さない)', () => {
+    const summary = summarizeReport(withBaseline([stopFinding({ baseline: 'new' }), stopFinding({ baseline: 'carried' })], { resolved: [{ step: 'a', title: 'x', finding: stopFinding() }] }))
+    expect(summary).toMatchObject({ stop: 2, info: 1, newStops: 1, carriedStops: 1, resolvedStops: 1 })
+    expect(summarizeReport(patrol([classroom([step()])]))).not.toHaveProperty('newStops')
+  })
+
+  it('文: 1 行目に「(新しい a・前から b)・消えた変 c 件」。[変・新]／[変・前]。消えたものは教室ごとに [消えた] で 1 件 1 行', () => {
+    const report = withBaseline(
+      [stopFinding({ baseline: 'new', message: '新しい変' }), stopFinding({ baseline: 'carried', message: '前からの変' })],
+      { resolved: [{ step: 'a', title: 'テンプレ保存', finding: stopFinding({ message: '直った変' }) }, { step: 'b', title: '生徒の移動 1', finding: stopFinding({ message: 'もう一つ直った' }) }] },
+    )
+    const lines = formatPatrolReportText(report).split('\n')
+    expect(lines[0]).toBe('■ 画面の自動巡回 (アプリ v1.5.720・データ 2026-11-10T23-45): 変 2 件(新しい 1・前から 1)・消えた変 2 件・知らせるだけ 1 件・操作 4 回')
+    expect(lines).toContain('    [変・新] 新しい変')
+    expect(lines).toContain('    [変・前] 前からの変')
+    expect(lines).toContain('    [消えた] テンプレ保存: 直った変')
+    expect(lines).toContain('    [消えた] 生徒の移動 1: もう一つ直った')
+    expect(lines.filter((line) => line.includes('[消えた]'))).toHaveLength(2)
+    expect(lines.some((line) => line.includes('比べた報告'))).toBe(true)
+  })
+
+  it('baseline なしの 1 行目・[変] は今までどおり', () => {
+    const lines = formatPatrolReportText(patrol([classroom([step({ findings: [stopFinding()] })])])).split('\n')
+    expect(lines[0]).toBe('■ 画面の自動巡回 (アプリ v1.5.720・データ 2026-11-10T23-45): 変 1 件・知らせるだけ 0 件・操作 2 回')
+    expect(lines).toContain('    [変] 11/19(木) 3限 机1: 変わった')
+  })
+})

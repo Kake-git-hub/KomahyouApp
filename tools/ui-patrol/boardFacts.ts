@@ -16,6 +16,7 @@ import { normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, type Temp
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from '../../src/components/schedule-board/types'
 import type { AppSnapshotPayload } from '../../src/types/appState'
 import { hasRealDeskTeacher } from '../../src/utils/deskTeacherLabel'
+import { isTemplateDiffTeacherTombstone } from '../../src/components/schedule-board/templateDiffApply'
 
 /** key＝managedStudentId、無ければ 'name:' + name(盤面の比べ方と同じく、名簿に結べない生徒は名前で数える)。 */
 export type StudentFact = { key: string; name: string; subject: string; lessonType: string; origin: 'template' | 'manual' }
@@ -37,6 +38,16 @@ export type DeskFact = {
    * (修正 1・レビュー Minor 1)。名前が無く ID だけの記録は ID で持つ。
    */
   teacherRestName: string
+  /**
+   * 室長が講師を消した記録のある机(講師欄が空 ∧ teacherAssignmentSource='deleted')。講習 ID つきも同じ。
+   * ★権威は templateDiffApply.ts の isTemplateDiffTeacherTombstone(「講師欄の」削除記録＝机に生徒が居ても講師欄を削除のまま保つ判定。
+   *   テンプレ保存〔差分反映〕が「講師を消した机には講師を置かない・テンプレの生徒は置く」を決めるのもこの判定)。
+   *   ScheduleBoardScreen.tsx の isDeletedTeacherTombstone は「授業なし ∧ manualTeacher ∧ deleted」＝空き机としての判定(詰め直し・
+   *   講習の自動割当用)で、生徒が居る机では偽になるので使わない(両者は別の目的で、templateDiffApply.ts のコメントも統一を禁じている)。
+   * ★署名(signature)・changedFields には入れない: 比べる中身を変えない。この印は点検が「なぜ講師がいないか」を読むための注釈で、
+   *   保存→読み込み直しで付け直されうる内部の印(teacherAssignmentSource)を比べると「変わった」と誤報するため(origin と同じ考え)。
+   */
+  teacherDeleted: boolean
   /** 席 0・席 1。 */
   students: Array<StudentFact | null>
   /** 出欠記録 1 件 1 文字列(生徒キー|status|科目|種類)。並べ替え済み。 */
@@ -184,6 +195,8 @@ function buildDeskFact(cell: SlotCell, desk: DeskCell, deskIndex: number, lower:
     slotNumber: cell.slotNumber,
     deskIndex,
     ...content,
+    // 署名(content)の外。content に入れると JSON.stringify の署名に混ざる。
+    teacherDeleted: typeof desk.teacher === 'string' && isTemplateDiffTeacherTombstone({ teacher: desk.teacher, teacherAssignmentSource: desk.teacherAssignmentSource }),
     signature: JSON.stringify(content),
   }
 }

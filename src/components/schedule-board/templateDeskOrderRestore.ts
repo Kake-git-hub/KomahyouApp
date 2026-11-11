@@ -277,6 +277,9 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
     })
     const fallback = clue.fallback
     // X がそのコマで休み（§9-18＝いないもの）なら X の机への合流（下の 0・2）は使わない
+    // 2026-11-11（主セッションの裁定）: 休みの記録が残る机に別の講師を手で置いた机の X の休みは、ここでは数えない（今の挙動）。権威関数 isTeacherRestedInCell に替えると、
+    // X を同じコマの別の机に手で置いた形で 1 回目の保存で離れ 2 回目で戻る（INV-03）。休みにした講師を同じコマの別の机へ手で置いたときの扱いはオーナー判断待ち（2026-11-11）。
+    // 決まるまで替えない。
     const fallbackUsable = Boolean(fallback) && !cell.desks.some((other) => {
       const restRecord = resolveDeskRestRecord(other)
       return Boolean(restRecord && doesTeacherRestMatch(restRecord, desk, aliases))
