@@ -485,6 +485,17 @@ describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流
     }
   })
 
+  it('--json のときは標準出力が JSON だけ(進行の文を混ぜない)', async () => {
+    const env = setup()
+    try {
+      const { code, io } = await run(env, [reportOf(['甲']), reportOf(['甲'])], { extraArgs: ['--json'] })
+      expect(code).toBe(0)
+      expect(JSON.parse(io.out.join('')).baseline).toMatchObject({ carriedStops: 1 })
+    } finally {
+      rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+
   it('用意で断られたら(ref が解決できない・依存が違う・読み口が無い)2。何も流さず・取得もしない', async () => {
     const env = setup()
     try {

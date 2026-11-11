@@ -294,7 +294,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
     if (baselineApp) {
       const baselineOut = path.join(options.out, 'baseline')
       mkdirSync(baselineOut, { recursive: true })
-      say(`変更前(${options.baselineRef})のアプリで先に流します…`)
+      if (!options.json) say(`変更前(${options.baselineRef})のアプリで先に流します…`)
       let baseRun = await runPatrol({
         app: loaded.app, seeds, options: { ...options, out: baselineOut }, backupKey, today, env, say, warn,
         // シグナルで止めたときも、展開したアプリと束ねたアプリを消す(runBrowserPatrol の片づけが呼ぶ)。
@@ -317,8 +317,10 @@ export async function main({ argv = process.argv.slice(2), env = process.env, fe
       }
       baselineReport = baseRun
       baselineSource = path.join(baselineOut, 'report.json')
-      say(`変更前の巡回: ${formatPatrolReportText(baseRun).split('\n')[0]}`)
-      say('今の作業ツリーで流します…')
+      if (!options.json) {
+        say(`変更前の巡回: ${formatPatrolReportText(baseRun).split('\n')[0]}`)
+        say('今の作業ツリーで流します…')
+      }
     }
     let report = withFingerprints(await runPatrol({ app: loaded.app, seeds, options, backupKey, today, env, say, warn, extraCleanup: loaded.cleanup }), fingerprints)
     // シグナルで止めた巡回は書き出さない: 途中までの report.json・report.txt は普通の報告と見分けにくく、前回の報告を
