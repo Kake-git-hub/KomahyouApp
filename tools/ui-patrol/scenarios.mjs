@@ -1442,7 +1442,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const prepStep = newStep(`日付の操作の準備(${openedWeeks[0]}〜の 4 週)`)
       prepStep.notes.push(`開いた週: ${openedWeeks.join('・')}`)
       if (plan.holiday) prepStep.notes.push(`休日にする日: ${plan.holiday.dateKey}(席の生徒 ${plan.holiday.studentCount} 人)`)
-      if (plan.transfer) prepStep.notes.push(`丸ごと振替: 振替元 ${plan.transfer.sourceDateKey}(席の生徒 ${plan.transfer.studentCount} 人)→ 振替先の候補 ${plan.transfer.targetDateKeys.join('・')}(近い順・断られたら次)`)
+      if (plan.transfer) prepStep.notes.push(`丸ごと振替: 振替元 ${plan.transfer.sourceDateKey}(席の生徒 ${plan.transfer.studentCount} 人)→ 振替先の候補 ${plan.transfer.targetDateKeys.join('・')}(近い順・断られたら次)${plan.transfer.otherSources?.length ? `。全部断られたら次の振替元 ${plan.transfer.otherSources.map((other) => other.sourceDateKey).join('・')}` : ''}`)
       for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
       await finish('g', prepStep)
 
@@ -1579,35 +1579,40 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       }
 
       if (plan.transfer) {
-        const D = plan.transfer.sourceDateKey
         const base = current
-        const step = newStep(`丸ごと振替(振替元 ${D})`)
+        const step = newStep(`丸ごと振替(振替元 ${plan.transfer.sourceDateKey})`)
         let applied = null
-        for (const T of plan.transfer.targetDateKeys) {
-          await d.gotoWeekOf(session, mondayOf(D))
-          const started = await d.chooseDayMenuItem(session, D, 'transfer')
-          if (started.missing) {
-            step.notes.push(`飛ばした: ${D} のメニューに「丸ごと振替」がありません。`)
-            break
+        // 振替先が全部断られたら次の振替元を試す(otherSources・Issue #87: 振替元の手置きの講師が振替先の同じ時限の別の机にも居るとアプリが止める)。
+        sourceLoop: for (const candidate of [plan.transfer, ...(plan.transfer.otherSources ?? [])]) {
+          const D = candidate.sourceDateKey
+          if (candidate !== plan.transfer) step.notes.push(`次の振替元を試す: ${D}(席の生徒 ${candidate.studentCount} 人)→ 振替先の候補 ${candidate.targetDateKeys.join('・')}`)
+          for (const T of candidate.targetDateKeys) {
+            await d.gotoWeekOf(session, mondayOf(D))
+            const started = await d.chooseDayMenuItem(session, D, 'transfer')
+            if (started.missing) {
+              step.notes.push(`飛ばした: ${D} のメニューに「丸ごと振替」がありません。`)
+              continue sourceLoop
+            }
+            step.operations += 1
+            if (started.blocked) {
+              step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが丸ごと振替を断った(振替元 ${D}): ${started.blocked}` })
+              continue sourceLoop
+            }
+            await d.gotoWeekOf(session, mondayOf(T))
+            step.notes.push(`丸ごと振替: ${D} → ${T}(同じ曜日)`)
+            const result = await runDayOp(step, `${D} → ${T} の丸ごと振替`, () => d.clickDayHeader(session, T))
+            if (result.outcome === 'applied') {
+              applied = { D, T, ...result }
+              break sourceLoop
+            }
+            // 断られた(振替先の手入力・机の数・同じ講師が 2 机になる など)。選ぶ状態を取り消して次の振替先を試す。
+            if (await d.cancelWholeDayTransfer(session)) step.operations += 1
           }
-          step.operations += 1
-          if (started.blocked) {
-            step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが丸ごと振替を断った(振替元 ${D}): ${started.blocked}` })
-            break
-          }
-          await d.gotoWeekOf(session, mondayOf(T))
-          step.notes.push(`丸ごと振替: ${D} → ${T}(同じ曜日)`)
-          const result = await runDayOp(step, `${D} → ${T} の丸ごと振替`, () => d.clickDayHeader(session, T))
-          if (result.outcome === 'applied') {
-            applied = { T, ...result }
-            break
-          }
-          // 断られた(振替先の手入力・机の数など)。選ぶ状態を取り消して次の振替先を試す。
-          if (await d.cancelWholeDayTransfer(session)) step.operations += 1
         }
         if (applied) {
           effectiveOps += 1
-          const { T, before, after } = applied
+          const { D, T, before, after } = applied
+          step.title = `丸ごと振替(振替元 ${D})`
           step.findings.push(
             ...dayOpFindings(before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
             ...app.checkWholeDayTransferApplied(before.facts, after.facts, { sourceDateKey: D, targetDateKey: T }),
