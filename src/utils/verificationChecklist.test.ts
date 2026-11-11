@@ -210,7 +210,8 @@ describe('確認リストの項目定義', () => {
     // 第131版(2026-11-10): 先の反映日のテンプレがあっても手入力が講師の机から動かない確認 tf-1 も開発用教室だけ。
     // 第132版(2026-11-10): 手入力が講師について行く確認 tf-2 も開発用教室だけ。
     // 第133版(2026-11-10): 手で置いた講師とテンプレの同じ講師が 1 机にまとまる確認 tf-3 も開発用教室だけ。
-    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3']
+    // 第134版(2026-11-11): 講師を替えた机の講師がテンプレにいれば生徒と一緒に残る確認 tf-4 も開発用教室だけ。
+    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
@@ -271,7 +272,8 @@ describe('確認リストの項目定義', () => {
     // 第131版(2026-11-10・v1.5.715 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 先の反映日のテンプレがあっても手入力が講師の机から動かない確認 tf-1(開発用教室だけ)。
     // 第132版(2026-11-10・v1.5.716 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 手入力が講師について行く確認 tf-2(開発用教室だけ)。
     // 第133版(2026-11-10・v1.5.717 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 手で置いた講師とテンプレの同じ講師が 1 机にまとまる確認 tf-3(開発用教室だけ)。
-    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3'])
+    // 第134版(2026-11-11・v1.5.719 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 講師を替えた机の講師がテンプレにいれば生徒と一緒に残る確認 tf-4(開発用教室だけ)。
+    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual([])
     expect(ids).not.toContain('mg-1')
     expect(ids).not.toContain('mg-2')
@@ -1260,7 +1262,8 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
   it('版は v1.5.711(OK 済みを外したので上げる)。項目は 4 機能の全教室展開を本番の教室で見るだけの pr-1〜pr-3 と、第129版の pr-4(第130版で tr-1 を足した・版は据え置き)', () => {
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
     // 第131版(2026-11-10): tf-1 を足した(版は据え置き)。第132版(2026-11-10): tf-2 を足した(版は据え置き)。第133版(2026-11-10): tf-3 を足した(版は据え置き)。
-    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3'])
+    // 第134版(2026-11-11): tf-4 を足した(版は据え置き)。
+    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4'])
   })
 
   it('第129版: pr-4(作成済みの講習がすべて非公開)は v1.5.712 で追加・開発用教室だけ・本番の教室では公開を押さない。pr-2 も「非公開」へ', () => {
@@ -1412,5 +1415,29 @@ describe('第133版(2026-11-10・版は v1.5.711 据え置き): 手で置いた�
     expect(item.steps[1]).toContain('生徒1の席')
     expect(item.steps[2]).toContain('来週')
     expect(item.check).toEqual(['講師Xはそのコマで1つの机だけにいる', 'テンプレの生徒も手で置いた生徒も講師なしになっていない', '講師欄が2行(緑)になっていない'])
+  })
+})
+
+// 第134版(2026-11-11・v1.5.719 で入る・版は v1.5.711 据え置き＝確認中の版へ項目を足しただけ): オーナー決定「A をなおして」(§9-23・Issue #84・INV-02／INV-01)。
+// 別の講師 W の授業に手で X を入れた机で、テンプレが W を外して X を置くとき、X が生徒と一緒に残る(X だけが空き机へ移らない)ことの確認。
+describe('第134版(2026-11-11・版は v1.5.711 据え置き): 講師を替えた机の講師がテンプレにいれば生徒と一緒に残る確認 tf-4', () => {
+  const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'tf-4')!
+
+  it('v1.5.719 で追加(版は v1.5.711 据え置き)・開発用教室だけ・準備するは付けない(tf-1〜tf-3 と同じ)・tf-1〜tf-3 は残す', () => {
+    expect(item).toBeDefined()
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
+    expect(item.introducedIn).toBe('v1.5.719')
+    expect(item.area).toBe('コマ表')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('tf-4')
+    expect(item.autoPrep).toBeUndefined()
+    for (const id of ['tf-1', 'tf-2', 'tf-3']) expect(VERIFICATION_CHECKLIST.items.some((entry) => entry.id === id), id).toBe(true)
+  })
+
+  it('操作は 講師Wの机の講師を講師Xに替えて保存 → テンプレで W を外し X にその生徒 → 来週の反映日で保存。確認は X が 1 机・生徒が X の机・X だけ空き机へ移らない', () => {
+    expect(item.steps).toHaveLength(3)
+    expect(item.steps[0]).toContain('講師Xに替えて')
+    expect(item.steps[1]).toContain('講師Wを外し')
+    expect(item.steps[2]).toContain('来週')
+    expect(item.check).toEqual(['講師Xはそのコマで1つの机だけにいる', 'その生徒は講師Xの机にいる(講師なしになっていない)', '講師Xだけが空いた机へ移っていない'])
   })
 })

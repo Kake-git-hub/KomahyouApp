@@ -17,6 +17,8 @@
 //     保存前のテンプレで乗っていた机の講師 → 下段の講師を採用した記録 templateTeacherDeclined の講師（採用した講師が今の机の講師のときだけ）→
 //     授業の手がかりも採用の記録も無い手置き講師の机（手置き・入れ替え・QR・講師名を固定しただけ）はその講師自身（新しいテンプレのそのコマにいるときだけ・§9-1 改定で同じ講師の机へ合流）。
 //     講師の削除記録・講師の休みの机は、消した／休んだ講師。
+//     2026-11-11 改定（オーナー決定・§9-23・Issue #84）: 手置き講師の机で授業の講師・取り下げた講師 W が新しいテンプレのそのコマにいなくて、机の講師 X がいれば、
+//     X の机へ合流する（v1.5.717 の合流と同じ扱い）。X が休み・X の机が保留・X の机の番号を取れないときは今までどおり W がいない机（下の空き机へ）。
 //   - その講師が新しいテンプレのそのコマにいる → 机ごと（中身はそのまま）その机番号へ。いない → 手入力があれば、テンプレが使う最後の机より下の空き机の
 //     一番若いもの → 無ければテンプレが使わない机の一番若いもの → どちらも無ければ残った机（別の講師の机になりうるので確認画面に出す）。
 //     テンプレの講師は付かない（差分反映がテンプレ由来の講師を外す）。手置きの講師は机と一緒に移る。
@@ -117,12 +119,20 @@ function resolveAnchorCandidates(desk: DeskCell, deskIndex: number, dateKey: str
  * （テンプレの授業・採用の記録・固定した講師名）。足場講師の机より後に番号を取る。
  * onlyIfPresent＝その講師が新しいテンプレのそのコマにいなければ手がかりに使わない（講師自身の机・regression-reviewer M-3／§9-1 改定）。
  */
-type DeskTeacherClue = { label: string; matches: (templateDesk: TemplateDeskRef) => boolean; derived: boolean; onlyIfPresent?: boolean }
+type DeskTeacherClue = {
+  label: string; matches: (templateDesk: TemplateDeskRef) => boolean; derived: boolean; onlyIfPresent?: boolean
+  /**
+   * 2026-11-11 オーナー決定（§9-23・Issue #84）: 手がかりの講師 W（授業の講師・取り下げたテンプレの講師）が新しいテンプレのそのコマにいないときに使う、机の今の講師 X 自身の手がかり
+   * （onlyIfPresent・X がいれば X の机へ合流）。X がそのコマで休み・X の机が全部保留の机なら使わない（W がいない机として今までどおり下の空き机へ）。
+   */
+  fallback?: DeskTeacherClue
+}
 
 function resolveDeskTeacherClue(desk: DeskCell, templateDesks: readonly TemplateDeskRef[], aliases: TeacherAliasResolver): DeskTeacherClue | null {
   const byName = (name: string, derived: boolean, onlyIfPresent = false): DeskTeacherClue => ({
     label: name, derived, onlyIfPresent, matches: (templateDesk) => hasRealDeskTeacher(templateDesk.teacher) && isSameTeacherByAliases(templateDesk.teacher, name, aliases),
   })
+  const selfFallback = (): Pick<DeskTeacherClue, 'fallback'> => (hasRealDeskTeacher(desk.teacher) ? { fallback: byName(desk.teacher.trim(), true, true) } : {})
   const origin = resolveDeskTeacherOrigin(desk)
   // 足場講師（テンプレ由来・埋め草でない本物の講師）はその名前
   if (origin === 'template' && hasRealDeskTeacher(desk.teacher)) return byName(desk.teacher.trim(), false)
@@ -131,13 +141,15 @@ function resolveDeskTeacherClue(desk: DeskCell, templateDesks: readonly Template
     if (desk.lesson && isTemplateManagedLesson(desk.lesson)) {
       const lessonId = desk.lesson.id
       const anchor = templateDesks.find((templateDesk) => templateDesk.lesson?.id === lessonId && hasRealDeskTeacher(templateDesk.teacher))
-      if (anchor) return byName(anchor.teacher.trim(), true)
+      // 2026-11-11 改定（§9-23・Issue #84）: W が新しいテンプレのそのコマにいなくて X がいれば X の机へ合流（fallback）。W がいれば §9-15 のまま W について行く。
+      if (anchor) return { ...byName(anchor.teacher.trim(), true), ...selfFallback() }
     }
     // 下段（手入力）の講師を採用したときに取り下げたテンプレの講師（この机はその講師の机だった）。採用した講師が今の机の講師のときだけ
     // （isTemplateTeacherDeclinedAtDesk の S-1 と同じ条件＝あとで別の講師へ替えた机では古い記録を使わない）。
     const declined = desk.templateTeacherDeclined
     if (declined?.adopted && hasRealDeskTeacher(declined.teacher) && isSameTeacherRecord(declined.adopted, desk, aliases)) {
-      return { label: declined.teacher.trim(), derived: true, matches: (templateDesk) => hasRealDeskTeacher(templateDesk.teacher) && isSameTeacherRecord(declined, templateDesk, aliases) }
+      // 2026-11-11 改定（§9-23・Issue #84）: 取り下げた W がいなくて採用した X がいれば X の机へ合流（fallback）。
+      return { label: declined.teacher.trim(), derived: true, matches: (templateDesk) => hasRealDeskTeacher(templateDesk.teacher) && isSameTeacherRecord(declined, templateDesk, aliases), ...selfFallback() }
     }
     // 机の講師の手がかりが講師自身の机（授業の手がかりも採用の記録も無い＝手で講師を置いた机・QR で自動で入った講師の机・講師名を固定しただけの机・
     // 授業の手がかりの無い入れ替え〔manual-replaced〕の机）は、
@@ -146,6 +158,7 @@ function resolveDeskTeacherClue(desk: DeskCell, templateDesks: readonly Template
     //   2026-11-10 オーナー決定・§9-1 の改定（spec §2-3「同じ講師として合流する」・緑が丘の報告「テンプレで入れた先生が消えちゃう」）: 手置き（manual）・QR（schedule-registration）
     //   の講師の机も対象にした。改定前は「手置きが勝つ＝テンプレの別の机に X を置かない」で、その机のテンプレの生徒が講師なし（赤字）になっていた。今の番号が
     //   同じ講師のテンプレの机なら、その番号に居るまま（押し出されない・11/16 5限の型）。別の講師 W の授業に X を入れた机は上の授業の手がかりで W について行く（§9-15 のまま）。
+    //   2026-11-11 改定（§9-23・Issue #84）: ただし W が新しいテンプレのそのコマにいなくて X がいれば、上の手がかりの fallback で X の机へ合流する。
     if (hasRealDeskTeacher(desk.teacher)) return byName(desk.teacher.trim(), true, true)
     return null
   }
@@ -219,7 +232,11 @@ export function restoreTemplateDeskOrder(cell: SlotCell, templateDesks: readonly
 type DeskRoute =
   | { kind: 'locked' }
   /** 講師が新しいテンプレのそのコマにいる（候補＝その講師の机番号・今の番号を先頭に）。 */
-  | { kind: 'follow'; candidates: number[]; derived: boolean }
+  /**
+   * leftTeacherName（2026-11-11・§9-23）: W がいないので X の机へ合流しに行く机。合流先の番号を取れなかったら（同じ X の机を先に取られた等）、
+   * 今までどおり「W がいない机」（teacher-left・確認画面に出す）として扱う（別の講師の机に入って 2 行にならないように）。
+   */
+  | { kind: 'follow'; candidates: number[]; derived: boolean; leftTeacherName?: string }
   /** 講師の手がかりはあるが、その講師が新しいテンプレのそのコマにいない。 */
   | { kind: 'teacher-left'; teacherName: string }
   /** 講師の手がかりが無い（従来どおり保存前のテンプレの机番号）。 */
@@ -261,6 +278,18 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
     if (hits.length > 0) return { kind: 'follow', candidates: currentFirst(index, hits.filter((target) => !lockedIndexes.has(target))), derived: clue.derived }
     // 講師自身が手がかりの机（手置き・QR・講師名を固定しただけ）は、その講師が新しいテンプレにいなければ手がかりにしない（従来どおり手入力だけの机）
     if (clue.onlyIfPresent) return anchorRoute()
+    // 2026-11-11 オーナー決定（§9-23・Issue #84・日大前の 29 机）: 別の講師 W の授業に手で X を入れた机（採用の記録の机も）で、W が新しいテンプレのそのコマにいなくて
+    // X がいれば、下の空き机へは移さず X の新しいテンプレの机へ合流する（§2-3「同じ講師として合流する」と同じ・今の番号が X の机なら居るまま）。
+    // 改定前は W がいない机として X ごと下の空き机へ移り、テンプレの X は「手置きの X がいる」ので置かれず、テンプレの生徒が講師なし（赤字）で残っていた（確認画面にも出なかった）。
+    // X がそのコマで休み（§9-18＝いないもの）・X の机が全部保留（2 行）の机（合流できない＝手置きが勝つ）のときは使わず、今までどおり下の空き机へ（teacher-left）。
+    const fallback = clue.fallback
+    if (fallback && !cell.desks.some((other) => {
+      const restRecord = resolveDeskRestRecord(other)
+      return Boolean(restRecord && doesTeacherRestMatch(restRecord, desk, aliases))
+    })) {
+      const fallbackHits = positions.filter((target) => !lockedIndexes.has(target) && Boolean(usedDesks[target]) && fallback.matches(usedDesks[target]))
+      if (fallbackHits.length > 0) return { kind: 'follow', candidates: currentFirst(index, fallbackHits), derived: true, leftTeacherName: clue.label }
+    }
     return { kind: 'teacher-left', teacherName: clue.label }
   })
   const candidatesOf = (index: number) => {
@@ -294,9 +323,14 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
   anchored.forEach(claim)
 
   const rest = positions.filter((index) => !lockedIndexes.has(index) && !targetByDesk.has(index))
-  const teacherLeftManual = rest.filter((index) => routes[index].kind === 'teacher-left' && hasManualDeskContent(cell.desks[index], cell.dateKey))
+  // W がいないので X の机へ合流しに行ったが番号を取れなかった机（§9-23）は、今までどおり W がいない机として扱う
+  const leftTeacherNameOf = (index: number) => {
+    const route = routes[index]
+    return route.kind === 'teacher-left' ? route.teacherName : route.kind === 'follow' ? route.leftTeacherName : undefined
+  }
+  const teacherLeftManual = rest.filter((index) => leftTeacherNameOf(index) !== undefined && hasManualDeskContent(cell.desks[index], cell.dateKey))
   // 講師の手がかりの無い机・講師の机へ行けなかった机のうち中身のあるもの（従来の「手入力だけの机」）
-  const manualDesks = rest.filter((index) => routes[index].kind !== 'teacher-left' && !isEmptyBoardDesk(cell.desks[index]))
+  const manualDesks = rest.filter((index) => leftTeacherNameOf(index) === undefined && !isEmptyBoardDesk(cell.desks[index]))
   // 空き机と、講師がいなくなった手入力の無い机（テンプレが置き直すのでどこでもよい）
   const looseDesks = rest.filter((index) => !teacherLeftManual.includes(index) && !manualDesks.includes(index))
   const rearranged = [...targetByDesk].some(([index, target]) => index !== target)
@@ -326,9 +360,8 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
     if (target === undefined) continue
     take(index, target)
     const desk = cell.desks[index]
-    const route = routes[index]
     const base = {
-      cellId: cell.id, dateKey: cell.dateKey, slotNumber: cell.slotNumber, fromDeskIndex: index, toDeskIndex: target, formerTeacherName: route.kind === 'teacher-left' ? route.teacherName : '',
+      cellId: cell.id, dateKey: cell.dateKey, slotNumber: cell.slotNumber, fromDeskIndex: index, toDeskIndex: target, formerTeacherName: leftTeacherNameOf(index) ?? '',
       ...(resolveDeskTeacherOrigin(desk) === 'manual' && hasRealDeskTeacher(desk.teacher) ? { movedTeacherName: desk.teacher.trim() } : {}),
       manualStudents: liveStudents(desk.lesson).filter((student) => resolveStudentOriginOnDate(student, cell.dateKey) !== 'template'),
     }
