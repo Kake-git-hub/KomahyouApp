@@ -19,6 +19,9 @@ export const TESTIDS = {
   menuAttendance: 'menu-attendance-button', menuAbsence: 'menu-absence-button', menuAbsenceNoMakeup: 'menu-absence-no-makeup-button',
   makeupStockChip: 'makeup-stock-chip', makeupStockPanel: 'makeup-stock-panel', makeupStockClose: 'makeup-stock-close-button',
   stockActionModal: 'stock-action-modal', stockActionModalCancel: 'stock-action-modal-cancel',
+  // 台本 f(講師の移動・入れ替え・休み): 盤面の講師メニューの「休み」／「休みを解除する(講師名)」と、講師を生徒のいる机へ落としたときに選ぶ画面(ScheduleBoardScreen.tsx)。
+  teacherRestButton: 'teacher-rest-button', teacherSeatMoveModal: 'teacher-seat-move-modal',
+  teacherSeatMoveTeacher: 'teacher-seat-move-teacher-button', teacherSeatMoveSeat: 'teacher-seat-move-seat-button', teacherSeatMoveCancel: 'teacher-seat-move-cancel-button',
 }
 
 /** prop で渡して付く testid(ソースには data-testid="…" の字面で残らない・selectors.test.mjs が別に見張る)。選択の取り消し(AppMenu の actionButtonTestId)。 */
@@ -29,7 +32,8 @@ export const SEARCHABLE_SELECT_TESTIDS = { templateAddStudent: 'template-add-stu
 
 // student-cell-{cellId}-{deskIndex}-{studentIndex}(BoardGrid.tsx)・week-jump-day-{dateKey}(BoardToolbar.tsx)
 // makeup-stock-entry-{生徒キー__- の記号を - に}・stock-origin-item-{振替元の並び}(ScheduleBoardScreen.tsx の未消化振替の一覧)
-export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-' }
+// teacher-rest-{cellId}-{deskIndex}(BoardGrid.tsx の講師欄のグレーの「休」)
+export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-', teacherRest: 'teacher-rest-' }
 
 export const SOURCE_FILES_WITH_TESTIDS = [
   'src/components/schedule-board/BoardToolbar.tsx',

@@ -273,3 +273,31 @@ describe('盤面の事実(collectBoardFacts)', () => {
     expect(empty.pendingDeskCount).toBe(0)
   })
 })
+
+describe('講師のコマの形(teacherAnomalies・台本 f・2026-11-11)', () => {
+  const teachers = [{ id: 't1', name: '講師A本名', displayName: '講師A' }, { id: 't2', name: '講師B' }, { id: 't3', name: '講師C' }]
+  const factsOf = (desks, { isOpenDay = true } = {}) => collectBoardFacts(makePayload({ weeks: [[{ ...makeCell('2026-11-19', 3, desks), isOpenDay }]], extra: { teachers } }))
+
+  it('休みの記録があるコマにその講師が居る(§9-25)を集める。照合はアプリの権威関数(呼び名の対応表・ID でも当たる)', () => {
+    const facts = factsOf([
+      makeDesk('d1', [makeStudentEntry(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }),
+      makeDesk('d2', [null, null], { teacher: '講師A本名' }),
+    ])
+    expect(facts.teacherAnomalies).toEqual([{ kind: 'rested-present', cellId: CELL_ID, dateKey: '2026-11-19', slotNumber: 3, deskIndex: 1, teacher: '講師A本名' }])
+    // 休みの講師が居なければ何も無い(代わりの講師 B は休みではない)
+    expect(factsOf([makeDesk('d1', [null, null], { teacher: '講師B', teacherRest: { teacher: '講師A' } }), makeDesk('d2')]).teacherAnomalies).toEqual([])
+  })
+
+  it('同じ講師が 1 コマに 2 机(INV-01)を集める。埋め草「講師未割当」どうし・休校のコマは数えない', () => {
+    const facts = factsOf([makeDesk('d1', [null, null], { teacher: '講師B' }), makeDesk('d2', [null, null], { teacher: '講師B', teacherAssignmentTeacherId: 't2' }), makeDesk('d3', [null, null], { teacher: '講師C' })])
+    expect(facts.teacherAnomalies.map((item) => `${item.kind}:${item.deskIndex}:${item.teacher}`)).toEqual(['duplicate:0:講師B', 'duplicate:1:講師B'])
+    expect(factsOf([makeDesk('d1', [null, null], { teacher: '講師未割当' }), makeDesk('d2', [null, null], { teacher: '講師未割当' })]).teacherAnomalies).toEqual([])
+    expect(factsOf([makeDesk('d1', [null, null], { teacher: '講師B' }), makeDesk('d2', [null, null], { teacher: '講師B' })], { isOpenDay: false }).teacherAnomalies).toEqual([])
+  })
+
+  it('講師のコマの形は署名の外(比べる中身を変えない)', () => {
+    const plain = factsOf([makeDesk('d1', [null, null], { teacher: '講師B' })])
+    expect(plain.desks.get(`${CELL_ID}#0`).signature).not.toContain('rested-present')
+    expect(plain.teacherAnomalies).toEqual([])
+  })
+})

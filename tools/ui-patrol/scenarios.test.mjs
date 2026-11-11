@@ -5,6 +5,7 @@ import { collectBoardFacts } from './boardFacts.ts'
 import {
   ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
+  TEACHER_OPS, buildTeacherOpAllowedChange, collectRestReleasedDeskKeys, isTeacherInCell, pickTeacherPlan,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
@@ -762,5 +763,184 @@ describe('runClassroomPatrol(台本 e のつなぎ)', () => {
     const order = report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
     expect(order.indexOf('e')).toBeLessThan(order.indexOf('a'))
     expect(stepsOf(report, 'a')[0].findings.map((finding) => `${finding.level}:${finding.code}`)).toContain('stop:attendance-record-overridden')
+  })
+})
+
+// ── 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)
+describe('台本 f(講師)の候補選び・範囲', () => {
+  /** 11/17 に 6 つのコマ(どれも講師 2 人以上の机と空き机がある)。11/16(今日より前)と保留・休みのあるコマは選ばない。 */
+  const fWeek = () => [
+    cell('2026-11-16', 1, [desk('p0', '講師A', [student('ep', 'sP', 'regular'), null]), desk('p1', '講師B'), desk('p2', '')]),
+    ...[1, 2, 3, 4, 5, 6].map((slot) => cell('2026-11-17', slot, [
+      desk(`a${slot}0`, '講師A', [student(`e${slot}0`, `s${slot}0`, 'regular'), null]),
+      desk(`a${slot}1`, '講師B', [student(`e${slot}1`, `s${slot}1`, 'regular'), null]),
+      desk(`a${slot}2`, '', [null, null]),
+    ])),
+    // 休みの記録のあるコマは選ばない(前からある休みと混ざる)
+    cell('2026-11-18', 1, [desk('r0', '', [student('er', 'sR', 'regular'), null], { teacherRest: { teacher: '講師C' } }), desk('r1', '講師A'), desk('r2', '')]),
+  ]
+
+  it('6 つの操作(講師の移動 → 講師だけ入替 → 生徒ごと席入替 → 講師メニューで替える → 休みの流れ → 休みと解除)を別々のコマで選ぶ。同じ種なら同じ', () => {
+    const facts = factsOf(fWeek())
+    const plan = pickTeacherPlan(facts, { weekDateKeys: WEEK, todayKey: TODAY, seed: 1 })
+    expect(plan.ops.map((op) => op.name)).toEqual(TEACHER_OPS.map((op) => op.name))
+    expect(plan.skipped).toEqual([])
+    expect(new Set(plan.ops.map((op) => op.cellId)).size).toBe(plan.ops.length)
+    for (const op of plan.ops) expect(op.cellId.startsWith('2026-11-17_')).toBe(true)
+    expect(pickTeacherPlan(facts, { weekDateKeys: WEEK, todayKey: TODAY, seed: 1 })).toEqual(plan)
+    const byName = Object.fromEntries(plan.ops.map((op) => [op.name, op]))
+    const at = (op, index) => facts.desks.get(`${op.cellId}#${index}`)
+    // 講師の移動・休みの流れの先は講師も生徒も居ない机
+    for (const name of ['move', 'rest-flow']) {
+      expect(at(byName[name], byName[name].deskIndex).teacher).not.toBe('')
+      expect(at(byName[name], byName[name].targetDeskIndex).teacher).toBe('')
+      expect(at(byName[name], byName[name].targetDeskIndex).students).toEqual([null, null])
+    }
+    // 入れ替えは講師どうし
+    for (const name of ['teacher-swap', 'seat-swap']) {
+      expect(at(byName[name], byName[name].deskIndex).teacher).not.toBe('')
+      expect(at(byName[name], byName[name].targetDeskIndex).teacher).not.toBe('')
+    }
+    expect(byName['rest-flow'].teacher).toBe(at(byName['rest-flow'], byName['rest-flow'].deskIndex).teacher)
+  })
+
+  it('候補の無い操作は飛ばして理由を残す(空き机が無いコマでは講師の移動・休みの流れを選ばない)', () => {
+    const cells = [cell('2026-11-17', 1, [desk('a0', '講師A', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師B')])]
+    const plan = pickTeacherPlan(factsOf(cells), { weekDateKeys: WEEK, todayKey: TODAY, seed: 1 })
+    expect(plan.ops.map((op) => op.name)).toHaveLength(1)
+    expect(plan.skipped.length).toBe(TEACHER_OPS.length - 1)
+    expect(plan.skipped.join('\n')).toContain('講師の移動')
+    expect(pickTeacherPlan(factsOf([]), { weekDateKeys: WEEK, todayKey: TODAY, seed: 1 }).ops).toEqual([])
+  })
+
+  it('変わってよい範囲: 操作した机(入れ替えは 2 机)だけ・部分は無し。休みの講師を手で置いたときは、同じコマで休みの記録だけ消えた机も範囲に入る', () => {
+    expect([...buildTeacherOpAllowedChange({ kind: 'teacher-swap', cellId: 'c', deskIndex: 0, targetDeskIndex: 2 }).deskKeys]).toEqual(['c#0', 'c#2'])
+    expect([...buildTeacherOpAllowedChange({ kind: 'rest', cellId: 'c', deskIndex: 1 }).deskKeys]).toEqual(['c#1'])
+    expect(buildTeacherOpAllowedChange({ kind: 'rest', cellId: 'c', deskIndex: 1 }).sections.size).toBe(0)
+    const before = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '講師A' } }), desk('a1', ''), desk('a2', '講師C', [null, null], { teacherRest: { teacher: '講師A' } })])])
+    const after = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A'), desk('a2', '講師D')])])
+    // 机0 は記録が消えただけ(範囲に入る)。机2 は講師も替わった(入らない)。
+    expect([...collectRestReleasedDeskKeys(before, after, '2026-11-17_1', { teacher: '講師A' })]).toEqual(['2026-11-17_1#0'])
+    // 別の講師 Z の休みの記録が消えた机は範囲に入れない(置いた講師の記録だけ・手直し 1 M-2)
+    const otherBefore = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '講師Z' } }), desk('a1', '')])])
+    const otherAfter = factsOf([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A')])])
+    expect([...collectRestReleasedDeskKeys(otherBefore, otherAfter, '2026-11-17_1', { teacher: '講師A' })]).toEqual([])
+  })
+
+  it('講師の照合はアプリの権威関数(呼び名の対応表): 休みの記録が講師 ID だけ・講師欄が表示名だけでも同じ講師と分かる(手直し 1 M-2・M-3)', () => {
+    const teachers = [{ id: 't1', name: '講師A本名', displayName: '講師A' }, { id: 't2', name: '講師B' }]
+    const withTeachers = (cells) => collectBoardFacts({ ...payloadOf(cells), teachers })
+    const before = withTeachers([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null], { teacherRest: { teacher: '', teacherId: 't1' } }), desk('a1', '')])])
+    const after = withTeachers([cell('2026-11-17', 1, [desk('a0', '講師B', [student('e1', 'sA', 'regular'), null]), desk('a1', '講師A')])])
+    expect([...collectRestReleasedDeskKeys(before, after, '2026-11-17_1', { teacher: '講師A' })]).toEqual(['2026-11-17_1#0'])
+    // 講師メニューの選択肢の名前で「そのコマに居る」: 講師欄の登録名・休みの記録の ID でも当たる
+    expect(isTeacherInCell(before, '2026-11-17_1', '講師A本名')).toBe(true)
+    expect(isTeacherInCell(before, '2026-11-17_1', '講師A')).toBe(true)
+    expect(isTeacherInCell(after, '2026-11-17_1', '講師A本名')).toBe(true)
+    expect(isTeacherInCell(after, '2026-11-17_1', '講師C')).toBe(false)
+  })
+})
+
+describe('runClassroomPatrol(台本 f のつなぎ)', () => {
+  /** 講師の操作を盤面へ当てる偽のアプリ。broken で「§9-25 を机単位に戻す」「講師だけ入替で生徒も動く」を作る。 */
+  function makeTeacherDriver(payload, broken = {}) {
+    const fake = makeFakeDriver(payload, {})
+    const ops = []
+    const commit = (next, status) => { fake.state.undo.push(fake.state.payload); fake.state.redo = []; fake.state.payload = next; fake.state.status = `${status} ${ops.length}`; return fake.state.status }
+    const cellOf = (next, cellId) => next.boardState.weeks.flat().find((item) => item.id === cellId)
+    const releaseInCell = (boardCell, placed, placedIndex) => {
+      boardCell.desks.forEach((item, index) => {
+        if (broken.restDeskOnly && index !== placedIndex) return
+        if (item.teacherRest?.teacher === placed) delete item.teacherRest
+      })
+    }
+    const blockOf = (item) => ({ teacher: item.teacher, manualTeacher: item.manualTeacher })
+    Object.assign(fake.driver, {
+      dragTeacher: async (_session, from, to, swapMode) => {
+        ops.push({ kind: 'drag', from, to, swapMode })
+        const next = clone(fake.state.payload)
+        const boardCell = cellOf(next, from.cellId)
+        const source = boardCell.desks[from.deskIndex]
+        const target = boardCell.desks[to.deskIndex]
+        const [sourceBlock, targetBlock] = [blockOf(source), blockOf(target)]
+        Object.assign(source, targetBlock, { manualTeacher: Boolean(targetBlock.teacher) })
+        Object.assign(target, sourceBlock, { manualTeacher: true })
+        if (swapMode === 'seat' || broken.swapMovesStudents) [source.lesson, target.lesson] = [target.lesson, source.lesson]
+        return { status: commit(next, '講師を動かしました'), modal: true }
+      },
+      setBoardTeacher: async (_session, position, choose) => {
+        const options = ['講師A', '講師B', '講師C', '講師D'].map((name) => ({ value: name, label: name }))
+        const teacher = choose(options)
+        if (!teacher) return { teacher: null, status: fake.state.status }
+        ops.push({ kind: 'menu', position, teacher })
+        const next = clone(fake.state.payload)
+        const boardCell = cellOf(next, position.cellId)
+        Object.assign(boardCell.desks[position.deskIndex], { teacher, manualTeacher: true, teacherAssignmentSource: 'manual' })
+        releaseInCell(boardCell, teacher, position.deskIndex)
+        return { teacher, status: commit(next, '講師を設定しました') }
+      },
+      toggleTeacherRest: async (_session, position) => {
+        ops.push({ kind: 'rest', position })
+        const next = clone(fake.state.payload)
+        const item = cellOf(next, position.cellId).desks[position.deskIndex]
+        if (item.teacherRest) {
+          delete item.teacherRest
+          return { status: commit(next, '休みを解除しました'), label: '休みを解除する' }
+        }
+        item.teacherRest = { teacher: item.teacher }
+        item.teacher = ''
+        item.manualTeacher = false
+        return { status: commit(next, '休みにしました'), label: '休み' }
+      },
+    })
+    return { ...fake, ops }
+  }
+
+  const fPayload = () => patrolPayload([1, 2, 3, 4, 5, 6].map((slot) => cell('2026-11-17', slot, [
+    desk(`a${slot}0`, '講師A', [student(`e${slot}0`, `s${slot}0`, 'regular'), null]),
+    desk(`a${slot}1`, '講師B', [student(`e${slot}1`, `s${slot}1`, 'regular'), null]),
+    desk(`a${slot}2`, '', [null, null]),
+  ])))
+  const appF = { ...app, collectStockBalances: () => ({ makeup: {}, lecture: {} }), resolveTeacherIdByDisplayName: () => '' }
+
+  async function runF(payload, { broken, scenarios = ['boot', 'f'] } = {}) {
+    const fake = makeTeacherDriver(payload, broken)
+    const report = await runClassroomPatrol({
+      session: fake.session, app: appF, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
+      options: { scenarios, moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    return { report, fake }
+  }
+  const stopsOf = (report) => stepsOf(report, 'f').flatMap((step) => step.findings).filter((finding) => finding.level === 'stop').map((finding) => finding.code)
+
+  it('仕様どおりに効けば止める所見 0。操作ごとに 何をどこへ を仮名で残し、休みの流れは 休み → 代わりの講師 → 別の机へ手で置く → 元に戻す。最後に保存→読み込み直し', async () => {
+    const { report, fake } = await runF(fPayload())
+    expect(report.aborted).toBeNull()
+    expect(stopsOf(report)).toEqual([])
+    const titles = stepsOf(report, 'f').map((step) => step.title)
+    expect(titles[0]).toContain('講師の操作の準備')
+    expect(titles.at(-1)).toBe('講師の操作のあと 保存→読み込み直し')
+    expect(titles.join('\n')).toContain('休みの講師を同じコマの別の机へ手で置く')
+    expect(fake.ops.map((op) => op.kind)).toEqual(['drag', 'drag', 'drag', 'menu', 'rest', 'menu', 'menu', 'rest', 'rest'])
+    expect(fake.ops.filter((op) => op.kind === 'drag').map((op) => op.swapMode)).toEqual(['teacher', 'teacher', 'seat'])
+    expect(stepsOf(report, 'f').map((step) => step.notes.join('\n')).join('\n')).toMatch(/講師[AB]/)
+    // ドラッグで休みの講師を置く形は作れない(休みの講師は机に居ない)ことを注に書く
+    expect(stepsOf(report, 'f')[0].notes.join('\n')).toContain('ドラッグ')
+  })
+
+  it('わざと壊す: §9-25 を机単位に戻す → stop teacher-rested-but-present／講師だけ入替で生徒も動く → stop teacher-op-not-applied', async () => {
+    const deskOnly = await runF(fPayload(), { broken: { restDeskOnly: true } })
+    expect(stopsOf(deskOnly.report)).toContain('teacher-rested-but-present')
+    expect(stopsOf(deskOnly.report)).toContain('teacher-op-not-applied')
+    const swap = await runF(fPayload(), { broken: { swapMovesStudents: true } })
+    expect(stopsOf(swap.report)).toContain('teacher-op-not-applied')
+  })
+
+  it('講師を動かせる机が無ければ中断(台本 b・d・e と同じ扱い)。台本 f は e のあと・a の前に流れる', async () => {
+    const { report } = await runF(patrolPayload([cell('2026-11-17', 1, [desk('a0', '')])]))
+    expect(report.aborted).toMatch(/^f: /)
+    const order = (await runF(fPayload(), { scenarios: ['boot', 'a', 'f'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
+    expect(order.indexOf('f')).toBeLessThan(order.indexOf('a'))
   })
 })

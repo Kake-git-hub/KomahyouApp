@@ -18,6 +18,8 @@ import {
   checkTeacherlessStudentsNotAdded,
   checkTemplateEditApplied,
   checkTemplateEditSaved,
+  checkTeacherCellIntegrity,
+  checkTeacherOpApplied,
   parseAnnouncedOrphanedMakeupCount,
   parsePendingCountFromConfirm,
   summarizeChanges,
@@ -84,7 +86,9 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('template-edit-held-by-rule')
   // 台本 e(出欠・2026-11-11 第 2 段の 2 本目)
   for (const code of ['stock-delta-mismatch', 'attendance-not-applied', 'attendance-blocked', 'attendance-record-overridden']) expect(PATROL_FINDING_CODES).toContain(code)
-  expect(PATROL_FINDING_CODES).toHaveLength(29)
+  // 台本 f(講師の移動・入れ替え・休み・2026-11-11 第 2 段の 3 本目)と講師のコマの点検
+  for (const code of ['teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked']) expect(PATROL_FINDING_CODES).toContain(code)
+  expect(PATROL_FINDING_CODES).toHaveLength(34)
 })
 
 describe('変わってよい範囲', () => {
@@ -677,5 +681,110 @@ describe('台本 e の点検', () => {
     // 前から同じコマに座っていた(記録と授業が並んでいた)なら新しく置き直したのではない
     const seatedBefore = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] }), desk('d2', [student(), null], { teacher: '講師B' })])])
     expect(checkAttendanceRecordsHold(seatedBefore, replaced, { fromDateKey: '2026-11-16' })).toEqual([])
+  })
+})
+
+describe('台本 f(講師の移動・入れ替え・休み)の点検', () => {
+  const teacherFacts = (desks, teachers = [{ id: 't1', name: '講師A' }, { id: 't2', name: '講師B' }, { id: 't3', name: '講師C' }]) => collectBoardFacts({ ...payload([cell(D, 3, desks)]), teachers })
+
+  it('休みの講師がそのコマに居る形・同じ講師が 1 コマに 2 机が新しくできたら stop。前からある形は止めない(reportExisting なら info で知らせるだけ)', () => {
+    const clean = teacherFacts([desk('d1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('d2')])
+    const rested = teacherFacts([desk('d1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }), desk('d2', [null, null], { teacher: '講師A' })])
+    const found = checkTeacherCellIntegrity(clean, rested)
+    expect(codes(found)).toEqual(['stop:teacher-rested-but-present'])
+    expect(found[0]).toMatchObject({ dateKey: D, slotNumber: 3, deskIndex: 1 })
+    expect(found[0].message).toContain('講師A')
+    // 前から(種データに最初からある形・丸ごと振替の付け替えなど)は止めない
+    expect(checkTeacherCellIntegrity(rested, rested)).toEqual([])
+    expect(codes(checkTeacherCellIntegrity(rested, rested, { reportExisting: true }))).toEqual(['info:teacher-cell-anomaly-existing'])
+    const duplicated = teacherFacts([desk('d1', [null, null], { teacher: '講師B' }), desk('d2', [null, null], { teacher: '講師B' })])
+    const single = teacherFacts([desk('d1', [null, null], { teacher: '講師B' }), desk('d2')])
+    expect(codes(checkTeacherCellIntegrity(single, duplicated))).toEqual(['stop:teacher-duplicated-in-cell', 'stop:teacher-duplicated-in-cell'])
+    expect(checkTeacherCellIntegrity(duplicated, duplicated)).toEqual([])
+    // 前から 1 件ある「休みなのに居る」形と同じコマ・同じ講師に 2 机目ができたら止まる(数で突き合わせる)
+    const restedTwice = teacherFacts([
+      desk('d1', [student(), null], { teacher: '講師B', teacherRest: { teacher: '講師A', teacherId: 't1' } }),
+      desk('d2', [null, null], { teacher: '講師A' }),
+      desk('d3', [null, null], { teacher: '講師A' }),
+    ])
+    expect(codes(checkTeacherCellIntegrity(rested, restedTwice))).toEqual(expect.arrayContaining(['stop:teacher-rested-but-present', 'stop:teacher-duplicated-in-cell']))
+    expect(codes(checkTeacherCellIntegrity(rested, restedTwice)).filter((code) => code === 'stop:teacher-rested-but-present')).toHaveLength(1)
+  })
+
+  it('まとめる行(ほか n 机)の code は種類ごと(休みの講師が居る形は teacher-rested-but-present のまま)', () => {
+    const cells = Array.from({ length: 22 }, (_, index) => cell(D, index + 1, [
+      desk(`r${index}`, [null, null], { teacher: '講師B', teacherRest: { teacher: '講師A' } }),
+      desk(`p${index}`, [null, null], { teacher: '講師A' }),
+    ]))
+    const clean = collectBoardFacts(payload(cells.map((item) => ({ ...item, desks: [item.desks[0]] }))))
+    const found = checkTeacherCellIntegrity(clean, collectBoardFacts(payload(cells)))
+    expect(found).toHaveLength(21)
+    expect(new Set(found.map((finding) => finding.code))).toEqual(new Set(['teacher-rested-but-present']))
+    expect(found.at(-1).message).toContain('ほか 2 机')
+  })
+
+  it('休みの講師を手で置いた: 休みの記録が講師 ID だけでも、残っていれば止める(照合は doesTeacherRestMatch)', () => {
+    const teachers = [{ id: 't1', name: '講師A本名', displayName: '講師A' }, { id: 't3', name: '講師C' }]
+    const before = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '', teacherId: 't1' } }), desk('d2')], teachers)
+    const kept = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '', teacherId: 't1' } }), desk('d2', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })], teachers)
+    const cleared = teacherFacts([desk('d1', [student(), null], { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual' }), desk('d2', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })], teachers)
+    const placeOp = { kind: 'place-rested', cellId: `${D}_3`, deskIndex: 1, teacher: '講師A' }
+    expect(codes(checkTeacherOpApplied(before, kept, placeOp))).toEqual(['stop:teacher-op-not-applied'])
+    expect(checkTeacherOpApplied(before, cleared, placeOp)).toEqual([])
+  })
+
+  const two = (first, second) => teacherFacts([desk('d1', first.slots ?? [null, null], first.desk), desk('d2', second.slots ?? [null, null], second.desk)])
+  const op = (kind, extra = {}) => ({ kind, cellId: `${D}_3`, deskIndex: 0, targetDeskIndex: 1, ...extra })
+
+  it('講師だけ入替: 講師が入れ替わり、生徒・出欠記録・メモは机に残る。生徒も動いた・片方の講師が消えたら stop teacher-op-not-applied', () => {
+    const before = two({ slots: [student(), null], desk: { teacher: '講師A' } }, { slots: [studentB(), null], desk: { teacher: '講師B' } })
+    const swapped = two({ slots: [student(), null], desk: { teacher: '講師B', manualTeacher: true } }, { slots: [studentB(), null], desk: { teacher: '講師A', manualTeacher: true } })
+    expect(checkTeacherOpApplied(before, swapped, op('teacher-swap'))).toEqual([])
+    const seatMoved = two({ slots: [studentB(), null], desk: { teacher: '講師B', manualTeacher: true } }, { slots: [student(), null], desk: { teacher: '講師A', manualTeacher: true } })
+    expect(codes(checkTeacherOpApplied(before, seatMoved, op('teacher-swap')))).toEqual(['stop:teacher-op-not-applied', 'stop:teacher-op-not-applied'])
+    const lost = two({ slots: [student(), null], desk: { teacher: '' } }, { slots: [studentB(), null], desk: { teacher: '講師A', manualTeacher: true } })
+    expect(codes(checkTeacherOpApplied(before, lost, op('teacher-swap')))).toEqual(['stop:teacher-op-not-applied'])
+    // 生徒ごと席入替は、生徒も一緒に入れ替わるのが正しい
+    expect(checkTeacherOpApplied(before, seatMoved, op('seat-swap'))).toEqual([])
+    expect(codes(checkTeacherOpApplied(before, swapped, op('seat-swap')))).toEqual(['stop:teacher-op-not-applied', 'stop:teacher-op-not-applied'])
+    // 講師の移動(講師の居ない机へ)は講師だけ入替と同じ形(元の机は講師なし・生徒は残る)
+    const moveBefore = two({ slots: [student(), null], desk: { teacher: '講師A' } }, {})
+    const moved = two({ slots: [student(), null], desk: { teacher: '' } }, { desk: { teacher: '講師A', manualTeacher: true } })
+    expect(checkTeacherOpApplied(moveBefore, moved, op('move'))).toEqual([])
+    // 入った講師は手入力(青字)になる
+    const notManual = two({ slots: [student(), null], desk: { teacher: '' } }, { desk: { teacher: '講師A' } })
+    expect(codes(checkTeacherOpApplied(moveBefore, notManual, op('move')))).toEqual(['stop:teacher-op-not-applied'])
+  })
+
+  it('講師メニューで替える・休み・解除・休みの講師を別の机へ手で置く', () => {
+    const before = two({ slots: [student(), null], desk: { teacher: '講師A' } }, {})
+    const replaced = two({ slots: [student(), null], desk: { teacher: '講師C', teacherAssignmentSource: 'manual', manualTeacher: true } }, {})
+    expect(checkTeacherOpApplied(before, replaced, op('menu-teacher', { teacher: '講師C', targetDeskIndex: undefined }))).toEqual([])
+    expect(codes(checkTeacherOpApplied(before, before, op('menu-teacher', { teacher: '講師C', targetDeskIndex: undefined })))).toEqual(['stop:teacher-op-not-applied'])
+    // 休み: 講師なし・休みの記録・生徒は残る
+    const rested = two({ slots: [student(), null], desk: { teacher: '', teacherRest: { teacher: '講師A', teacherId: 't1' } } }, {})
+    expect(checkTeacherOpApplied(before, rested, op('rest', { targetDeskIndex: undefined }))).toEqual([])
+    const restedLost = two({ desk: { teacher: '', teacherRest: { teacher: '講師A' } } }, {})
+    expect(codes(checkTeacherOpApplied(before, restedLost, op('rest', { targetDeskIndex: undefined })))).toEqual(['stop:teacher-op-not-applied'])
+    // 解除: 記録が消える(講師欄は今のまま)
+    const released = two({ slots: [student(), null], desk: { teacher: '' } }, {})
+    expect(checkTeacherOpApplied(rested, released, op('release', { targetDeskIndex: undefined }))).toEqual([])
+    // 解除の直後に再マージでテンプレの講師が戻るのは仕様どおり(§2-4)。手入力の講師が入る・生徒が変わるのは「変」
+    const templateBack = two({ slots: [student(), null], desk: { teacher: '講師A' } }, {})
+    expect(checkTeacherOpApplied(rested, templateBack, op('release', { targetDeskIndex: undefined }))).toEqual([])
+    const manualBack = two({ slots: [student(), null], desk: { teacher: '講師C', manualTeacher: true } }, {})
+    expect(codes(checkTeacherOpApplied(rested, manualBack, op('release', { targetDeskIndex: undefined })))).toEqual(['stop:teacher-op-not-applied'])
+    expect(codes(checkTeacherOpApplied(rested, rested, op('release', { targetDeskIndex: undefined })))).toEqual(['stop:teacher-op-not-applied'])
+    // 代わりの講師: 休みの記録は残る(§2-4)
+    const substituted = two({ slots: [student(), null], desk: { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '講師A', teacherId: 't1' } } }, {})
+    expect(checkTeacherOpApplied(rested, substituted, op('menu-teacher', { teacher: '講師C', targetDeskIndex: undefined }))).toEqual([])
+    // 休みの講師を別の机へ手で置く(§9-25): 置いた机に講師・そのコマに休みの記録が 1 つも残らない
+    const placedOk = two({ slots: [student(), null], desk: { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual' } }, { desk: { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' } })
+    const placeOp = op('place-rested', { deskIndex: 1, targetDeskIndex: undefined, teacher: '講師A', restedName: '講師A' })
+    expect(checkTeacherOpApplied(substituted, placedOk, placeOp)).toEqual([])
+    const placedKeptRest = two({ slots: [student(), null], desk: { teacher: '講師C', manualTeacher: true, teacherAssignmentSource: 'manual', teacherRest: { teacher: '講師A', teacherId: 't1' } } }, { desk: { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' } })
+    const kept = checkTeacherOpApplied(substituted, placedKeptRest, placeOp)
+    expect(codes(kept)).toEqual(['stop:teacher-op-not-applied'])
+    expect(kept[0].message).toContain('休みの記録')
   })
 })

@@ -60,6 +60,18 @@ describe('selectors', () => {
     expect(toolbar).toContain(`actionButtonTestId={hasSelectedStudent ? '${PROP_TESTIDS.cancelSelection}'`)
   })
 
+  it('台本 f(講師の移動・入れ替え・休み)が使う 講師メニューの休みのボタン・講師の入れ替えの選択の testid と、講師欄の着地の目印がアプリと同じ', () => {
+    for (const name of ['teacherRestButton', 'teacherSeatMoveModal', 'teacherSeatMoveTeacher', 'teacherSeatMoveSeat', 'teacherSeatMoveCancel']) expect(TESTIDS[name]).toBeTruthy()
+    expect(TESTID_PREFIXES.teacherRest).toBe('teacher-rest-')
+    const grid = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardGrid.tsx'), 'utf8')
+    expect(grid).toContain('data-testid={`teacher-rest-${cell.id}-${deskIndex}`}')
+    // 講師を放した位置の机の引き方(handleTeacherMouseDown の closest('.sa-teacher[data-cell-id]'))と、講師欄の td の印
+    const screen = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    expect(screen).toContain(".closest<HTMLElement>('.sa-teacher[data-cell-id]')")
+    expect(grid).toMatch(/'sa-teacher',\n/)
+    expect(grid).toContain('data-desk-index={deskIndex}')
+  })
+
   it('長押しの長さと取り消しの距離がアプリと合っている', () => {
     // 変わったら driver の待ち(DRIVER_TIMING)を見直す合図。
     const screen = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')

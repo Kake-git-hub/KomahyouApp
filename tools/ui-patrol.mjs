@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 画面の自動巡回(docs/test-strategy.md 層 5)。本番の形のデータ(名前は伏せる)を手元のアプリに入れ、室長と同じ画面操作を
 // 自動で行い、操作のたびに点検する。流れ: 引数 → 取得 → 伏せ字 → 自己点検 3 つ → 種データの書き出し(--prepare-only はここまで)
-// → 開発用サーバー(ローカルモード) → 教室ごとにブラウザ → 台本(起動・c・b・a・d・tools/ui-patrol/scenarios.mjs) → 報告(<out>/report.json)。
+// → 開発用サーバー(ローカルモード) → 教室ごとにブラウザ → 台本(起動・c・b・e・f・a・d・tools/ui-patrol/scenarios.mjs) → 報告(<out>/report.json)。
 // --seed-file を渡すと取得・伏せ字を飛ばし、伏せ字済みの種データで流す。
 //
 // ★読み取り専用・実名を残さない(本番データ保護ルール)

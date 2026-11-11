@@ -534,6 +534,91 @@ export async function placeMakeupFromStock(session, { stockStudentKey, choose },
   return { placed: true, status, chosenText: texts[index] }
 }
 
+// ── 台本 f(講師の移動・入れ替え・休み): 盤面の講師欄の長押しドラッグと講師メニュー。室長と同じく、講師欄を長押しして同じコマの別の机の講師欄へ放す
+// (ScheduleBoardScreen.tsx の handleTeacherMouseDown。生徒が絡むと「講師だけ入れ替え／生徒ごと席を入れ替え」を選ぶ画面)・講師欄を押して
+// 講師メニューの「保存」「休み」「休みを解除する(講師名)」を押す(handleConfirmTeacher・handleToggleTeacherRest)。
+
+/**
+ * 講師の長押しドラッグ: 元の講師欄の中央で押し → 長押し → 先の講師欄の中央へ段階的に動かし → 放す。選ぶ画面が出たら swapMode('teacher'/'seat')のボタンを押す。
+ * from/to は { cellId, deskIndex }(同じコマ)。戻り値 { status(ステータスの文), modal(選ぶ画面が出たか) }。
+ */
+export async function dragTeacher(session, from, to, swapMode = 'teacher') {
+  const { page } = session
+  const source = page.locator(byTestId(teacherCellTestId(from)))
+  const target = page.locator(byTestId(teacherCellTestId(to)))
+  const statusBefore = await readStatusText(session)
+  const start = await centerOf(source, '講師の元')
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.waitForTimeout(DRIVER_TIMING.longPressMs)
+  const box = await target.boundingBox()
+  if (!box) {
+    await page.mouse.up()
+    throw new PatrolAbortError('講師の先の机の位置が取れません。')
+  }
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: DRIVER_TIMING.dragSteps })
+  await page.waitForTimeout(DRIVER_TIMING.beforeReleaseMs)
+  await page.mouse.up()
+  // 選ぶ画面は放した直後の描画で出る(ステータスの文はまだ変わらない)。画面が出るか、文が変わるまで待つ。
+  const modal = page.locator(byTestId(TESTIDS.teacherSeatMoveModal))
+  const started = Date.now()
+  while (Date.now() - started < STATUS_CHANGE_TIMEOUT_MS) {
+    if (await modal.isVisible().catch(() => false)) {
+      await modal.locator(byTestId(swapMode === 'seat' ? TESTIDS.teacherSeatMoveSeat : TESTIDS.teacherSeatMoveTeacher)).click()
+      await waitHidden(modal, '講師の入れ替えを選ぶ画面が閉じませんでした。')
+      return { status: await waitForStatusChange(session, statusBefore), modal: true }
+    }
+    if ((await readStatusText(session)) !== statusBefore) break
+    await page.waitForTimeout(100)
+  }
+  return { status: await readStatusText(session), modal: false }
+}
+
+async function openBoardTeacherMenu(session, position) {
+  const { page } = session
+  const teacherCell = page.locator(byTestId(teacherCellTestId(position)))
+  await waitVisible(teacherCell, `盤面の講師欄 ${describeTemplatePosition(position)} が画面にありません。`)
+  await teacherCell.click()
+  const menu = page.locator(byTestId(TESTIDS.teacherMenu))
+  await waitVisible(menu, `盤面の講師欄 ${describeTemplatePosition(position)} の講師メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  return menu
+}
+
+/** 盤面の講師欄を押す → 講師を選ぶ → 「保存」。choose が null を返したらメニューを閉じて { teacher: null }。戻り値 { teacher, status }。 */
+export async function setBoardTeacher(session, position, choose) {
+  const { page } = session
+  const menu = await openBoardTeacherMenu(session, position)
+  const statusOpened = await readStatusText(session)
+  const select = page.locator(byTestId(SEARCHABLE_SELECT_TESTIDS.teacherSelect))
+  await waitVisible(select, '講師を選ぶ欄が出ませんでした。')
+  const teacher = choose(await readSelectOptions(select))
+  if (!teacher) {
+    await closeMenu(menu)
+    return { teacher: null, status: await readStatusText(session) }
+  }
+  await select.selectOption(teacher)
+  await menu.locator(byTestId(TESTIDS.teacherConfirm)).click()
+  await waitHidden(menu, `講師を保存したあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  return { teacher, status: await waitForStatusChange(session, statusOpened) }
+}
+
+/** 盤面の講師欄を押す → 「休み」／「休みを解除する(講師名)」を押す。ボタンが無ければメニューを閉じて { status(押す前と同じ), label: null }。 */
+export async function toggleTeacherRest(session, position) {
+  const { page } = session
+  const statusBefore = await readStatusText(session)
+  const menu = await openBoardTeacherMenu(session, position)
+  const statusOpened = await readStatusText(session)
+  const button = menu.locator(byTestId(TESTIDS.teacherRestButton))
+  if ((await button.count()) === 0) {
+    await closeMenu(menu)
+    return { status: statusBefore, label: null }
+  }
+  const label = ((await button.first().innerText()) ?? '').trim()
+  await button.first().click()
+  await waitHidden(menu, `休みのボタンを押したあと講師メニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  return { status: await waitForStatusChange(session, statusOpened), label }
+}
+
 export async function takeScreenshot(session, file) {
   if (!session?.page) return null
   try {
