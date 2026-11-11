@@ -15,7 +15,7 @@ describe('parseArgs / validateArgs', () => {
     // 台本 e(出欠)は a の前(付けた出欠記録のコマにテンプレ保存が生徒を置き直さないかを a で見る)。
     // 台本 f(講師の移動・入れ替え・休み)は e のあと・a の前(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも見える)。
     expect(options.scenarios).toEqual(['boot', 'c', 'b', 'e', 'f', 'a', 'd'])
-    // 台本 g は既定の並びに入れない(所要時間がオーナー決定を超えて決め直し待ち・2026-11-11 の裁定)。
+    // 台本 g は既定の並びに入れない(2026-11-11 オーナー決定: 所要時間は約 10 分のまま)。
     expect(options.scenarios).not.toContain('g')
     // 台本 h(講習の自動割振)も既定の並びに入れない(2026-11-11 オーナー決定: 既定は約 10 分のまま)。
     expect(options.scenarios).not.toContain('h')

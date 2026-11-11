@@ -1138,8 +1138,9 @@ export function parseAutoAssignAnnouncedCounts(message: string | undefined): { l
  * 自動割振が盤面に正しく効いたか(在庫の増減は呼んだ側が checkStockDeltas で見る)。根拠は handleAutoAssignLectureStockEntry と findBestAutoAssignCandidate:
  * - 変わってよいのは、前は空いていた席にその生徒の講習(振替も同時に、なら振替も)が座ることだけ。机の講師・出欠記録・メモ・保留の下段・ほかの席が変わったら
  *   stop auto-assign-outside-placement(手入力・通常授業が動く・消える＝INV-02)。
- * - 置いた席は、講習の期間の中(振替も同じ講習の期間)・開いているコマ・本物の講師がいた机(desk.teacher が空の机は候補にしない)・そのコマにその生徒が 1 席だけ
- *   (findDuplicateStudentInCell・INV-01)。外れたら stop auto-assign-rule-violated。出席不可のコマ・制約事項は autoAssign.ts が別に見る。
+ * - 見るのは講習の期間の机だけ(期間の外の机の変化は checkOutsideAllowedRange の範囲の外として出る・2 回出さない)。
+ * - 置いた席は、開いているコマ・本物の講師がいた机(desk.teacher が空の机は候補にしない)。外れたら stop auto-assign-rule-violated。
+ *   同じコマに同じ生徒が 2 席(INV-01)・出席不可のコマ・制約事項は autoAssign.ts の checkAutoAssignPlacementRules が見る(アプリの関数を呼ぶ)。
  * - 画面の文の件数(講習・振替)と置いた席の数が違えば stop auto-assign-count-mismatch(INV-06 の「置いた数と減った数」の片方)。
  */
 export function checkAutoAssignApplied(before: BoardFacts, after: BoardFacts, op: AutoAssignOp): PatrolFinding[] {
@@ -1149,6 +1150,8 @@ export function checkAutoAssignApplied(before: BoardFacts, after: BoardFacts, op
   const placements: AutoAssignPlacement[] = []
   for (const change of diffBoardFacts(before, after).desks) {
     const fact = (change.after ?? change.before)!
+    // 期間の外の机の変化は、ほかの台本と同じく checkOutsideAllowedRange(範囲＝期間の机)が拾う。ここでも拾うと同じ所が 2 回出る(手直し 1 M-3)。
+    if (fact.dateKey < op.periodStart || fact.dateKey > op.periodEnd) continue
     const other = change.fields.filter((field) => field !== 'students')
     if (other.length > 0 || !change.after) {
       outside.push({ level: 'stop', code: 'auto-assign-outside-placement', message: `自動割振で置いた席のほかが変わった: ${describeDeskChange(change)}`, ...locationOf(fact) })
@@ -1170,13 +1173,9 @@ export function checkAutoAssignApplied(before: BoardFacts, after: BoardFacts, op
     const where = `${formatPlace(placed.dateKey, placed.slotNumber, placed.deskIndex)} 席${placed.seat + 1} ${placed.subject} ${LESSON_TYPE_LABELS[placed.lessonType] ?? placed.lessonType}`
     const location = { dateKey: placed.dateKey, slotNumber: placed.slotNumber, deskIndex: placed.deskIndex, studentId: op.studentKey }
     const reasons: string[] = []
-    if (placed.dateKey < op.periodStart || placed.dateKey > op.periodEnd) reasons.push(`講習の期間(${op.periodStart}〜${op.periodEnd})の外`)
     const previousDesk = before.desks.get(placed.deskKey)
     if (!previousDesk || previousDesk.teacher === '') reasons.push('講師のいない机')
     if (!after.desks.get(placed.deskKey)?.cellOpen) reasons.push('休校のコマ')
-    const sameCell = [...after.desks.values()].filter((desk) => desk.cellId === placed.cellId)
-    const seats = sameCell.reduce((count, desk) => count + [...desk.students, ...desk.pendingStudents].filter((entry) => entry?.key === op.studentKey).length, 0)
-    if (seats > 1) reasons.push(`同じコマにこの生徒が ${seats} 席(INV-01)`)
     for (const reason of reasons) violated.push({ level: 'stop', code: 'auto-assign-rule-violated', message: `自動割振で置いた席が決まりに反する(${reason}): ${where} ${op.studentKey}`, ...location })
   }
   const counted: PatrolFinding[] = []

@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
 import { PatrolAbortError } from './driver.mjs'
+import { resolveExitCode } from './report.mjs'
 import {
   ATTENDANCE_ALLOWED_SECTIONS, ATTENDANCE_SLOTS, MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, buildAttendanceAllowedChange, collectStockIneligibleSeatKeys, expectedStockDeltas, pickAttendancePlan, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
@@ -1152,9 +1153,24 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     expect(fake.ops.filter((op) => op.item === 'transfer')).toHaveLength(2)
   })
 
-  it('日付の操作の候補が無ければ中断。台本 g は既定の台本(d)のあとに流れる', async () => {
-    const { report } = await runG(patrolPayload([cell('2026-11-19', 3, [desk('a0', '講師A')])]))
-    expect(report.aborted).toMatch(/^g: /)
+  it('日付の操作の候補が無ければ中断せず飛ばす(注に理由・g だけなら終了コード 2・前の台本に変があれば 1＝変を隠さない・手直し 1 I-1)。台本 g は既定の台本(d)のあとに流れる', async () => {
+    const empty = () => patrolPayload([cell('2026-11-19', 3, [desk('a0', '講師A')])])
+    const { report } = await runG(empty())
+    expect(report.aborted).toBeNull()
+    expect(report.noScenarioRan).toBe(true)
+    expect(stepsOf(report, 'g').map((step) => step.title)).toContain('日付の操作は候補なしで飛ばした')
+    expect(resolveExitCode({ classrooms: [report, report] })).toBe(2)
+    // 前の台本(c)で変 1 件 → 1(g の候補なしで 2 に隠れない)
+    const fake = makeDayDriver(empty())
+    fake.driver.reloadApp = async () => { fake.state.payload = clone(fake.state.payload); fake.state.payload.boardState.weeks[0][0].desks[0].teacher = '講師Z' }
+    const withStop = await runClassroomPatrol({
+      session: fake.session, app: appG, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: empty() }] },
+      options: { scenarios: ['boot', 'c', 'g'], moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    expect(withStop.aborted).toBeNull()
+    expect(withStop.noScenarioRan).toBe(false)
+    expect(resolveExitCode({ classrooms: [withStop] })).toBe(1)
     const order = (await runG(gPayload(), { scenarios: ['boot', 'g', 'c'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
     expect(order.indexOf('g')).toBeGreaterThan(order.indexOf('c'))
   })
@@ -1241,6 +1257,7 @@ describe('runClassroomPatrol(台本 h のつなぎ)', () => {
         fake.state.redo = []
         fake.state.payload = next
         fake.state.status = includeMakeup ? `生徒${sid} を自動割振しました（講習${placedLecture}・振替${placedMakeup}コマ）。` : `生徒${sid} を自動割振しました（${broken.wrongCount ? placedLecture + 1 : placedLecture}コマ）。`
+        if (broken.unreadableStatus) fake.state.status = `生徒${sid} に ${placedLecture} コマ割り振りました。`
         return { found: true, status: fake.state.status, debugText: 'ルール対応率' }
       },
     })
@@ -1284,17 +1301,40 @@ describe('runClassroomPatrol(台本 h のつなぎ)', () => {
     expect(stopsOf((await runH(hPayload(), { broken: { wrongCount: true } })).report)).toContain('auto-assign-count-mismatch')
   })
 
+  it('結果の文が読めない(アプリの文の形が変わった)ときは、件数の点検を黙って飛ばさず注に残す', async () => {
+    const { report } = await runH(hPayload(), { broken: { unreadableStatus: true } })
+    expect(stepsOf(report, 'h').flatMap((step) => step.notes).join('\n')).toContain('結果の文を読めなかった')
+  })
+
   it('わざと壊す: 手入力の生徒の席を上書きする → stop auto-assign-outside-placement(INV-02)／1 回目で置き切らず 2 回目で置く → stop auto-assign-rerun-changed(INV-03)', async () => {
     expect(stopsOf((await runH(hPayload(), { broken: { overwrite: true } })).report)).toContain('auto-assign-outside-placement')
     expect(stopsOf((await runH(hPayload(), { broken: { firstRunShort: true } })).report)).toContain('auto-assign-rerun-changed')
   })
 
-  it('割り振れる未消化講習の行が無ければ中断(台本 g と同じ扱い)。理由(期間が今日より前など)を注に残す。台本 h は g のあとに流れ、既定では流れない', async () => {
-    const past = hPayload()
-    past.boardState.__stock.rows = past.boardState.__stock.rows.map((item) => ({ ...item, periodStart: '2026-07-21', periodEnd: '2026-08-31' }))
-    const { report } = await runH(past)
-    expect(report.aborted).toMatch(/^h: /)
+  it('割り振れる未消化講習の行が無ければ中断せず飛ばす(台本 g と同じ・理由を注に・h だけなら終了コード 2・既定＋h で前の台本に変があれば 1・候補なしだけなら 0＝手直し 1 I-1)。台本 h は g のあとに流れる', async () => {
+    const past = () => {
+      const payload = hPayload()
+      payload.boardState.__stock.rows = payload.boardState.__stock.rows.map((item) => ({ ...item, periodStart: '2026-07-21', periodEnd: '2026-08-31' }))
+      return payload
+    }
+    const { report } = await runH(past())
+    expect(report.aborted).toBeNull()
+    expect(report.noScenarioRan).toBe(true)
     expect(stepsOf(report, 'h').flatMap((step) => step.notes).join('\n')).toContain('期間が今日より前')
+    expect(stepsOf(report, 'h').map((step) => step.title)).toContain('講習の自動割振は候補なしで飛ばした')
+    expect(resolveExitCode({ classrooms: [report, report] })).toBe(2)
+    // 既定＋h(ここでは c＋h): h の候補なしは飛ばし、ほかの台本の結果で決まる
+    const clean = await runH(past(), { scenarios: ['boot', 'c', 'h'] })
+    expect(clean.report.noScenarioRan).toBe(false)
+    expect(resolveExitCode({ classrooms: [clean.report, clean.report] })).toBe(0)
+    const fake = makeAutoAssignDriver(past())
+    fake.driver.reloadApp = async () => { fake.state.payload = clone(fake.state.payload); fake.state.payload.boardState.weeks[0][0].desks[1].teacher = '講師Z' }
+    const withStop = await runClassroomPatrol({
+      session: fake.session, app: appH, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: past() }] },
+      options: { scenarios: ['boot', 'c', 'h'], moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    expect(resolveExitCode({ classrooms: [withStop] })).toBe(1)
     const order = (await runH(hPayload(), { scenarios: ['boot', 'h', 'c'] })).report.steps.map((step) => step.name).filter((name, index, list) => list.indexOf(name) === index)
     expect(order.indexOf('h')).toBeGreaterThan(order.indexOf('c'))
   })

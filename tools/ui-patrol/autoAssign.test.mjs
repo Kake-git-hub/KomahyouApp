@@ -120,6 +120,13 @@ describe('checkAutoAssignPlacementRules(置いた席の決まり・アプリの�
     expect(unresolved.notes.join('\n')).toContain('講師 ID で名簿から引けない')
   })
 
+  it('同じコマに同じ生徒が 2 席(INV-01)は stop。数えるのはアプリの findDuplicateStudentInCellByKey(置いた席を外して同じ生徒を探す)', () => {
+    const twice = payloadWith()
+    twice.boardState.weeks[0][0].desks.push({ id: 'd1', teacher: '講師B', teacherAssignmentTeacherId: 't2', lesson: { id: 'L1', studentSlots: [placedEntry({ id: 'x2', subject: '英' }), null] } })
+    expect(codes(checkAutoAssignPlacementRules(twice, [placement()], 's1'))).toEqual(['stop:auto-assign-rule-violated'])
+    expect(codes(checkAutoAssignPlacementRules(payloadWith(), [placement()], 's1'))).toEqual([])
+  })
+
   it('確かめられない制約事項(通常講師のみ・1 日のコマ数の上限)が制約になっていれば注に出す(止めない)', () => {
     const result = checkAutoAssignPlacementRules(payloadWith({ rules: [rule('regularTeachersOnly'), rule('maxTwoLessons')] }), [placement()], 's1')
     expect(codes(result)).toEqual([])

@@ -7,11 +7,11 @@
 //   科目対応＝canTeacherHandleStudentSubject・在籍＝isActiveOnDate。学年は、アプリが置いた生徒に付けた grade(置いた日の学年)を読む。
 // ★確かめられない制約事項(通常講師のみ＝盤面とライブ配列の担当講師の和・1 日のコマ数の上限＝同じ日の授業の数え方)は止めずに注へ出す(runbook の限界)。
 // ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
-import { canTeacherHandleStudentSubject, isAutoAssignRuleApplicable, isSubjectCapabilityConstraintApplicable } from '../../src/components/schedule-board/ScheduleBoardScreen'
+import { canTeacherHandleStudentSubject, findDuplicateStudentInCellByKey, isAutoAssignRuleApplicable, isSubjectCapabilityConstraintApplicable } from '../../src/components/schedule-board/ScheduleBoardScreen'
 import { resolveForbiddenPeriods, resolveRuleCategory, type AutoAssignRuleKey, type AutoAssignRuleRow } from '../../src/components/auto-assign-rules/autoAssignRuleModel'
 import { isActiveOnDate, type StudentRow, type TeacherRow } from '../../src/components/basic-data/basicDataModel'
 import { resolveEffectiveUnavailableSlots, type SpecialSessionRow } from '../../src/components/special-data/specialSessionModel'
-import type { GradeLabel, SlotCell, SubjectLabel } from '../../src/components/schedule-board/types'
+import type { GradeLabel, SlotCell, StudentEntry, SubjectLabel } from '../../src/components/schedule-board/types'
 import type { AppSnapshotPayload } from '../../src/types/appState'
 import type { AutoAssignPlacement, PatrolFinding } from './checks'
 import type { StockBalances } from './stock'
@@ -147,6 +147,9 @@ export function expectedAutoAssignStockDeltas(op: Pick<AutoAssignPlanOp, 'entryK
   return { lecture, makeup }
 }
 
+/** 盤面の事実(boardFacts.ts)と同じ生徒の鍵。 */
+const comparableStudentKey = (student: StudentEntry) => student.managedStudentId || `name:${student.name}`
+
 /** 止めずに注へ出す(道具の側で確かめられない)制約事項。 */
 const UNCHECKED_CONSTRAINT_KEYS: AutoAssignRuleKey[] = ['regularTeachersOnly', 'maxOneLesson', 'maxTwoLessons', 'maxThreeLessons']
 
@@ -156,6 +159,7 @@ function normalizeWeeks(value: unknown): SlotCell[][] {
 
 /**
  * 置いた席の決まり(アプリの権威関数で確かめられる範囲)。payload は自動割振のあとの教室データ。
+ * - 同じコマに同じ生徒がもう 1 席(INV-01・アプリの findDuplicateStudentInCellByKey) → stop。
  * - 出席不可のコマ(その生徒のどの講習の提出でも、resolveEffectiveUnavailableSlots＝不可 − 出席可能に変更)に置いた → stop(findBestAutoAssignCandidate の studentUnavailableSlots と同じ集め方)。
  * - 制約事項(区分=制約・その生徒が対象)の「指定時限禁止」の時限に置いた → stop。
  * - 制約事項「科目対応講師のみ」で、机の講師(teacherAssignmentTeacherId で名簿から引けたとき)がその科目を持たない → stop。引けない机は注に数える。
@@ -187,6 +191,10 @@ export function checkAutoAssignPlacementRules(payload: Partial<AppSnapshotPayloa
     const where = `${placed.dateKey} ${placed.slotNumber}限 机${placed.deskIndex + 1} 席${placed.seat + 1} ${placed.subject}`
     const location = { dateKey: placed.dateKey, slotNumber: placed.slotNumber, deskIndex: placed.deskIndex, studentId }
     const violated = (reason: string) => findings.push({ level: 'stop', code: 'auto-assign-rule-violated', message: `自動割振で置いた席が決まりに反する(${reason}): ${where} ${studentId}`, ...location })
+    // 同じコマに同じ生徒(INV-01): アプリが候補から外す判定と同じ探し方(findDuplicateStudentInCellByKey)。置いた席は外して探す。
+    // 生徒の比べ方は盤面の事実と同じ(名簿に結べる生徒は managedStudentId・結べない生徒は name:名前)。
+    const cell = cells.get(placed.cellId)
+    if (cell && findDuplicateStudentInCellByKey(cell, studentId, comparableStudentKey, undefined, [{ deskIndex: placed.deskIndex, studentIndex: placed.seat }])) violated('同じコマにこの生徒がもう 1 席(INV-01)')
     if (unavailable.has(`${placed.dateKey}_${placed.slotNumber}`)) violated('出席不可のコマ(講習の提出)')
     if (forbidConstraint && isAutoAssignRuleApplicable(forbidRule, studentId, grade) && resolveForbiddenPeriods(forbidRule).includes(placed.slotNumber)) {
       violated(`制約事項「指定時限禁止」の ${placed.slotNumber}限`)

@@ -3,6 +3,7 @@
 // 一番大事なのは 2026-11-10 の事故の形(テンプレ保存で手入力の振替の生徒が講師の机から講師のいない机へ移った)を止められること。
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
+import { buildAutoAssignResultMessage } from '../../src/components/schedule-board/boardResultMessages.ts'
 import {
   PATROL_FINDING_CODES,
   applyKnownIssues,
@@ -1001,17 +1002,17 @@ describe('台本 h(講習の自動割振)の点検', () => {
     expect(codes(checkAutoAssignApplied(before, someoneElse, op))).toContain('stop:auto-assign-outside-placement')
   })
 
-  it('振替を同時に割り当てない設定で振替が座った・講習の期間の外・講師のいない机・休校のコマ・同じコマに同じ生徒が 2 席は stop auto-assign-rule-violated', () => {
+  it('振替を同時に割り当てない設定で振替が座った・講師のいない机・休校のコマは stop auto-assign-rule-violated', () => {
     const before = facts(base())
     expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, makeupA({ id: 'm1' }))), op))).toContain('stop:auto-assign-outside-placement')
     expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, makeupA({ id: 'm1' }))), { ...op, includeMakeup: true }))).toEqual([])
-    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, special())), { ...op, periodStart: '2026-12-15' }))).toEqual(['stop:auto-assign-rule-violated'])
+    // 期間の外に置いた席は、ほかの台本と同じく範囲の点検(checkOutsideAllowedRange)が拾う。ここでは数えない(同じ所を 2 回出さない・手直し 1 M-3)。
+    expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 1, 0, special())), { ...op, periodStart: '2026-12-15' }))).toEqual([])
     expect(codes(checkAutoAssignApplied(before, facts(withSeat(base(), 0, 2, 0, special())), op))).toEqual(['stop:auto-assign-rule-violated'])
     const closed = structuredClone(withSeat(base(), 0, 1, 0, special()))
     closed[0].isOpenDay = false
     expect(codes(checkAutoAssignApplied(facts(base()), facts(closed), op))).toContain('stop:auto-assign-rule-violated')
-    const twice = facts(withSeat(withSeat(base(), 0, 1, 0, special()), 0, 1, 1, special({ id: 'x2', subject: '英' })))
-    expect(codes(checkAutoAssignApplied(before, twice, op))).toContain('stop:auto-assign-rule-violated')
+    // 同じコマに同じ生徒が 2 席は、アプリの findDuplicateStudentInCellByKey で autoAssign.ts の checkAutoAssignPlacementRules が見る(手直し 1 の Minor 2)。
   })
 
   it('画面の文の件数と置いた席の数が違えば stop auto-assign-count-mismatch(講習だけ・振替も同時)', () => {
@@ -1029,5 +1030,12 @@ describe('台本 h(講習の自動割振)の点検', () => {
     expect(parseAutoAssignAnnouncedCounts('生徒A を自動割振しました（講習2・振替1コマ・候補なしで残り 振替2）。')).toEqual({ lecture: 2, makeup: 1 })
     expect(parseAutoAssignAnnouncedCounts('生徒A は条件に合う空きコマが見つからず、自動割振できませんでした。')).toBeNull()
     expect(parseAutoAssignAnnouncedCounts('')).toBeNull()
+  })
+
+  it('アプリの文を作る関数(buildAutoAssignResultMessage)の文を往復で読める(アプリの文が変わったらここで落ちる・黙って点検が飛ばない)', () => {
+    for (const [includeMakeup, placedLecture, placedMakeup, remainingLecture, remainingMakeup] of [[false, 3, 0, 0, 0], [false, 1, 0, 2, 0], [true, 2, 1, 0, 0], [true, 0, 2, 1, 3], [true, 12, 10, 0, 1]]) {
+      const message = buildAutoAssignResultMessage({ displayName: '生徒A', includeMakeup, placedLecture, placedMakeup, remainingLecture, remainingMakeup })
+      expect(parseAutoAssignAnnouncedCounts(message), message).toEqual({ lecture: placedLecture, makeup: includeMakeup ? placedMakeup : 0 })
+    }
   })
 })
