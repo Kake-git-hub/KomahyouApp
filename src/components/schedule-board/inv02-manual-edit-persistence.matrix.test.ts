@@ -2141,9 +2141,10 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
   // 講師が新しいテンプレのそのコマにいない机の手入力は、テンプレが使わない一番若い机番号へ（講師なし・手置きの講師は一緒に移る）。
   describe('テンプレで講師の机番号を変えて保存 → 手入力は講師について行く（2026-11-10）', () => {
     const settings4 = (extra: Partial<ClassroomSettings> = {}) => diffSettings({ deskCount: 4, ...extra })
-    const templateOf4 = (effectiveStartDate: string, desks: Array<[string, string]>): RegularLessonTemplate => ({
+    // 3 つ目の要素（省略可）は生徒 2 の席（2026-11-11 追加 2: 生徒が X と W に分かれる形のため。省略時は今までどおり生徒 2 は空席）。
+    const templateOf4 = (effectiveStartDate: string, desks: Array<[string, string] | [string, string, string]>): RegularLessonTemplate => ({
       version: 1, effectiveStartDate, savedAt: '2026-09-01T00:00:00.000Z',
-      cells: [{ dayOfWeek: 3, slotNumber: 5, desks: desks.map(([teacherId, studentId], index) => ({ deskIndex: index + 1, teacherId, students: [studentId ? { studentId, subject: '数' as const } : null, null] })) }],
+      cells: [{ dayOfWeek: 3, slotNumber: 5, desks: desks.map(([teacherId, studentId, secondId], index) => ({ deskIndex: index + 1, teacherId, students: [studentId ? { studentId, subject: '数' as const } : null, secondId ? { studentId: secondId, subject: '数' as const } : null] })) }],
     })
     const rowsOf = (template: RegularLessonTemplate) => buildRegularLessonsFromTemplate({ template, teachers: teacherRows, students: studentRows })
     // 盤面の元になった版（9/2〜）: 机1=田中(A)・机2=鈴木(B)・机3=佐藤(講師だけ)・机4=空
@@ -2553,6 +2554,33 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
           expect(saved.nextPendingDesks).toEqual({})
           expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '', '高橋', ''])
           expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC'], ['sB', 'sM'], []])
+          // 追加 2（2026-11-11 レビュー）: §9-15 どおり C の机は講師なしで残るので、その理由を確認の画面に出す（赤字の机が黙って残らない）
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept').length).toBeGreaterThan(0)
+        })
+
+        // 追加 2（2026-11-11 レビュー）: 机 A のテンプレの生徒 2 人（B・C）が、新テンプレで高橋（B）と鈴木（C）に分かれる → 高橋の机へ合流し、C は鈴木の机に置かれる（本番の経路）。
+        it('(0) 机 A の B・C が新テンプレで高橋（B・机4）と鈴木（C・机2）に分かれる → 高橋＋B・鈴木＋C・講師なしの机なし・保留 0・知らせ 0・同じテンプレで再保存しても同じ（INV-03）', () => {
+          const CURRENT2 = templateOf4('2026-09-02', [['t1', 'sA'], ['t2', 'sB', 'sC'], ['t3', ''], ['', '']])
+          const week = withDesk(boardOf(rowsOf(CURRENT2)), 1, replacedOnSuzuki())
+          expect(liveIds(week.find((item) => item.id === CELL)!.desks[1].lesson)).toEqual(['sB', 'sC'])
+          const savedTemplate = templateOf4(DATE, [['t1', 'sA'], ['t2', 'sC'], ['t3', ''], ['t4', 'sB']])
+          const classroom = settings4({ templateFreezeBeforeDate: DATE, regularLessonTemplate: savedTemplate, regularLessonTemplateHistory: [CURRENT2, savedTemplate] })
+          const { saved } = saveAndRemerge(week, rowsOf(savedTemplate), { classroom, previousRows: rowsOf(CURRENT2), previousHistory: [CURRENT2] })
+          const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤', '高橋'])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC'], [], ['sB']])
+          expect(cell.desks[3].manualTeacher).toBe(true)
+          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+          noTeacherlessDeskWithStudents(cell)
+          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept')).toEqual([])
+          const again = computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
+            weeks: saved.nextWeeks, classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rowsOf(savedTemplate),
+            effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: saved.nextPendingDesks, createdAt: '2026-09-29T11:00:00.000Z', manualMakeupAdjustments: {},
+            previousRegularLessons: rowsOf(savedTemplate), previousRegularLessonTemplateHistory: [CURRENT2, savedTemplate],
+          })
+          expect(contentOf(again.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(cell))
+          expect(again.studentNotes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept')).toEqual([])
         })
 
         it('鈴木が新テンプレにいれば、高橋が居ても鈴木について行く（§9-15 のまま・高橋は 1 行で鈴木の授業の机）', () => {
