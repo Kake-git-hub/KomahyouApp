@@ -9,7 +9,8 @@ export function createPatrolReport({ appVersion = '', backupKey = '' } = {}) {
 }
 
 export function createClassroomReport({ classroomId, label, backupKey }) {
-  return { classroomId, label, backupKey, steps: [], knownCount: 0, aborted: null }
+  // noScenarioRan: 選んだ台本(起動のほか)がどれも候補なしで飛んだ(台本 g・h は候補なしを中断にせず飛ばす・resolveExitCode が見る)。
+  return { classroomId, label, backupKey, steps: [], knownCount: 0, aborted: null, noScenarioRan: false }
 }
 
 /** 手順を足した新しい教室の報告を返す(元は書き換えない)。 */
@@ -62,6 +63,7 @@ export function summarizeReport(report) {
 /**
  * 0=変なし／1=変あり／2=流せなかった。教室ごとに見る: 中断、または手順が 0 本の教室が 1 つでもあれば 2。
  * 全体の操作が 0 回でも 2(何も操作していない巡回の「変なし」を信用させない)。2 が先で、そのあと変があれば 1。
+ * 変が無く、全部の教室で選んだ台本が候補なしで飛んだ(noScenarioRan)ときも 2(例 --scenario h を講習の提出の前に流した)。
  * --prepare-only はこの関数を通さない(自己点検が通れば 0・tools/ui-patrol.mjs)。
  */
 export function resolveExitCode(report) {
@@ -71,8 +73,12 @@ export function resolveExitCode(report) {
   const summary = summarizeReport(report)
   if (summary.operations === 0) return 2
   // baseline ありは「新しい変」だけで決める(前からある変が残っていても、自分の変更が新しい変を生んでいなければ 0)。
-  if (report?.baseline) return summary.newStops > 0 ? 1 : 0
-  return summary.stop > 0 ? 1 : 0
+  const hasStop = report?.baseline ? summary.newStops > 0 : summary.stop > 0
+  if (hasStop) return 1
+  // 選んだ台本(起動のほか)がどの教室でも候補なしで飛んだ(noScenarioRan・台本 g・h)なら、何も確かめていないので 2。
+  // 1 校でも流れていれば、候補なしで飛んだ台本は注に残るだけ(既定＋h を講習の提出の前に流しても、ほかの台本の結果どおり 0／1・手直し 1 I-1)。
+  if (rooms.every((room) => room.noScenarioRan)) return 2
+  return 0
 }
 
 export function formatPatrolReportText(report) {

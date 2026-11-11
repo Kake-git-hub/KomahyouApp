@@ -36,6 +36,32 @@ describe('collectStockBalances', () => {
     const before = JSON.stringify(payload)
     collectStockBalances(payload, TODAY)
     expect(JSON.stringify(payload)).toBe(before)
-    expect(collectStockBalances({}, TODAY)).toEqual({ makeup: {}, lecture: {}, makeupRows: [] })
+    expect(collectStockBalances({}, TODAY)).toEqual({ makeup: {}, lecture: {}, makeupRows: [], lectureRows: [] })
+  })
+
+  it('台本 h: 未消化講習の行(鍵＝生徒キー__講習 ID)ごとに、生徒 ID・講習 ID・残の数・講習の期間を持つ(残 0 の行は入らない)', () => {
+    const session = {
+      id: 'winter', label: '冬期講習', startDate: '2026-12-14', endDate: '2027-01-10', createdAt: '', updatedAt: '',
+      studentInputs: { s1: { unavailableSlots: ['2026-12-15_1'], subjectSlots: { 数: 2, 英: 1 }, regularOnly: false, countSubmitted: true, updatedAt: '' } },
+      teacherInputs: {},
+    }
+    const payload = { ...payloadOf(), specialSessions: [session] }
+    const balances = collectStockBalances(payload, TODAY)
+    expect(balances.lecture).toEqual({ s1__winter: 3 })
+    expect(balances.lectureRows).toHaveLength(1)
+    const [row] = balances.lectureRows
+    expect(row).toMatchObject({ key: 's1__winter', studentKey: 's1', studentId: 's1', sessionId: 'winter', count: 3, periodStart: '2026-12-14', periodEnd: '2027-01-10' })
+    expect(row.items.map((item) => item.subject).sort()).toEqual(['数', '数', '英'])
+    expect(row.items.every((item) => item.startDate === '2026-12-14' && item.endDate === '2027-01-10')).toBe(true)
+    // 置いた分(台帳の -1)だけ残が減る(アプリの数え方そのもの)
+    const consumed = collectStockBalances({ ...payload, boardState: { ...payload.boardState, manualLectureStockCounts: { s1__数__winter: -2, s1__英__winter: -1 } } }, TODAY)
+    expect(consumed.lecture).toEqual({})
+    expect(consumed.lectureRows).toEqual([])
+  })
+
+  it('台本 h: 期間の無い行(講習に結べない手動追加の在庫)は periodStart・periodEnd が空', () => {
+    const payload = { ...payloadOf(), boardState: { ...payloadOf().boardState, manualLectureStockCounts: { s1__数: 1 } } }
+    const [row] = collectStockBalances(payload, TODAY).lectureRows
+    expect(row).toMatchObject({ key: 's1__-', studentId: 's1', count: 1, periodStart: '', periodEnd: '' })
   })
 })

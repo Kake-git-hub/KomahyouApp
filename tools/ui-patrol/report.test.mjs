@@ -38,6 +38,15 @@ describe('終了コード', () => {
     expect(resolveExitCode(patrol([classroom([step()]), classroom([step({ findings: [stopFinding] })])]))).toBe(1)
   })
 
+  it('選んだ台本(起動のほか)がどれも候補なしで飛んだ教室(noScenarioRan)だけなら 2。1 校でも流れていれば手順の結果で決まる。変があれば 1(変を隠さない)', () => {
+    const stopFinding = { level: 'stop', code: 'page-error', message: 'x' }
+    expect(resolveExitCode(patrol([classroom([step()], { noScenarioRan: true }), classroom([step()], { noScenarioRan: true })]))).toBe(2)
+    expect(resolveExitCode(patrol([classroom([step()], { noScenarioRan: true }), classroom([step()])]))).toBe(0)
+    expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding] })], { noScenarioRan: true })]))).toBe(1)
+    // 候補なしで飛んだ台本があっても、ほかの台本が流れていれば(noScenarioRan でない)変の有無で 0／1
+    expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding] })])]))).toBe(1)
+  })
+
   it('中断と変が両方あれば 2(流せなかった巡回の「変なし」「変あり」を信用させない)', () => {
     const stopFinding = { level: 'stop', code: 'page-error', message: 'x' }
     expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding] })], { aborted: '止まった' })]))).toBe(2)

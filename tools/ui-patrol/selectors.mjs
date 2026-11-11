@@ -26,6 +26,11 @@ export const TESTIDS = {
   dayHeaderMenuHoliday: 'day-header-menu-holiday', dayHeaderMenuTransfer: 'day-header-menu-transfer', dayHeaderMenuTransferRelease: 'day-header-menu-transfer-release',
   wholeDayTransferBanner: 'whole-day-transfer-banner', wholeDayTransferCancel: 'whole-day-transfer-cancel',
   wholeDayTransferBlockedModal: 'whole-day-transfer-blocked-modal', wholeDayTransferBlockedClose: 'whole-day-transfer-blocked-close-button',
+  // 台本 h(講習の自動割振): ツールバー「未消化講習」(BoardToolbar.tsx)・一覧・生徒の行を押して開く画面の「未消化振替も同時に自動割り当てする」と「自動割振」・
+  // 押したあとに出る結果の画面(ScheduleBoardScreen.tsx)。
+  lectureStockChip: 'lecture-stock-chip', lectureStockPanel: 'lecture-stock-panel', lectureStockClose: 'lecture-stock-close-button',
+  stockActionModalIncludeMakeup: 'stock-action-modal-include-makeup', stockActionModalAuto: 'stock-action-modal-auto',
+  autoAssignDebugPanel: 'auto-assign-debug-panel', autoAssignDebugClose: 'auto-assign-debug-close',
 }
 
 /** testid の無い要素(class で待つ)。日付のメニュー(div.day-header-menu)とその外側(押すと閉じる)。selectors.test.mjs が className の字面を見張る。 */
@@ -40,7 +45,8 @@ export const SEARCHABLE_SELECT_TESTIDS = { templateAddStudent: 'template-add-stu
 // student-cell-{cellId}-{deskIndex}-{studentIndex}(BoardGrid.tsx)・week-jump-day-{dateKey}(BoardToolbar.tsx)
 // makeup-stock-entry-{生徒キー__- の記号を - に}・stock-origin-item-{振替元の並び}(ScheduleBoardScreen.tsx の未消化振替の一覧)
 // teacher-rest-{cellId}-{deskIndex}(BoardGrid.tsx の講師欄のグレーの「休」)・day-header-{dateKey}(BoardGrid.tsx の日付の見出し)
-export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-', teacherRest: 'teacher-rest-', dayHeader: 'day-header-' }
+// lecture-stock-entry-{未消化講習の行の鍵(生徒キー__講習 ID)の記号を - に}(ScheduleBoardScreen.tsx の未消化講習の一覧)
+export const TESTID_PREFIXES = { studentCell: 'student-cell-', weekJumpDay: 'week-jump-day-', teacherCell: 'teacher-cell-', studentName: 'student-name-', makeupStockEntry: 'makeup-stock-entry-', stockOriginItem: 'stock-origin-item-', teacherRest: 'teacher-rest-', dayHeader: 'day-header-', lectureStockEntry: 'lecture-stock-entry-' }
 
 export const SOURCE_FILES_WITH_TESTIDS = [
   'src/components/schedule-board/BoardToolbar.tsx',
@@ -63,4 +69,6 @@ export const weekJumpDayTestId = (dateKey) => `${TESTID_PREFIXES.weekJumpDay}${d
 export const dayHeaderTestId = (dateKey) => `${TESTID_PREFIXES.dayHeader}${dateKey}`
 // 未消化振替の一覧の生徒の行: 行の鍵は `${生徒キー}__-`(生徒ごとにまとめた行・makeupStockEntries)、testid は英数字・_・- 以外を - に直す(アプリと同じ)。
 export const makeupStockEntryTestId = (stockStudentKey) => `${TESTID_PREFIXES.makeupStockEntry}${`${stockStudentKey}__-`.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+// 未消化講習の一覧の生徒の行: 行の鍵は 生徒キー__講習 ID(buildLectureStockScopeKey)、testid は英数字・_・- 以外を - に直す(アプリと同じ)。
+export const lectureStockEntryTestId = (entryKey) => `${TESTID_PREFIXES.lectureStockEntry}${entryKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 export const byTestId = (testId) => `[data-testid="${testId}"]`

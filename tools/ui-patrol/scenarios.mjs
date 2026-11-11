@@ -1,6 +1,6 @@
 // 画面の自動巡回(tools/ui-patrol.mjs・docs/test-strategy.md 層 5「台本(第 1 段)」)の台本。
 // 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (e) 出欠 → (f) 講師の移動・入れ替え・休み → (a) テンプレ保存 → (d) テンプレを実際に変えて保存
-// (→ (g) 休日設定と解除・丸ごと振替〔既定では流さない・--scenario で挙げたときだけ〕)の順で、室長と同じ画面操作をし、
+// (→ (g) 休日設定と解除・丸ごと振替 → (h) 講習の自動割振〔g と h は既定では流さない・--scenario で挙げたときだけ〕)の順で、室長と同じ画面操作をし、
 // 操作のたびに「前の状態を読む → 操作 → 後の状態を読む → 点検 → 既知を外す → 報告へ足す」。
 // ★点検は tools/ui-patrol/checks.ts、盤面の事実は boardFacts.ts(どちらも esbuild で束ねた app から呼ぶ)。ここで規則を書き直さない。
 // ★報告に出すのは仮名・ID・件数・経路だけ(所見の message は checks.ts が作る。ここで足す注も ID と件数だけ)。
@@ -506,6 +506,27 @@ export const HOLIDAY_RELEASE_ALLOWED_SECTIONS = [...HOLIDAY_ALLOWED_SECTIONS, 'b
  */
 export const WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS = ['boardState.suppressedRegularLessonOccurrences']
 
+// ── 台本 h(講習の自動割振・2026-11-11 第 2 段の 5 本目・既定では流さない)。盤面の「未消化講習」→ 生徒の行 → 自動割振
+// (「未消化振替も同時に自動割り当てする」の選択つき)。入口は ScheduleBoardScreen.tsx の handleAutoAssignLectureStockEntry
+// (findBestLectureAutoAssignCandidate → findBestMakeupAutoAssignCandidate・共有コア findBestAutoAssignCandidate)。全員まとめての入口は無い(生徒の行ごと)。
+// 候補選び・在庫の仕様の増減・置いた席の決まりは tools/ui-patrol/autoAssign.ts(束ねた app)。
+
+/**
+ * 講習の自動割振で、講習の期間の机のほかに変わってよい部分。根拠(handleAutoAssignLectureStockEntry の commitWeeks):
+ * 講習の在庫の台帳 manualLectureStockCounts(置いた 1 コマごとに −1)と manualLectureStockOrigins(consumeManualLectureStockOrigin)。
+ * 入れていないもの: 振替の台帳(manualMakeupAdjustments・suppressedMakeupOrigins・fallbackMakeupStudents)・fallbackLectureStockStudents は今の値をそのまま渡す
+ * (未消化振替は盤面に置いた振替を消化として数えるので台帳は書かない)。抑止キー・回数の調整・保留・講習(specialSessions)も渡さない。
+ * 机は講習の期間の日だけ(振替も同じ講習の期間の中だけに置く・findBestMakeupAutoAssignCandidate)。期間の中でも、置いた席のほかは checks.ts の
+ * checkAutoAssignApplied が「変」にする(手入力・通常授業・講師・出欠記録・メモ・保留の下段は動かない＝INV-02)。
+ */
+export const AUTO_ASSIGN_ALLOWED_SECTIONS = ['boardState.manualLectureStockCounts', 'boardState.manualLectureStockOrigins']
+
+/** 台本 h で、講師を置かない理由と、全員まとめての入口が無いこと(報告の注に出す)。 */
+export const AUTO_ASSIGN_NOTES = [
+  '入口は「未消化講習」の生徒の行の「自動割振」だけ(全員まとめての入口は無い)。1 回目は講習だけ、2 回目は「未消化振替も同時に自動割り当てする」を入れて別の生徒で押す。',
+  '講習の自動割振は生徒の席だけを置き、講師は置かない(講師の居る机の空いた席に座らせる)。講習の講師を自動で置くのは講師日程表の登録・QR 提出(teacherAutoAssignRequest)で、台本 h は通らない。講師の休みのコマ・同じ講師が 2 机は全体の点検(checkTeacherCellIntegrity)が見る。',
+]
+
 /** dateKey(YYYY-MM-DD)の週の月曜(盤面の週は月曜から)。 */
 export function mondayOf(dateKey) {
   const time = Date.parse(`${dateKey}T00:00:00Z`)
@@ -789,6 +810,8 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   const newStep = (title) => ({ title, started: Date.now(), operations: 0, findings: [], notes: [] })
 
   let current = null
+  // 候補なしで飛ばした台本(g・h だけ。中断にしない)。
+  const skippedNoCandidates = new Set()
   // 台本 b が使った週(でたらめ操作も同じ週で動かす)。
   let moveWeekStart = null
   try {
@@ -1613,15 +1636,173 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           await finish('g', step)
         }
       }
-      // 効いた操作が 1 回も無い台本 g は、中身が無いまま緑になる。台本 g を指定しているなら中断(台本 b・d・e・f と同じ扱い)。
-      if (effectiveOps === 0) throw new PatrolAbortError('台本 g で効いた日付の操作が 1 回もありません(候補が無い・全部断られた)。')
-      await persist('日付の操作のあと 保存→読み込み直し')
+      // 選んだときだけ流す台本(g・h)は、候補なしは中断せず「飛ばす」(手順 1 の注に理由・手直し 1 I-1)。中断にすると、既定＋g で流したときに
+      // 前の台本の「変」が終了コード 2 に隠れる。候補はあったのに 1 回も効かなかった(全部断られた)ときは、中身が無いまま緑になるので今までどおり中断。
+      // 選んだ台本がどの教室でも候補なしなら、report.mjs の resolveExitCode が noScenarioRan を見て 2 にする(何も確かめていない)。
+      if (!plan.holiday && !plan.transfer) {
+        skippedNoCandidates.add('g')
+        await finish('g', { ...newStep('日付の操作は候補なしで飛ばした'), notes: ['休日にする日も丸ごと振替の振替元も選べなかった(理由は準備の段の「飛ばした」)。台本 g は何も操作していない。'] })
+      } else {
+        if (effectiveOps === 0) throw new PatrolAbortError('台本 g で効いた日付の操作が 1 回もありません(候補はあったが全部断られた)。')
+        await persist('日付の操作のあと 保存→読み込み直し')
+      }
+    }
+
+    // ── (h) 講習の自動割振(既定では流さない・--scenario で挙げたときだけ)。「未消化講習」→ 生徒の行 → 自動割振。1 回目は講習だけ、2 回目は
+    // 「未消化振替も同時に」を入れて別の生徒(autoAssign.ts の pickAutoAssignPlan)。押す前に講習の期間の週を全部開く(アプリは週を開いたときに初めてその週を作る)。
+    // 1 回ごとに 押す → 点検(範囲・置いた席・決まり・在庫) → もう一度押す(何も変わらない・INV-03) → 元に戻す(押す前と同じ) → やり直し(押したあとと同じ)。
+    // 最後に 保存→読み込み直し。★ローカルモードの控えの罠(台本 f・g と同じ): 元に戻す・やり直しの前に保存ボタンを押す。
+    if (scenarios.includes('h')) {
+      lastScenario = 'h'
+      current = await timedRead()
+      const plan = app.pickAutoAssignPlan({ stock: stockOf(current), payload: current.payload, todayKey: today, random: createSeededRandom((Number(options.seed) || 0) + 0x48) })
+      const prepStep = newStep('講習の自動割振の準備')
+      prepStep.notes.push(...AUTO_ASSIGN_NOTES)
+      prepStep.notes.push(`未消化講習の行 ${(stockOf(current).lectureRows ?? []).length} 行・操作 ${plan.ops.length} 回(${plan.ops.map((op) => `${op.studentKey}・${op.sessionId}・${op.periodStart}〜${op.periodEnd}・残 ${op.count}${op.includeMakeup ? `・振替の残 ${op.makeupBalance}` : ''}`).join('／') || 'なし'})`)
+      for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
+      await finish('h', prepStep)
+
+      let effectiveOps = 0
+      const describeOp = (op) => `${op.label}: ${op.studentKey}(未消化講習の行 ${op.entryKey}・期間 ${op.periodStart}〜${op.periodEnd})`
+      for (const [index, op] of plan.ops.entries()) {
+        const step = newStep(`講習の自動割振 ${index + 1}(${op.includeMakeup ? '未消化振替も同時に' : '講習だけ'})`)
+        step.notes.push(describeOp(op))
+        const weeks = app.periodWeekStarts(op.periodStart, op.periodEnd)
+        const unopened = []
+        for (const monday of weeks) {
+          try {
+            await d.gotoWeekOf(session, monday)
+          } catch (error) {
+            // 盤面のデータに無い間の週(例: 緑が丘校の形の 2026-08-10 の週＝盆休みで保存されていない)は、週の選択で押しても別の週が出る
+            // (jumpToWeekByDate の ensureWeeksCoverDateRange は端にしか週を足さない)。自動割振も同じ関数で週を足すので、その週には置かない。開けなかった週として注に出して続ける。
+            if (!(error instanceof PatrolAbortError)) throw error
+            unopened.push(monday)
+          }
+        }
+        if (weeks.length > 0 && unopened.length === weeks.length) {
+          await finish('h', step)
+          throw new PatrolAbortError(`講習の期間の週を 1 つも開けません(${weeks[0]}〜${weeks.at(-1)}・週の選択の作りが変わった疑い): ${describeOp(op)}`)
+        }
+        step.notes.push(`講習の期間の週を開いた: ${weeks.length - unopened.length}/${weeks.length} 週(${weeks[0] ?? ''}〜${weeks.at(-1) ?? ''})${unopened.length > 0 ? `・開けなかった週 ${unopened.join('・')}(盤面のデータに無い間の週)` : ''}`)
+        const before = await timedRead()
+        current = before
+        const dialogsBefore = session.dialogs.length
+        const statusBefore = await d.readStatusText(session)
+        const pressed = await d.runLectureAutoAssign(session, { entryKey: op.entryKey, includeMakeup: op.includeMakeup })
+        if (!pressed.found) {
+          step.notes.push(`飛ばした: 未消化講習の一覧に ${op.entryKey} の行が無い(または自動割振が押せない・ステータス: ${pressed.status ?? ''})。`)
+          await finish('h', step)
+          continue
+        }
+        step.operations += 1
+        step.notes.push(`ステータス: ${pressed.status ?? ''}`)
+        if (pressed.debugText) step.notes.push(`自動割振の結果の画面: ${pressed.debugText}`)
+        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
+        const after = await timedRead()
+        const diff = app.diffBoardFacts(before.facts, after.facts)
+        if (diff.desks.length === 0 && diff.sections.length === 0) {
+          if ((pressed.status ?? '') === statusBefore && !pressed.debugText) {
+            await finish('h', step)
+            throw new PatrolAbortError(`自動割振を押しても盤面もステータスの文も変わらず、何も起きません: ${describeOp(op)}`)
+          }
+          step.findings.push({ level: 'info', code: 'auto-assign-blocked', message: `アプリが割り振らなかった: ${describeOp(op)}(${pressed.status ?? ''})`, studentId: op.studentKey })
+          await finish('h', step)
+          continue
+        }
+        effectiveOps += 1
+        // 件数の点検(checkAutoAssignApplied)は画面の文(buildAutoAssignResultMessage の形)を読む。読めなければ黙って飛ばさず注に残す(手直し 1 の Minor 3)。
+        if (!app.parseAutoAssignAnnouncedCounts(pressed.status ?? '')) step.notes.push(`結果の文を読めなかった(件数の点検は飛ばした・アプリの文の形が変わった疑い): ${pressed.status ?? ''}`)
+        step.diff = { before: before.facts, after: after.facts }
+        const placements = app.collectAutoAssignPlacements(before.facts, after.facts, op.studentKey)
+        step.notes.push(`置いた席: 講習 ${placements.filter((item) => item.lessonType === 'special').length}・振替 ${placements.filter((item) => item.lessonType === 'makeup').length}(${placements.slice(0, 8).map((item) => `${item.dateKey} ${item.slotNumber}限 机${item.deskIndex + 1} ${item.subject}`).join('・')}${placements.length > 8 ? '・…' : ''})`)
+        const allowed = { deskKeys: app.collectDateDeskKeys([before.facts, after.facts], app.collectPeriodDateKeys(op.periodStart, op.periodEnd)), sections: new Set(AUTO_ASSIGN_ALLOWED_SECTIONS) }
+        const exclude = { excludeDeskKeys: allowed.deskKeys }
+        const rules = app.checkAutoAssignPlacementRules(after.payload, placements, op.studentKey)
+        step.notes.push(...rules.notes)
+        step.findings.push(
+          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+          ...app.checkTeacherCellIntegrity(before.facts, after.facts),
+          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
+          ...app.checkAutoAssignApplied(before.facts, after.facts, { ...op, announced: pressed.status ?? '' }),
+          ...rules.findings,
+          ...app.checkStockDeltas(stockOf(before), stockOf(after), app.expectedAutoAssignStockDeltas(op, placements), { label: '自動割振で在庫の増減が仕様と違う' }),
+        )
+        current = after
+        // もう一度押す: 置けるものは 1 回目で置き切る(割振のループは候補が無くなるまで回る)ので、何も変わらない(INV-03 相当)。
+        const again = await d.runLectureAutoAssign(session, { entryKey: op.entryKey, includeMakeup: op.includeMakeup })
+        if (again.found) {
+          step.operations += 1
+          step.notes.push(`2 回目のステータス: ${again.status ?? ''}`)
+          const rerun = await timedRead()
+          step.findings.push(
+            ...sameState(after, rerun, 'auto-assign-rerun-changed'),
+            ...app.checkStockDeltas(stockOf(after), stockOf(rerun), {}, { code: 'auto-assign-rerun-changed', label: '2 回目の自動割振で在庫が変わった' }),
+          )
+          current = rerun
+        } else {
+          step.notes.push('2 回目: 残りを置き切ったので、未消化講習の一覧にこの行が無い(押せない)。')
+        }
+        // 元に戻す → やり直し。どちらも前に保存した形へ戻りうるので、先に保存する(ローカルモードの控えの罠)。
+        const afterAll = current
+        if (await d.clickSave(session)) step.operations += 1
+        if (await d.clickUndo(session)) {
+          step.operations += 1
+          const undone = await timedRead()
+          step.findings.push(...sameState(before, undone, 'undo-not-restored'), ...app.checkStockDeltas(stockOf(before), stockOf(undone), {}, { code: 'undo-not-restored', label: '元に戻すで在庫が自動割振の前に戻らない' }))
+          current = undone
+          step.notes.push('元に戻す: 自動割振の前の盤面・在庫に戻るかを確かめた。')
+          if (await d.clickSave(session)) step.operations += 1
+          if (await d.clickRedo(session)) {
+            step.operations += 1
+            const redone = await timedRead()
+            step.findings.push(...sameState(afterAll, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(afterAll), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が自動割振のあとに戻らない' }))
+            current = redone
+            step.notes.push('やり直し: 自動割振のあとの盤面・在庫に戻るかを確かめた。')
+          } else {
+            step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `自動割振を元に戻したあとやり直しが押せない(ボタンが無効): ${describeOp(op)}`, studentId: op.studentKey })
+          }
+        } else {
+          step.findings.push({ level: 'stop', code: 'undo-not-restored', message: `自動割振のあと元に戻すが押せない(ボタンが無効): ${describeOp(op)}`, studentId: op.studentKey })
+        }
+        await finish('h', step)
+      }
+      // 候補なし(割り振れる未消化講習の行が無い＝講習の提出の前の時期など)は中断せず飛ばす(台本 g と同じ・手直し 1 I-1)。候補はあったのに全部割り振れなかったときだけ中断。
+      if (plan.ops.length === 0) {
+        skippedNoCandidates.add('h')
+        await finish('h', { ...newStep('講習の自動割振は候補なしで飛ばした'), notes: [`割り振れる未消化講習の行が無い(期間の終わりが今日以降・名簿に結べる・今日在籍の行が 0${plan.pastOnlyCount > 0 ? `・期間が今日より前の行 ${plan.pastOnlyCount} 行は選ばない` : ''})。台本 h は何も操作していない。`] })
+      } else if (effectiveOps === 0) {
+        throw new PatrolAbortError('台本 h で効いた自動割振が 1 回もありません(候補はあったが全部割り振れなかった)。')
+      } else {
+        const persistStep = newStep('講習の自動割振のあと 保存→読み込み直し')
+        if (await d.clickSave(session)) persistStep.operations += 1
+        else persistStep.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
+        const saved = await timedRead()
+        persistStep.findings.push(...sameState(current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
+        await d.reloadApp(session)
+        persistStep.operations += 1
+        const reloaded = await timedRead()
+        persistStep.findings.push(
+          ...sameState(saved, reloaded, 'reload-changed'),
+          ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }),
+          ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts),
+        )
+        persistStep.diff = { before: saved.facts, after: reloaded.facts }
+        current = reloaded
+        await finish('h', persistStep)
+      }
     }
   } catch (error) {
     const file = await shoot(`${lastScenario}-aborted`)
     const reason = error instanceof PatrolAbortError ? error.message : `巡回の途中で例外: ${error instanceof Error ? `${error.name}: ${error.message.split('\n')[0].slice(0, 200)}` : String(error)}`
     report = { ...report, aborted: `${lastScenario}: ${reason}${file ? `(画面写真 ${path.basename(file)})` : ''}` }
   }
+
+  // 選んだ台本(起動のほか)がどれも候補なしで飛んだ(でたらめ操作も流していない)教室。終了コードの決め方は report.mjs の resolveExitCode。
+  const selectedScenarios = scenarios.filter((name) => name !== 'boot')
+  if (!report.aborted && (options.random ?? 0) === 0 && selectedScenarios.length > 0 && selectedScenarios.every((name) => skippedNoCandidates.has(name))) report = { ...report, noScenarioRan: true }
 
   // ── 最後に、外への通信の試みと画面のエラーを所見にする(途中で止まっても出す)。
   const browserStep = newStep('ブラウザの記録(外への通信・画面のエラー)')

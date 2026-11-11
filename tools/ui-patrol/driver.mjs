@@ -5,7 +5,7 @@
 //   待ちが時間切れになったら PatrolAbortError を投げる(台本が画面写真を撮って教室を「中断」にする。所見にはしない)。
 // ★Playwright は package.json に入れない(この環境の全体の node_modules から読む)。読めなければ loadPlaywright() が null を返す。
 import { createRequire } from 'node:module'
-import { CLASS_SELECTORS, DRIVER_TIMING, PROP_TESTIDS, SEARCHABLE_SELECT_TESTIDS, TESTIDS, TESTID_PREFIXES, byTestId, dayHeaderTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { CLASS_SELECTORS, DRIVER_TIMING, PROP_TESTIDS, SEARCHABLE_SELECT_TESTIDS, TESTIDS, TESTID_PREFIXES, byTestId, dayHeaderTestId, lectureStockEntryTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 export class PatrolAbortError extends Error {
   constructor(message) {
@@ -241,7 +241,8 @@ export async function gotoWeekOf(session, dateKey) {
     const day = page.locator(byTestId(weekJumpDayTestId(dateKey)))
     if ((await day.count()) > 0) {
       await day.first().click()
-      await withTimeout(page.locator(`[data-cell-id^="${dateKey}_"]`).first().waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS }), `${dateKey} の週が盤面に出ませんでした。`)
+      // 休日・休校の日はコマ(data-cell-id)を描かないので、日付の見出しが出るのも「その週が出た」とみなす(台本 h が夏期講習の盆休みの週を開いて分かった)。
+      await withTimeout(page.locator(`[data-cell-id^="${dateKey}_"], ${byTestId(dayHeaderTestId(dateKey))}`).first().waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS }), `${dateKey} の週が盤面に出ませんでした。`)
       await fitViewportToBoard(session)
       return
     }
@@ -532,6 +533,55 @@ export async function placeMakeupFromStock(session, { stockStudentKey, choose },
   const cancel = page.locator(byTestId(PROP_TESTIDS.cancelSelection))
   if (await cancel.isVisible().catch(() => false)) await cancel.first().click().catch(() => {})
   return { placed: true, status, chosenText: texts[index] }
+}
+
+// ── 台本 h(講習の自動割振): ツールバー「未消化講習」→ 生徒の行 → 画面の「未消化振替も同時に自動割り当てする」→「自動割振」(ScheduleBoardScreen.tsx の
+// handleAutoAssignLectureStockEntry)。押すと、割り振れたときも割り振れなかったときも結果の画面(auto-assign-debug-panel)が出るので、それを待って閉じる。
+
+/** 未消化講習の一覧・自動割振の画面・振替の一覧が開いていれば閉じる(押したあとアプリが一覧を開き直すことがある)。 */
+async function closeLectureStockPanels(session) {
+  const { page } = session
+  const modal = page.locator(byTestId(TESTIDS.stockActionModal))
+  if (await modal.isVisible().catch(() => false)) await modal.locator(byTestId(TESTIDS.stockActionModalCancel)).first().click().catch(() => {})
+  for (const [panelId, closeId] of [[TESTIDS.lectureStockPanel, TESTIDS.lectureStockClose], [TESTIDS.makeupStockPanel, TESTIDS.makeupStockClose]]) {
+    const panel = page.locator(byTestId(panelId))
+    if (await panel.isVisible().catch(() => false)) await panel.locator(byTestId(closeId)).first().click().catch(() => {})
+  }
+}
+
+/**
+ * 講習の自動割振を 1 回: 未消化講習の一覧を開く → 行(entryKey)を押す → 「未消化振替も同時に」を includeMakeup に合わせる →「自動割振」→ 結果の画面を待って閉じる。
+ * 戻り値 { found(行があって押せた), status(ステータスの文), debugText(結果の画面の文・1 行) }。行が無い・自動割振が押せないときは画面を閉じて found: false。
+ */
+export async function runLectureAutoAssign(session, { entryKey, includeMakeup }) {
+  const { page } = session
+  await closeLectureStockPanels(session)
+  await page.locator(byTestId(TESTIDS.lectureStockChip)).click()
+  const panel = page.locator(byTestId(TESTIDS.lectureStockPanel))
+  await waitVisible(panel, `未消化講習の一覧が開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const row = panel.locator(byTestId(lectureStockEntryTestId(entryKey)))
+  if ((await row.count()) === 0) {
+    await closeLectureStockPanels(session)
+    return { found: false, status: await readStatusText(session) }
+  }
+  await row.first().click()
+  const modal = page.locator(byTestId(TESTIDS.stockActionModal))
+  await waitVisible(modal, `自動割振の画面が開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const checkbox = modal.locator(`${byTestId(TESTIDS.stockActionModalIncludeMakeup)} input[type="checkbox"]`)
+  if ((await checkbox.isChecked()) !== Boolean(includeMakeup)) await checkbox.setChecked(Boolean(includeMakeup))
+  const auto = modal.locator(byTestId(TESTIDS.stockActionModalAuto))
+  if (await auto.isDisabled()) {
+    await closeLectureStockPanels(session)
+    return { found: false, status: await readStatusText(session) }
+  }
+  await auto.click()
+  const result = page.locator(byTestId(TESTIDS.autoAssignDebugPanel))
+  await waitVisible(result, `自動割振の結果の画面が出ませんでした(ステータス: ${await readStatusText(session)})。`)
+  const debugText = (await result.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 200)
+  await result.locator(byTestId(TESTIDS.autoAssignDebugClose)).first().click()
+  await waitHidden(result, '自動割振の結果の画面が閉じませんでした。')
+  await closeLectureStockPanels(session)
+  return { found: true, status: await readStatusText(session), debugText }
 }
 
 // ── 台本 f(講師の移動・入れ替え・休み): 盤面の講師欄の長押しドラッグと講師メニュー。室長と同じく、講師欄を長押しして同じコマの別の机の講師欄へ放す

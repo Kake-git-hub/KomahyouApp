@@ -34,7 +34,7 @@ export const PATROL_FINDING_CODES = [
   'teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked',
   // 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目): 日付の操作が盤面に効いていない(stop)／休日の解除・丸ごと振替の解除で
   // 操作の前の盤面・在庫に戻らない(stop・§9-20・休日解除は逆操作)／アプリが日付の操作を断った(info)／丸ごと振替の作成・解除でできた
-  // 「休みの記録があるコマにその講師が居る」(info・§9-25 の対象外でオーナー判断待ちの既知の形・2026-11-11 の裁定)。
+  // 「休みの記録があるコマにその講師が居る」(info・§9-25 の対象外の既知の形・2026-11-11 オーナー決定で今のまま〔講師の休みが本番で使われ始めてから見直す〕)。
   'day-op-not-applied', 'round-trip-not-restored', 'day-op-blocked', 'teacher-rested-present-by-whole-day-transfer',
   // 休日のまま読み込み直す(再マージ)とそのコマのメモは消え、解除しても戻らない(休日にした時点では残る＝convertHolidayDeskEntriesToRecords は触らない)
   // (info・仕様: 休日のコマは再マージで授業・講師・メモを持ち込まない＝spec-makeup-stock §B-2-2c・
@@ -47,6 +47,10 @@ export const PATROL_FINDING_CODES = [
   // テンプレの講師が戻ることはある)(info・仕様: 休日のコマは再マージで
   // 記録のある机に限り講師を引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定)。
   'holiday-teacher-dropped',
+  // 台本 h(講習の自動割振・2026-11-11 第 2 段の 5 本目・既定では流さない): 自動割振で置いた席のほかが変わった(stop・INV-02)／
+  // 置いた席が決まりに反する(講習の期間の外・講師のいない机・休校のコマ・同じコマに同じ生徒が 2 席・出席不可のコマ・制約事項・stop・INV-01)／
+  // 画面の文の件数と置いた席の数が違う(stop・INV-06)／アプリが割り振らなかった(info)／2 回目の自動割振で盤面か在庫が変わった(stop・INV-03)。
+  'auto-assign-outside-placement', 'auto-assign-rule-violated', 'auto-assign-count-mismatch', 'auto-assign-blocked', 'auto-assign-rerun-changed',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -389,7 +393,7 @@ export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, 
   return findings
 }
 
-type SameStateCode = 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored'
+type SameStateCode = 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored' | 'auto-assign-rerun-changed'
 
 const SAME_STATE_LABELS: Record<SameStateCode, string> = {
   'undo-not-restored': '元に戻すで操作前に戻らない',
@@ -398,6 +402,8 @@ const SAME_STATE_LABELS: Record<SameStateCode, string> = {
   'redo-not-restored': 'やり直しで操作後に戻らない',
   'save-changed': '保存で盤面が変わった',
   'reload-changed': '読み込み直しで盤面が変わった',
+  // 台本 h: 同じ生徒の自動割振をもう一度押したら盤面が変わった(置けるものは 1 回目で置き切る・INV-03 相当)。
+  'auto-assign-rerun-changed': '2 回目の自動割振で盤面が変わった',
 }
 
 export function checkSameState(before: BoardFacts, after: BoardFacts, code: SameStateCode): PatrolFinding[] {
@@ -650,7 +656,7 @@ export function checkTemplateEditSaved(template: unknown, edit: TemplateEdit): P
 
 /** 在庫の残(tools/ui-patrol/stock.ts の collectStockBalances の makeup・lecture)。鍵ごとの残。無い鍵は 0。 */
 export type StockBalanceMaps = { makeup: Record<string, number>; lecture: Record<string, number> }
-export type StockDeltaCode = 'stock-delta-mismatch' | 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored'
+export type StockDeltaCode = 'stock-delta-mismatch' | 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored' | 'auto-assign-rerun-changed'
 /**
  * 比べない鍵(台本 g の休日設定)。数え方が通常と違う生徒(手動追加・編集で振替にした・講習・同じ日に同じ科目が 2 つ)の鍵は、仕様の増減を
  * 1 つに決められないので比べない(dayOps.ts の expectedHolidayStockDeltas が集める)。lecturePrefixes は講習の在庫の行の鍵の頭(生徒キー__)。
@@ -838,10 +844,11 @@ export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts,
       continue
     }
     // 台本 g: 丸ごと振替(付け替え)は講師の欄だけを別の日へ移し、休みの記録は元の日に残る(§9-25 の対象外・作成→解除で元の形 §9-20 と両立させるため)。
-    // 作成・解除でできた「休みなのに居る」は仕様の範囲でできうる既知の形(オーナー判断待ち)なので知らせるだけ。同じ講師が 2 机は止める。
+    // 作成・解除でできた「休みなのに居る」は仕様の範囲でできうる既知の形なので知らせるだけ(2026-11-11 オーナー決定: 今のまま・
+    // 講師の休みが本番で使われ始めてから見直す)。同じ講師が 2 机は止める。
     // 知らせるだけにするのは、丸ごと振替の振替元・振替先の日のコマにできた形だけ(ほかの日にできたものは止める・手直し 1 M-1)。
     if (options.restedPresentAsInfoDates?.has(item.dateKey) && item.kind === 'rested-present') {
-      transferRested.push({ level: 'info', code: 'teacher-rested-present-by-whole-day-transfer', message: `丸ごと振替でできた形(知らせるだけ・オーナー判断待ち): ${label}: ${where}`, ...location })
+      transferRested.push({ level: 'info', code: 'teacher-rested-present-by-whole-day-transfer', message: `丸ごと振替でできた形(知らせるだけ・今のまま。講師の休みが本番で使われ始めたら見直す): ${label}: ${where}`, ...location })
       continue
     }
     stops.push({ level: 'stop', code, message: `${label}: ${where}`, ...location })
@@ -1091,4 +1098,98 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
     ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-memo-dropped'), 'info', 'holiday-memo-dropped', '休日のまま読み込み直すと消えて戻らないメモ'),
   ].sort((left, right) => position(left).localeCompare(position(right)))
   return [...merged, ...sectionFindings]
+}
+
+// ── 台本 h(講習の自動割振・2026-11-11 第 2 段の 5 本目・既定では流さない)。入口は「未消化講習」の生徒の行 → 自動割振(振替も同時に、の選択つき)
+// = ScheduleBoardScreen.tsx の handleAutoAssignLectureStockEntry。置くのは生徒の席だけ(講師は置かない・在庫の台帳は講習の分だけ書く)。
+
+/** 台本 h の 1 回の自動割振。studentKey＝生徒 ID・entryKey＝未消化講習の行の鍵(生徒キー__講習 ID)・期間は講習の期間(YYYY-MM-DD)。announced は押したあとの画面の文。 */
+export type AutoAssignOp = { studentKey: string; entryKey: string; includeMakeup: boolean; periodStart: string; periodEnd: string; announced?: string }
+/** 自動割振で置かれた 1 席(前は空いていた席に、その生徒が座った)。deskIndex・seat は 0 始まり。 */
+export type AutoAssignPlacement = { cellId: string; dateKey: string; slotNumber: number; deskIndex: number; seat: number; lessonType: string; subject: string; deskKey: string }
+
+/** 前は空いていた席に、その生徒(studentKey)が座った席。並びは日付・時限・机・席。 */
+export function collectAutoAssignPlacements(before: BoardFacts, after: BoardFacts, studentKey: string): AutoAssignPlacement[] {
+  const placements: AutoAssignPlacement[] = []
+  for (const change of diffBoardFacts(before, after).desks) {
+    const next = change.after
+    if (!next) continue
+    next.students.forEach((entry, seat) => {
+      if (!entry || entry.key !== studentKey || (change.before?.students[seat] ?? null) !== null) return
+      placements.push({ cellId: next.cellId, dateKey: next.dateKey, slotNumber: next.slotNumber, deskIndex: next.deskIndex, seat, lessonType: entry.lessonType, subject: entry.subject, deskKey: next.key })
+    })
+  }
+  return placements
+}
+
+/**
+ * 自動割振の画面の文(boardResultMessages.ts の buildAutoAssignResultMessage)から、置いた数を読む。
+ * 「…を自動割振しました（3コマ…」→ 講習 3・振替 0／「…（講習2・振替1コマ…」→ 講習 2・振替 1。割り振れなかった文などは null。
+ */
+export function parseAutoAssignAnnouncedCounts(message: string | undefined): { lecture: number; makeup: number } | null {
+  const text = message ?? ''
+  const both = /を自動割振しました（講習(\d+)・振替(\d+)コマ/u.exec(text)
+  if (both) return { lecture: Number(both[1]), makeup: Number(both[2]) }
+  const only = /を自動割振しました（(\d+)コマ/u.exec(text)
+  return only ? { lecture: Number(only[1]), makeup: 0 } : null
+}
+
+/**
+ * 自動割振が盤面に正しく効いたか(在庫の増減は呼んだ側が checkStockDeltas で見る)。根拠は handleAutoAssignLectureStockEntry と findBestAutoAssignCandidate:
+ * - 変わってよいのは、前は空いていた席にその生徒の講習(振替も同時に、なら振替も)が座ることだけ。机の講師・出欠記録・メモ・保留の下段・ほかの席が変わったら
+ *   stop auto-assign-outside-placement(手入力・通常授業が動く・消える＝INV-02)。
+ * - 見るのは講習の期間の机だけ(期間の外の机の変化は checkOutsideAllowedRange の範囲の外として出る・2 回出さない)。
+ * - 置いた席は、開いているコマ・本物の講師がいた机(desk.teacher が空の机は候補にしない)。外れたら stop auto-assign-rule-violated。
+ *   同じコマに同じ生徒が 2 席(INV-01)・出席不可のコマ・制約事項は autoAssign.ts の checkAutoAssignPlacementRules が見る(アプリの関数を呼ぶ)。
+ * - 画面の文の件数(講習・振替)と置いた席の数が違えば stop auto-assign-count-mismatch(INV-06 の「置いた数と減った数」の片方)。
+ */
+export function checkAutoAssignApplied(before: BoardFacts, after: BoardFacts, op: AutoAssignOp): PatrolFinding[] {
+  const outside: PatrolFinding[] = []
+  const violated: PatrolFinding[] = []
+  const allowedTypes = new Set(op.includeMakeup ? ['special', 'makeup'] : ['special'])
+  const placements: AutoAssignPlacement[] = []
+  for (const change of diffBoardFacts(before, after).desks) {
+    const fact = (change.after ?? change.before)!
+    // 期間の外の机の変化は、ほかの台本と同じく checkOutsideAllowedRange(範囲＝期間の机)が拾う。ここでも拾うと同じ所が 2 回出る(手直し 1 M-3)。
+    if (fact.dateKey < op.periodStart || fact.dateKey > op.periodEnd) continue
+    const other = change.fields.filter((field) => field !== 'students')
+    if (other.length > 0 || !change.after) {
+      outside.push({ level: 'stop', code: 'auto-assign-outside-placement', message: `自動割振で置いた席のほかが変わった: ${describeDeskChange(change)}`, ...locationOf(fact) })
+    }
+    if (!change.after) continue
+    change.after.students.forEach((entry, seat) => {
+      const previous = change.before?.students[seat] ?? null
+      if (JSON.stringify(previous) === JSON.stringify(entry)) return
+      if (previous === null && entry && entry.key === op.studentKey && allowedTypes.has(entry.lessonType)) {
+        placements.push({ cellId: fact.cellId, dateKey: fact.dateKey, slotNumber: fact.slotNumber, deskIndex: fact.deskIndex, seat, lessonType: entry.lessonType, subject: entry.subject, deskKey: fact.key })
+        return
+      }
+      const was = previous ? `${personOf(previous)} ${lessonOf(previous)}` : '空き'
+      const now = entry ? `${personOf(entry)} ${lessonOf(entry)}` : '空き'
+      outside.push({ level: 'stop', code: 'auto-assign-outside-placement', message: `自動割振で置いた席のほかが変わった: ${placeOf(fact)} 席${seat + 1} ${was} → ${now}`, ...locationOf(fact), ...(previous && !previous.key.startsWith('name:') ? { studentId: previous.key } : {}) })
+    })
+  }
+  for (const placed of placements) {
+    const where = `${formatPlace(placed.dateKey, placed.slotNumber, placed.deskIndex)} 席${placed.seat + 1} ${placed.subject} ${LESSON_TYPE_LABELS[placed.lessonType] ?? placed.lessonType}`
+    const location = { dateKey: placed.dateKey, slotNumber: placed.slotNumber, deskIndex: placed.deskIndex, studentId: op.studentKey }
+    const reasons: string[] = []
+    const previousDesk = before.desks.get(placed.deskKey)
+    if (!previousDesk || previousDesk.teacher === '') reasons.push('講師のいない机')
+    if (!after.desks.get(placed.deskKey)?.cellOpen) reasons.push('休校のコマ')
+    for (const reason of reasons) violated.push({ level: 'stop', code: 'auto-assign-rule-violated', message: `自動割振で置いた席が決まりに反する(${reason}): ${where} ${op.studentKey}`, ...location })
+  }
+  const counted: PatrolFinding[] = []
+  const announced = parseAutoAssignAnnouncedCounts(op.announced)
+  if (announced) {
+    const lecture = placements.filter((item) => item.lessonType === 'special').length
+    const makeup = placements.filter((item) => item.lessonType === 'makeup').length
+    if (announced.lecture !== lecture || announced.makeup !== makeup) {
+      counted.push({ level: 'stop', code: 'auto-assign-count-mismatch', message: `自動割振の画面の文の件数と置いた席の数が違う: 文 講習 ${announced.lecture}・振替 ${announced.makeup}／盤面 講習 ${lecture}・振替 ${makeup}(${op.studentKey})`, studentId: op.studentKey })
+    }
+  }
+  return [
+    ...limitDeskFindings(outside, 'stop', 'auto-assign-outside-placement', '自動割振で置いた席のほかが変わった'),
+    ...limitDeskFindings(violated, 'stop', 'auto-assign-rule-violated', '自動割振で置いた席が決まりに反する'),
+    ...counted,
+  ]
 }

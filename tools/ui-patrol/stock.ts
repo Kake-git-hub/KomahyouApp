@@ -20,8 +20,24 @@ export type MakeupStockRow = {
   remainingOriginLabels: string[]
 }
 
+/**
+ * 未消化講習の 1 行(画面の「未消化講習」の行＝生徒×講習。鍵は buildLectureStockScopeKey の 生徒キー__講習 ID〔講習に結べない手動追加は 生徒キー__-〕)。
+ * 台本 h(講習の自動割振)が、押す行と割振の期間を選ぶのに使う。items は残っている 1 コマずつ(科目・期間・その生徒の出席不可のコマ)。
+ * periodStart / periodEnd は items の期間の最小・最大(期間の無い item が 1 つでもあれば空＝期間を決められない)。
+ */
+export type LectureStockRow = {
+  key: string
+  studentKey: string
+  studentId: string | null
+  sessionId: string
+  count: number
+  periodStart: string
+  periodEnd: string
+  items: Array<{ subject: string; startDate: string; endDate: string; unavailableSlots: string[] }>
+}
+
 /** makeup: 未消化振替の残(鍵＝生徒キー__科目)。lecture: 未消化講習の残(鍵＝講習の在庫の行の鍵・残 0 の行は入らない)。 */
-export type StockBalances = { makeup: Record<string, number>; lecture: Record<string, number>; makeupRows: MakeupStockRow[] }
+export type StockBalances = { makeup: Record<string, number>; lecture: Record<string, number>; makeupRows: MakeupStockRow[]; lectureRows: LectureStockRow[] }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -55,10 +71,24 @@ export function collectStockBalances(payload: AppSnapshotPayload, today: string)
     fallbackLectureStockStudents: (isPlainObject(boardState.fallbackLectureStockStudents) ? boardState.fallbackLectureStockStudents : {}) as Record<string, { displayName: string }>,
   })
   const lecture: Record<string, number> = {}
+  const lectureRows: LectureStockRow[] = []
   for (const [entryKey, scoped] of pending) {
-    if (scoped.pendingItems.length > 0) lecture[entryKey] = scoped.pendingItems.length
+    if (scoped.pendingItems.length === 0) continue
+    lecture[entryKey] = scoped.pendingItems.length
+    const items = scoped.pendingItems.map((item) => ({ subject: item.subject, startDate: item.startDate ?? '', endDate: item.endDate ?? '', unavailableSlots: [...(item.unavailableSlots ?? [])] }))
+    const dated = items.every((item) => item.startDate !== '' && item.endDate !== '')
+    lectureRows.push({
+      key: entryKey,
+      studentKey: scoped.studentKey,
+      studentId: scoped.studentId,
+      sessionId: scoped.sessionId ?? '',
+      count: items.length,
+      periodStart: dated ? items.map((item) => item.startDate).sort()[0] : '',
+      periodEnd: dated ? items.map((item) => item.endDate).sort().at(-1)! : '',
+      items,
+    })
   }
-  return { makeup, lecture, makeupRows }
+  return { makeup, lecture, makeupRows, lectureRows }
 }
 
 /**
