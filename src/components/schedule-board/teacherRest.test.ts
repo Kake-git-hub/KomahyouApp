@@ -400,7 +400,7 @@ describe('§9-25 休みの講師を同じコマのどこかへ手で置いたら
   function restedWithSubstitute() {
     return placeManualTeacher(restedBoard(), 0, '高橋', 't4')
   }
-  /** v1.5.722 より前に作られた食い違った形: 休みの記録が高橋の机（机 0）に残り、田中が同じコマの机 2 に居る。机 3＝空き机。 */
+  /** v1.5.723 より前に作られた食い違った形: 休みの記録が高橋の机（机 0）に残り、田中が同じコマの机 2 に居る。机 3＝空き机。 */
   function staleBoard() {
     const weeks = placeManualTeacher(restedWithSubstitute(), 2, '田中', 't1')
     return weeks.map((week) => week.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: [...cell.desks, { id: `${CELL_ID}_desk_4`, teacher: '' }] })))

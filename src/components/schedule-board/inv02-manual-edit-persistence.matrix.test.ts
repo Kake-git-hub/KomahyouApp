@@ -2625,7 +2625,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
         // 追加 3・4（2026-11-11）: 高橋の休みの記録が残る机に、別の講師（佐藤）を手で置いたコマ。休みの判定は講師欄が空の休みの机だけ（v1.5.719 の今の挙動）なので、
         // この机の高橋の休みは数えず、手置きの高橋は高橋の机へ合流する（手で入れた高橋とテンプレの B が一緒に残る）。主セッションの裁定で休みの判定の入れ替え（a02699c7）は取り下げ。
         // 入れ替えると 1 回目の保存で離れ 2 回目で戻る（INV-03）ため。2026-11-11 オーナー決定（§9-25・案 1）で、この形は手の操作では作れなくなった（高橋を手で置いた時点で
-        // コマの高橋の記録が消える＝下の「§9-25 休みの兄弟」の行）。この 2 行は v1.5.722 より前に作られて残っている記録の形（自動では掃除しない）として、今の合流を固定したまま残す。
+        // コマの高橋の記録が消える＝下の「§9-25 休みの兄弟」の行）。この 2 行は v1.5.723 より前に作られて残っている記録の形（自動では掃除しない）として、今の合流を固定したまま残す。
         const restedStaffedSato = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3', teacherRest: { teacher: '高橋', teacherId: 't4' } })
         const resaveSame = (first: ReturnType<typeof saveWith>) => computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
           weeks: first.saved.nextWeeks, classroomSettings: first.classroom, teachers: teacherRows, students: studentRows, regularLessons: rowsOf(first.savedTemplate),
@@ -2634,7 +2634,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
         })
         const teacherNotes = (notes: Array<{ kind: string }>) => notes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept' || note.kind === 'teacher-pending')
 
-        it('v1.5.722 より前の記録が残っている形（掃除しない・§9-23 末尾） 休みの兄弟 (a): 高橋の休みの記録が残る机に佐藤を手で置いたコマ × 新テンプレは鈴木なし・高橋＋B → 高橋の机（机2）へ合流（B・M と 1 行）・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
+        it('v1.5.723 より前の記録が残っている形（掃除しない・§9-23 末尾） 休みの兄弟 (a): 高橋の休みの記録が残る机に佐藤を手で置いたコマ × 新テンプレは鈴木なし・高橋＋B → 高橋の机（机2）へ合流（B・M と 1 行）・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
           const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, restedStaffedSato)
           const first = saveWith(week, [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']])
           const { saved, cell } = first
@@ -2651,7 +2651,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
           expect(teacherNotes(again.studentNotes)).toEqual([])
         })
 
-        it('v1.5.722 より前の記録が残っている形（掃除しない・§9-23 末尾） 休みの兄弟 (b): 同じ机の形 × 新テンプレは鈴木＋C・高橋＋B（順番 0 に当たる形）→ 高橋の机（机4）へ合流（B・M）・鈴木＋C は机2・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
+        it('v1.5.723 より前の記録が残っている形（掃除しない・§9-23 末尾） 休みの兄弟 (b): 同じ机の形 × 新テンプレは鈴木＋C・高橋＋B（順番 0 に当たる形）→ 高橋の机（机4）へ合流（B・M）・鈴木＋C は机2・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
           const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, restedStaffedSato)
           const first = saveWith(week, [['t1', 'sA'], ['t2', 'sC'], ['t3', ''], ['t4', 'sB']])
           const { saved, cell } = first
@@ -2714,7 +2714,7 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
         })
 
         it('§9-25 休みの兄弟 D&D: 古い記録が残った形から高橋を講師の D&D（講師だけ入替・鈴木の机へ）で動かすと、そのコマの高橋の記録が消える（佐藤の机のほかの項目は不変）→ 同じ新テンプレの保存で高橋と B が一緒に残る（INV-03）', () => {
-          // v1.5.722 より前の形（机3＝佐藤＋高橋の休みの記録・机4＝手置きの高橋）。高橋を机4 → 机2（鈴木の授業）へ講師だけ入替（鈴木は机4 へ）。
+          // v1.5.723 より前の形（机3＝佐藤＋高橋の休みの記録・机4＝手置きの高橋）。高橋を机4 → 机2（鈴木の授業）へ講師だけ入替（鈴木は机4 へ）。
           const stale = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 2, restedStaffedSato), 3, handPlacedTakahashi(undefined))
           const moved = computeTeacherMove({ weeks: [stale], weekIndex: 0, cellId: CELL, sourceDeskIndex: 3, targetDeskIndex: 1, teachers: teacherRows, swapMode: 'teacher' })
           if (moved.status !== 'moved') throw new Error(moved.message)

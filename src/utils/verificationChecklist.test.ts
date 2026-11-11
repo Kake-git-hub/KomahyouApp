@@ -211,7 +211,7 @@ describe('確認リストの項目定義', () => {
     // 第132版(2026-11-10): 手入力が講師について行く確認 tf-2 も開発用教室だけ。
     // 第133版(2026-11-10): 手で置いた講師とテンプレの同じ講師が 1 机にまとまる確認 tf-3 も開発用教室だけ。
     // 第134版(2026-11-11): 講師を替えた机の講師がテンプレにいれば生徒と一緒に残る確認 tf-4 も開発用教室だけ。
-    // 第135版(2026-11-11・v1.5.722 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 休みにした講師を同じコマの別の机に置くと休みが解除される確認 rs-1 も開発用教室だけ。
+    // 第135版(2026-11-11・v1.5.723 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 休みにした講師を同じコマの別の机に置くと休みが解除される確認 rs-1 も開発用教室だけ。
     const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
@@ -274,7 +274,7 @@ describe('確認リストの項目定義', () => {
     // 第132版(2026-11-10・v1.5.716 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 手入力が講師について行く確認 tf-2(開発用教室だけ)。
     // 第133版(2026-11-10・v1.5.717 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 手で置いた講師とテンプレの同じ講師が 1 机にまとまる確認 tf-3(開発用教室だけ)。
     // 第134版(2026-11-11・v1.5.719 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 講師を替えた机の講師がテンプレにいれば生徒と一緒に残る確認 tf-4(開発用教室だけ)。
-    // 第135版(2026-11-11・v1.5.722 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 休みにした講師を同じコマの別の机に置くと休みが解除される確認 rs-1(開発用教室だけ)。
+    // 第135版(2026-11-11・v1.5.723 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 休みにした講師を同じコマの別の机に置くと休みが解除される確認 rs-1(開発用教室だけ)。
     expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual([])
     expect(ids).not.toContain('mg-1')
@@ -1450,10 +1450,10 @@ describe('第134版(2026-11-11・版は v1.5.711 据え置き): 講師を替え�
 describe('第135版(2026-11-11・版は v1.5.711 据え置き): 休みにした講師を同じコマの別の机に置くと休みが解除される確認 rs-1（§9-25）', () => {
   const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'rs-1')!
 
-  it('v1.5.722 で追加(版は v1.5.711 据え置き)・開発用教室だけ・準備するは付けない・tf-1〜tf-4 は残す', () => {
+  it('v1.5.723 で追加(版は v1.5.711 据え置き)・開発用教室だけ・準備するは付けない・tf-1〜tf-4 は残す', () => {
     expect(item).toBeDefined()
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
-    expect(item.introducedIn).toBe('v1.5.722')
+    expect(item.introducedIn).toBe('v1.5.723')
     expect(item.area).toBe('コマ表')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('rs-1')
     expect(item.autoPrep).toBeUndefined()
