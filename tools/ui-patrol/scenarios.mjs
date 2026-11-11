@@ -251,7 +251,7 @@ export function collectTemplateSaveFindings({ app, before, after, fromDateKey, c
     ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
     ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
     ...app.checkAuditNotWorse(audit(before), audit(after)),
-    ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage),
+    ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage, { fromDateKey }),
     ...app.summarizeChanges(before.facts, after.facts),
   ]
 }
@@ -614,8 +614,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
             studentName = row ? (row.displayName || row.name || '') : ''
           }
         } else if (kind === 'change-teacher') {
+          // 確かめる日のコマに既に居る講師へ替えると「新しい講師が居る」が素通りするので、居ない講師が選べなければこの種類は飛ばす(レビュー M-2)。
           const { teacher } = await d.templateChangeTeacher(session, position, (choices) => app.pickTemplateEditOption({
-            options: choices, exclude: new Set([desk.teacher]), random, prefer: (value) => !presence.teachers.has(value),
+            options: choices, exclude: new Set([desk.teacher]), random, prefer: (value) => !presence.teachers.has(value), requirePreferred: true,
           }))
           if (teacher) {
             edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, newTeacher: teacher, newTeacherId: app.resolveTeacherIdByDisplayName(before.payload?.teachers, teacher), studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
@@ -627,7 +628,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         if (!edit) {
           // 選べる生徒・講師が画面に無かった。テンプレ編集を保存せずに閉じる。
           await d.closeTemplateEditor(session)
-          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${describeTemplateDesk(desk)} で選べる${kind === 'add-student' ? '生徒' : '講師'}が画面にありません。`)
+          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${describeTemplateDesk(desk)} で選べる${kind === 'add-student' ? '生徒' : '講師(確かめる日のコマに居ない講師)'}が画面にありません。`)
           await finish('d', step)
           continue
         }
@@ -649,7 +650,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         step.findings.push(
           ...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit: timedAudit, allowed: buildTemplateEditAllowedChange(nextMonday) }),
           ...app.checkTemplateEditSaved(after.payload?.classroomSettings?.regularLessonTemplate, edit),
-          ...app.checkTemplateEditApplied(before.facts, after.facts, edit, { isStudentActiveOnDate }),
+          ...app.checkTemplateEditApplied(before.facts, after.facts, edit, {
+            isStudentActiveOnDate,
+            // 保存の前からある削除記録だけ(この保存が自分で積んだ抑止キーで「置かない」を説明させない)。
+            suppressedOccurrences: before.payload?.boardState?.suppressedRegularLessonOccurrences ?? [],
+          }),
         )
         await finish('d', step)
         current = after

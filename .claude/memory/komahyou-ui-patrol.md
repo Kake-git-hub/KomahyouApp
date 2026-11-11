@@ -39,8 +39,10 @@ type: project
 - Ctrl+C: 子の vite は別プロセスグループ。Playwright の既定のシグナル処理を切り、自前で片づけて 130。
 - (台本 d・2026-11-11) テンプレ作成の画面の生徒・講師のプルダウンは `SearchableSelect`(testId の prop で `<select>` に data-testid)。ソースには `testId="…"` の字面で残るので、
   `selectors.mjs` の `SEARCHABLE_SELECT_TESTIDS` と `selectors.test.mjs` で別に見張る。テンプレの机の `deskIndex` は 1 始まり・画面の机は 0 始まり。
-- (台本 d) 確認の画面の「保留 n机」は「保存のあと保留の、反映した範囲の机」(作った保留＋保存し直した保留・`summary.pending`)で、増えた数ではない。前から保留のある盤面で
-  「増えた数＝n」と見て誤報した(日大前の形: 前 30・確認 28・後 28)。点検は「増えた数 ≦ n ≦ 保存のあとの総数」。
+- (台本 d) 確認の画面の「保留 n机」は「反映日以降の開いている日のコマの机のうち、保存のあとに保留の机」(作った保留＋保存し直した保留・`templateConflictRules.ts` の `summary.pending`・休日は飛ばす)で、増えた数ではない。前から保留のある盤面で
+  「増えた数＝n」と見て誤報した(日大前の形: 前 30・確認 28・後 28)。点検は `countPendingDesksFrom` で数えて等号(手直し 1)。
+- (台本 d) 講師を替えるときは確かめる日のコマに居ない講師だけ選ぶ(居る講師に替えると点検が素通り・無ければ飛ばす)。足した生徒にその日その時限の削除記録(保存前からの抑止キー)があれば知らせるだけ。
+- (台本 d) 既知の制約: 手入力のある机でテンプレを変える形は未検査(§2-1 と「講師なしは変」の扱いを決めてから)。
 - (台本 d) テンプレ保存の反映(第 2 版)の本体は `templateConflictRules.ts` の `computeTemplateDiffApply`(`ScheduleBoardScreen.tsx` の `runTemplateDiffApplyV2`)。
   `templateDiffApply.ts` の `stripUnmarkedRegularStudents`・`resolveTemplateDeskTeacher` を 1 行壊しても巡回の盤面は変わらなかった。講師の置き場は保存後の読み直し(再マージ)が
   通常授業の行から作り直すので、反映の途中の講師の選び方を壊しても室長に見える不具合にならない。「わざと壊す」は盤面に出る所(手入力の拾い上げ・画面の追加)で行う。

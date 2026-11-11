@@ -152,13 +152,14 @@ export function pickTemplateEditTarget(params: {
 }
 
 /**
- * 画面のプルダウンの選択肢から 1 つ選ぶ(値が空のもの・exclude は選ばない)。prefer に合うものがあればその中から、無ければ残りから。無ければ null。
+ * 画面のプルダウンの選択肢から 1 つ選ぶ(値が空のもの・exclude は選ばない)。prefer に合うものがあればその中から、無ければ残りから(requirePreferred なら null)。無ければ null。
  * 選択肢の並びは画面の並び(アプリが並べる)のまま使う(同じデータ・同じ種なら同じ結果)。
  */
-export function pickTemplateEditOption(params: { options: ReadonlyArray<{ value: string; label?: string }>; exclude: ReadonlySet<string>; prefer: (value: string) => boolean; random: () => number }): string | null {
+export function pickTemplateEditOption(params: { options: ReadonlyArray<{ value: string; label?: string }>; exclude: ReadonlySet<string>; prefer: (value: string) => boolean; random: () => number; requirePreferred?: boolean }): string | null {
   const eligible = params.options.map((option) => option.value).filter((value) => value !== '' && !params.exclude.has(value))
   const preferred = eligible.filter((value) => params.prefer(value))
-  const pool = preferred.length > 0 ? preferred : eligible
+  // requirePreferred: 望ましいものが無ければ選ばない(講師を替える＝確かめる日のコマに既に居る講師へ替えると、点検の「新しい講師が居る」が素通りするため)。
+  const pool = preferred.length > 0 ? preferred : (params.requirePreferred ? [] : eligible)
   if (pool.length === 0) return null
   return pool[Math.floor(params.random() * pool.length)]
 }

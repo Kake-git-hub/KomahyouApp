@@ -157,6 +157,9 @@ describe('pickTemplateEditOption・collectCellPresence', () => {
       expect(pick(seed)).toBe(pick(seed))
     }
     expect(pickTemplateEditOption({ options: [{ value: '', label: '' }], exclude: new Set(), prefer: () => true, random: createSeededRandom(1) })).toBeNull()
+    // requirePreferred: 望ましいもの(講師を替える＝そのコマに居ない講師)が無ければ残りから選ばず null(既に居る講師に替えると点検が素通りするため)
+    expect(pickTemplateEditOption({ options, exclude: new Set(), prefer: () => false, random: createSeededRandom(1), requirePreferred: true })).toBeNull()
+    expect(pickTemplateEditOption({ options, exclude: new Set(), prefer: (value) => value === 'sC', random: createSeededRandom(1), requirePreferred: true })).toBe('sC')
   })
 
   it('コマに居る生徒(上段・下段・出欠記録)と講師(講師欄・下段・休み)を集める', () => {

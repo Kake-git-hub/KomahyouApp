@@ -48,6 +48,10 @@ export type DeskFact = {
    *   保存→読み込み直しで付け直されうる内部の印(teacherAssignmentSource)を比べると「変わった」と誤報するため(origin と同じ考え)。
    */
   teacherDeleted: boolean
+  /** コマが開いている日か(休日でない・SlotCell.isOpenDay)。署名の外(比べない・保留の数の点検が使う注釈)。 */
+  cellOpen: boolean
+  /** この机に保留(2 行)の記録がある(templatePendingDesks に机の鍵がある・下段の中身が空でも)。署名の外。 */
+  pendingRecorded: boolean
   /** 席 0・席 1。 */
   students: Array<StudentFact | null>
   /** 出欠記録 1 件 1 文字列(生徒キー|status|科目|種類)。並べ替え済み。 */
@@ -197,6 +201,8 @@ function buildDeskFact(cell: SlotCell, desk: DeskCell, deskIndex: number, lower:
     ...content,
     // 署名(content)の外。content に入れると JSON.stringify の署名に混ざる。
     teacherDeleted: typeof desk.teacher === 'string' && isTemplateDiffTeacherTombstone({ teacher: desk.teacher, teacherAssignmentSource: desk.teacherAssignmentSource }),
+    cellOpen: cell.isOpenDay !== false,
+    pendingRecorded: lower !== undefined,
     signature: JSON.stringify(content),
   }
 }
@@ -268,6 +274,17 @@ export function collectBoardFacts(payload: AppSnapshotPayload): BoardFacts {
     unmatchedPending[pendingKey] = toUnmatchedPendingFact(entry.lower)
   }
   return { desks, sections: collectSections(safePayload, unmatchedPending), pendingDeskCount: Object.keys(pendingMap).length }
+}
+
+/**
+ * 反映日以降の開いている日のコマで、保留(2 行)の記録がある机の数。テンプレ保存の確認の画面の「保留 n机」と同じ数え方
+ * (templateConflictRules.ts の computeTemplateDiffApply: 反映日以降のコマを applyCell に通し、休日のコマは飛ばし、机ごとに保留が残れば summary.pending を 1 足す
+ * ＝新しく作った保留と保存し直した保留の両方)。机に結べない保留(週に無い机)は数えない。
+ */
+export function countPendingDesksFrom(facts: BoardFacts, fromDateKey: string): number {
+  let count = 0
+  for (const desk of facts.desks.values()) if (desk.pendingRecorded && desk.cellOpen && desk.dateKey >= fromDateKey) count += 1
+  return count
 }
 
 export function isEmptyDeskFact(fact: DeskFact): boolean {

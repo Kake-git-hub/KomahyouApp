@@ -7,7 +7,7 @@
 // ★所見の message は日本語 1 行。場所は「11/19(木) 3限 机5」、人は仮名(伏せ字のあとの名前)と生徒 ID だけ。
 // ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
 import type { InvAuditFinding, InvAuditResult } from '../invAuditEntry'
-import { diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact } from './boardFacts'
+import { countPendingDesksFrom, diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact } from './boardFacts'
 
 export const PATROL_FINDING_CODES = [
   'outside-allowed-range', 'manual-student-teacher-changed', 'manual-student-teacher-changed-announced', 'manual-student-lost',
@@ -427,20 +427,25 @@ export function parsePendingCountFromConfirm(message: string): number | null {
 
 /**
  * 確認の画面の「保留 n机」と、保存で実際にできた保留の数が合うか。
- * ★n は「保存のあと保留になっている、反映した範囲の机」の数(templateDiffApply.ts の summary.pending は、新しく作った保留と、前からの保留を
- *   保存し直した机の両方で 1 ずつ増える)。前から保留がある盤面では「増えた数」と一致しない(台本 d・2026-11-11: 前に 30 机・確認 28 机・
- *   保存のあと 28 机〔2 机が 1 行に戻った〕)。そこで「増えた数 ≦ n ≦ 保存のあとの保留の総数」を見る。前に保留が無ければ両端が同じ数になり、
- *   今までどおり「増えた数＝n」を求める。
+ * ★n は「反映日以降の開いている日のコマの机のうち、保存のあとに保留になっている机」の数(templateConflictRules.ts の computeTemplateDiffApply の summary.pending。
+ *   新しく作った保留と、前からの保留を保存し直した机の両方で 1 ずつ増える・休日のコマは飛ばす)。前から保留がある盤面では「増えた数」と一致しない
+ *   (台本 d・2026-11-11 の日大前の形: 前に 30 机・確認 28 机)。options.fromDateKey(反映日)を渡すと、その数え方(boardFacts.ts の countPendingDesksFrom)と等号で比べる。
+ *   渡さないときは従来どおり「増えた数＝n」。
  */
-export function checkPendingCountMatchesPreview(before: BoardFacts, after: BoardFacts, confirmMessage: string): PatrolFinding[] {
+export function checkPendingCountMatchesPreview(before: BoardFacts, after: BoardFacts, confirmMessage: string, options: { fromDateKey?: string } = {}): PatrolFinding[] {
   const expected = parsePendingCountFromConfirm(confirmMessage)
   if (expected === null) return []
-  const increase = after.pendingDeskCount - before.pendingDeskCount
-  if (increase <= expected && expected <= after.pendingDeskCount) return []
-  return [{
-    level: 'stop', code: 'pending-count-mismatch',
-    message: `確認の画面の保留の数と実際の保留の数が合わない: 確認の画面 ${expected} 机・実際に増えた ${increase} 机・保存のあとの保留 ${after.pendingDeskCount} 机`,
-  }]
+  if (options.fromDateKey) {
+    const actual = countPendingDesksFrom(after, options.fromDateKey)
+    if (actual === expected) return []
+    return [{
+      level: 'stop', code: 'pending-count-mismatch',
+      message: `確認の画面の保留の数と実際の保留の数が違う: 確認の画面 ${expected} 机・保存のあと反映日以降の保留 ${actual} 机(増えた ${after.pendingDeskCount - before.pendingDeskCount} 机)`,
+    }]
+  }
+  const actual = after.pendingDeskCount - before.pendingDeskCount
+  if (actual === expected) return []
+  return [{ level: 'stop', code: 'pending-count-mismatch', message: `確認の画面の保留の数と実際に増えた保留の数が違う: 確認の画面 ${expected} 机・実際 ${actual} 机` }]
 }
 
 export function summarizeChanges(before: BoardFacts, after: BoardFacts): PatrolFinding[] {
@@ -504,14 +509,20 @@ export type TemplateEdit = {
 /**
  * 変えたテンプレの机で、起きるはずの変化が確かめる日のコマに起きたか(spec-template-conflict-v2 §2)。
  * - 生徒を足す: 足した生徒がそのコマ(上段か保留の下段)に居る。居なくても、そのコマにその生徒の出欠記録がある(§2-4 記録が勝つ)・
- *   在籍していない日(options.isStudentActiveOnDate)は info。手入力の同じ生徒が先にある(§2-2)はコマに居るので所見にならない。
+ *   その日その時限の通常授業の削除記録がある(options.suppressedOccurrences・§1-1 #10)・在籍していない日(options.isStudentActiveOnDate)は info。手入力の同じ生徒が先にある(§2-2)はコマに居るので所見にならない。
  * - 講師を替える: 新しい講師がそのコマ(講師欄か保留の下段)に居る。居なくても、そのコマに新しい講師の休みの記録がある(§2-4)なら info。
  *   前の講師がテンプレ由来のまま残っていたら stop(前の講師はテンプレのそのコマに居なくなった。手置き〔青字〕で残るのは手入力なので見ない)。
  * - 机を消す: 消した机の講師・生徒が、そのコマにテンプレ由来で残っていたら stop(手入力で残るのは見ない)。
  * 規則で説明できない「反映されていない」だけを stop にする。日ごと・机ごとに 1 件(20 件まで＋「ほか n 机」)。
  */
-export function checkTemplateEditApplied(before: BoardFacts, after: BoardFacts, edit: TemplateEdit, options: { isStudentActiveOnDate?: (studentKey: string, dateKey: string) => boolean } = {}): PatrolFinding[] {
+export function checkTemplateEditApplied(before: BoardFacts, after: BoardFacts, edit: TemplateEdit, options: { isStudentActiveOnDate?: (studentKey: string, dateKey: string) => boolean; suppressedOccurrences?: ReadonlyArray<string> } = {}): PatrolFinding[] {
   const anchors = new Set(edit.anchorCellIds)
+  // 通常授業の削除記録(抑止キー「生徒キー__科目__日付__時限」・templateDiffApply.ts の buildTemplateOccurrenceKey)。科目は表示の科目に直されることがあるので見ない。
+  const suppressedSlots = new Set<string>()
+  for (const key of options.suppressedOccurrences ?? []) {
+    const parts = typeof key === 'string' ? key.split('__') : []
+    if (parts.length >= 4) suppressedSlots.add(`${parts[0]}|${parts[parts.length - 2]}|${parts[parts.length - 1]}`)
+  }
   const desksOf = (facts: BoardFacts) => {
     const map = new Map<string, DeskFact[]>()
     for (const desk of facts.desks.values()) {
@@ -543,10 +554,12 @@ export function checkTemplateEditApplied(before: BoardFacts, after: BoardFacts, 
       if (present) continue
       const hasStatus = [...beforeDesks, ...afterDesks].some((desk) => [...desk.statuses, ...desk.pendingStatuses].some((status) => status.split('|')[0] === key))
       const inactive = options.isStudentActiveOnDate ? !options.isStudentActiveOnDate(key, place.location.dateKey) : false
-      if (hasStatus || inactive) {
+      const suppressed = suppressedSlots.has(`${key}|${place.location.dateKey}|${place.location.slotNumber}`)
+      if (hasStatus || inactive || suppressed) {
+        const why = hasStatus ? 'その生徒の出欠記録が先にある・§2-4' : suppressed ? 'そのコマのその日の通常授業の削除記録がある・§1-1 #10' : '在籍していない日'
         infos.push({
           level: 'info', code: 'template-edit-held-by-rule',
-          message: `テンプレに足した生徒を規則どおり置かなかった(${hasStatus ? 'その生徒の出欠記録が先にある・§2-4' : '在籍していない日'}): ${place.text} ${studentIdText(key)}`,
+          message: `テンプレに足した生徒を規則どおり置かなかった(${why}): ${place.text} ${studentIdText(key)}`,
           ...place.location, studentId: key,
         })
         continue

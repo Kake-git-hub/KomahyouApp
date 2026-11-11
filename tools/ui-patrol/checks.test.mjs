@@ -447,20 +447,33 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     expect(checkPendingCountMatchesPreview(withPending(0), withPending(3), '保存しました')).toEqual([])
   })
 
-  it('前から保留がある盤面: 確認の画面の数は「保存のあと保留の机」(作った保留＋保存し直した保留・templateDiffApply.ts の summary.pending)なので、増えた数〜保存のあとの保留の総数の間なら所見なし', () => {
-    // 台本 d(2026-11-11・日大前の形): 前に 30 机の保留・テンプレを変えて保存 → 確認の画面「保留 28机」・保存のあと 28 机(2 机が 1 行に戻った)
-    const withPending = (count) => facts([cell(D, 3, [desk('d1')])], {
-      board: { templatePendingDesks: Object.assign({}, ...Array.from({ length: count }, (_, index) => pending(`d${index}`, { memoSlots: ['メモ', null] }))) },
-    })
+  it('反映日を渡したとき: 確認の画面の数は「反映日以降の開いている日のコマで、保存のあと保留の机」(templateConflictRules.ts の summary.pending)と等しい', () => {
+    // 台本 d(2026-11-11・日大前の形): 前に 30 机の保留(反映日より前 2・以降 28)。保存のあとも 30(以降 28)。確認の画面「保留 28机」。
+    const FROM = '2026-11-16'
+    const pendingAt = (dateKey, deskId) => ({ [`${dateKey}_3::${deskId}`]: { lower: { memoSlots: ['メモ', null] }, effectiveStartDate: FROM, createdAt: '2026-11-10T00:00:00.000Z' } })
+    const board = ({ early, later, holiday = 0 }) => {
+      const cells = [
+        cell('2026-11-09', 3, Array.from({ length: early }, (_, index) => desk(`e${index}`))),
+        cell('2026-11-19', 3, Array.from({ length: later }, (_, index) => desk(`l${index}`))),
+        { ...cell('2026-11-23', 3, Array.from({ length: holiday }, (_, index) => desk(`h${index}`))), isOpenDay: false },
+      ]
+      const map = Object.assign({},
+        ...Array.from({ length: early }, (_, index) => pendingAt('2026-11-09', `e${index}`)),
+        ...Array.from({ length: later }, (_, index) => pendingAt('2026-11-19', `l${index}`)),
+        ...Array.from({ length: holiday }, (_, index) => pendingAt('2026-11-23', `h${index}`)))
+      return facts([...cells], { board: { templatePendingDesks: map } })
+    }
     const message = (count) => `11/16 以降に反映します（置き換え 17机・保留 ${count}机）。`
-    expect(checkPendingCountMatchesPreview(withPending(30), withPending(28), message(28))).toEqual([])
-    expect(checkPendingCountMatchesPreview(withPending(30), withPending(30), message(28))).toEqual([])
-    // 保存のあとの保留の総数より多い数を言った・言った数より多く増えた、は stop
-    expect(codes(checkPendingCountMatchesPreview(withPending(30), withPending(28), message(29)))).toEqual(['stop:pending-count-mismatch'])
-    expect(codes(checkPendingCountMatchesPreview(withPending(2), withPending(5), message(2)))).toEqual(['stop:pending-count-mismatch'])
-    // 前に保留が無い盤面は今までどおり「増えた数＝確認の画面の数」
-    expect(codes(checkPendingCountMatchesPreview(withPending(0), withPending(3), message(4)))).toEqual(['stop:pending-count-mismatch'])
-    expect(checkPendingCountMatchesPreview(withPending(0), withPending(3), message(3))).toEqual([])
+    const before = board({ early: 2, later: 28 })
+    expect(checkPendingCountMatchesPreview(before, board({ early: 2, later: 28 }), message(28), { fromDateKey: FROM })).toEqual([])
+    // n が少なく出る誤り(範囲〔増えた数 0 ≦ 26 ≦ 総数 30〕なら通ってしまう形)は stop
+    expect(codes(checkPendingCountMatchesPreview(before, board({ early: 2, later: 28 }), message(26), { fromDateKey: FROM }))).toEqual(['stop:pending-count-mismatch'])
+    // 反映日より前の保留を含めた総数(30)を言ったのも stop
+    expect(codes(checkPendingCountMatchesPreview(before, board({ early: 2, later: 28 }), message(30), { fromDateKey: FROM }))).toEqual(['stop:pending-count-mismatch'])
+    // 休日のコマの保留はアプリが数えない(applyCell が休日を飛ばす)
+    expect(checkPendingCountMatchesPreview(before, board({ early: 2, later: 28, holiday: 3 }), message(28), { fromDateKey: FROM })).toEqual([])
+    // 文に数が無ければ所見なし
+    expect(checkPendingCountMatchesPreview(before, board({ early: 2, later: 1 }), '保存しました', { fromDateKey: FROM })).toEqual([])
   })
 
   it('既知: 書いた項目がすべて一致する所見だけ外す', () => {
@@ -528,6 +541,12 @@ describe('テンプレを変えて保存したとき、起きるはずの変化�
     const inactive = checkTemplateEditApplied(facts([base()]), facts([base()]), { ...addEdit, anchorCellIds: [C] }, { isStudentActiveOnDate: () => false })
     expect(codes(inactive)).toEqual(['info:template-edit-held-by-rule'])
     expect(inactive[0].message).toContain('在籍')
+    // そのコマのその日に、その生徒の通常授業の削除記録(抑止キー・科目は問わない)がある → 置かないのが仕様(§1-1 #10)
+    const suppressed = checkTemplateEditApplied(facts([base()]), facts([base()]), { ...addEdit, anchorCellIds: [C] }, { suppressedOccurrences: [`s2__英__${D}__3`, `s2__英__${D}__4`] })
+    expect(codes(suppressed)).toEqual(['info:template-edit-held-by-rule'])
+    expect(suppressed[0].message).toContain('削除')
+    // 別の時限・別の生徒の削除記録では下げない
+    expect(codes(checkTemplateEditApplied(facts([base()]), facts([base()]), { ...addEdit, anchorCellIds: [C] }, { suppressedOccurrences: [`s2__英__${D}__4`, `s9__英__${D}__3`] }))).toEqual(['stop:template-edit-not-applied'])
   })
 
   it('講師を替える: 確かめる日のコマに新しい講師が居れば所見なし。居ない日・前の講師がテンプレのまま残った日は stop', () => {
