@@ -2620,49 +2620,49 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
           expect(cell.desks.some((desk) => desk.teacherRest?.teacher === '高橋' && !desk.teacher)).toBe(true)
         })
 
-        // 追加 3（2026-11-11 レビュー・a02699c7 の休みの判定の権威関数化 isTeacherRestedInCell の兄弟）: 高橋の休みの記録が残る机に、別の講師（佐藤）を手で置いたコマ。
-        // 講師欄が空でなくても高橋は休み（§9-18＝いないもの）に数える。元の判定（講師欄が空の休みの机だけ）だと見落として高橋の机へ合流していた。
+        // 追加 3・4（2026-11-11）: 高橋の休みの記録が残る机に、別の講師（佐藤）を手で置いたコマ。休みの判定は講師欄が空の休みの机だけ（v1.5.719 の今の挙動）なので、
+        // この机の高橋の休みは数えず、手置きの高橋は高橋の机へ合流する（手で入れた高橋とテンプレの B が一緒に残る）。主セッションの裁定で休みの判定の入れ替え（a02699c7）は取り下げ。
+        // 入れ替えると 1 回目の保存で離れ 2 回目で戻る（INV-03）ため。休みにした講師を同じコマの別の机へ手で置いたときの扱いはオーナー判断待ち（決まるまで挙動を変えない）。
         const restedStaffedSato = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't3', teacherRest: { teacher: '高橋', teacherId: 't4' } })
         const resaveSame = (first: ReturnType<typeof saveWith>) => computeTemplateDiffApplyForBoard({ scheduleCountAdjustments: [],
           weeks: first.saved.nextWeeks, classroomSettings: first.classroom, teachers: teacherRows, students: studentRows, regularLessons: rowsOf(first.savedTemplate),
           effectiveStartDate: DATE, suppressedRegularLessonOccurrences: [], templatePendingDesks: first.saved.nextPendingDesks, createdAt: '2026-09-29T11:00:00.000Z', manualMakeupAdjustments: {},
           previousRegularLessons: rowsOf(first.savedTemplate), previousRegularLessonTemplateHistory: [CURRENT, first.savedTemplate],
         })
+        const teacherNotes = (notes: Array<{ kind: string }>) => notes.filter((note) => note.kind === 'teacher-left-moved' || note.kind === 'teacher-elsewhere' || note.kind === 'teacher-kept' || note.kind === 'teacher-pending')
 
-        it('休みの兄弟 (a): 高橋の休みの記録が残る机に佐藤を手で置いたコマ × 新テンプレは鈴木なし・高橋＋B → 合流しない。高橋は M と下の空き机へ・B は講師なし・「移した」1 件（講師欄が空の休みの机の行と同じ。再保存の不動点は下の it.todo）', () => {
+        it('今の挙動・オーナー判断待ち 休みの兄弟 (a): 高橋の休みの記録が残る机に佐藤を手で置いたコマ × 新テンプレは鈴木なし・高橋＋B → 高橋の机（机2）へ合流（B・M と 1 行）・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
           const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, restedStaffedSato)
           const first = saveWith(week, [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']])
           const { saved, cell } = first
-          // 講師欄が空の休みの机（上の既存の行）と同じ扱い
-          const emptyRest = saveWith(withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, (desk) => ({ ...desk, teacher: '', teacherRest: { teacher: '高橋', teacherId: 't4' } })), [['t1', 'sA'], ['t4', 'sB'], ['t3', ''], ['', '']])
           expect(saved.nextPendingDesks).toEqual({})
-          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '', '佐藤', '高橋'])
-          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB'], [], ['sM']])
-          expect(cell.desks[3].manualTeacher).toBe(true)
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '高橋', '佐藤', ''])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sB', 'sM'], [], []])
+          expect(cell.desks[1].teacherAssignmentSource).toBe('manual-replaced')
           expect(cell.desks[2].teacherRest).toEqual({ teacher: '高橋', teacherId: 't4' })
-          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-left-moved')).toHaveLength(1)
-          expect(cell.desks.map((desk) => [desk.teacher === '高橋', liveIds(desk.lesson)])).toEqual(emptyRest.cell.desks.map((desk) => [desk.teacher === '高橋', liveIds(desk.lesson)]))
-          // 講師欄が空の休みの机の形は、同じテンプレで再保存しても同じ（INV-03）
-          const againEmpty = resaveSame(emptyRest)
-          expect(contentOf(againEmpty.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(emptyRest.cell))
-        })
-        // ★穴（2026-11-11 追加 3 で見つけた・アプリ未修正・主セッションへ報告）: 休みの兄弟 (a) の保存結果を同じテンプレでもう一度保存すると、机4 の高橋の机（授業 ID が
-        // 保存したテンプレの高橋＋B の行に当たる）が、授業の手がかり＝高橋（休み）について行って机2 へ戻り、B と M を受け持つ（INV-03 の不動点が崩れる・休みの高橋が授業を持つ）。
-        // 休みの判定が fallback（X の机への合流）だけに効き、授業の手がかりの講師が休みの X 自身のときに効かないため。講師欄が空の休みの机の形は、休みの机が高橋の番号を取るので起きない。
-        it.todo('休みの兄弟 (a) の再保存: 授業の手がかりの講師が休みの X 自身でも机は動かず、同じテンプレで再保存しても同じ（INV-03）')
-
-        it('休みの兄弟 (b): 同じ机の形 × 新テンプレは鈴木＋C・高橋＋B（順番 0 に当たる形）→ 高橋が休みなので合流しない（§9-18 が先）。鈴木の机に C と M・高橋はその下の行（保留 1）・B は講師なし・再保存で同じ', () => {
-          const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, restedStaffedSato)
-          const first = saveWith(week, [['t1', 'sA'], ['t2', 'sC'], ['t3', ''], ['t4', 'sB']])
-          const { saved, cell, lowerOf } = first
-          expect(Object.keys(saved.nextPendingDesks)).toHaveLength(1)
-          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤', ''])
-          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC', 'sM'], [], ['sB']])
-          expect(lowerOf(1)?.teacher).toMatchObject({ teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual-replaced' })
-          expect(cell.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(0)
-          expect(saved.studentNotes.filter((note) => note.kind === 'teacher-pending')).toHaveLength(1)
+          noTeacherlessDeskWithStudents(cell)
+          expect(teacherNotes(saved.studentNotes)).toEqual([])
           const again = resaveSame(first)
           expect(contentOf(again.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(cell))
+          expect(again.nextPendingDesks).toEqual({})
+          expect(teacherNotes(again.studentNotes)).toEqual([])
+        })
+
+        it('今の挙動・オーナー判断待ち 休みの兄弟 (b): 同じ机の形 × 新テンプレは鈴木＋C・高橋＋B（順番 0 に当たる形）→ 高橋の机（机4）へ合流（B・M）・鈴木＋C は机2・保留 0・知らせ 0・再保存で同じ（INV-03）', () => {
+          const week = withDesk(withDesk(boardOf(rowsOf(CURRENT)), 1, replacedOnSuzuki(withHandM)), 2, restedStaffedSato)
+          const first = saveWith(week, [['t1', 'sA'], ['t2', 'sC'], ['t3', ''], ['t4', 'sB']])
+          const { saved, cell } = first
+          expect(saved.nextPendingDesks).toEqual({})
+          expect(cell.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', '佐藤', '高橋'])
+          expect(cell.desks.map((desk) => liveIds(desk.lesson))).toEqual([['sA'], ['sC'], [], ['sB', 'sM']])
+          expect(cell.desks[3].teacherAssignmentSource).toBe('manual-replaced')
+          expect(cell.desks[2].teacherRest).toEqual({ teacher: '高橋', teacherId: 't4' })
+          noTeacherlessDeskWithStudents(cell)
+          expect(teacherNotes(saved.studentNotes)).toEqual([])
+          const again = resaveSame(first)
+          expect(contentOf(again.nextWeeks.flat().find((item) => item.id === CELL)!)).toEqual(contentOf(cell))
+          expect(again.nextPendingDesks).toEqual({})
+          expect(teacherNotes(again.studentNotes)).toEqual([])
         })
       })
     })

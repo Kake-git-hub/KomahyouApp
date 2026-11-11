@@ -29,7 +29,7 @@ import type { DeskCell, DeskLesson, SlotCell, StudentEntry } from './types'
 import { resolveDeskTeacherOrigin } from './placementOrigin'
 import { resolveStudentOriginOnDate } from './templateConflictRules'
 import { isSameTeacherByAliases, isSameTeacherRecord, isSameTemplateStudent, isTemplateDiffTeacherTombstone, isTemplateManagedLesson, type TeacherAliasResolver } from './templateDiffApply'
-import { doesTeacherRestMatch, isTeacherRestedInCell, type DeskTeacherRest } from './teacherRest'
+import { doesTeacherRestMatch, type DeskTeacherRest } from './teacherRest'
 import { hasRealDeskTeacher } from '../../utils/deskTeacherLabel'
 
 type TemplateDeskRef = Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId' | 'lesson'>
@@ -276,10 +276,14 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
       return Boolean(templateDesk) && clue.matches(templateDesk)
     })
     const fallback = clue.fallback
-    // X がそのコマで休み（§9-18＝いないもの）なら X の机への合流（下の 0・2）は使わない。
-    // 2026-11-11 追加 2（レビュー）: 判定は権威関数 isTeacherRestedInCell（差分反映の buildTemplateTeacherRestPredicate と同じ数え方＝休みの記録が残る机に
-    // 別の講師を手で置いた机も休みに数える）。講師欄が空の机だけを見ていた（resolveDeskRestRecord）と、その机の X の休みを見落として合流していた。
-    const fallbackUsable = Boolean(fallback) && !isTeacherRestedInCell(cell, desk, aliases)
+    // X がそのコマで休み（§9-18＝いないもの）なら X の机への合流（下の 0・2）は使わない
+    // 2026-11-11（主セッションの裁定）: 休みの記録が残る机に別の講師を手で置いた机の X の休みは、ここでは数えない（今の挙動）。権威関数 isTeacherRestedInCell に替えると、
+    // X を同じコマの別の机に手で置いた形で 1 回目の保存で離れ 2 回目で戻る（INV-03）。休みにした講師を同じコマの別の机へ手で置いたときの扱いはオーナー判断待ち（2026-11-11）。
+    // 決まるまで替えない。
+    const fallbackUsable = Boolean(fallback) && !cell.desks.some((other) => {
+      const restRecord = resolveDeskRestRecord(other)
+      return Boolean(restRecord && doesTeacherRestMatch(restRecord, desk, aliases))
+    })
     // 2026-11-11 追加 1（主セッションの裁定・§9-15 の例外・オーナーの言葉「手で入れた講師と、その机のテンプレの生徒を一緒に残す」・日大前 11/19・11/26 木 3限の型）:
     // 新しいテンプレがそのコマの X の机に、机 A のテンプレの生徒（isSameTemplateStudent で同じ生徒・1 人以上）を持たせているなら、W が居ても居なくても X の机へ合流する
     // （室長が新しいテンプレの組を先に手で入れていた形）。X の机の番号を取れなければ、続く W の机（§9-15）→ W がいなければ下の空き机（今までどおり）。
