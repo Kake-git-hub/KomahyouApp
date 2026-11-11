@@ -275,6 +275,29 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
       const templateDesk = usedDesks[target]
       return Boolean(templateDesk) && clue.matches(templateDesk)
     })
+    const fallback = clue.fallback
+    // X がそのコマで休み（§9-18＝いないもの）なら X の机への合流（下の 0・2）は使わない
+    const fallbackUsable = Boolean(fallback) && !cell.desks.some((other) => {
+      const restRecord = resolveDeskRestRecord(other)
+      return Boolean(restRecord && doesTeacherRestMatch(restRecord, desk, aliases))
+    })
+    // 2026-11-11 追加 1（主セッションの裁定・§9-15 の例外・オーナーの言葉「手で入れた講師と、その机のテンプレの生徒を一緒に残す」・日大前 11/19・11/26 木 3限の型）:
+    // 新しいテンプレがそのコマの X の机に、机 A のテンプレの生徒（isSameTemplateStudent で同じ生徒・1 人以上）を持たせているなら、W が居ても居なくても X の机へ合流する
+    // （室長が新しいテンプレの組を先に手で入れていた形）。X の机の番号を取れなければ、続く W の机（§9-15）→ W がいなければ下の空き机（今までどおり）。
+    // 改定前は W が居ると机 A が W の番号へ行き、X が W の新しい生徒を受け持ち、W は置かれず、机 A の生徒は X の新しい机で講師なし（赤字）になっていた。
+    const ownTemplateStudents = liveStudents(desk.lesson).filter((student) => resolveStudentOriginOnDate(student, cell.dateKey) === 'template')
+    const pairedHits = fallback && fallbackUsable && ownTemplateStudents.length > 0
+      ? positions.filter((target) => {
+        const templateDesk = usedDesks[target]
+        return !lockedIndexes.has(target) && Boolean(templateDesk) && fallback.matches(templateDesk)
+          && liveStudents(templateDesk.lesson).some((candidate) => ownTemplateStudents.some((own) => isSameTemplateStudent(own, candidate)))
+      })
+      : []
+    if (pairedHits.length > 0) {
+      const wCandidates = currentFirst(index, hits.filter((target) => !lockedIndexes.has(target)))
+      const candidates = [...currentFirst(index, pairedHits), ...wCandidates.filter((target) => !pairedHits.includes(target))]
+      return { kind: 'follow', candidates, derived: true, ...(hits.length === 0 ? { leftTeacherName: clue.label } : {}) }
+    }
     if (hits.length > 0) return { kind: 'follow', candidates: currentFirst(index, hits.filter((target) => !lockedIndexes.has(target))), derived: clue.derived }
     // 講師自身が手がかりの机（手置き・QR・講師名を固定しただけ）は、その講師が新しいテンプレにいなければ手がかりにしない（従来どおり手入力だけの机）
     if (clue.onlyIfPresent) return anchorRoute()
@@ -282,11 +305,7 @@ export function restoreTemplateDeskOrderWithMoves(cell: SlotCell, templateDesks:
     // X がいれば、下の空き机へは移さず X の新しいテンプレの机へ合流する（§2-3「同じ講師として合流する」と同じ・今の番号が X の机なら居るまま）。
     // 改定前は W がいない机として X ごと下の空き机へ移り、テンプレの X は「手置きの X がいる」ので置かれず、テンプレの生徒が講師なし（赤字）で残っていた（確認画面にも出なかった）。
     // X がそのコマで休み（§9-18＝いないもの）・X の机が全部保留（2 行）の机（合流できない＝手置きが勝つ）のときは使わず、今までどおり下の空き机へ（teacher-left）。
-    const fallback = clue.fallback
-    if (fallback && !cell.desks.some((other) => {
-      const restRecord = resolveDeskRestRecord(other)
-      return Boolean(restRecord && doesTeacherRestMatch(restRecord, desk, aliases))
-    })) {
+    if (fallback && fallbackUsable) {
       const fallbackHits = positions.filter((target) => !lockedIndexes.has(target) && Boolean(usedDesks[target]) && fallback.matches(usedDesks[target]))
       if (fallbackHits.length > 0) return { kind: 'follow', candidates: currentFirst(index, fallbackHits), derived: true, leftTeacherName: clue.label }
     }

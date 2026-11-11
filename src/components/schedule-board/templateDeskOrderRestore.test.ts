@@ -304,6 +304,53 @@ describe('restoreTemplateDeskOrder: 手入力は講師について行く（2026-
       const { teacherLeftMoves } = restoreTemplateDeskOrderWithMoves(cellWith([TANAKA, withHand, { teacher: '', teacherRest: { teacher: '高橋' } }, EMPTY]), TEMPLATE, { usedDesks: used })
       expect(teacherLeftMoves.map((move) => [move.formerTeacherName, move.movedTeacherName])).toEqual([['鈴木', '高橋']])
     })
+    // 追加 1（2026-11-11 主セッションの裁定・§9-15 の例外・日大前 11/19・11/26 木 3限の型）: 新しいテンプレがそのコマの高橋の机に、机 A のテンプレの生徒を持たせている
+    // → 鈴木が居ても居なくても高橋の机へ合流する（室長が新しいテンプレの組を先に手で入れていた形）。それ以外で鈴木が居れば鈴木について行く（§9-15）。
+    it('(0) 鈴木が居ても、新しいテンプレの高橋の机（机 4）に机 A の sB が居れば高橋の机へ合流する。鈴木の机（机 2）は空き、鈴木はそこに置かれる', () => {
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sC')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sB')) }]
+      const { cell: restored, teacherLeftMoves } = restoreTemplateDeskOrderWithMoves(cellWith([TANAKA, replacedOnSuzuki(), { teacher: '佐藤' }, EMPTY]), TEMPLATE, { usedDesks: used })
+      expect(shape(restored)).toEqual(['田中|sA', '|', '佐藤|', '高橋|sB'])
+      expect(teacherLeftMoves).toEqual([])
+    })
+    it('(0 の裏・§9-15 のガード) 鈴木が居て、新しいテンプレの高橋の机は別の生徒 sC → 今までどおり鈴木について行く', () => {
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '高橋', lesson: managed('n1', student('sC')) }, TEMPLATE[2], { id: 'n4', teacher: '鈴木', lesson: managed('n3', student('sB')) }]
+      const restored = restoreTemplateDeskOrder(cellWith([TANAKA, replacedOnSuzuki(), { teacher: '佐藤' }, EMPTY]), TEMPLATE, { usedDesks: used })
+      expect(shape(restored)).toEqual(['田中|sA', '|', '佐藤|', '高橋|sB'])
+      expect(restored.desks[3].lesson?.id).toBe('managed_r1_2026-10-07')
+      // 鈴木の机は机 4 → 机 A（高橋）は机 4（鈴木の番号）。高橋の机（机 2）へは行かない
+      const used2: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sB')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sC')) }]
+      const cell2 = cellWith([TANAKA, replacedOnSuzuki(), { teacher: '佐藤' }, EMPTY])
+      expect(restoreTemplateDeskOrder(cell2, TEMPLATE, { usedDesks: used2 })).toBe(cell2)
+    })
+    it('(0) 机 A の生徒 2 人が新しいテンプレで高橋と鈴木に分かれる → 高橋の机へ合流（鈴木の机は空き・鈴木の担当の生徒は差分反映が鈴木の机へ）', () => {
+      const both = replacedOnSuzuki({ lesson: managed('r1', student('sB'), student('sD')) })
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sD')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sB')) }]
+      const restored = restoreTemplateDeskOrder(cellWith([TANAKA, both, { teacher: '佐藤' }, EMPTY]), TEMPLATE, { usedDesks: used })
+      expect(shape(restored)).toEqual(['田中|sA', '|', '佐藤|', '高橋|sB,sD'])
+    })
+    it('(0) 机 A にテンプレの生徒がいない（手入力の生徒だけ）なら当たらない → 鈴木について行く', () => {
+      const handOnly = replacedOnSuzuki({ lesson: { ...managed('r1'), studentSlots: [student('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } })
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sB')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sM')) }]
+      const cell = cellWith([TANAKA, handOnly, { teacher: '佐藤' }, EMPTY])
+      expect(restoreTemplateDeskOrder(cell, TEMPLATE, { usedDesks: used })).toBe(cell)
+    })
+    it('(0) 合流できない（高橋の机が保留）→ 今までどおり鈴木について行く', () => {
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sC')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sB')) }]
+      const cell = cellWith([TANAKA, replacedOnSuzuki(), { teacher: '佐藤' }, EMPTY])
+      const restored = restoreTemplateDeskOrder(cell, TEMPLATE, { usedDesks: used, lockedDeskIds: new Set([cell.desks[3].id]) })
+      expect(restored).toBe(cell)
+    })
+    it('(0) 合流できない（高橋がそのコマで休み）→ 今までどおり鈴木について行く', () => {
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sC')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sB')) }]
+      const cell = cellWith([TANAKA, replacedOnSuzuki(), { teacher: '', teacherRest: { teacher: '高橋' } }, EMPTY])
+      expect(restoreTemplateDeskOrder(cell, TEMPLATE, { usedDesks: used }).desks[1]).toBe(cell.desks[1])
+    })
+    it('(0) 採用の記録の机: 取り下げた鈴木が居ても、新しいテンプレの高橋の机に机 A のテンプレの生徒 sB が居れば高橋の机へ合流', () => {
+      const adopted: Omit<DeskCell, 'id'> = { teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', templateTeacherDeclined: { teacher: '鈴木', adopted: { teacher: '高橋' } }, lesson: { id: 'moved_sB', studentSlots: [student('sB', { origin: 'template' }), null] } }
+      const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '鈴木', lesson: managed('n1', student('sC')) }, TEMPLATE[2], { id: 'n4', teacher: '高橋', lesson: managed('n3', student('sB')) }]
+      const restored = restoreTemplateDeskOrder(cellWith([TANAKA, adopted, { teacher: '佐藤' }, EMPTY]), TEMPLATE, { usedDesks: used })
+      expect(shape(restored)).toEqual(['田中|sA', '|', '佐藤|', '高橋|sB'])
+    })
     it('隣の形（採用の記録）: 取り下げた鈴木が居なくて、採用した高橋が新しいテンプレの机 3 に居る → 高橋の机へ合流', () => {
       const adopted: Omit<DeskCell, 'id'> = { teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', templateTeacherDeclined: { teacher: '鈴木', adopted: { teacher: '高橋' } }, lesson: { id: 'hand', studentSlots: [student('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null] } }
       const used: DeskCell[] = [TEMPLATE[0], { id: 'n2', teacher: '佐藤' }, { id: 'n3', teacher: '高橋', lesson: managed('n1', student('sB')) }, TEMPLATE[3]]

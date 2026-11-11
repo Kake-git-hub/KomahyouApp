@@ -1016,6 +1016,22 @@ describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q
     expect(pagesOf('井上')).toEqual(['落合'])
   })
 
+  // 追加 1（2026-11-11 主セッションの裁定・§9-15 の例外）: 山本の授業に手で入れた加藤の机 1。新テンプレは山本を残して新しい生徒 三好 を持たせ、加藤に青木を持たせる（机 2）。
+  // 新テンプレの加藤の机に机 1 のテンプレの生徒 青木 が居る → 加藤の机へ合流。山本は机 1 に三好と置かれ、青木は加藤・三好は山本のページにだけ出る。
+  it('追加 1（本番経路）: 山本の授業に手で入れた加藤の机 1 × 新テンプレは山本＋三好（机 1）・加藤＋青木（机 2）→ 加藤は机 2 へ合流。青木は加藤・三好は山本のページにだけ出て、講師なしの机は無い', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual-replaced', teacherAssignmentTeacherId: 't_kato' } : desk)))
+    const rows = [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_yamamoto', 'student-miyoshi', '数'), row('r2', 't_kato', 'student-aoki', '数')]
+    const { boardDesk, fri5, pagesOf, saved } = saveToSchedule(week, rows, oldRows)
+    expect(saved.nextPendingDesks).toEqual({})
+    expect([boardDesk(1).teacher, liveIdsOf(boardDesk(1))]).toEqual(['山本', ['student-miyoshi']])
+    expect([boardDesk(2).teacher, liveIdsOf(boardDesk(2))]).toEqual(['加藤', ['student-aoki']])
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(1)
+    expect(fri5.flatMap((cell) => cell.desks).filter((desk) => !desk.teacher && liveIdsOf(desk).length > 0)).toEqual([])
+    expect(pagesOf('青木')).toEqual(['加藤'])
+    expect(pagesOf('三好')).toEqual(['山本'])
+    expect(pagesOf('井上')).toEqual(['落合'])
+  })
+
   // 例外 2 の改定（オーナー決定 2026-10-14「削除記録は削除した講師だけに有効に。別講師はそこに割り振ることがある」）:
   //   同じ講師（削除した本人）がテンプレに居る → 従来どおり戻らない／別の講師 → その机に置かれ、生徒はその講師のページに出る。
   it('(e) 講師の削除記録（落合を削除）の机にテンプレが**同じ講師**落合と生徒 → 講師欄は空のまま（再マージ 2 回でも戻らない）。井上はどの講師のページにも出ない', () => {
