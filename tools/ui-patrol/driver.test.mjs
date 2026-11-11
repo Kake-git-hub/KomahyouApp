@@ -1,6 +1,6 @@
 // tools/ui-patrol/driver.mjs の純関数(止めずに通す URL)を固定する。ブラウザ操作の部品そのものは実際に流して確かめる。
 import { describe, it, expect } from 'vitest'
-import { closePatrolBrowser, isAllowedPatrolUrl } from './driver.mjs'
+import { buildPatrolClockTime, closePatrolBrowser, installPatrolClock, isAllowedPatrolUrl } from './driver.mjs'
 
 describe('isAllowedPatrolUrl', () => {
   const base = 'http://127.0.0.1:5199'
@@ -35,5 +35,19 @@ describe('closePatrolBrowser', () => {
     await closePatrolBrowser({ browser: { close: async () => { closed = true } } }, { timeoutMs: 50 })
     expect(closed).toBe(true)
     await closePatrolBrowser(null)
+  })
+})
+
+describe('時計の固定(--incidents の件の「流す日」・手直し 1)', () => {
+  it('流す日の JST 9:00 から始まる時計(時間は流れる)。日が無ければ固定しない', async () => {
+    expect(buildPatrolClockTime('2026-11-10')).toBe('2026-11-10T09:00:00+09:00')
+    expect(buildPatrolClockTime('')).toBe('')
+    expect(buildPatrolClockTime(undefined)).toBe('')
+    const calls = []
+    const context = { clock: { install: async (options) => { calls.push(options.time.toISOString()) }, setFixedTime: async () => { throw new Error('止まる時計は使わない') } } }
+    await installPatrolClock(context, '2026-11-10T09:00:00+09:00')
+    expect(calls).toEqual(['2026-11-10T00:00:00.000Z'])
+    await installPatrolClock(context, '')
+    expect(calls).toHaveLength(1)
   })
 })

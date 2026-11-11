@@ -5,11 +5,13 @@
 import path from 'node:path'
 import { DEFAULT_CLASSROOMS } from './fetchData.mjs'
 import { DEFAULT_SCENARIO_NAMES, SCENARIO_NAMES } from './options.mjs'
+import { buildPatrolClockTime } from './driver.mjs'
 
 /** 一覧の置き場(リポジトリの根からの相対)。 */
 export const INCIDENTS_FILE = 'tools/ui-patrol-incidents.json'
 
-const FIELDS = ['name', 'key', 'classrooms', 'incident', 'scenarios', 'note']
+const FIELDS = ['name', 'key', 'today', 'classrooms', 'incident', 'scenarios', 'note']
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 const KEY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}$/
 const CLASSROOM_PATTERN = /^[A-Za-z0-9_-]+$/
@@ -52,11 +54,16 @@ export function parseIncidentList(value) {
         scenarios = ['boot', ...item.scenarios.filter((name) => name !== 'boot')]
       }
     }
+    // today: その事故の形を流す日(道具の今日とブラウザの時計をその日に合わせる)。台本の日付(来週の月曜など)は今日から決まるので、
+    // 実際の今日で流すと日が進むほど事故の形を通らなくなる(手直し 1・Important-1)。データの時点の日より前にはできない。
+    if (item.today !== undefined && (typeof item.today !== 'string' || !DATE_PATTERN.test(item.today) || (typeof item.key === 'string' && item.today < item.key.slice(0, 10)))) {
+      errors.push(`${where}: today はその形を流す日 YYYY-MM-DD(データの時点の日〔${typeof item.key === 'string' ? item.key.slice(0, 10) : '?'}〕以降)で書いてください。`)
+    }
     if (item.note !== undefined && typeof item.note !== 'string') errors.push(`${where}: note は文字列で書いてください。`)
     for (const field of ['incident', 'note']) {
       if (typeof item[field] === 'string' && PERSON_ID_PATTERN.test(item[field])) errors.push(`${where}: ${field} に生徒・講師の ID のような文字があります(公開リポジトリなので書かない)。`)
     }
-    if (errors.length === before) incidents.push({ name: item.name, key: item.key, classrooms, incident: item.incident.trim(), scenarios, note: item.note ?? '' })
+    if (errors.length === before) incidents.push({ name: item.name, key: item.key, today: item.today ?? '', classrooms, incident: item.incident.trim(), scenarios, note: item.note ?? '' })
   })
   return { incidents: errors.length === 0 ? incidents : [], errors }
 }
@@ -86,6 +93,9 @@ export function buildIncidentRunOptions(options, incident) {
     classrooms: [...incident.classrooms],
     scenarios: [...incident.scenarios],
     out: path.join(options.out, incident.name),
+    // 流す日(省略なら本物の今日・時計も固定しない)。道具の今日(today)とブラウザの時計(clockTime=その日の JST 9:00 から進む)の両方。
+    today: incident.today ?? '',
+    clockTime: buildPatrolClockTime(incident.today),
     incidents: false,
     incidentName: incident.name,
     // 報告の見出し(件の名前と時点)と、取得の前の形の確かめ(tools/ui-patrol.mjs)に使う。
@@ -102,7 +112,8 @@ export function resolveIncidentsExitCode(results) {
   if (!Array.isArray(results) || results.length === 0) return 2
   const codes = results.map((result) => result.exitCode)
   if (codes.includes(130)) return 130
-  if (codes.includes(1)) return 1
+  // 変を出したあと途中で止まった件(終了コード 2 でも報告に変がある・--baseline-ref のときは新しい変)も 1 に数える。
+  if (codes.includes(1) || results.some((result) => result.exitCode !== 0 && (result.stops ?? 0) > 0)) return 1
   if (codes.some((code) => code !== 0)) return 2
   return 0
 }
@@ -115,7 +126,8 @@ export function formatIncidentsSummary(results) {
   const lines = [`■ 過去の事故の日の形(${results.length} 件): 終了コード ${total}(${EXIT_MEANINGS[total] ?? '不明'})`]
   for (const result of results) {
     const seconds = typeof result.seconds === 'number' ? `・${Math.round(result.seconds)} 秒` : ''
-    lines.push(`  - ${result.name}(時点 ${result.key}): 終了コード ${result.exitCode}(${EXIT_MEANINGS[result.exitCode] ?? '不明'})${seconds}`)
+    const stopsText = result.exitCode === 2 && (result.stops ?? 0) > 0 ? `・途中で止まる前に変 ${result.stops} 件` : ''
+    lines.push(`  - ${result.name}(時点 ${result.key}${result.today ? `・流す日 ${result.today}` : ''}): 終了コード ${result.exitCode}(${EXIT_MEANINGS[result.exitCode] ?? '不明'})${stopsText}${seconds}`)
     if (result.headline) lines.push(`      ${result.headline}`)
     if (result.reason) lines.push(`      理由: ${result.reason}`)
   }

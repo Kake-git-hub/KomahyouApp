@@ -123,33 +123,49 @@ export function compareWithBaseline(currentReport, baselineReport, { source = ''
   let resolvedStops = 0
   const classrooms = currentRooms.map((room) => {
     const base = roomsOf(baselineReport).find((item) => item.classroomId === room.classroomId)
-    // baseline の stop を鍵ごとに数える(多重集合)。残ったものが「消えた」。
-    const left = new Map()
-    const order = []
+    // baseline の stop を鍵ごとに数える(多重集合)。2 段で突き合わせ、どちらでも組にならなかったものが「消えた」。
+    // 1 段目=厳しい鍵(手順の題名・何本目か込み)。2 段目=台本の記号＋所見の鍵だけ(手直し 1・Important-2: 題名には候補の通し番号と種類が入るので、
+    // 変更前と今で候補の数・順がずれると、同じ場所の同じ所見が別の手順に出る。それを「新しい」に数えると誤って終了コード 1 になる)。
+    const items = []
+    const strict = new Map()
+    const loose = new Map()
+    const push = (map, key, item) => { const list = map.get(key); if (list) list.push(item); else map.set(key, [item]) }
     for (const { step, identity } of identifySteps(base.steps)) {
       for (const finding of step.findings ?? []) {
         if (finding.level !== 'stop') continue
-        const key = findingKey(room.classroomId, identity, finding)
-        const entry = left.get(key)
-        if (entry) entry.items.push({ step, finding })
-        else { left.set(key, { items: [{ step, finding }] }); order.push(key) }
+        const item = { step, finding, used: false }
+        items.push(item)
+        push(strict, findingKey(room.classroomId, identity, finding), item)
+        push(loose, findingKey(room.classroomId, step.name, finding), item)
       }
     }
-    const steps = identifySteps(room.steps).map(({ step, identity }) => ({
+    const take = (map, key) => {
+      const item = (map.get(key) ?? []).find((candidate) => !candidate.used)
+      if (item) item.used = true
+      return item ?? null
+    }
+    const identified = identifySteps(room.steps)
+    // 1 段目を全部の手順で先に済ませる(同じ手順どうしの組を、別の手順の 2 段目に取られないように)。
+    const marks = identified.map(({ step, identity }) => (step.findings ?? []).map((finding) => (
+      finding.level === 'stop' && take(strict, findingKey(room.classroomId, identity, finding)) ? 'same-step' : null
+    )))
+    const steps = identified.map(({ step }, stepIndex) => ({
       ...step,
-      findings: (step.findings ?? []).map((finding) => {
+      findings: (step.findings ?? []).map((finding, findingIndex) => {
         if (finding.level !== 'stop') return finding
-        const entry = left.get(findingKey(room.classroomId, identity, finding))
-        if (entry && entry.items.length > 0) {
-          entry.items.shift()
+        if (marks[stepIndex][findingIndex] === 'same-step') {
           carriedStops += 1
           return { ...finding, baseline: 'carried' }
+        }
+        if (take(loose, findingKey(room.classroomId, step.name, finding))) {
+          carriedStops += 1
+          return { ...finding, baseline: 'carried', baselineMatch: 'other-step' }
         }
         newStops += 1
         return { ...finding, baseline: 'new' }
       }),
     }))
-    const resolved = order.flatMap((key) => left.get(key).items.map(({ step, finding }) => ({ step: step.name, title: step.title ?? step.name, finding })))
+    const resolved = items.filter((item) => !item.used).map(({ step, finding }) => ({ step: step.name, title: step.title ?? step.name, finding }))
     resolvedStops += resolved.length
     return { ...room, steps, resolved }
   })

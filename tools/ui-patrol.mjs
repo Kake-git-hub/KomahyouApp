@@ -28,7 +28,7 @@ import { USAGE, assertOutDirOutsideRepo, jstToday, parseArgs, validateArgs } fro
 import { buildPatrolWorkspaceSnapshot } from './ui-patrol/seed.mjs'
 import { startDevServer } from './ui-patrol/devServer.mjs'
 import { closePatrolBrowser, launchPatrolBrowser, loadPlaywright } from './ui-patrol/driver.mjs'
-import { createClassroomReport, createPatrolReport, formatPatrolReportText, resolveExitCode } from './ui-patrol/report.mjs'
+import { createClassroomReport, createPatrolReport, formatPatrolReportText, resolveExitCode, summarizeReport } from './ui-patrol/report.mjs'
 import { runClassroomPatrol } from './ui-patrol/scenarios.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..')
@@ -221,8 +221,11 @@ async function runIncidents(options, context) {
       outcome = { exitCode: 2 }
     }
     const report = outcome.report ?? null
+    const summarized = report ? summarizeReport(report) : null
     results.push({
-      name: incident.name, key: incident.key, classrooms: incident.classrooms, exitCode: outcome.exitCode,
+      name: incident.name, key: incident.key, today: incident.today,
+      // 報告の変の数(--baseline-ref のときは新しい変)。途中で止まった件(2)の変も全体の 1 に数える。
+      stops: summarized ? (report.baseline ? summarized.newStops : summarized.stop) : 0, classrooms: incident.classrooms, exitCode: outcome.exitCode,
       seconds: (Date.now() - started) / 1000, headline: report ? formatPatrolReportText(report).split('\n')[0] : '', reason: outcome.reason ?? '',
       report: report ? path.join(runOptions.out, 'report.json') : '',
     })
@@ -276,7 +279,8 @@ async function runSingleCore(options, { env, fetchImpl, say, warn, deps }, holde
   let seeds = []
   let backupKey = ''
   let baselineApp = null
-  const today = jstToday()
+  // --incidents の件の流す日があればそれを今日にする(ブラウザの時計も runBrowserPatrol がその日に合わせる)。
+  const today = options.today || jstToday()
   try {
     // --baseline-ref: 断る条件(ref が解決できない・依存が違う・読み口が無い)は、取得より前に見る。
     if (options.baselineRef) {
@@ -516,7 +520,7 @@ export async function runBrowserPatrol({ app, seeds, options, backupKey, today, 
       const started = Date.now()
       let classroomReport
       try {
-        session = await launch({ baseUrl: server.baseUrl, headed: options.headed })
+        session = await launch({ baseUrl: server.baseUrl, headed: options.headed, clockTime: options.clockTime })
         classroomReport = await runClassroom({
           session, app, classroom: { classroomId, label, backupKey: key }, seedSnapshot: seed, options, outDir: options.out, known, today,
         })

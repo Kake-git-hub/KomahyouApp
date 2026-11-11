@@ -68,7 +68,24 @@ async function withTimeout(promise, message) {
   }
 }
 
-export async function launchPatrolBrowser({ baseUrl, headed = false }) {
+/**
+ * --incidents の件の「流す日」(YYYY-MM-DD)から、ブラウザの時計を始める時刻(その日の JST 9:00)。日が無ければ ''(固定しない)。
+ * 9:00 にするのは、その日の授業の前(台本は今日以降のコマを選ぶ)で、日付が JST の日付どおりになるため。
+ */
+export function buildPatrolClockTime(today) {
+  return typeof today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(today) ? `${today}T09:00:00+09:00` : ''
+}
+
+/**
+ * ブラウザの時計をその時刻から始める(Playwright の clock.install)。install の時計は時間が流れ、タイマーも本物の速さで動くので、
+ * 5 秒後の自動保存・台本の待ちはそのまま効く(setFixedTime の「止まった時計」は使わない)。clockTime が空なら何もしない(本物の時計)。
+ */
+export async function installPatrolClock(context, clockTime) {
+  if (!clockTime) return
+  await context.clock.install({ time: new Date(clockTime) })
+}
+
+export async function launchPatrolBrowser({ baseUrl, headed = false, clockTime = '' }) {
   const playwright = loadPlaywright()
   if (!playwright) throw new PatrolAbortError('Playwright が無い環境では回せません。')
   const browser = await playwright.chromium.launch({
@@ -92,6 +109,8 @@ export async function launchPatrolBrowser({ baseUrl, headed = false }) {
   try {
     const context = await browser.newContext({ viewport: PATROL_VIEWPORT, locale: 'ja-JP', timezoneId: 'Asia/Tokyo', deviceScaleFactor: 1, acceptDownloads: true })
     session.context = context
+    // --incidents の件の流す日: アプリの時計もその日から(道具の今日と合わせる)。ページを作る前に入れる。
+    await installPatrolClock(context, clockTime)
     await context.route('**/*', (route) => {
       const url = route.request().url()
       if (isAllowedPatrolUrl(url, baseUrl) && new URL(url).pathname === BLANK_PATH) {
@@ -174,10 +193,12 @@ export async function seedAndOpen(session, seedSnapshot) {
   await page.goto(`${baseUrl}${BLANK_PATH}`, { waitUntil: 'load' })
   const webdriver = await page.evaluate(() => navigator.webdriver)
   if (webdriver !== false) throw new PatrolAbortError('navigator.webdriver が false になりません(アプリが保存を止めるので回せません)。')
+  // savedAt はブラウザの時計で付ける(--incidents で時計をその日に合わせたとき、道具の側の今の時刻だと種データが「未来」になり、
+  // アプリの自動保存より新しい扱いのまま残って読み込み直しで種データへ戻ってしまう)。時計を合わせないときは同じ時刻。
   const seeded = await page.evaluate(async (snapshot) => {
     const repository = await import('/src/data/appSnapshotRepository.ts')
-    return repository.saveWorkspaceSnapshot(snapshot)
-  }, { ...seedSnapshot, savedAt: new Date().toISOString() })
+    return repository.saveWorkspaceSnapshot({ ...snapshot, savedAt: new Date().toISOString() })
+  }, seedSnapshot)
   if (!seeded?.savedToIndexedDb) throw new PatrolAbortError('種データをブラウザの保存領域(IndexedDB)へ入れられませんでした。')
   session.classroomId = seedSnapshot.actingClassroomId
   await page.goto(`${baseUrl}/`, { waitUntil: 'load' })

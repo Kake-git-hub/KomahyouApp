@@ -648,6 +648,23 @@ describe('runBrowserPatrol(repoRoot・--baseline-ref)', () => {
   })
 })
 
+describe('runBrowserPatrol(時計の固定・--incidents の件の流す日)', () => {
+  it('options.clockTime をブラウザの起動へ渡す。無ければ渡さない(今までどおり本物の時計)', async () => {
+    const launched = []
+    const deps = {
+      process: new EventEmitter(),
+      startDevServer: async () => ({ baseUrl: 'http://127.0.0.1:1', stop: async () => {} }),
+      launchPatrolBrowser: async (args) => { launched.push(args.clockTime); return {} },
+      closePatrolBrowser: async () => {},
+      runClassroomPatrol: async ({ classroom }) => ({ classroomId: classroom.classroomId, label: 'A', backupKey: 'k', steps: [], knownCount: 0, aborted: null }),
+    }
+    const args = (options) => ({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true, ...options }, backupKey: 'k', today: '2026-11-10', env: {}, say: () => {} })
+    await runBrowserPatrol(args({ clockTime: '2026-11-10T09:00:00+09:00' }), deps)
+    await runBrowserPatrol(args({}), deps)
+    expect(launched).toEqual(['2026-11-10T09:00:00+09:00', undefined])
+  })
+})
+
 describe('runBrowserPatrol(シグナルの時間帯)', () => {
   const baseArgs = (extra = {}) => ({ app: {}, seeds: [{ classroomId: ROOM_A, label: 'A', key: 'k', seed: {} }, { classroomId: ROOM_B, label: 'B', key: 'k', seed: {} }], options: { port: 1, headed: false, known: '/nonexistent.json', json: true }, backupKey: 'k', today: '2026-11-11', env: {}, say: () => {}, ...extra })
   const makeProc = () => {
@@ -816,7 +833,7 @@ describe('ui-patrol --incidents(過去の事故の日の形を決まった一覧
   }
 
   const LIST = [
-    { name: 'room-b-template', key: '2026-11-10T03-00', classrooms: [ROOM_B], incident: '教室 B のテンプレ保存の事故', scenarios: ['a', 'd'] },
+    { name: 'room-b-template', key: '2026-11-10T03-00', classrooms: [ROOM_B], incident: '教室 B のテンプレ保存の事故', scenarios: ['a', 'd'], today: '2026-11-10' },
     { name: 'both-rooms', key: '2026-11-11T03-00', classrooms: 'all', incident: '2 校の形' },
   ]
 
@@ -832,6 +849,11 @@ describe('ui-patrol --incidents(過去の事故の日の形を決まった一覧
         runPatrol: async (args) => { runs.push(args); return okReport(args.seeds.map((seed) => seed.classroomId)) },
       })
       expect(io.err.join('')).toBe('')
+      // 流す日のある件は、その日を今日として流し(台本の来週の月曜もその日から)・ブラウザの時計もその日から始める。無い件は本物の今日
+      expect(runs[0].today).toBe('2026-11-10')
+      expect(runs[0].options.clockTime).toBe('2026-11-10T09:00:00+09:00')
+      expect(runs[1].options.clockTime).toBe('')
+      expect(runs[1].today).toMatch(/^\d{4}-\d{2}-\d{2}$/)
       expect(code).toBe(0)
       expect(runs.map((run) => [run.backupKey, run.seeds.map((seed) => seed.classroomId), run.options.scenarios, run.options.out, run.options.moves])).toEqual([
         ['2026-11-10T03-00', [ROOM_B], ['boot', 'a', 'd'], path.join(dir, 'out', 'room-b-template'), 3],
@@ -847,7 +869,7 @@ describe('ui-patrol --incidents(過去の事故の日の形を決まった一覧
       // 種データは件のフォルダの下に(伏せ字のあと・元の名前は無い)
       expect(existsSync(path.join(dir, 'out', 'room-b-template', `${ROOM_B}.seed.json`))).toBe(true)
       const summary = readFileSync(path.join(dir, 'out', 'incidents.txt'), 'utf8')
-      expect(summary).toContain('room-b-template(時点 2026-11-10T03-00): 終了コード 0')
+      expect(summary).toContain('room-b-template(時点 2026-11-10T03-00・流す日 2026-11-10): 終了コード 0')
       expect(summary).toContain('both-rooms(時点 2026-11-11T03-00): 終了コード 0')
       expect(JSON.parse(readFileSync(path.join(dir, 'out', 'incidents.json'), 'utf8')).exitCode).toBe(0)
       for (const name of NAMES) {

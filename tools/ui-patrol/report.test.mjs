@@ -151,3 +151,14 @@ describe('過去の事故の日の形(--incidents)の報告の見出し', () => 
     expect(formatPatrolReportText(withIncident).split('\n')[1]).toContain('テンプレ保存の事故')
   })
 })
+
+describe('変更前と比べた印(2 段の突き合わせ)', () => {
+  it('2 段目(別の手順)で組になった「前から」は [変・前・別の手順]', () => {
+    const findings = [{ level: 'stop', code: 'x', message: '同じ手順', baseline: 'carried' }, { level: 'stop', code: 'x', message: '別の手順', baseline: 'carried', baselineMatch: 'other-step' }]
+    const report = { ...createPatrolReport({ appVersion: '1', backupKey: 'k' }), classrooms: [classroom([step({ findings })])], baseline: { source: 's', newStops: 0, carriedStops: 2, resolvedStops: 0 } }
+    const text = formatPatrolReportText(report)
+    expect(text).toContain('[変・前] 同じ手順')
+    expect(text).toContain('[変・前・別の手順] 別の手順')
+    expect(resolveExitCode(report)).toBe(0)
+  })
+})

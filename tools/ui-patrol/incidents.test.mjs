@@ -49,6 +49,13 @@ describe('parseIncidentList(一覧の読み込みと検査)', () => {
     expect(parseIncidentList([entry({ unknownField: 1 })]).errors.join('\n')).toContain('unknownField')
   })
 
+  it('流す日 today(YYYY-MM-DD・省略可)は、データの時点の日より前にできない', () => {
+    expect(parseIncidentList([entry({ today: '2026-11-10' })]).incidents[0].today).toBe('2026-11-10')
+    expect(parseIncidentList([entry()]).incidents[0].today).toBe('')
+    expect(parseIncidentList([entry({ today: '11/10' })]).errors.join('\n')).toContain('today')
+    expect(parseIncidentList([entry({ today: '2026-11-09' })]).errors.join('\n')).toContain('today')
+  })
+
   it('公開リポジトリなので、説明・備考に生徒・講師の ID(s091・t025 の形)を書いたら断る', () => {
     expect(parseIncidentList([entry({ incident: '生徒 s091 の席がずれた' })]).errors.join('\n')).toContain('生徒・講師の ID')
     expect(parseIncidentList([entry({ note: '講師 t025 の机' })]).errors.join('\n')).toContain('生徒・講師の ID')
@@ -68,8 +75,10 @@ describe('リポジトリの一覧(tools/ui-patrol-incidents.json)', () => {
     expect(first.key).toBe('2026-11-10T03-00')
     expect(first.classrooms).toEqual(['KzFnOQoTFLsCxwUp1tvh'])
     expect(first.incident).toContain('v1.5.715')
-    // テンプレ保存の事故なので台本 a を流す
+    // テンプレ保存の事故なので台本 a を流す。事故の印が出る日(来週の月曜が 11/16)に固定する
     expect(first.scenarios).toContain('a')
+    expect(first.today).toBe('2026-11-10')
+    expect(parsed.incidents.every((item) => item.today)).toBe(true)
   })
 })
 
@@ -92,8 +101,12 @@ describe('selectIncidents(--incidents の選び方)', () => {
 describe('buildIncidentRunOptions(件ごとの引数)', () => {
   it('時点・教室・台本を件のものにし、出力は <out>/<名前>。ほかの引数(移動の数・種・--baseline-ref など)はそのまま', () => {
     const options = parseArgs(['--out', '/tmp/o', '--incidents', '--moves', '3', '--seed', '9', '--baseline-ref', 'origin/main'])
-    const [incident] = parseIncidentList([entry({ scenarios: ['a'] })]).incidents
+    const [incident] = parseIncidentList([entry({ scenarios: ['a'], today: '2026-11-11' })]).incidents
     const run = buildIncidentRunOptions(options, incident)
+    // 流す日: 道具の今日とブラウザの時計(その日の JST 9:00 から進む)
+    expect(run.today).toBe('2026-11-11')
+    expect(run.clockTime).toBe('2026-11-11T09:00:00+09:00')
+    expect(buildIncidentRunOptions(options, parseIncidentList([entry()]).incidents[0])).toMatchObject({ today: '', clockTime: '' })
     expect(run).toMatchObject({ key: '2026-11-10T03-00', classrooms: ['room1'], scenarios: ['boot', 'a'], out: path.join('/tmp/o', 'room1-2026-11-10-template-save'), moves: 3, seed: 9, baselineRef: 'origin/main', incidentName: 'room1-2026-11-10-template-save' })
     // 元の options は書き換えない
     expect(options.out).toBe('/tmp/o')
@@ -113,6 +126,10 @@ describe('resolveIncidentsExitCode(全体の終了コード)', () => {
   })
   it('変が無く、どれかが流せなければ 2', () => {
     expect(resolveIncidentsExitCode([{ exitCode: 0 }, { exitCode: 2 }])).toBe(2)
+  })
+  it('変を出したあと途中で止まった件(終了コード 2・変の数 > 0)も 1 として数える', () => {
+    expect(resolveIncidentsExitCode([{ exitCode: 0 }, { exitCode: 2, stops: 3 }])).toBe(1)
+    expect(resolveIncidentsExitCode([{ exitCode: 0 }, { exitCode: 2, stops: 0 }])).toBe(2)
   })
   it('止めた(130)はほかより先', () => {
     expect(resolveIncidentsExitCode([{ exitCode: 1 }, { exitCode: 130 }])).toBe(130)

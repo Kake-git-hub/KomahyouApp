@@ -135,23 +135,56 @@ describe('compareWithBaseline', () => {
     expect(result.report.baseline).toMatchObject({ newStops: 1, carriedStops: 0, resolvedStops: 1 })
   })
 
-  it('同じ台本の中の別の手順で同じ文の所見が出たら別の所見(手順の題名で見分ける)。今までは同じ name なので「前から」に数えていた', () => {
-    // 変更前: 移動 1 で出ていた所見が直り、今回は移動 2 で同じ文の所見が出た → 新しい 1・消えた 1(今までは 前から 1)
+  it('2 段で突き合わせる(手直し 1・Important-2): 手順の本数・順がずれても、同じ台本の同じ場所の同じ所見は「前から(別の手順)」で新しい変に数えない', () => {
+    // (i) 変更前は移動 1 で出ていた所見が、今は移動 2 で出た(候補の数・順のずれ) → 前から 1・新しい 0・消えた 0
     const result = compareWithBaseline(
       patrol([room([step([], { name: 'b', title: '生徒の移動 1(通常・同じコマ)' }), step([stop()], { name: 'b', title: '生徒の移動 2(通常・別の日)' })])]),
       patrol([room([step([stop()], { name: 'b', title: '生徒の移動 1(通常・同じコマ)' }), step([], { name: 'b', title: '生徒の移動 2(通常・別の日)' })])]),
       { source: 's' },
     )
-    expect(result.report.baseline).toMatchObject({ newStops: 1, carriedStops: 0, resolvedStops: 1 })
-    expect(result.report.classrooms[0].resolved[0].title).toBe('生徒の移動 1(通常・同じコマ)')
+    expect(result.report.baseline).toMatchObject({ newStops: 0, carriedStops: 1, resolvedStops: 0 })
+    expect(stopsOf(result.report)[0]).toMatchObject({ baseline: 'carried', baselineMatch: 'other-step' })
+    // 手順の本数が違う(変更前は移動が 1 本少ない)
+    const shifted = compareWithBaseline(
+      patrol([room([step([], { name: 'f', title: '講師 1(移動)' }), step([], { name: 'f', title: '講師 2(入替)' }), step([stop({ message: '机2 が変わった' })], { name: 'f', title: '講師 3(休み)' })])]),
+      patrol([room([step([], { name: 'f', title: '講師 1(入替)' }), step([stop({ message: '机2 が変わった' })], { name: 'f', title: '講師 2(休み)' })])]),
+      { source: 's' },
+    )
+    expect(shifted.report.baseline).toMatchObject({ newStops: 0, carriedStops: 1, resolvedStops: 0 })
   })
 
-  it('題名まで同じ手順が 2 本あれば何本目かで見分ける', () => {
-    const twin = (findings) => step(findings, { name: 'c', title: '保存→読み込み直し' })
+  it('2 段目でも、本当に新しい所見(別の机・別の文)は「新しい」のまま。別の台本の同じ所見も拾わない', () => {
     const result = compareWithBaseline(
-      patrol([room([twin([]), twin([stop()])])]), patrol([room([twin([stop()]), twin([])])]), { source: 's' },
+      patrol([room([step([stop({ deskIndex: 3 }), stop({ message: '別の文' })], { name: 'b', title: '生徒の移動 2(通常・別の日)' })])]),
+      patrol([room([step([stop()], { name: 'b', title: '生徒の移動 1(通常・同じコマ)' })])]),
+      { source: 's' },
     )
-    expect(result.report.baseline).toMatchObject({ newStops: 1, carriedStops: 0, resolvedStops: 1 })
+    expect(result.report.baseline).toMatchObject({ newStops: 2, carriedStops: 0, resolvedStops: 1 })
+    const otherScenario = compareWithBaseline(patrol([room([step([stop()], { name: 'f', title: '講師 1' })])]), patrol([room([step([stop()], { name: 'b', title: '生徒の移動 1' })])]), { source: 's' })
+    expect(otherScenario.report.baseline).toMatchObject({ newStops: 1, carriedStops: 0, resolvedStops: 1 })
+  })
+
+  it('1 段目(手順の題名・何本目か)が先: 同じ台本の別の手順の同じ机の別の文は区別され、同じ手順どうしが先に組になる', () => {
+    // (iii) 同じ机で、移動 1 は文 A・移動 2 は文 B。今は移動 1 が文 B・移動 2 が文 A → 2 段目で組になり新しい 0(文が同じものどうし)
+    const a = stop({ message: '文 A' })
+    const b = stop({ message: '文 B' })
+    const crossed = compareWithBaseline(
+      patrol([room([step([b], { name: 'b', title: '生徒の移動 1' }), step([a], { name: 'b', title: '生徒の移動 2' })])]),
+      patrol([room([step([a], { name: 'b', title: '生徒の移動 1' }), step([b], { name: 'b', title: '生徒の移動 2' })])]),
+      { source: 's' },
+    )
+    expect(crossed.report.baseline).toMatchObject({ newStops: 0, carriedStops: 2, resolvedStops: 0 })
+    // 同じ手順に同じ所見があれば 1 段目で組になる(「別の手順」の印は付かない)
+    const same = compareWithBaseline(
+      patrol([room([step([a], { name: 'b', title: '生徒の移動 1' }), step([a], { name: 'b', title: '生徒の移動 2' })])]),
+      patrol([room([step([a], { name: 'b', title: '生徒の移動 1' })])]),
+      { source: 's' },
+    )
+    expect(same.report.baseline).toMatchObject({ newStops: 1, carriedStops: 1, resolvedStops: 0 })
+    expect(stopsOf(same.report).map((f) => [f.baseline, f.baselineMatch ?? ''])).toEqual([['carried', ''], ['new', '']])
+    // 別の机の別の文は区別される
+    const distinct = compareWithBaseline(patrol([room([step([stop({ deskIndex: 1, message: '文 C' })], { name: 'b', title: '生徒の移動 2' })])]), patrol([room([step([a], { name: 'b', title: '生徒の移動 1' })])]), { source: 's' })
+    expect(distinct.report.baseline).toMatchObject({ newStops: 1, carriedStops: 0, resolvedStops: 1 })
   })
 
   it('同じ手順の同じ所見は今までどおり「前から」', () => {
