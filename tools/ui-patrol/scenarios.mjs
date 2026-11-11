@@ -1,5 +1,5 @@
 // 画面の自動巡回(tools/ui-patrol.mjs・docs/test-strategy.md 層 5「台本(第 1 段)」)の台本。
-// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (a) テンプレ保存 の順で、室長と同じ画面操作をし、
+// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (a) テンプレ保存 → (d) テンプレを実際に変えて保存 の順で、室長と同じ画面操作をし、
 // 操作のたびに「前の状態を読む → 操作 → 後の状態を読む → 点検 → 既知を外す → 報告へ足す」。
 // ★点検は tools/ui-patrol/checks.ts、盤面の事実は boardFacts.ts(どちらも esbuild で束ねた app から呼ぶ)。ここで規則を書き直さない。
 // ★報告に出すのは仮名・ID・件数・経路だけ(所見の message は checks.ts が作る。ここで足す注も ID と件数だけ)。
@@ -60,6 +60,20 @@ export const TEMPLATE_SAVE_ALLOWED_SECTIONS = [
   'boardState.scheduleCountAdjustments',
   'boardState.manualMakeupAdjustments',
 ]
+
+/**
+ * テンプレを実際に変えて保存(台本 d)で変わってよい範囲。考え方(docs/runbooks/ui-patrol.md の台本の表):
+ * (i) 反映日以降の、テンプレ由来の部分(§2 の規則で説明がつく変化) (ii) 今回変えたテンプレの机に対応するコマの机。
+ * (ii) のコマは反映日以降にしかない(テンプレ保存は反映日より前の机を触らない)ので、机の範囲は (i) と同じ「反映日以降」で足りる。
+ * 部分は何も変えない保存(台本 a)と同じ: テンプレの中身が変わっても、保存が書き換える部分は buildTemplateDiffSavePlan の同じ所だけ
+ * (TEMPLATE_SAVE_ALLOWED_SECTIONS の根拠のとおり)。手入力が消える・ずれる・講師なしになる、は範囲の内でも checks.ts の点検が「変」にする(INV-02)。
+ */
+export const TEMPLATE_EDIT_ALLOWED_SECTIONS = TEMPLATE_SAVE_ALLOWED_SECTIONS
+
+/** 台本 d の範囲(反映日以降の机・TEMPLATE_EDIT_ALLOWED_SECTIONS)。 */
+export function buildTemplateEditAllowedChange(fromDateKey) {
+  return { fromDateKey, sections: new Set(TEMPLATE_EDIT_ALLOWED_SECTIONS) }
+}
 
 /** 種つきの乱数(mulberry32)。0 以上 1 未満・同じ種なら同じ列。 */
 export function createSeededRandom(seed) {
@@ -218,6 +232,47 @@ function writeStopDiff(file, stops, before, after) {
 }
 
 /**
+ * テンプレ保存(台本 a と d)の点検の組み合わせ。両方の台本がここを通す(数え方を 2 つ作らない)。
+ * 根拠を失った振替を消す件数(§9-12・確認の画面の詳細に出る)。その範囲で消えた振替と、同じ生徒×科目の振替元の「移)」の記録は info になる。
+ * テンプレ自体が講師なしにしている授業は「変」ではない(保存のあとのテンプレ＝反映日以降に効く版から作る)。
+ */
+export function collectTemplateSaveFindings({ app, before, after, fromDateKey, confirmMessage, detailText, audit, allowed = { fromDateKey, sections: new Set(TEMPLATE_SAVE_ALLOWED_SECTIONS) } }) {
+  const manualFindings = app.checkManualStudentsKeepTeacher(before.facts, after.facts, {
+    announcedText: detailText,
+    announcedOrphanedMakeupCount: app.parseAnnouncedOrphanedMakeupCount(detailText),
+  })
+  const releasedMovedStatuses = manualFindings
+    .filter((finding) => finding.code === 'orphaned-makeup-removed-announced' && finding.studentId)
+    .map((finding) => `${finding.studentId}|${finding.subject ?? ''}`)
+  const templateTeacherless = collectTemplateTeacherlessKeys(after.payload?.classroomSettings?.regularLessonTemplate)
+  return [
+    ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+    ...manualFindings,
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
+    ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
+    ...app.checkAuditNotWorse(audit(before), audit(after)),
+    ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage),
+    ...app.summarizeChanges(before.facts, after.facts),
+  ]
+}
+
+const TEMPLATE_WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
+const TEMPLATE_EDIT_LABELS = { 'add-student': '生徒を 1 人足す', 'change-teacher': '講師を替える', 'delete-desk': '机を消す' }
+
+function describeTemplateDesk(desk) {
+  return `テンプレ ${TEMPLATE_WEEKDAY_LABELS[desk.dayOfWeek] ?? '?'}曜 ${desk.slotNumber}限 机${desk.deskIndex + 1}`
+}
+
+/** 報告の「何をどこへ」(仮名と ID だけ)。anchorDates は確かめる日の日付。 */
+function describeTemplateEdit(edit, desk, { studentName = '', anchorDates = [] } = {}) {
+  const teacher = `${desk.teacher}(${desk.teacherId})`
+  const range = anchorDates.length > 0 ? `・確かめる日 ${anchorDates.length} コマ(${anchorDates[0]}〜${anchorDates[anchorDates.length - 1]})` : ''
+  if (edit.kind === 'add-student') return `${TEMPLATE_EDIT_LABELS[edit.kind]}: ${describeTemplateDesk(desk)} 席${(edit.seat ?? 0) + 1} ← ${studentName}(${edit.studentKeys[0]})(${teacher} の机)${range}`
+  if (edit.kind === 'change-teacher') return `${TEMPLATE_EDIT_LABELS[edit.kind]}: ${describeTemplateDesk(desk)} ${teacher} → ${edit.newTeacher}(${edit.newTeacherId || 'ID なし'})${range}`
+  return `${TEMPLATE_EDIT_LABELS[edit.kind]}: ${describeTemplateDesk(desk)} ${teacher}・生徒 ${edit.studentKeys.join('・') || 'なし'}${range}`
+}
+
+/**
  * 生徒の移動を 1 回: 長押しドラッグ → 読む → 点検。台本 b とでたらめ操作の両方から呼ぶ(点検の組み合わせを 1 か所にする)。
  * before は操作の前の状態({ payload, facts, auditResult })、read は状態を読む関数、audit は状態の保証台帳(状態にためて使い回す)。
  * 戻り値 outcome: 'moved'(状態が変わった・点検した)/ 'blocked'(状態が変わらずステータスの文が変わった＝アプリが断った・info move-blocked)/
@@ -288,7 +343,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   const d = driver
   const { classroomId } = classroom
   let report = createClassroomReport(classroom)
-  const scenarios = options.scenarios ?? ['boot', 'c', 'b', 'a']
+  const scenarios = options.scenarios ?? ['boot', 'c', 'b', 'a', 'd']
   const nextMonday = app.resolveNextMondayDateKey(today)
   let shotCount = 0
   let lastScenario = 'boot'
@@ -490,25 +545,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const after = await timedRead()
       step.diff = { before: before.facts, after: after.facts }
       step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`, `テンプレ保存前の盤面の PDF: ${session.downloads - downloadsBefore} 件(保存せず取り消し)`)
-      // 根拠を失った振替を消す件数(§9-12・確認の画面の詳細に出る)。その範囲で消えた振替と、同じ生徒×科目の振替元の「移)」の記録は info になる。
-      const manualFindings = app.checkManualStudentsKeepTeacher(before.facts, after.facts, {
-        announcedText: detailText,
-        announcedOrphanedMakeupCount: app.parseAnnouncedOrphanedMakeupCount(detailText),
-      })
-      const releasedMovedStatuses = manualFindings
-        .filter((finding) => finding.code === 'orphaned-makeup-removed-announced' && finding.studentId)
-        .map((finding) => `${finding.studentId}|${finding.subject ?? ''}`)
-      // テンプレ自体が講師なしにしている授業は「変」ではない(保存のあとのテンプレ＝反映日 nextMonday 以降に効く版から作る)。
-      const templateTeacherless = collectTemplateTeacherlessKeys(after.payload?.classroomSettings?.regularLessonTemplate)
-      step.findings.push(
-        ...app.checkOutsideAllowedRange(before.facts, after.facts, { fromDateKey: nextMonday, sections: new Set(TEMPLATE_SAVE_ALLOWED_SECTIONS) }),
-        ...manualFindings,
-        ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
-        ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
-        ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
-        ...app.checkPendingCountMatchesPreview(before.facts, after.facts, confirmMessage),
-        ...app.summarizeChanges(before.facts, after.facts),
-      )
+      step.findings.push(...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit: timedAudit }))
       await finish('a', step)
       current = after
 
@@ -522,6 +559,114 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       current = await timedRead()
       persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
       await finish('a', persistStep)
+    }
+
+    // ── (d) テンプレを実際に変えて保存: 生徒を 1 人足す → 講師を替える → 机を消す を 1 回の保存に 1 種類ずつ(所見がどの変更のせいか分かるように)。
+    // 1 回ごとに テンプレ編集を開く → 反映日を来週の月曜 → 机を変える → 保存 → 確認 → 読む → 点検。最後に 保存→読み込み直し。
+    // 変える机・生徒・講師は種つきの乱数(--seed)で選ぶ(tools/ui-patrol/templateEdit.ts)。候補の無い種類は飛ばして注に理由を書く。
+    if (scenarios.includes('d')) {
+      lastScenario = 'd'
+      const random = createSeededRandom((Number(options.seed) || 0) + 0x5d)
+      const usedCellIds = new Set()
+      let editsDone = 0
+      const rosterById = new Map((current.payload?.students ?? []).map((row) => [row.id, row]))
+      const isStudentActiveOnDate = (studentKey, dateKey) => {
+        const row = rosterById.get(studentKey)
+        return row ? app.isActiveOnDate(row.entryDate ?? '', row.withdrawDate ?? '', row.birthDate ?? '', dateKey) : true
+      }
+      const kinds = app.TEMPLATE_EDIT_KINDS ?? ['add-student', 'change-teacher', 'delete-desk']
+      for (const [index, kind] of kinds.entries()) {
+        const step = newStep(`テンプレを変えて保存 ${index + 1}(${TEMPLATE_EDIT_LABELS[kind]}・反映日 ${nextMonday})`)
+        const before = current
+        const target = app.pickTemplateEditTarget({ kind, desks: app.buildTemplateEditorDesks(before.payload, today), facts: before.facts, fromDateKey: nextMonday, random, excludeCellIds: usedCellIds })
+        if (target.skip) {
+          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${target.skip}`)
+          await finish('d', step)
+          continue
+        }
+        const { desk } = target
+        usedCellIds.add(desk.cellId)
+        const anchorDates = [...new Set(target.anchorCellIds.map((cellId) => cellId.split('_')[0]))].sort()
+        const presence = app.collectCellPresence(before.facts, target.anchorCellIds)
+        const position = { cellId: desk.cellId, deskIndex: desk.deskIndex }
+        const defaultDate = await d.openTemplateEditor(session)
+        step.operations += 1
+        step.notes.push(`反映開始日の既定: ${defaultDate}`)
+        // 台本 a を流さずに d だけ流すと、1 回目の保存は先の版の中身も手前の日付で当てる(変わった机にその分も混ざる)。読む人が取り違えないよう注を出す。
+        if (defaultDate && defaultDate > nextMonday) step.notes.push(`保存済みのテンプレ(反映日 ${defaultDate})を手前の日付で当てています(${nextMonday} 以降に、その版の中身も当たる)。`)
+        await d.setTemplateStartDate(session, nextMonday)
+        step.operations += 1
+        let edit = null
+        let studentName = ''
+        if (kind === 'add-student') {
+          const inTemplateCell = new Set()
+          for (const other of app.buildTemplateEditorDesks(before.payload, today)) {
+            if (other.cellId !== desk.cellId) continue
+            for (const entry of other.students) if (entry) inTemplateCell.add(entry.studentId)
+          }
+          const { studentId } = await d.templateAddStudent(session, { ...position, seat: target.seat }, (choices) => app.pickTemplateEditOption({
+            options: choices, exclude: inTemplateCell, random,
+            prefer: (value) => !presence.studentKeys.has(value) && anchorDates.every((dateKey) => isStudentActiveOnDate(value, dateKey)),
+          }))
+          if (studentId) {
+            edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, seat: target.seat, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: [studentId], anchorCellIds: target.anchorCellIds }
+            const row = rosterById.get(studentId)
+            studentName = row ? (row.displayName || row.name || '') : ''
+          }
+        } else if (kind === 'change-teacher') {
+          const { teacher } = await d.templateChangeTeacher(session, position, (choices) => app.pickTemplateEditOption({
+            options: choices, exclude: new Set([desk.teacher]), random, prefer: (value) => !presence.teachers.has(value),
+          }))
+          if (teacher) {
+            edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, newTeacher: teacher, newTeacherId: app.resolveTeacherIdByDisplayName(before.payload?.teachers, teacher), studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
+          }
+        } else {
+          await d.templateDeleteDesk(session, { ...position, seats: [0, 1].filter((seat) => desk.students[seat] !== null) })
+          edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
+        }
+        if (!edit) {
+          // 選べる生徒・講師が画面に無かった。テンプレ編集を保存せずに閉じる。
+          await d.closeTemplateEditor(session)
+          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${describeTemplateDesk(desk)} で選べる${kind === 'add-student' ? '生徒' : '講師'}が画面にありません。`)
+          await finish('d', step)
+          continue
+        }
+        step.operations += 1
+        editsDone += 1
+        step.notes.push(describeTemplateEdit(edit, desk, { studentName, anchorDates }))
+        const { confirmMessage, detailText } = await d.requestTemplateSave(session)
+        step.operations += 1
+        step.notes.push(`確認の画面: ${confirmMessage}`)
+        if (detailText) {
+          const lines = detailText.split('\n').map((line) => line.trim()).filter(Boolean)
+          step.notes.push(`確認の画面の詳細(${lines.length} 行): ${lines.slice(0, 12).join(' / ')}${lines.length > 12 ? ' / …' : ''}`)
+        } else step.notes.push('確認の画面の詳細: なし')
+        await d.confirmTemplateSave(session)
+        step.operations += 1
+        const after = await timedRead()
+        step.diff = { before: before.facts, after: after.facts }
+        step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`)
+        step.findings.push(
+          ...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit: timedAudit, allowed: buildTemplateEditAllowedChange(nextMonday) }),
+          ...app.checkTemplateEditSaved(after.payload?.classroomSettings?.regularLessonTemplate, edit),
+          ...app.checkTemplateEditApplied(before.facts, after.facts, edit, { isStudentActiveOnDate }),
+        )
+        await finish('d', step)
+        current = after
+      }
+      // 3 種類とも 1 度もできなければ、中身が無いまま緑になる。台本 d を指定しているなら中断(台本 b と同じ扱い)。
+      if (editsDone === 0) throw new PatrolAbortError('台本 d でテンプレの変更が 1 回もできませんでした(候補の机・生徒・講師が無い)。')
+
+      const persistStep = newStep('テンプレを変えて保存のあと 保存→読み込み直し')
+      if (await d.clickSave(session)) persistStep.operations += 1
+      else persistStep.notes.push('保存ボタンは既に clean で押せませんでした。')
+      const saved = await timedRead()
+      persistStep.findings.push(...sameState(current, saved, 'save-changed'))
+      await d.reloadApp(session)
+      persistStep.operations += 1
+      current = await timedRead()
+      persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
+      await finish('d', persistStep)
     }
   } catch (error) {
     const file = await shoot(`${lastScenario}-aborted`)

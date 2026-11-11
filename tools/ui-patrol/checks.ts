@@ -20,6 +20,9 @@ export const PATROL_FINDING_CODES = [
   'teacherless-student-by-template',
   // 室長が講師を消した机(講師の削除記録)にテンプレの生徒が置かれた。仕様どおり(オーナー決定 2026-11-11・Issue #85・spec-template-conflict-v2)なので info。
   'teacherless-student-at-deleted-teacher-desk',
+  // 台本 d(テンプレを実際に変えて保存・2026-11-11 第 2 段): 変えたテンプレの机で起きるはずの変化が盤面に起きない(stop)／
+  // 保存したテンプレにその変更が入っていない(stop)／§2 の規則(手入力・出欠記録・講師の休みが勝つ・在籍していない日)で置かれない(info)。
+  'template-edit-not-applied', 'template-edit-not-saved', 'template-edit-held-by-rule',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -422,12 +425,22 @@ export function parsePendingCountFromConfirm(message: string): number | null {
   return match ? Number(match[1]) : null
 }
 
+/**
+ * 確認の画面の「保留 n机」と、保存で実際にできた保留の数が合うか。
+ * ★n は「保存のあと保留になっている、反映した範囲の机」の数(templateDiffApply.ts の summary.pending は、新しく作った保留と、前からの保留を
+ *   保存し直した机の両方で 1 ずつ増える)。前から保留がある盤面では「増えた数」と一致しない(台本 d・2026-11-11: 前に 30 机・確認 28 机・
+ *   保存のあと 28 机〔2 机が 1 行に戻った〕)。そこで「増えた数 ≦ n ≦ 保存のあとの保留の総数」を見る。前に保留が無ければ両端が同じ数になり、
+ *   今までどおり「増えた数＝n」を求める。
+ */
 export function checkPendingCountMatchesPreview(before: BoardFacts, after: BoardFacts, confirmMessage: string): PatrolFinding[] {
   const expected = parsePendingCountFromConfirm(confirmMessage)
   if (expected === null) return []
-  const actual = after.pendingDeskCount - before.pendingDeskCount
-  if (actual === expected) return []
-  return [{ level: 'stop', code: 'pending-count-mismatch', message: `確認の画面の保留の数と実際に増えた保留の数が違う: 確認の画面 ${expected} 机・実際 ${actual} 机` }]
+  const increase = after.pendingDeskCount - before.pendingDeskCount
+  if (increase <= expected && expected <= after.pendingDeskCount) return []
+  return [{
+    level: 'stop', code: 'pending-count-mismatch',
+    message: `確認の画面の保留の数と実際の保留の数が合わない: 確認の画面 ${expected} 机・実際に増えた ${increase} 机・保存のあとの保留 ${after.pendingDeskCount} 机`,
+  }]
 }
 
 export function summarizeChanges(before: BoardFacts, after: BoardFacts): PatrolFinding[] {
@@ -464,4 +477,130 @@ export function applyKnownIssues(findings: PatrolFinding[], known: KnownPatrolIs
     return true
   })
   return { findings: kept, knownCount }
+}
+
+/**
+ * 台本 d が変えたテンプレの机 1 つ(tools/ui-patrol/templateEdit.ts の pickTemplateEditTarget で選び、画面で変えたもの)。
+ * teacher/newTeacher は講師の表示名(盤面の講師欄と同じ)、studentKeys は生徒のキー(managedStudentId)。
+ * anchorCellIds は確かめる日(反映日以降で、盤面に前の版のその机が当たっていたコマ・templateEdit.ts の findTemplateDeskAnchorCells)。
+ */
+export type TemplateEdit = {
+  kind: 'add-student' | 'change-teacher' | 'delete-desk'
+  dayOfWeek: number
+  slotNumber: number
+  /** 0 始まり(テンプレの deskIndex - 1)。 */
+  deskIndex: number
+  /** 生徒を足した席(add-student)。 */
+  seat?: number
+  teacher: string
+  teacherId: string
+  newTeacher?: string
+  newTeacherId?: string
+  /** add-student: 足した生徒 1 人／delete-desk: 消した机の生徒／change-teacher: 机の生徒(確かめには使わない)。 */
+  studentKeys: string[]
+  anchorCellIds: string[]
+}
+
+/**
+ * 変えたテンプレの机で、起きるはずの変化が確かめる日のコマに起きたか(spec-template-conflict-v2 §2)。
+ * - 生徒を足す: 足した生徒がそのコマ(上段か保留の下段)に居る。居なくても、そのコマにその生徒の出欠記録がある(§2-4 記録が勝つ)・
+ *   在籍していない日(options.isStudentActiveOnDate)は info。手入力の同じ生徒が先にある(§2-2)はコマに居るので所見にならない。
+ * - 講師を替える: 新しい講師がそのコマ(講師欄か保留の下段)に居る。居なくても、そのコマに新しい講師の休みの記録がある(§2-4)なら info。
+ *   前の講師がテンプレ由来のまま残っていたら stop(前の講師はテンプレのそのコマに居なくなった。手置き〔青字〕で残るのは手入力なので見ない)。
+ * - 机を消す: 消した机の講師・生徒が、そのコマにテンプレ由来で残っていたら stop(手入力で残るのは見ない)。
+ * 規則で説明できない「反映されていない」だけを stop にする。日ごと・机ごとに 1 件(20 件まで＋「ほか n 机」)。
+ */
+export function checkTemplateEditApplied(before: BoardFacts, after: BoardFacts, edit: TemplateEdit, options: { isStudentActiveOnDate?: (studentKey: string, dateKey: string) => boolean } = {}): PatrolFinding[] {
+  const anchors = new Set(edit.anchorCellIds)
+  const desksOf = (facts: BoardFacts) => {
+    const map = new Map<string, DeskFact[]>()
+    for (const desk of facts.desks.values()) {
+      if (!anchors.has(desk.cellId)) continue
+      const list = map.get(desk.cellId) ?? []
+      list.push(desk)
+      map.set(desk.cellId, list)
+    }
+    return map
+  }
+  const beforeByCell = desksOf(before)
+  const afterByCell = desksOf(after)
+  const stops: PatrolFinding[] = []
+  const infos: PatrolFinding[] = []
+  const label = '変えたテンプレの机が盤面に反映されていない'
+  const where = (cellDesks: DeskFact[], cellId: string) => {
+    const [dateKey = '', slotText = ''] = cellId.split('_')
+    const slotNumber = cellDesks[0]?.slotNumber ?? Number(slotText)
+    return { text: formatPlace(dateKey, slotNumber), location: { dateKey, slotNumber } }
+  }
+  for (const cellId of [...anchors].sort()) {
+    const beforeDesks = beforeByCell.get(cellId) ?? []
+    const afterDesks = afterByCell.get(cellId) ?? []
+    const place = where(afterDesks.length > 0 ? afterDesks : beforeDesks, cellId)
+    if (edit.kind === 'add-student') {
+      const key = edit.studentKeys[0] ?? ''
+      if (!key) continue
+      const present = afterDesks.some((desk) => [...desk.students, ...desk.pendingStudents].some((student) => student?.key === key))
+      if (present) continue
+      const hasStatus = [...beforeDesks, ...afterDesks].some((desk) => [...desk.statuses, ...desk.pendingStatuses].some((status) => status.split('|')[0] === key))
+      const inactive = options.isStudentActiveOnDate ? !options.isStudentActiveOnDate(key, place.location.dateKey) : false
+      if (hasStatus || inactive) {
+        infos.push({
+          level: 'info', code: 'template-edit-held-by-rule',
+          message: `テンプレに足した生徒を規則どおり置かなかった(${hasStatus ? 'その生徒の出欠記録が先にある・§2-4' : '在籍していない日'}): ${place.text} ${studentIdText(key)}`,
+          ...place.location, studentId: key,
+        })
+        continue
+      }
+      stops.push({ level: 'stop', code: 'template-edit-not-applied', message: `${label}: テンプレに足した生徒がいない ${place.text} ${studentIdText(key)}`, ...place.location, studentId: key })
+      continue
+    }
+    if (edit.kind === 'change-teacher') {
+      const next = edit.newTeacher ?? ''
+      const present = next !== '' && afterDesks.some((desk) => desk.teacher === next || desk.pendingTeacher === next)
+      if (!present && next !== '') {
+        const rested = [...beforeDesks, ...afterDesks].some((desk) => desk.teacherRestName === next)
+        if (rested) infos.push({ level: 'info', code: 'template-edit-held-by-rule', message: `テンプレで替えた講師を規則どおり置かなかった(その講師の休みが先にある・§2-4): ${place.text} ${next}`, ...place.location })
+        else stops.push({ level: 'stop', code: 'template-edit-not-applied', message: `${label}: テンプレで替えた講師 ${next} がいない ${place.text}`, ...place.location })
+      }
+    }
+    // 講師を替える・机を消す: 前の講師と消した机の生徒は、テンプレのそのコマに居なくなった。テンプレ由来のまま残っていたら「変」。
+    for (const desk of afterDesks) {
+      if (edit.teacher && desk.teacher === edit.teacher && desk.teacherOrigin === 'template') {
+        stops.push({ level: 'stop', code: 'template-edit-not-applied', message: `${label}: テンプレから外した講師 ${edit.teacher} がテンプレのまま残った ${placeOf(desk)}`, ...locationOf(desk) })
+      }
+      if (edit.kind !== 'delete-desk') continue
+      for (const student of desk.students) {
+        if (student && student.origin === 'template' && edit.studentKeys.includes(student.key)) {
+          stops.push({ level: 'stop', code: 'template-edit-not-applied', message: `${label}: テンプレで消した机の生徒がテンプレのまま残った ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`, ...locationOf(desk), studentId: student.key })
+        }
+      }
+    }
+  }
+  return [...limitDeskFindings(stops, 'stop', 'template-edit-not-applied', label), ...limitDeskFindings(infos, 'info', 'template-edit-held-by-rule', 'テンプレの変更を規則どおり置かなかった')]
+}
+
+/**
+ * 保存したテンプレ(教室設定の regularLessonTemplate)に、画面で変えた内容が入っているか。入っていなければ stop(室長が変えたのに保存されていない)。
+ * 生徒を足す＝その席にその生徒／講師を替える＝その机の講師が新しい講師の ID／机を消す＝その机に講師も生徒もいない(机ごと無いのも「消えた」)。
+ */
+export function checkTemplateEditSaved(template: unknown, edit: TemplateEdit): PatrolFinding[] {
+  type SavedDesk = { deskIndex?: number; teacherId?: string; students?: Array<{ studentId?: string } | null> }
+  type SavedCell = { dayOfWeek?: number; slotNumber?: number; desks?: SavedDesk[] }
+  const record = (template && typeof template === 'object' ? template : null) as { cells?: SavedCell[] } | null
+  const fail = (what: string): PatrolFinding[] => [{
+    level: 'stop', code: 'template-edit-not-saved',
+    message: `画面で変えたテンプレが保存されていない(${what}): ${WEEKDAY_LABELS[edit.dayOfWeek] ?? '?'}曜 ${edit.slotNumber}限 机${edit.deskIndex + 1}`,
+  }]
+  if (!record || !Array.isArray(record.cells)) return fail('テンプレが無い')
+  const cell = record.cells.find((item) => item?.dayOfWeek === edit.dayOfWeek && item?.slotNumber === edit.slotNumber)
+  const desk = (Array.isArray(cell?.desks) ? cell!.desks : []).find((item) => item?.deskIndex === edit.deskIndex + 1)
+  const students = Array.isArray(desk?.students) ? desk!.students : []
+  if (edit.kind === 'add-student') {
+    return students[edit.seat ?? 0]?.studentId === edit.studentKeys[0] ? [] : fail(`足した生徒 ${studentIdText(edit.studentKeys[0] ?? '')} が席に無い`)
+  }
+  if (edit.kind === 'change-teacher') {
+    return desk?.teacherId === edit.newTeacherId ? [] : fail(`講師が ${edit.newTeacher ?? ''} になっていない`)
+  }
+  const empty = !desk || (!desk.teacherId && students.every((student) => !student?.studentId))
+  return empty ? [] : fail('講師か生徒が残っている')
 }

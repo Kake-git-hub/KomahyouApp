@@ -5,7 +5,7 @@
 //   待ちが時間切れになったら PatrolAbortError を投げる(台本が画面写真を撮って教室を「中断」にする。所見にはしない)。
 // ★Playwright は package.json に入れない(この環境の全体の node_modules から読む)。読めなければ loadPlaywright() が null を返す。
 import { createRequire } from 'node:module'
-import { DRIVER_TIMING, TESTIDS, byTestId, studentCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, TESTIDS, byTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 export class PatrolAbortError extends Error {
   constructor(message) {
@@ -344,6 +344,119 @@ export async function confirmTemplateSave(session) {
   await page.locator(byTestId(TESTIDS.templateConfirmExecute)).click()
   await withTimeout(page.locator(byTestId(TESTIDS.openTemplate)).waitFor({ state: 'visible', timeout: TEMPLATE_SAVE_TIMEOUT_MS }), 'テンプレ保存が終わりませんでした(テンプレ編集が閉じない)。')
   await withTimeout(page.locator(byTestId(TESTIDS.templateConfirmModal)).waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS }), 'テンプレ保存の確認の画面が閉じませんでした。')
+}
+
+// ── 台本 d(テンプレを実際に変えて保存): テンプレ作成の画面で机を変える。室長と同じく、席・講師欄を押してメニューから選ぶ
+// (ScheduleBoardScreen.tsx の handleTemplateStudentClick / handleTemplateSelectDesk → 空欄メニューの「既存生徒追加」・生徒メニューの「削除」・
+// 講師メニューの「保存」「講師削除」)。選ぶ生徒・講師は、画面のプルダウンの選択肢を choose(options) に渡して台本が決める(種つきの乱数)。
+// 変えたあとに画面の席・講師欄の文字で効いたことを確かめ、効かなければ中断する(台本が画面に合っていない)。
+
+async function waitVisible(locator, message) {
+  await withTimeout(locator.waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS }), message)
+}
+
+async function waitHidden(locator, message) {
+  await withTimeout(locator.waitFor({ state: 'hidden', timeout: UI_TIMEOUT_MS }), message)
+}
+
+async function readSelectOptions(select) {
+  return select.locator('option').evaluateAll((nodes) => nodes.map((node) => ({ value: node.value, label: node.textContent ?? '' })))
+}
+
+const describeTemplatePosition = ({ cellId, deskIndex, seat }) => `${cellId} 机${deskIndex + 1}${seat === undefined ? '' : ` 席${seat + 1}`}`
+
+async function closeMenu(menu) {
+  await menu.locator('.student-menu-close').first().click()
+  await waitHidden(menu, 'メニューが閉じませんでした。')
+}
+
+async function cellText(session, testId) {
+  return ((await session.page.locator(byTestId(testId)).innerText().catch(() => '')) ?? '').trim()
+}
+
+/** 空いた席を押す → 「既存生徒追加」→ 生徒を選ぶ → 「追加」。choose が null を返したらメニューを閉じて { studentId: null }。 */
+export async function templateAddStudent(session, position, choose) {
+  const { page } = session
+  const seatCell = page.locator(byTestId(studentCellTestId(position)))
+  await waitVisible(seatCell, `テンプレの席 ${describeTemplatePosition(position)} が画面にありません。`)
+  await seatCell.click()
+  const menu = page.locator(byTestId(TESTIDS.studentMenu))
+  await waitVisible(menu, `テンプレの席 ${describeTemplatePosition(position)} の空欄メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  await menu.locator(byTestId(TESTIDS.menuOpenAdd)).click()
+  const select = page.locator(byTestId(SEARCHABLE_SELECT_TESTIDS.templateAddStudent))
+  await waitVisible(select, `生徒を選ぶ欄が出ませんでした(ステータス: ${await readStatusText(session)})。`)
+  const studentId = choose(await readSelectOptions(select))
+  if (!studentId) {
+    await closeMenu(menu)
+    return { studentId: null }
+  }
+  await select.selectOption(studentId)
+  await menu.locator(byTestId(TESTIDS.menuAddConfirm)).click()
+  await waitHidden(menu, `生徒を足したあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  if (!(await cellText(session, studentNameTestId(position)))) {
+    throw new PatrolAbortError(`テンプレの席 ${describeTemplatePosition(position)} に足した生徒が画面に出ません(ステータス: ${await readStatusText(session)})。`)
+  }
+  return { studentId }
+}
+
+/** 講師欄を押す → 講師を選ぶ → 「保存」。choose が null を返したらメニューを閉じて { teacher: null }。 */
+export async function templateChangeTeacher(session, position, choose) {
+  const { page } = session
+  const teacherCell = page.locator(byTestId(teacherCellTestId(position)))
+  await waitVisible(teacherCell, `テンプレの講師欄 ${describeTemplatePosition(position)} が画面にありません。`)
+  await teacherCell.click()
+  const menu = page.locator(byTestId(TESTIDS.teacherMenu))
+  await waitVisible(menu, `テンプレの講師欄 ${describeTemplatePosition(position)} の講師メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const select = page.locator(byTestId(SEARCHABLE_SELECT_TESTIDS.teacherSelect))
+  await waitVisible(select, '講師を選ぶ欄が出ませんでした。')
+  const teacher = choose(await readSelectOptions(select))
+  if (!teacher) {
+    await closeMenu(menu)
+    return { teacher: null }
+  }
+  await select.selectOption(teacher)
+  await menu.locator(byTestId(TESTIDS.teacherConfirm)).click()
+  await waitHidden(menu, `講師を替えたあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  if (!(await cellText(session, teacherCellTestId(position))).includes(teacher)) {
+    throw new PatrolAbortError(`テンプレの講師欄 ${describeTemplatePosition(position)} が選んだ講師になりません(ステータス: ${await readStatusText(session)})。`)
+  }
+  return { teacher }
+}
+
+/** 机の生徒を 1 人ずつ「削除」→ 講師欄の「講師削除」。seats は生徒のいる席。 */
+export async function templateDeleteDesk(session, { cellId, deskIndex, seats }) {
+  const { page } = session
+  const menu = page.locator(byTestId(TESTIDS.studentMenu))
+  for (const seat of seats) {
+    const position = { cellId, deskIndex, seat }
+    const seatCell = page.locator(byTestId(studentCellTestId(position)))
+    await waitVisible(seatCell, `テンプレの席 ${describeTemplatePosition(position)} が画面にありません。`)
+    await seatCell.click()
+    await waitVisible(menu, `テンプレの席 ${describeTemplatePosition(position)} の生徒メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+    await menu.locator(byTestId(TESTIDS.menuDelete)).click()
+    await waitHidden(menu, `生徒を消したあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+    if (await cellText(session, studentNameTestId(position))) {
+      throw new PatrolAbortError(`テンプレの席 ${describeTemplatePosition(position)} の生徒が消えません(ステータス: ${await readStatusText(session)})。`)
+    }
+  }
+  const position = { cellId, deskIndex }
+  const teacherCell = page.locator(byTestId(teacherCellTestId(position)))
+  await waitVisible(teacherCell, `テンプレの講師欄 ${describeTemplatePosition(position)} が画面にありません。`)
+  await teacherCell.click()
+  const teacherMenu = page.locator(byTestId(TESTIDS.teacherMenu))
+  await waitVisible(teacherMenu, `テンプレの講師欄 ${describeTemplatePosition(position)} の講師メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  await teacherMenu.locator(byTestId(TESTIDS.teacherDelete)).click()
+  await waitHidden(teacherMenu, `講師を消したあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  if (await cellText(session, teacherCellTestId(position))) {
+    throw new PatrolAbortError(`テンプレの講師欄 ${describeTemplatePosition(position)} の講師が消えません(ステータス: ${await readStatusText(session)})。`)
+  }
+}
+
+/** テンプレ編集を保存せずに閉じる(「コマ表に戻る」)。盤面のテンプレ作成ボタンが戻るのを待つ。 */
+export async function closeTemplateEditor(session) {
+  const { page } = session
+  await page.locator(byTestId(TESTIDS.templateClose)).click()
+  await withTimeout(page.locator(byTestId(TESTIDS.openTemplate)).waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS }), 'テンプレ編集が閉じませんでした(コマ表に戻る)。')
 }
 
 export async function takeScreenshot(session, file) {

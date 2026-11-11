@@ -2,5 +2,7 @@
 export * from './anonymize'
 export * from './boardFacts'
 export * from './checks'
+export * from './templateEdit'
+export { isActiveOnDate } from '../../src/components/basic-data/basicDataModel'
 export { auditClassroomSnapshot } from '../invAuditEntry'
 export { resolveNextMondayDateKey } from '../../src/components/schedule-board/templateDefinitionDiff'

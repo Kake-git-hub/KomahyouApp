@@ -11,7 +11,7 @@ type: project
 
 **決定(オーナー回答 2026-11-11)**: データは毎回の最新だけ(過去は `--key`)／台本は標準(移動 6 か所)／マージ前に回して「変」が出たら止める／毎朝の健診には入れない。
 
-**回し方**: `node tools/ui-patrol.mjs --out <スクラッチ領域>/…`(約 3 分半・終了コード 0/1/2・手順 docs/runbooks/ui-patrol.md・設計 docs/test-strategy.md 層 5)。
+**回し方**: `node tools/ui-patrol.mjs --out <スクラッチ領域>/…`(約 6 分〔台本 d を足す前は約 4 分〕・終了コード 0/1/2・手順 docs/runbooks/ui-patrol.md・設計 docs/test-strategy.md 層 5)。
 盤面のロジック・画面・テンプレ・保存/読み込みを変えたら回す(safe-release のチェックリスト)。
 
 **作り**
@@ -21,7 +21,11 @@ type: project
 - 入れ方: **アプリを開く前に**、同じオリジンの空ページから `saveWorkspaceSnapshot`(アプリ自身の関数)で IndexedDB へ。室長でログイン済みの種データ(`seed.mjs`)。
 - 読み口: `window.__komahyouUiPatrol.readClassroom()`(`src/utils/uiPatrolHook.ts`・開発用ビルド かつ ローカルモードだけ)。本番ビルドの番人 `tools/check-dist-dev-hooks.mjs`。
 - 点検(`boardFacts.ts`・`checks.ts`): 盤面の「意味」(本物の講師・生徒・出自・出欠記録・メモ・保留の下段)で比べる。出自・講師なしはアプリの権威関数。
-- 台本(`scenarios.mjs`): 起動 → c 保存→読み込み直し → b 生徒の移動(長押しドラッグ・元に戻す・やり直し) → a テンプレを何も変えずに保存(反映日=来週の月曜)。`--random n` はでたらめ操作(試験的)。
+- 台本(`scenarios.mjs`): 起動 → c 保存→読み込み直し → b 生徒の移動(長押しドラッグ・元に戻す・やり直し) → a テンプレを何も変えずに保存(反映日=来週の月曜)
+  → d テンプレを実際に変えて保存(第 2 段・2026-11-11。生徒を 1 人足す → 講師を替える → 机を消す を 1 回の保存に 1 種類ずつ・別々のコマ・最後に保存→読み込み直し)。`--random n` はでたらめ操作(試験的)。
+- 台本 d の候補選びは `tools/ui-patrol/templateEdit.ts`(テンプレ作成の画面と同じ机を `resolveTemplateDiffBaseline` で作る・盤面で前の版のその机が当たり手入力の無い机だけ・
+  生徒と講師は画面のプルダウンの選択肢から `--seed` の種で選ぶ)。点検は `checks.ts` の `checkTemplateEditApplied`(起きるはずの変化・規則で置かれない日は知らせるだけ)と
+  `checkTemplateEditSaved`(保存したテンプレに変更が入っているか)。テンプレ保存の点検の組み合わせは a と d で `collectTemplateSaveFindings` 1 つ。
 
 **踏んだ罠(次に触るとき用)**
 - ローカルモードは `navigator.webdriver` が true だと保存を止める(`App.tsx` の `isSnapshotPersistenceRuntimeEnabled`・旧 E2E の名残)。起動引数 `--disable-blink-features=AutomationControlled` で隠す。
@@ -33,6 +37,14 @@ type: project
 - `teacherAssignmentTeacherId` には ID でなく講師の名前が入っている机が約 2,100 ある。名簿から外れた講師の ID も残っている。
 - Playwright は `createRequire(import.meta.url)('playwright')`(`/opt/node-tools/node_modules`・`package.json` に足さない)。Chromium は環境変数の proxy を使いうるので `--no-proxy-server`。
 - Ctrl+C: 子の vite は別プロセスグループ。Playwright の既定のシグナル処理を切り、自前で片づけて 130。
+- (台本 d・2026-11-11) テンプレ作成の画面の生徒・講師のプルダウンは `SearchableSelect`(testId の prop で `<select>` に data-testid)。ソースには `testId="…"` の字面で残るので、
+  `selectors.mjs` の `SEARCHABLE_SELECT_TESTIDS` と `selectors.test.mjs` で別に見張る。テンプレの机の `deskIndex` は 1 始まり・画面の机は 0 始まり。
+- (台本 d) 確認の画面の「保留 n机」は「保存のあと保留の、反映した範囲の机」(作った保留＋保存し直した保留・`summary.pending`)で、増えた数ではない。前から保留のある盤面で
+  「増えた数＝n」と見て誤報した(日大前の形: 前 30・確認 28・後 28)。点検は「増えた数 ≦ n ≦ 保存のあとの総数」。
+- (台本 d) テンプレ保存の反映(第 2 版)の本体は `templateConflictRules.ts` の `computeTemplateDiffApply`(`ScheduleBoardScreen.tsx` の `runTemplateDiffApplyV2`)。
+  `templateDiffApply.ts` の `stripUnmarkedRegularStudents`・`resolveTemplateDeskTeacher` を 1 行壊しても巡回の盤面は変わらなかった。講師の置き場は保存後の読み直し(再マージ)が
+  通常授業の行から作り直すので、反映の途中の講師の選び方を壊しても室長に見える不具合にならない。「わざと壊す」は盤面に出る所(手入力の拾い上げ・画面の追加)で行う。
+- (台本 d) d だけ流すと(`--scenario d`)1 回目の保存で先の版(反映日が来週より先)の中身も当たり、変わった机にその分が混ざる(注に出る)。ふだんは a のあと。
 
 **効くことの確かめ**: 緑が丘 11/10 朝の形(`--key 2026-11-10T03-00`)・台本 a・反映日 11/16。修正前(v1.5.714)= 止める所見 29(うち「手入力の生徒の講師が変わった」8)。今のコード= その所見 0。
 戻し方は `git checkout 7014a07a -- src/components/schedule-board/{ScheduleBoardScreen.tsx,templateDeskOrderRestore.ts,templateDiffApply.ts,templateTransferFollow.ts,checklistPrep.ts}` → 流す → `git checkout HEAD -- …`。
@@ -55,7 +67,10 @@ type: project
 - 同じ種データでないと比べない(報告に種データの指紋)。依存(`package-lock.json`)が違う ref・読み口の無い版(v1.5.718 より前)は断る(2)。2 つ同時には流せない(ポートと `node_modules` を共用)。
 - ふだんは比べずに回し、「変」が出たら `--baseline-ref origin/main --seed-file …` で流し直す(手で `git stash` して比べない)。
 
+**台本 d が効くこと(2026-11-11)**: 緑が丘の形・`--scenario d`・壊す前の報告と `--baseline` で比べた(どれも戻した)。手入力の生徒を拾わない(`templateConflictRules.ts` の `collectManualSeatItems`)=`[変・新]` 79 件・終了コード 1。
+画面で足した生徒の `managedStudentId` を空にする(`handleTemplateConfirmAdd`)=「保存されていない」1＋「盤面に反映されていない」9・終了コード 1。今のコードの本番 2 校(11/11 18:45)は止める所見 0・全体 5 分 50 秒。
+
 **次のセッションへの引き継ぎ(2026-11-11 オーナー回答)**: 第 2 段の残りは推奨順(台本 → 事故の日の形 → でたらめ操作 → 毎晩)。手順は `docs/plan-2026-11-11-ui-patrol-stage2-handoff.md`。休みの講師を同じコマへ手で置いたら休みをコマ全体で解除する(案 1)は v1.5.723 で済み(spec-template-conflict-v2 §9-25)。
 
-**第 2 段の残り(台帳 `ui-patrol-stage2`)**: 台本を足す(出欠・講師の移動・丸ごと振替・休日設定・講習の自動割振・テンプレを実際に変えて保存)／でたらめ操作を既定に／毎晩の自動実行／過去の事故の日の形の一覧。
+**第 2 段の残り(台帳 `ui-patrol-stage2`)**: 台本を足す(出欠・講師の移動・丸ごと振替・休日設定・講習の自動割振。テンプレを実際に変えて保存=台本 d は済み)／でたらめ操作を既定に／毎晩の自動実行／過去の事故の日の形の一覧。
 カード 1(テンプレ保存前の自己点検)が同じ数え方を使うときは `tools/ui-patrol/boardFacts.ts` を `src/` へ移して共有する。

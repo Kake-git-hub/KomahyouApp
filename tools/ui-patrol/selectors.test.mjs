@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { DRIVER_TIMING, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, studentCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -20,6 +20,19 @@ describe('selectors', () => {
     expect(missing).toEqual([])
     const missingPrefixes = Object.entries(TESTID_PREFIXES).filter(([, value]) => !source.includes(`data-testid={\`${value}`)).map(([key, value]) => `${key}=${value}`)
     expect(missingPrefixes).toEqual([])
+    // 虫眼鏡つきのプルダウン(SearchableSelect)は testId の prop で <select> に data-testid を付ける(台本 d が生徒・講師を選ぶ)。
+    const missingSelects = Object.entries(SEARCHABLE_SELECT_TESTIDS).filter(([, value]) => !source.includes(`testId="${value}"`)).map(([key, value]) => `${key}=${value}`)
+    expect(missingSelects).toEqual([])
+    const select = readFileSync(path.join(REPO_ROOT, 'src/components/common/SearchableSelect.tsx'), 'utf8')
+    expect(select).toContain('data-testid={testId}')
+  })
+
+  it('台本 d(テンプレを変えて保存)が使う講師欄・生徒名の testid の並びがアプリと同じ', () => {
+    const grid = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardGrid.tsx'), 'utf8')
+    expect(grid).toMatch(/data-testid=\{`teacher-cell-\$\{cell\.id\}-\$\{deskIndex\}`\}/)
+    expect(grid).toMatch(/data-testid=\{`student-name-\$\{cell\.id\}-\$\{deskIndex\}-\$\{studentIndex\}`\}/)
+    expect(teacherCellTestId({ cellId: 'template_2_1', deskIndex: 3 })).toBe('teacher-cell-template_2_1-3')
+    expect(studentNameTestId({ cellId: 'template_2_1', deskIndex: 3, seat: 1 })).toBe('student-name-template_2_1-3-1')
   })
 
   it('接頭辞の後ろの並び(席は {cellId}-{deskIndex}-{studentIndex}・週の日は {dateKey})がアプリのテンプレート文字列と同じ', () => {

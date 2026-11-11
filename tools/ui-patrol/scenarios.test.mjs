@@ -3,13 +3,15 @@
 import { describe, it, expect } from 'vitest'
 import { collectBoardFacts } from './boardFacts.ts'
 import {
-  MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, collectTemplateTeacherlessKeys,
+  MOVE_ALLOWED_SECTIONS, MOVE_DISPLACED_STATUS_SECTIONS, MOVE_KINDS, TEMPLATE_EDIT_ALLOWED_SECTIONS, TEMPLATE_SAVE_ALLOWED_SECTIONS, buildMoveAllowedChange, buildTemplateEditAllowedChange, collectTemplateTeacherlessKeys,
   createSeededRandom, pickMoveCandidates, runClassroomPatrol, weekStartsFrom,
 } from './scenarios.mjs'
 import { BOARD_FACT_SECTIONS } from './boardFacts.ts'
 import * as boardFactsModule from './boardFacts.ts'
 import * as checksModule from './checks.ts'
 import { resolveNextMondayDateKey } from '../../src/components/schedule-board/templateDefinitionDiff.ts'
+import * as templateEditModule from './templateEdit.ts'
+import { isActiveOnDate } from '../../src/components/basic-data/basicDataModel.ts'
 
 const WEEK = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']
 const TODAY = '2026-11-17'
@@ -207,6 +209,7 @@ describe('候補の週・テンプレ自体の講師なし', () => {
 const ROOM = 'roomA'
 const PATROL_TODAY = '2026-11-11' // 来週の月曜は 11/16
 const app = { ...boardFactsModule, ...checksModule, resolveNextMondayDateKey, auditClassroomSnapshot: () => ({ findings: [] }) }
+const appD = { ...app, ...templateEditModule, isActiveOnDate }
 const clone = (value) => structuredClone(value)
 
 function patrolPayload(cells, settings = {}) {
@@ -402,5 +405,152 @@ describe('runClassroomPatrol(台本 a のつなぎ)', () => {
     expect(codes).toContain('info:teacherless-student-by-template')
     expect(step.findings.filter((finding) => finding.level === 'stop').map((finding) => `${finding.code}:${finding.studentId}`)).toEqual(['teacherless-student-added:sU'])
     expect(step.notes.join('\n')).toContain('保存済みのテンプレ(反映日 2027-02-01)を手前の日付で当てています')
+  })
+})
+
+// ── 台本 d(テンプレを実際に変えて保存)のつなぎ。偽のアプリは、画面で変えたテンプレの机を保存で盤面へ当てる(規則は最小限)。
+describe('runClassroomPatrol(台本 d のつなぎ)', () => {
+  const teachersD = [
+    { id: 't1', name: '講師A', displayName: '講師A', entryDate: '', withdrawDate: '', memo: '' },
+    { id: 't2', name: '講師B', displayName: '講師B', entryDate: '', withdrawDate: '', memo: '' },
+    { id: 't3', name: '講師C', displayName: '講師C', entryDate: '', withdrawDate: '', memo: '' },
+    { id: 't4', name: '講師D', displayName: '講師D', entryDate: '', withdrawDate: '', memo: '' },
+  ]
+  const rosterD = ['sA', 'sB', 'sC', 'sD', 'sE'].map((id) => ({ id, name: `生徒${id}`, displayName: `生徒${id}`, entryDate: '', withdrawDate: '', birthDate: '2012-05-01', email: '', memo: '' }))
+  const tplDesk = (deskIndex, teacherId, ids = []) => ({ deskIndex, teacherId, students: [0, 1].map((seat) => (ids[seat] ? { studentId: ids[seat], subject: '数', note: '' } : null)) })
+  const tplStudent = (id, key) => student(id, key, 'regular', { origin: 'template' })
+  /** テンプレ: 火(2) 1限 = 講師A(生徒A)・講師B(生徒B・生徒C)／水(3) 1限 = 講師C(生徒D)／木(4) 1限 = 講師D(生徒E)。盤面は 11/17〜11/26 の火水木。 */
+  function dPayload() {
+    const tuesday = (dateKey) => cell(dateKey, 1, [
+      desk(`${dateKey}-0`, '講師A', [tplStudent(`${dateKey}-a`, 'sA'), null]),
+      desk(`${dateKey}-1`, '講師B', [tplStudent(`${dateKey}-b`, 'sB'), tplStudent(`${dateKey}-c`, 'sC')]),
+      desk(`${dateKey}-2`, ''),
+    ])
+    const wednesday = (dateKey) => cell(dateKey, 1, [desk(`${dateKey}-0`, '講師C', [tplStudent(`${dateKey}-d`, 'sD'), null]), desk(`${dateKey}-1`, '')])
+    const thursday = (dateKey) => cell(dateKey, 1, [desk(`${dateKey}-0`, '講師D', [tplStudent(`${dateKey}-e`, 'sE'), null]), desk(`${dateKey}-1`, '')])
+    const payload = patrolPayload([tuesday('2026-11-17'), wednesday('2026-11-18'), thursday('2026-11-19'), tuesday('2026-11-24'), wednesday('2026-11-25'), thursday('2026-11-26')], {
+      deskCount: 3,
+      regularLessonTemplate: {
+        version: 1, effectiveStartDate: '2026-11-16', savedAt: '',
+        cells: [
+          { dayOfWeek: 2, slotNumber: 1, desks: [tplDesk(1, 't1', ['sA']), tplDesk(2, 't2', ['sB', 'sC'])] },
+          { dayOfWeek: 3, slotNumber: 1, desks: [tplDesk(1, 't3', ['sD'])] },
+          { dayOfWeek: 4, slotNumber: 1, desks: [tplDesk(1, 't4', ['sE'])] },
+        ],
+      },
+    })
+    return { ...payload, teachers: teachersD, students: rosterD }
+  }
+  const nameOf = (teacherId) => teachersD.find((teacher) => teacher.id === teacherId)?.name ?? ''
+  const dayOf = (dateKey) => new Date(`${dateKey}T00:00:00Z`).getUTCDay()
+
+  /** 画面で変えたテンプレの机を、保存で盤面へ当てる偽のアプリ。broken で「当てない」形を作る。 */
+  function applyTemplateEdit(payload, edit, broken = {}) {
+    const [, dow, slot] = edit.cellId.split('_').map(Number)
+    const tplCell = payload.classroomSettings.regularLessonTemplate.cells.find((item) => item.dayOfWeek === dow && item.slotNumber === slot)
+    const tplDeskEntry = tplCell.desks.find((item) => item.deskIndex === edit.deskIndex + 1)
+    const oldTeacher = nameOf(tplDeskEntry.teacherId)
+    if (edit.kind === 'add') tplDeskEntry.students[edit.seat] = { studentId: edit.studentId, subject: '英', note: '' }
+    if (edit.kind === 'teacher') tplDeskEntry.teacherId = teachersD.find((teacher) => teacher.name === edit.teacher).id
+    if (edit.kind === 'delete') { tplDeskEntry.teacherId = ''; tplDeskEntry.students = [null, null] }
+    if (broken[edit.kind]) return payload
+    for (const boardCell of payload.boardState.weeks.flat()) {
+      if (boardCell.slotNumber !== slot || dayOf(boardCell.dateKey) !== dow || boardCell.dateKey < '2026-11-16') continue
+      const target = boardCell.desks.find((item) => item.teacher === oldTeacher)
+      if (!target) continue
+      if (edit.kind === 'add') target.lesson.studentSlots[edit.seat] = tplStudent(`${boardCell.dateKey}-add`, edit.studentId)
+      if (edit.kind === 'teacher') target.teacher = edit.teacher
+      if (edit.kind === 'delete') { target.teacher = ''; target.lesson.studentSlots = [null, null] }
+    }
+    return payload
+  }
+
+  function makeTemplateEditDriver(payload, broken = {}) {
+    const fake = makeFakeDriver(payload, {})
+    const edits = []
+    let pending = null
+    Object.assign(fake.driver, {
+      templateAddStudent: async (_session, position, choose) => {
+        const studentId = choose(rosterD.map((row) => ({ value: row.id, label: row.displayName })))
+        if (studentId) pending = { kind: 'add', ...position, studentId }
+        return { studentId }
+      },
+      templateChangeTeacher: async (_session, position, choose) => {
+        const teacher = choose([{ value: '', label: '' }, ...teachersD.map((row) => ({ value: row.name, label: row.name }))])
+        if (teacher) pending = { kind: 'teacher', ...position, teacher }
+        return { teacher }
+      },
+      templateDeleteDesk: async (_session, position) => { pending = { kind: 'delete', ...position } },
+      closeTemplateEditor: async () => { pending = null },
+      confirmTemplateSave: async () => {
+        if (pending) { edits.push(pending); fake.state.payload = applyTemplateEdit(clone(fake.state.payload), pending, broken) }
+        pending = null
+      },
+    })
+    return { ...fake, edits }
+  }
+
+  async function runD(payload, { broken, seed = 1, scenarios = ['boot', 'd'] } = {}) {
+    const fake = makeTemplateEditDriver(payload, broken)
+    const report = await runClassroomPatrol({
+      session: fake.session, app: appD, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
+      options: { scenarios, moves: 1, seed }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
+    })
+    return { report, fake }
+  }
+
+  it('台本 d の変わってよい範囲: 反映日以降の机・テンプレ保存と同じ部分(在庫・名簿・講習・保留の机に無い部分は入れない)', () => {
+    const allowed = buildTemplateEditAllowedChange('2026-11-16')
+    expect(allowed.fromDateKey).toBe('2026-11-16')
+    expect(allowed.deskKeys).toBeUndefined()
+    expect([...allowed.sections].sort()).toEqual([...TEMPLATE_SAVE_ALLOWED_SECTIONS].sort())
+    expect(TEMPLATE_EDIT_ALLOWED_SECTIONS).toEqual(TEMPLATE_SAVE_ALLOWED_SECTIONS)
+    for (const section of ['students', 'teachers', 'specialSessions', 'boardState.manualLectureStockCounts', 'boardState.templatePendingDesks.unmatched']) expect(allowed.sections.has(section)).toBe(false)
+  })
+
+  it('3 種類を 1 回ずつ保存し(別々のコマ)、何をどこへを仮名と ID で残す。正しく当たれば止める所見 0・最後に保存→読み込み直し', async () => {
+    const { report, fake } = await runD(dPayload())
+    expect(report.aborted).toBeNull()
+    const steps = stepsOf(report, 'd')
+    expect(steps.map((step) => step.title)).toEqual([
+      'テンプレを変えて保存 1(生徒を 1 人足す・反映日 2026-11-16)',
+      'テンプレを変えて保存 2(講師を替える・反映日 2026-11-16)',
+      'テンプレを変えて保存 3(机を消す・反映日 2026-11-16)',
+      'テンプレを変えて保存のあと 保存→読み込み直し',
+    ])
+    expect(fake.edits.map((edit) => edit.kind)).toEqual(['add', 'teacher', 'delete'])
+    // 3 つとも別のコマ(所見が出たとき、どの変更のせいか分かるように)
+    expect(new Set(fake.edits.map((edit) => edit.cellId)).size).toBe(3)
+    for (const step of steps.slice(0, 3)) {
+      expect(step.findings.filter((finding) => finding.level === 'stop')).toEqual([])
+      expect(step.operations).toBe(5)
+    }
+    const addNote = steps[0].notes.join('\n')
+    expect(addNote).toMatch(/生徒を 1 人足す: テンプレ (火|水|木)曜 1限 机\d 席\d ← 生徒s[A-E]\(s[A-E]\)\(講師[A-D]\(t\d\) の机\)/)
+    expect(addNote).toMatch(/確かめる日 2 コマ/)
+    expect(steps[1].notes.join('\n')).toMatch(/講師を替える: テンプレ (火|水|木)曜 1限 机\d 講師[A-D]\(t\d\) → 講師[A-D]\(t\d\)/)
+    expect(steps[2].notes.join('\n')).toMatch(/机を消す: テンプレ (火|水|木)曜 1限 机\d 講師[A-D]\(t\d\)・生徒 s[A-E]/)
+    // 同じ種なら同じ選び方
+    const again = await runD(dPayload())
+    expect(again.fake.edits).toEqual(fake.edits)
+  })
+
+  it('変えたのに盤面へ当たらない(足した生徒を置かない・替えた講師を置かない・消した机が残る)は stop template-edit-not-applied', async () => {
+    const { report } = await runD(dPayload(), { broken: { add: true, teacher: true, delete: true } })
+    expect(report.aborted).toBeNull()
+    const steps = stepsOf(report, 'd').slice(0, 3)
+    expect(steps).toHaveLength(3)
+    for (const step of steps) {
+      expect(step.findings.filter((finding) => finding.level === 'stop').map((finding) => finding.code)).toContain('template-edit-not-applied')
+    }
+  })
+
+  it('候補の無い種類は飛ばして注に理由を書く。3 種類とも 1 度もできなければ中断', async () => {
+    const none = patrolPayload([cell('2026-11-17', 1, [desk('a0', '講師A')])])
+    const { report } = await runD(none)
+    expect(report.aborted).toMatch(/^d: /)
+    expect(report.aborted).toContain('1 回もできませんでした')
+    expect(stepsOf(report, 'd').map((step) => step.notes.join('\n')).join('\n')).toContain('飛ばした')
   })
 })

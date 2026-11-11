@@ -13,6 +13,8 @@ import {
   checkPendingCountMatchesPreview,
   checkSameState,
   checkTeacherlessStudentsNotAdded,
+  checkTemplateEditApplied,
+  checkTemplateEditSaved,
   parseAnnouncedOrphanedMakeupCount,
   parsePendingCountFromConfirm,
   summarizeChanges,
@@ -73,7 +75,11 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('orphaned-makeup-removed-announced')
   expect(PATROL_FINDING_CODES).toContain('teacherless-student-by-template')
   expect(PATROL_FINDING_CODES).toContain('teacherless-student-at-deleted-teacher-desk')
-  expect(PATROL_FINDING_CODES).toHaveLength(22)
+  // 台本 d(テンプレを実際に変えて保存): 起きるはずの変化が起きない(stop)・保存したテンプレに変更が無い(stop)・規則で置かれない(info)
+  expect(PATROL_FINDING_CODES).toContain('template-edit-not-applied')
+  expect(PATROL_FINDING_CODES).toContain('template-edit-not-saved')
+  expect(PATROL_FINDING_CODES).toContain('template-edit-held-by-rule')
+  expect(PATROL_FINDING_CODES).toHaveLength(25)
 })
 
 describe('変わってよい範囲', () => {
@@ -441,6 +447,22 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     expect(checkPendingCountMatchesPreview(withPending(0), withPending(3), '保存しました')).toEqual([])
   })
 
+  it('前から保留がある盤面: 確認の画面の数は「保存のあと保留の机」(作った保留＋保存し直した保留・templateDiffApply.ts の summary.pending)なので、増えた数〜保存のあとの保留の総数の間なら所見なし', () => {
+    // 台本 d(2026-11-11・日大前の形): 前に 30 机の保留・テンプレを変えて保存 → 確認の画面「保留 28机」・保存のあと 28 机(2 机が 1 行に戻った)
+    const withPending = (count) => facts([cell(D, 3, [desk('d1')])], {
+      board: { templatePendingDesks: Object.assign({}, ...Array.from({ length: count }, (_, index) => pending(`d${index}`, { memoSlots: ['メモ', null] }))) },
+    })
+    const message = (count) => `11/16 以降に反映します（置き換え 17机・保留 ${count}机）。`
+    expect(checkPendingCountMatchesPreview(withPending(30), withPending(28), message(28))).toEqual([])
+    expect(checkPendingCountMatchesPreview(withPending(30), withPending(30), message(28))).toEqual([])
+    // 保存のあとの保留の総数より多い数を言った・言った数より多く増えた、は stop
+    expect(codes(checkPendingCountMatchesPreview(withPending(30), withPending(28), message(29)))).toEqual(['stop:pending-count-mismatch'])
+    expect(codes(checkPendingCountMatchesPreview(withPending(2), withPending(5), message(2)))).toEqual(['stop:pending-count-mismatch'])
+    // 前に保留が無い盤面は今までどおり「増えた数＝確認の画面の数」
+    expect(codes(checkPendingCountMatchesPreview(withPending(0), withPending(3), message(4)))).toEqual(['stop:pending-count-mismatch'])
+    expect(checkPendingCountMatchesPreview(withPending(0), withPending(3), message(3))).toEqual([])
+  })
+
   it('既知: 書いた項目がすべて一致する所見だけ外す', () => {
     const findings = [
       { level: 'stop', code: 'manual-student-lost', message: 'a', dateKey: D, slotNumber: 3, studentId: 's1' },
@@ -470,5 +492,86 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     expect(findings[0].message).toContain('講師 1')
     expect(findings[0].message).toContain('生徒 2')
     expect(findings[0].message).toContain('メモ 1')
+  })
+})
+
+describe('テンプレを変えて保存したとき、起きるはずの変化が起きたか(台本 d)', () => {
+  // 11/19(木) 3限 と 11/26(木) 3限 が確かめる日。机 1 は講師A(テンプレ)・生徒A(テンプレ)。
+  const D2 = '2026-11-26'
+  const tplA = (overrides = {}) => student({ origin: 'template', ...overrides })
+  const tplB = (overrides = {}) => studentB({ origin: 'template', ...overrides })
+  const base = (dateKey = D) => cell(dateKey, 3, [desk('d1', [tplA(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' }), desk('d3')])
+  const edit = (overrides) => ({ dayOfWeek: 4, slotNumber: 3, deskIndex: 0, teacher: '講師A', teacherId: 't1', studentKeys: [], anchorCellIds: [C, `${D2}_3`], ...overrides })
+
+  it('生徒を足す: 確かめる日のコマ(上段か保留の下段)に居れば所見なし。居なければ stop(日ごとに 1 件)', () => {
+    const before = facts([base(), base(D2)])
+    const added = (dateKey) => cell(dateKey, 3, [desk('d1', [tplA(), tplB()], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' }), desk('d3')])
+    const addEdit = edit({ kind: 'add-student', seat: 1, studentKeys: ['s2'] })
+    expect(checkTemplateEditApplied(before, facts([added(D), added(D2)]), addEdit)).toEqual([])
+    const findings = checkTemplateEditApplied(before, facts([added(D), base(D2)]), addEdit)
+    expect(codes(findings)).toEqual(['stop:template-edit-not-applied'])
+    expect(findings[0]).toMatchObject({ dateKey: D2, slotNumber: 3, studentId: 's2' })
+    expect(findings[0].message).toContain('11/26(木) 3限')
+  })
+
+  it('生徒を足す: 規則で置かれない日は info(手入力の同じ生徒が先にある・その生徒の出欠記録がある・在籍していない日)', () => {
+    const addEdit = edit({ kind: 'add-student', seat: 1, studentKeys: ['s2'] })
+    // 手入力の同じ生徒が同じコマの別の机に居る(§2-2): 前にも後にも居るので「居る」で所見なし
+    const manualThere = (dateKey) => cell(dateKey, 3, [desk('d1', [tplA(), null], { teacher: '講師A' }), desk('d2', [studentB({ origin: 'manual', lessonType: 'makeup', makeupSourceDate: '2026-11-05' }), null], { teacher: '講師B' }), desk('d3')])
+    expect(checkTemplateEditApplied(facts([manualThere(D), base(D2)]), facts([manualThere(D), base(D2)]), { ...addEdit, anchorCellIds: [C] })).toEqual([])
+    // 出欠記録(休み)が勝つ(§2-4)
+    const rested = cell(D, 3, [desk('d1', [tplA(), null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B', statusSlots: [status({ managedStudentId: 's2', name: '生徒B', studentId: 'e2' }), null] }), desk('d3')])
+    const held = checkTemplateEditApplied(facts([rested]), facts([rested]), { ...addEdit, anchorCellIds: [C] })
+    expect(codes(held)).toEqual(['info:template-edit-held-by-rule'])
+    expect(held[0].message).toContain('出欠記録')
+    // 在籍していない日
+    const inactive = checkTemplateEditApplied(facts([base()]), facts([base()]), { ...addEdit, anchorCellIds: [C] }, { isStudentActiveOnDate: () => false })
+    expect(codes(inactive)).toEqual(['info:template-edit-held-by-rule'])
+    expect(inactive[0].message).toContain('在籍')
+  })
+
+  it('講師を替える: 確かめる日のコマに新しい講師が居れば所見なし。居ない日・前の講師がテンプレのまま残った日は stop', () => {
+    const before = facts([base(), base(D2)])
+    const changed = (dateKey, teacher = '講師C') => cell(dateKey, 3, [desk('d1', [tplA(), null], { teacher }), desk('d2', [null, null], { teacher: '講師B' }), desk('d3')])
+    const changeEdit = edit({ kind: 'change-teacher', newTeacher: '講師C', newTeacherId: 't3', studentKeys: ['s1'] })
+    expect(checkTemplateEditApplied(before, facts([changed(D), changed(D2)]), changeEdit)).toEqual([])
+    const findings = checkTemplateEditApplied(before, facts([changed(D), base(D2)]), changeEdit)
+    expect(codes(findings)).toEqual(['stop:template-edit-not-applied', 'stop:template-edit-not-applied'])
+    expect(findings.map((finding) => finding.dateKey)).toEqual([D2, D2])
+    expect(findings[0].message).toContain('講師C')
+    expect(findings[1].message).toContain('講師A')
+    // 新しい講師がそのコマで休み(§2-4)なら info。前の講師が手置き(青字)で残るのは手入力なので所見なし。
+    const restedNew = cell(D, 3, [desk('d1', [tplA(), null], { teacher: '' }), desk('d2', [null, null], { teacher: '講師B', teacherRest: { teacher: '講師C', teacherId: 't3', origin: 'manual' } }), desk('d3', [null, null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' })])
+    const held = checkTemplateEditApplied(facts([restedNew]), facts([restedNew]), { ...changeEdit, anchorCellIds: [C] })
+    expect(codes(held)).toEqual(['info:template-edit-held-by-rule'])
+    expect(held[0].message).toContain('休み')
+  })
+
+  it('机を消す: 消した机の講師・生徒がテンプレ由来で残ったら stop。手入力で残るのは所見なし', () => {
+    const before = facts([base(), base(D2)])
+    const emptied = (dateKey) => cell(dateKey, 3, [desk('d1'), desk('d2', [null, null], { teacher: '講師B' }), desk('d3')])
+    const deleteEdit = edit({ kind: 'delete-desk', studentKeys: ['s1'] })
+    expect(checkTemplateEditApplied(before, facts([emptied(D), emptied(D2)]), deleteEdit)).toEqual([])
+    const findings = checkTemplateEditApplied(before, facts([emptied(D), base(D2)]), deleteEdit)
+    expect(codes(findings)).toEqual(['stop:template-edit-not-applied', 'stop:template-edit-not-applied'])
+    expect(findings.map((finding) => finding.studentId ?? '')).toEqual(['', 's1'])
+    const manualLeft = cell(D, 3, [desk('d1', [student({ origin: 'manual' }), null], { teacher: '講師A', manualTeacher: true, teacherAssignmentSource: 'manual' }), desk('d2', [null, null], { teacher: '講師B' }), desk('d3')])
+    expect(checkTemplateEditApplied(facts([base()]), facts([manualLeft]), { ...deleteEdit, anchorCellIds: [C] })).toEqual([])
+  })
+
+  it('保存したテンプレにその変更が入っているか(入っていなければ stop template-edit-not-saved)', () => {
+    const template = (deskOverrides) => ({ effectiveStartDate: '2026-11-16', cells: [{ dayOfWeek: 4, slotNumber: 3, desks: [{ deskIndex: 1, teacherId: 't1', students: [{ studentId: 's1', subject: '数' }, null], ...deskOverrides }] }] })
+    const addEdit = edit({ kind: 'add-student', seat: 1, studentKeys: ['s2'] })
+    expect(checkTemplateEditSaved(template({ students: [{ studentId: 's1', subject: '数' }, { studentId: 's2', subject: '英' }] }), addEdit)).toEqual([])
+    expect(codes(checkTemplateEditSaved(template({}), addEdit))).toEqual(['stop:template-edit-not-saved'])
+    const changeEdit = edit({ kind: 'change-teacher', newTeacher: '講師C', newTeacherId: 't3', studentKeys: ['s1'] })
+    expect(checkTemplateEditSaved(template({ teacherId: 't3' }), changeEdit)).toEqual([])
+    expect(codes(checkTemplateEditSaved(template({}), changeEdit))).toEqual(['stop:template-edit-not-saved'])
+    const deleteEdit = edit({ kind: 'delete-desk', studentKeys: ['s1'] })
+    expect(checkTemplateEditSaved(template({ teacherId: '', students: [null, null] }), deleteEdit)).toEqual([])
+    // 机ごと無い(空の机は省かれうる)のも「消えた」
+    expect(checkTemplateEditSaved({ effectiveStartDate: '2026-11-16', cells: [] }, deleteEdit)).toEqual([])
+    expect(codes(checkTemplateEditSaved(template({ students: [null, null] }), deleteEdit))).toEqual(['stop:template-edit-not-saved'])
+    expect(codes(checkTemplateEditSaved(null, addEdit))).toEqual(['stop:template-edit-not-saved'])
   })
 })
