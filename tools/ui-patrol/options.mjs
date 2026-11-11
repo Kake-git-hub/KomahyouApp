@@ -5,7 +5,7 @@ import { DEFAULT_CLASSROOMS } from './fetchData.mjs'
 
 export const USAGE = [
   '使い方: node tools/ui-patrol.mjs --out <出力先(リポジトリの外)> [--classroom <id>]... [--key <YYYY-MM-DDTHH-mm>] [--seed-file <path>]...',
-  '          [--scenario boot,c,b,a] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
+  '          [--scenario boot,c,b,a,d] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
   '          [--baseline <前に流した report.json> | --baseline-ref <git の ref>]',
   '  --prepare-only: 取得・伏せ字・自己点検・種データの書き出しまで(ブラウザは動かさない)。',
   '  --baseline <report.json>: 前に流した報告と突き合わせ、「変」を 新しい／前から／消えた に分ける。同じ種データ(指紋が同じ)でないと比べない(2)。',
@@ -16,7 +16,8 @@ export const USAGE = [
   '  終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。',
 ].join('\n')
 
-export const SCENARIO_NAMES = ['boot', 'c', 'b', 'a']
+// 流れる順は tools/ui-patrol/scenarios.mjs の runClassroomPatrol が決める(boot → c → b → でたらめ → a → d)。d はテンプレを変えるので最後。
+export const SCENARIO_NAMES = ['boot', 'c', 'b', 'a', 'd']
 const VALUE_FLAGS = {
   '--out': 'out', '--classroom': 'classroom', '--key': 'key', '--seed-file': 'seedFile', '--scenario': 'scenario',
   '--moves': 'moves', '--seed': 'seed', '--random': 'random', '--known': 'known', '--port': 'port',
@@ -72,7 +73,7 @@ export function validateArgs(options) {
     if (!/^[A-Za-z0-9_-]+$/.test(classroomId)) errors.push(`--classroom は英数字・_・- だけで指定してください: ${classroomId}`)
   }
   for (const name of options.scenarios ?? []) {
-    if (!SCENARIO_NAMES.includes(name)) errors.push(`--scenario に知らない台本があります: ${name}(boot,c,b,a から選びます)。`)
+    if (!SCENARIO_NAMES.includes(name)) errors.push(`--scenario に知らない台本があります: ${name}(${SCENARIO_NAMES.join(',')} から選びます)。`)
   }
   if (options.baseline && options.baselineRef) errors.push('--baseline と --baseline-ref は同時に指定できません(どちらか一方)。')
   if ((options.baseline || options.baselineRef) && options.prepareOnly) errors.push('--baseline / --baseline-ref は --prepare-only と併用できません(--prepare-only は巡回しないため)。')

@@ -207,7 +207,7 @@ Claude の記憶（過去の事故・設計判断・オーナー指示の記録�
 - `.github/workflows/ci-tests.yml` がブランチ push ごとに **lint / unit / build** を実行（毎push・約1分・決定的）。
   main マージ前に緑を確認する。マージ前チェックは `.github/PULL_REQUEST_TEMPLATE.md` ＝ `docs/runbooks/release-checklist.md`。
 - **画面の自動巡回（2026-11-11・オーナー決定）**: 盤面のロジックや画面を変えた修正は、main へ入れる前に `node tools/ui-patrol.mjs --out <スクラッチ領域>/…` を回す
-  （本番 2 校の形のデータ〔名前は伏せる・読み取りだけ〕を手元のアプリに入れ、室長と同じ画面操作をして、操作のたびに点検する。約 3 分半）。
+  （本番 2 校の形のデータ〔名前は伏せる・読み取りだけ〕を手元のアプリに入れ、室長と同じ画面操作をして、操作のたびに点検する。約 6 分）。
   「変」（終了コード 1）が出たら止めて調べる（自分の変更のせいかは `--baseline-ref origin/main` を付けて流し直すと道具が分ける）。手順は `docs/runbooks/ui-patrol.md`、設計は `docs/test-strategy.md` 層 5。ユニットの代わりではない。毎朝の健診には入れない。
 - **Playwright E2E は廃止（2026-06-29）**。全シナリオをユニット（純粋関数）へ移植済み。方針と移植マップは `docs/test-strategy.md`。
   UI操作の回帰はユニットが、実環境の通し動作は開発用教室の確認リスト（本番反映後・オーナー）が担保。Firestore ルールの教室分離は `npm run test:rules`（手動・要 Java + エミュレータ）。
