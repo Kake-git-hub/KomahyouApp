@@ -1868,6 +1868,15 @@ export function reconcileHolidayDeskStockReturns(params: {
    * ★既定を `true` にしてはいけない。全コマ削除経路は `returnedEntryIds` に入らないことを前提に希望回数を −1 している。
    */
   includeManualAddedLessons?: boolean
+  /**
+   * 配置(studentSlots)の**在庫由来の振替**(台帳に振替元日がある・手動追加でない)を台帳へ積まず、控えを 'none' にするか
+   * （Issue #86・INV-06・2026-11-11・spec-makeup-stock §B-2-2c）。判定は格納の権威関数 resolveStoreMakeupOriginDate（出欠記録の側の
+   * resolveMakeupStatusOriginToMaterialize と同じ ledgerOriginsIncludeDate）。在庫由来の振替は盤面から外れれば台帳の振替元が自動で再浮上するので、
+   * 積むと同じ振替元が 2 つになり、保存 → 読み込み直し（normalizeMakeupOriginMapKeys が 1 つに畳む）のあとの休日解除が控えどおり 1 つ外して振替元が消えていた。
+   * - `true`（**休日設定**だけ）… 積まない・控え 'none'（解除は 'none' の在庫由来の振替を別日のコマまで検査して席へ戻す・台帳は触らない）。
+   * - `false`（既定・全コマ削除／丸ごと振替の振替先処分／テンプレ保留の採用）… 従来どおり積む（重なりは未消化の計算で畳まれ残は正しい・巻き戻す操作も無い＝挙動を変えない）。
+   */
+  skipLedgerBackedMakeupPlacements?: boolean
 }): {
   ledgers: HolidayStockLedgers
   movedStudentCount: number
@@ -1884,7 +1893,7 @@ export function reconcileHolidayDeskStockReturns(params: {
     statusStamps: Array<HolidayStockReturnStamp | undefined>
   }
 } {
-  const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey, includeRegularLessons = true, includeManualAddedLessons = false } = params
+  const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey, includeRegularLessons = true, includeManualAddedLessons = false, skipLedgerBackedMakeupPlacements = false } = params
   let { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents } = params.ledgers
   let movedStudentCount = 0
   const placementStamps: Array<HolidayStockReturnStamp | undefined> = [undefined, undefined]
@@ -1976,6 +1985,24 @@ export function reconcileHolidayDeskStockReturns(params: {
     // 在庫から出したコマ（振替・ストック由来の講習）は常に返す。通常・体験・増コマは呼び出し側の方針に従う。
     const isStockBackedLesson = student.lessonType === 'makeup' || student.lessonType === 'special'
     if (!includeRegularLessons && !isStockBackedLesson) continue
+    // Issue #86（INV-06・休日設定だけ）: 在庫由来の振替（台帳に振替元日がある・手動追加でない）は積まない＝再浮上に任せ、控えは 'none'
+    //   （出欠記録の側の「在庫由来は積まない」と同じ扱い）。件数・returnedEntryIds は従来どおり数える（再浮上で在庫へ戻っている）。
+    //   移動由来（台帳に振替元が無い）は resolveStoreMakeupOriginDate が日付を返すので従来どおり下の returnEntryToStock で積む。
+    if (
+      skipLedgerBackedMakeupPlacements
+      && student.lessonType === 'makeup'
+      && !student.manualAdded
+      && resolveStoreMakeupOriginDate({
+        student,
+        cellDateKey,
+        ledgerOriginDates: ledgerOriginDatesByKey[buildMakeupStockKey(resolveStockId(student), student.subject)] ?? [],
+      }) === null
+    ) {
+      movedStudentCount += 1
+      returnedEntryIds.push(student.id)
+      placementStamps[studentIndex] = { kind: 'none' }
+      continue
+    }
     placementStamps[studentIndex] = returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey), resolveOriginalRegularSlotNumber(student, cellSlotNumber))
   }
 
@@ -13731,6 +13758,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             // 通常・増コマ・振替も未消化振替へ、手動追加の講習も未消化講習へ返す(「休み」と同じ扱い)。
             // ★全コマ削除(handleClearStudentsOnDate → disposeDayDeskEntries)・丸ごと振替・テンプレ保留の採用には渡さない。
             includeManualAddedLessons: true,
+            // Issue #86(INV-06): 在庫由来の振替の配置は台帳へ積まない(再浮上に任せる・控え none)。読み込み直してからの解除で振替元が消えないように。
+            skipLedgerBackedMakeupPlacements: true,
           })
           ledgers = result.ledgers
           movedStudentCount += result.movedStudentCount

@@ -843,6 +843,17 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     出欠記録つきは見送り・手動講習の往復と別日配置・出席にした手動振替の往復・別日の手動追加は消さない・フラグ OFF では巻き戻らない。(k) は旧記録として据え置き）、`holidayReleaseRestoration.wiring.test.ts`（フラグは休日設定の
     1 か所だけ・`includeRegularLessons:false` の呼び出しへ漏らさない・解除側の抑止キー除外）。仕様は `docs/spec-makeup-stock.md` §B-2-2b / §B-2-2c /
     §B-3 / §3、`docs/spec-lecture-stock.md` §4-2 / §4-3。
+- **休日設定 × 在庫由来の振替の配置（2026-11-11・Issue #86・画面の自動巡回の台本 g が発見・保証文の改定なし）**：休日設定**だけ**が
+  `reconcileHolidayDeskStockReturns` に `skipLedgerBackedMakeupPlacements:true` を渡し、配置の振替のうち**台帳に振替元日がある（在庫由来・手動追加でない）**ものは
+  台帳へ積まず控えを `none` にする（判定は格納の権威関数 `resolveStoreMakeupOriginDate`＝出欠記録の側の `resolveMakeupStatusOriginToMaterialize` と同じ
+  `ledgerOriginsIncludeDate`）。従来は配置の側だけ台帳を見ずに同じ振替元をもう 1 つ積み（上の「配置由来＝無条件に origin を積む」）、保存 → 読み込み直しで
+  `normalizeMakeupOriginMapKeys` が 1 つに畳んだあと、解除が控えどおり 1 つ外して振替元が消えていた（誤減側の違反。残は解除の直後は同じで、その振替を外したときに 1 少ない）。
+  休日設定の直後の残（在庫由来の振替が席から外れて未消化に 1）・移動由来の振替／通常授業／講習／手動追加の扱いは不変。全コマ削除・丸ごと振替の振替先の処分・
+  テンプレ保留の採用は渡さない（重なりは未消化の計算で畳まれ残が正しく、巻き戻す操作も無い＝挙動を変えない）。**既知の残り**：この修正より前の版で休日にした
+  在庫由来の振替の記録（控え `makeup`）は、解除の側に守りを作らない（裁定 2026-11-11・本番 2 校の該当 0 件）ので解除で振替元を 1 つ外す。席へ戻った振替は
+  「台帳に振替元の無い振替」（移動由来と同じ形）として格納・休み・休日設定・全コマ削除で振替元日を積み直すので、残の見え方は変わらない。
+  固定：`inv06-holiday-record-retention.matrix.test.ts` の describe「Issue #86」（(v)(w) 時限なし／時限つきの振替元・(w-2) 別日へ組み直し・対照 (x) 移動由来・(y) 通常授業〔日大前の控え 53 件の形〕・
+  (z) 手動追加・休日設定以外の呼び出し・(aa) 既知の残り）、`holidayReleaseRestoration.wiring.test.ts`（渡すのは休日設定の 1 か所だけ）。仕様は `docs/spec-makeup-stock.md` §B-2-2c。
 - **退塾スイープ（2026-09-20 オーナー確定・確認リスト b-2/b-3。同日夜に「退塾ボタン」限定から**退塾した生徒の検出**へ一般化）**：消す今日以降の痕跡は
   **未消化へ戻さない**（台帳 `manualMakeupAdjustments` / `manualLectureStockCounts` / 希望数へ一切足さない・
   「破棄前に台帳へ確定」もしない）。ただし**消したことで在庫が湧く分**は抑止（`suppressedMakeupOrigins`）へ積む

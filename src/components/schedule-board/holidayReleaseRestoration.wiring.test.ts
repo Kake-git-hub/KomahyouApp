@@ -106,6 +106,18 @@ describe('休日設定の配線(手動追加も未消化へ返す・Issue #73)',
     }
   })
 
+  // Issue #86(INV-06): 在庫由来の振替の配置を台帳へ積まない(控え none)のは休日設定だけ。会計は inv06-holiday-record-retention.matrix.test.ts の行(v)〜(aa)。
+  //   全コマ削除・丸ごと振替の振替先の処分・テンプレ保留の採用は重なりが未消化の計算で畳まれて残が正しいので、挙動を変えない(渡さない)。
+  it('★休日設定ハンドラの reconcile 呼び出しだけが skipLedgerBackedMakeupPlacements:true を渡す(Issue #86・盤面全体で 1 か所)', () => {
+    expect(holidaySetBranch()).toContain('skipLedgerBackedMakeupPlacements: true,')
+    expect(BOARD_TSX.match(/skipLedgerBackedMakeupPlacements: true/g)).toHaveLength(1)
+    expect(BOARD_TSX).toContain('skipLedgerBackedMakeupPlacements = false')
+    const callSites = BOARD_TSX.split('reconcileHolidayDeskStockReturns({').slice(1)
+    for (const site of callSites.filter((entry) => entry.slice(0, 800).includes('includeRegularLessons: false'))) {
+      expect(site.slice(0, 800)).not.toContain('skipLedgerBackedMakeupPlacements')
+    }
+  })
+
   it('解除側: 席へ戻す手動追加の通常授業は抑止キーを返さない(兄弟監査・テンプレ授業の削除の抑止を外さない)', () => {
     const fnIndex = BOARD_TSX.indexOf('export function computeHolidayReleaseRestoration(')
     expect(fnIndex).toBeGreaterThan(0)
