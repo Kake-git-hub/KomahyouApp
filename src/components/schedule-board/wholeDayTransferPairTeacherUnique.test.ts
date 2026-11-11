@@ -169,6 +169,22 @@ describe('Issue #87（INV-01）: 丸ごと振替の作成で同じ講師が 1 �
   })
 })
 
+describe('Issue #87（INV-01）: 前から同じ講師が 2 机のコマに 3 机目ができる形', () => {
+  it('D\' 4限の机 2・3 に手置きの同じ講師（前から 2 机）、D 4限の机 4 に同じ講師 → 作成で 3 机になるので止まる（机が 4 つの教室）', () => {
+    const cs4 = settings({ deskCount: 4 })
+    const weeks = structuredClone(remerge(buildBoard(ROWS, cs4), ROWS, [], cs4))
+    putManualTeacher(weeks, D2, 1, '鈴木', 't2')
+    putManualTeacher(weeks, D2, 2, '鈴木', 't2')
+    putManualTeacher(weeks, D, 3, '鈴木', 't2')
+    const board = remerge(weeks, ROWS, [], cs4)
+    expect(countTeacher(board, D2, '鈴木')).toBe(2)
+    expect(countTeacher(board, D, '鈴木')).toBe(1)
+    const result = pairOf(board, { classroomSettings: cs4 })
+    expect(result.status).toBe('blocked')
+    if (result.status === 'blocked') expect(result.message).toContain('4限（講師 鈴木）')
+  })
+})
+
 describe('Issue #87（INV-01）の兄弟: 丸ごと振替の解除で同じ講師が 1 コマに 2 机にならない', () => {
   it('作成で D\' へ移した手置きの高橋を戻す D の同じ時限に、あとから別の机へ高橋を手で置いた → 解除を止める（盤面は変えない）', () => {
     const weeks = base()
@@ -180,10 +196,8 @@ describe('Issue #87（INV-01）の兄弟: 丸ごと振替の解除で同じ講�
     const result = releaseOf(later, paired.nextSuppressedRegularLessonOccurrences, { classroomSettings: cs, pendingDesks: paired.nextTemplatePendingDesks })
     expect(result.status).toBe('blocked')
     if (result.status !== 'blocked') return
-    expect(result.message).toContain('同じ講師が 2 つの机に居る形になるため、丸ごと振替を解除できません')
-    expect(result.message).toContain(D)
-    expect(result.message).toContain('4限')
-    expect(result.message).toContain('高橋')
+    // 手直し 1: 何を外せばよいかが分かる文（振替元の日にあとから置いた講師を外す）。
+    expect(result.message).toBe('丸ごと振替を解除できません。講師 高橋 が振替元の 10/7 4限に居ます（同じ講師を 2 つの机に置けません）。振替元の日に後から置いた講師を外してから、解除してください。')
     expect(snapshot(later)).toBe(before)
   })
 

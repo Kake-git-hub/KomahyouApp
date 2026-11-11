@@ -9081,11 +9081,16 @@ function resolveWholeDayTransferPairDuplicateTeacherBlock(beforeWeeks: SlotCell[
   const found = collectNewDuplicateTeachersInCells(beforeWeeks, afterWeeks, dateKeys, teachers)
   if (found.length === 0) return null
   const [mainDateKey] = dateKeys
+  if (mode === 'release') {
+    // 手直し 1（主セッション 2026-11-12）: 解除では片方の X は振替先に居て、もう片方は室長が振替元の日にあとから置いた X。何を外せばよいかを文に出す。
+    const releaseListed = found.map((entry) => `講師 ${entry.teacher} が${entry.dateKey === mainDateKey ? '振替元' : '振替先'}の ${formatTemplateDiffMonthDay(entry.dateKey)} ${entry.slotNumber}限`)
+    const releaseWhere = `${releaseListed.slice(0, 3).join('、')}${releaseListed.length > 3 ? `（ほか ${releaseListed.length - 3} か所）` : ''}`
+    return `丸ごと振替を解除できません。${releaseWhere}に居ます（同じ講師を 2 つの机に置けません）。振替元の日に後から置いた講師を外してから、解除してください。`
+  }
   const listed = found.map((entry) => `${entry.dateKey === mainDateKey ? '' : `${entry.dateKey} の `}${entry.slotNumber}限（講師 ${entry.teacher}）`)
   const where = `${listed.slice(0, 3).join('・')}${listed.length > 3 ? ` ほか ${listed.length - 3} か所` : ''}`
   // 文の形は同じ番号の机どうしの重なりで止める文（「振替先 D' の … ため丸ごと振替できません。」）にそろえる。
-  const head = mode === 'create' ? `振替先 ${mainDateKey} の ${where}` : `振替元 ${mainDateKey} の ${where}`
-  return `${head}で同じ講師が 2 つの机に居る形になるため、丸ごと振替${mode === 'create' ? '' : 'を解除'}できません（同じ講師を 1 コマの 2 つの机に置けません）。どちらかの講師を片づけてからやり直してください。`
+  return `振替先 ${mainDateKey} の ${where}で同じ講師が 2 つの机に居る形になるため、丸ごと振替できません（同じ講師を 1 コマの 2 つの机に置けません）。どちらかの講師を片づけてからやり直してください。`
 }
 
 export function computeWholeDayTransferPair(params: WholeDayTransferPairParams): ComputeWholeDayTransferPairResult {
