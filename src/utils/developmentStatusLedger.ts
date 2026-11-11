@@ -109,17 +109,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-11-11',
   },
   {
-    id: 'teacher-rest-hand-placed-elsewhere',
-    title: '休みにした講師を同じコマに手で置いたら休みを解除する',
-    stage: 'planned',
-    who: 'claude',
-    summary: '講師を休みにして代わりの講師を置いたあと、休みの講師を同じコマの別の机に手で置くと、休みの記録が残ったままになる。手で置いたら休みを解除するように直す。',
-    nextAction: 'Claude が仕様を書き直し、テストを先に書いて直す。',
-    notes: '2026-11-11 オーナー決定=案 1(同じコマのどこかへ手で置いたら休みをコマ全体で解除)。進め方は docs/plan-2026-11-11-ui-patrol-stage2-handoff.md の作業 A。以下は経緯。Issue #84(手で入れた講師とテンプレの生徒が離れる)のレビューで見つかった仕様の空き。休みの自動解除(§9-19)は「休みにした机に本人を置き直したとき」だけ(机単位・releaseTeacherRestIfSameTeacherPlaced)。別の机に置いたときは決まっていない(§2-4 は「テンプレの X を置かない」)。今の挙動(v1.5.719): templateDeskOrderRestore の合流の判定は講師欄が空の休みの机だけを見るので、この形の X は「来ている」扱いで、テンプレ保存で X の机へ合流する(手で入れた X とテンプレの生徒が一緒に残る)。権威関数 isTeacherRestedInCell に替える案は取り下げた(1 回目の保存で離れ 2 回目で戻る=INV-03 の穴。塞ぐには授業の手がかりの経路にも休みの判定が要るが、そこは代講の机が休みの講師について行く経路と同じで影響が大きい)。選択肢: (1) 休みの講師を同じコマのどこかへ手で置いたら、休みをコマ全体で解除する(矛盾した状態が作れなくなる・いちばん素直) (2) 休みが勝つ(手で置いた X はそのまま・テンプレの生徒とは合流しない。上の穴の修正が要る) (3) 今のまま。今の挙動はマトリクスの「休みの兄弟」の行で固定してある。',
-    references: ['docs/plan-2026-11-11-ui-patrol-stage2-handoff.md', 'docs/spec-template-conflict-v2.md', 'src/components/schedule-board/templateDeskOrderRestore.ts', 'src/components/schedule-board/teacherRest.ts'],
-    updatedOn: '2026-11-11',
-  },
-  {
     id: 'checklist-auto-prep',
     title: '確認リストの準備をアプリが自動で作る',
     stage: 'development-only',

@@ -72,7 +72,7 @@ import { resolveOpenedPendingRowHighlight, type TemplatePendingPressedRow } from
 import { isManualOriginDeskTeacher, isManualOriginStudent, resolveMovedStudentOrigin, resolveStudentOrigin, stampPlacementOrigins } from './placementOrigin'
 import { formatDeskTeacherLabel, hasRealDeskTeacher, isPinnedPlaceholderTeacherDesk } from '../../utils/deskTeacherLabel'
 import { applyTemplateOriginRulesToManagedCell, collectSameDayMoveSourcesByDate, collectTemplateBlockersInCell, resolveSameDayMoveSourceSlot, resolveStudentOriginOnDate, resolveTemplateStudentBlock } from './templateConflictRules'
-import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestIfSameTeacherPlaced } from './teacherRest'
+import { buildTemplateTeacherRestPredicate, computeToggleDeskTeacherRest, hasDeskTeacherRest, isTeacherRestedInCell, releaseTeacherRestInCellIfSameTeacherPlaced } from './teacherRest'
 import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
 import { applyChecklistPrepOps, checklistPrepNeedsTemplate, isChecklistPrepSequenceItemId, pickChecklistPrepProfileStudent, resolveChecklistPrepStep, shouldProcessChecklistPrepRequest, CHECKLIST_PREP_DESK_SHORTAGE_MESSAGE, CHECKLIST_PREP_JUMP_FAILED_MESSAGE, CHECKLIST_PREP_MAX_JUMPS, type ChecklistPrepRequest, type ChecklistPrepRequestProgress, type ChecklistPrepRequestResult } from './checklistPrep'
 import type { ChecklistPrepFacts } from '../../utils/verificationChecklist'
@@ -7424,10 +7424,11 @@ export function computeTeacherMove(params: {
   // 使い regularTeacherIds を無視する(buildTeacherAssignments の else-if)。既に id を持つ机は上書きしない。
   backfillDeskTeacherAssignmentId(sourceDesk, teachers)
   backfillDeskTeacherAssignmentId(targetDesk, teachers)
-  // §9-19: 休みの机へ休んだ講師本人を D&D／入れ替えで戻したら休みを解除する（別の講師なら残す）。
+  // §9-19・§9-25: 休んだ講師本人を D&D／入れ替えで同じコマのどこかへ置いたら、そのコマのその講師の休みを全部解除する（別の講師なら残す）。
+  // 移動元・移動先の両方の机の講師について見る（入れ替えでは 2 人とも手で動いた）。講師のドラッグは同じコマの中だけ（コマをまたぐ移動は無い）。
   const restAliases = buildTeacherAliasResolver(teachers)
-  releaseTeacherRestIfSameTeacherPlaced(sourceDesk, restAliases)
-  releaseTeacherRestIfSameTeacherPlaced(targetDesk, restAliases)
+  releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, sourceDesk, restAliases)
+  releaseTeacherRestInCellIfSameTeacherPlaced(targetCell.desks, targetDesk, restAliases)
 
   const message = seatContentOnly
     ? (targetHadSeatContent
@@ -13500,7 +13501,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const selectedTeacher = teacherOptions.find((option) => option.name === currentTeacherMenu.selectedTeacherName)
     // 出自（授業の無い机のテンプレ講師を替える＝manual-replaced）は確認リストの準備と同じ権威関数 1 本で決める。
     const teacherAssignmentSource = resolveManualTeacherAssignmentSource(targetDesk)
-    setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))
+    setManualTeacherAssignment(targetCell, targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource, buildTeacherAliasResolver(teachers))
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`)

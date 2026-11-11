@@ -14,6 +14,12 @@
 
 ## 未リリース
 
+## v1.5.723 (2026-11-11)
+
+- fix: **講師の休み §9-25(オーナー決定 2026-11-11・案 1)**: 休みにした講師を同じコマのどこかの机へ手で置いたら、そのコマのその講師の休みの記録を全部消す(講師メニューの「保存」・確認リストの準備・講師の D&D／入れ替え・保留の下の行の講師の採用)。代わりの講師の机に休みの記録が残り「休みなのに盤面に居る」形が作れて、テンプレ保存の合流が 1 回目と 2 回目で食い違う穴になっていたため。自動配置(再マージ・差分反映・講習の自動割振・QR 提出)と丸ごと振替の付け替えでは消さない。INV-02・INV-01・INV-03。(`teacherRest.ts` `releaseTeacherRestInCellIfSameTeacherPlaced`=権威関数 1 本・`deskTeacherAssignment.ts`・`ScheduleBoardScreen.tsx` `computeTeacherMove`／講師メニュー・`checklistPrep.ts`・`templatePendingResolution.ts`・テスト `teacherRest.test.ts`・`teacherRest.wiring.test.ts`・`inv02-manual-edit-persistence.matrix.test.ts`・確認リスト rs-1(版は v1.5.711 据え置き))
+
+## v1.5.722 (2026-11-11)
+
 - 進行中テーマ台帳から「対応が済んだ Issue を閉じる」を削除(#64〜#66・#69・#70・#76 を GitHub で閉じた。#62・#63 は 11/3 に閉じ済み)。
 
 ## v1.5.721 (2026-11-11)

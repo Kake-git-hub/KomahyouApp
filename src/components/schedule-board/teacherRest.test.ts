@@ -15,6 +15,7 @@ import type { DeskCell, SlotCell } from './types'
 import {
   applyUserDeletedTeacherTombstone,
   buildManagedScheduleCellsForRange,
+  cloneWeeks,
   computeTeacherMove,
   computeTemplateDiffApplyForBoard,
   isDeletedTeacherTombstone,
@@ -33,8 +34,11 @@ import {
   isTeacherRestedInCell,
   releaseDeskTeacherRest,
   releaseTeacherRestIfSameTeacherPlaced,
+  releaseTeacherRestInCellIfSameTeacherPlaced,
   restDeskTeacher,
 } from './teacherRest'
+import { resolveManualTeacherAssignmentSource, setManualTeacherAssignment } from './deskTeacherAssignment'
+import { applyChecklistPrepOps } from './checklistPrep'
 import { buildTeacherPayload } from '../../utils/scheduleHtml'
 import { buildTeacherSheetViewModel } from '../../utils/scheduleViewData'
 import { buildParentScheduleView } from '../../utils/parentSchedule'
@@ -383,5 +387,154 @@ describe('§9-19 × 保留の講師の採用: 休んだ講師本人を採用し�
     const board = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
     expect(board).toContain('teacherAliases: params.teacherAliases })')
     expect(board).toContain('      teacherAliases: buildTeacherAliasResolver(teachers),\n    })')
+  })
+})
+
+// §9-25（2026-11-11 オーナー決定・案 1）: 休みにした講師 X を同じコマ（日付×時限）のどこかの机へ**手で**置いたら、そのコマにある X の休みの記録を全部消す
+// （どの机に残っていても・代わりの講師 Y の机はそのまま）。§9-19（休みにした机へ置き直す）はこの特別な場合。自動で講師が入る経路（テンプレの反映・再マージ・
+// 講習の自動割振・QR 提出の反映）は対象外（上の「再マージ・テンプレの反映（自動配置）では解除しない」・「QR 提出講師の自己修復…」の describe が固定）。
+describe('§9-25 休みの講師を同じコマのどこかへ手で置いたら、そのコマの休みの記録を全部消す（権威関数 releaseTeacherRestInCellIfSameTeacherPlaced）', () => {
+  const aliases = buildTeacherAliasResolver(teachers)
+  const restOf = (weeks: SlotCell[][]) => cellOf(weeks).desks.map((desk) => desk.teacherRest ?? null)
+  /** 机 0＝田中の休みの記録＋代わりの高橋（手置き）・机 1＝鈴木・机 2＝佐藤（講師だけ）。 */
+  function restedWithSubstitute() {
+    return placeManualTeacher(restedBoard(), 0, '高橋', 't4')
+  }
+  /** v1.5.723 より前に作られた食い違った形: 休みの記録が高橋の机（机 0）に残り、田中が同じコマの机 2 に居る。机 3＝空き机。 */
+  function staleBoard() {
+    const weeks = placeManualTeacher(restedWithSubstitute(), 2, '田中', 't1')
+    return weeks.map((week) => week.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: [...cell.desks, { id: `${CELL_ID}_desk_4`, teacher: '' }] })))
+  }
+
+  describe('単体（権威関数）', () => {
+    const desks = (): DeskCell[] => [
+      { id: 'd0', teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', memoSlots: ['連絡', null], lesson: { id: 'l0', studentSlots: [null, null] }, teacherRest: { teacher: '田中', teacherId: 't1' } },
+      { id: 'd1', teacher: '鈴木', teacherAssignmentTeacherId: 't2' },
+      { id: 'd2', teacher: '', teacherRest: { teacher: '田中', teacherId: 't1' } },
+      { id: 'd3', teacher: '', teacherRest: { teacher: '佐藤', teacherId: 't3' } },
+    ]
+    it('(a)(b) 別の机へ田中を置く → 代わりの講師の机の記録も、講師欄が空の休みの机の記録も、田中の分は全部消える。ほかの項目と別の講師の休みは不変', () => {
+      const cell = desks()
+      const before = desks()
+      const placed: DeskCell = { id: 'd1', teacher: '田中', manualTeacher: true, teacherAssignmentTeacherId: 't1' }
+      expect(releaseTeacherRestInCellIfSameTeacherPlaced(cell, placed, aliases)).toBe(true)
+      expect(cell[0].teacherRest).toBeUndefined()
+      expect(cell[2].teacherRest).toBeUndefined()
+      const { teacherRest: _drop, ...restOfDesk0 } = before[0]
+      expect(cell[0]).toEqual(restOfDesk0)
+      expect(cell[3].teacherRest).toEqual({ teacher: '佐藤', teacherId: 't3' })
+      expect(cell[1]).toEqual(before[1])
+    })
+    it('(c) 別の講師（高橋）を置く → 田中の記録は残る（false）', () => {
+      const cell = desks()
+      expect(releaseTeacherRestInCellIfSameTeacherPlaced(cell, { teacher: '高橋', teacherAssignmentTeacherId: 't4' }, aliases)).toBe(false)
+      expect(cell.map((desk) => desk.teacherRest ?? null)).toEqual(desks().map((desk) => desk.teacherRest ?? null))
+    })
+    it('(e) 呼び名の対応表: 記録は講師 ID だけ・置いた机は表示名だけでも消える。講師名が空の机（講師なし）を置いたことにはならない', () => {
+      const cell: DeskCell[] = [{ id: 'd0', teacher: '高橋', teacherRest: { teacher: '', teacherId: 't1' } }]
+      expect(releaseTeacherRestInCellIfSameTeacherPlaced(cell, { teacher: '田中' }, aliases)).toBe(true)
+      expect(cell[0].teacherRest).toBeUndefined()
+      const empty: DeskCell[] = [{ id: 'd0', teacher: '', teacherRest: { teacher: '田中', teacherId: 't1' } }]
+      expect(releaseTeacherRestInCellIfSameTeacherPlaced(empty, { teacher: '', teacherAssignmentTeacherId: 't1' }, aliases)).toBe(false)
+      expect(empty[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+    })
+    it('(f) §9-19: 休みにした机へ本人を置き直す（机 1 つだけを渡す形）は今までどおり消える', () => {
+      const desk: DeskCell = { id: 'd', teacher: '田中', manualTeacher: true, teacherAssignmentTeacherId: 't1', teacherRest: { teacher: '田中', teacherId: 't1' } }
+      expect(releaseTeacherRestInCellIfSameTeacherPlaced([desk], desk, aliases)).toBe(true)
+      expect(desk.teacherRest).toBeUndefined()
+    })
+  })
+
+  it('(d) 講師メニューの保存（setManualTeacherAssignment にコマを渡す）: 別のコマ（同じ日の別の時限・別の日の同じ時限）の田中の休みは残る', () => {
+    // 同じ日の 4限・別の日（木）の 5限にも田中の休みの記録を置く
+    const otherKeys = new Set([`${DATE}_4`, '2026-10-08_5'])
+    const board = restedWithSubstitute().map((week) => week.map((cell) => (!otherKeys.has(cell.id) ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, teacherRest: { teacher: '田中', teacherId: 't1' } } : desk)) })))
+    expect(board.flat().filter((cell) => otherKeys.has(cell.id))).toHaveLength(2)
+    const next = cloneWeeks(board)
+    const cell = cellOf(next)
+    setManualTeacherAssignment(cell, cell.desks[2], '田中', 't1', 'manual', aliases)
+    expect(restOf(next)).toEqual([null, null, null])
+    expect(next.flat().filter((item) => otherKeys.has(item.id)).map((item) => item.desks[0].teacherRest)).toEqual([{ teacher: '田中', teacherId: 't1' }, { teacher: '田中', teacherId: 't1' }])
+  })
+
+  describe('経路ごと（それぞれ修正なしで落ちる）。元に戻す（Undo）は操作の前の週データの写しを戻す＝渡した weeks に記録が残っていることを見る', () => {
+    it('講師メニューの保存: 休みの机に高橋を置いた後、田中を佐藤の机（机 2）へ手で置く → 机 0 の記録が消える。高橋・青木はそのまま。前の写しには記録が残る', () => {
+      const board = restedWithSubstitute()
+      const next = cloneWeeks(board)
+      const cell = cellOf(next)
+      setManualTeacherAssignment(cell, cell.desks[2], '田中', 't1', resolveManualTeacherAssignmentSource(cell.desks[2]), aliases)
+      expect(restOf(next)).toEqual([null, null, null])
+      expect(cellOf(next).desks[0]).toMatchObject({ teacher: '高橋', manualTeacher: true, teacherAssignmentTeacherId: 't4' })
+      expect(ids(cellOf(next).desks[0])).toEqual(['sA'])
+      expect(cellOf(next).desks[2]).toMatchObject({ teacher: '田中', manualTeacher: true })
+      expect(cellOf(board).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+    })
+
+    it('確認リストの準備（applyChecklistPrepOps＝同じ書き込み）: 田中を机 2 へ置く → 机 0 の記録が消える。渡した weeks は変えない', () => {
+      const board = restedWithSubstitute()
+      const applied = applyChecklistPrepOps(board, [{ kind: 'manual-teacher', cellId: CELL_ID, deskIndex: 2, teacherName: '田中', teacherId: 't1' }], aliases, { now: 1 })
+      expect(applied.skipped).toBe(0)
+      expect(restOf(applied.weeks)).toEqual([null, null, null])
+      expect(cellOf(applied.weeks).desks[0]).toMatchObject({ teacher: '高橋' })
+      expect(cellOf(board).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+    })
+
+    it.each([
+      ['講師だけ入替（田中 机 2 ↔ 鈴木 机 1）', 2, 1, 'teacher' as const],
+      ['生徒ごと席入替（田中 机 2 ↔ 鈴木 机 1）', 2, 1, 'seat' as const],
+      ['講師の移動（田中 机 2 → 空き机 3）', 2, 3, 'teacher' as const],
+      ['入替でドラッグしたのが鈴木（鈴木 机 1 ↔ 田中 机 2・田中も手で動いた）', 1, 2, 'teacher' as const],
+    ])('D&D %s: 食い違った形（記録が高橋の机に残る）から田中を動かす → そのコマの田中の記録が消える。高橋の机はそのまま。渡した weeks は変えない', (_label, sourceDeskIndex, targetDeskIndex, swapMode) => {
+      const board = staleBoard()
+      const result = computeTeacherMove({ weeks: board, weekIndex: 0, cellId: CELL_ID, sourceDeskIndex, targetDeskIndex, teachers, swapMode })
+      if (result.status !== 'moved') throw new Error(result.message)
+      expect(restOf(result.nextWeeks)).toEqual([null, null, null, null])
+      expect(cellOf(result.nextWeeks).desks[0]).toMatchObject({ teacher: '高橋', manualTeacher: true })
+      expect(ids(cellOf(result.nextWeeks).desks[0])).toEqual(['sA'])
+      expect(cellOf(board).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+    })
+
+    it('D&D 生徒ごと席入替（田中 机 2 ↔ 鈴木 机 1）: 動かしていない代わりの講師の机（机 0）は生徒・メモ・出欠記録が不変で、teacherRest だけ消える', () => {
+      const record = { id: 'st_sB', studentId: 'sB', sourceManagedLesson: false, name: '馬場', managedStudentId: 'sB', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '高橋', dateKey: DATE, slotNumber: SLOT, recordedAt: '2026-10-07T00:00:00.000Z', status: 'absent' } as const
+      const board = staleBoard().map((week) => week.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, memoSlots: [null, '連絡'] as [string | null, string | null], statusSlots: [null, { ...record }] as DeskCell['statusSlots'] } : desk)) })))
+      const before = structuredClone(cellOf(board).desks[0])
+      const result = computeTeacherMove({ weeks: board, weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 2, targetDeskIndex: 1, teachers, swapMode: 'seat' })
+      if (result.status !== 'moved') throw new Error(result.message)
+      const { teacherRest: dropped, ...expected } = before
+      expect(dropped).toEqual({ teacher: '田中', teacherId: 't1' })
+      expect(cellOf(result.nextWeeks).desks[0]).toEqual(expected)
+      expect(ids(cellOf(result.nextWeeks).desks[0])).toEqual(['sA'])
+      expect(cellOf(result.nextWeeks).desks[1]).toMatchObject({ teacher: '田中' })
+      expect(restOf(result.nextWeeks)).toEqual([null, null, null, null])
+      expect(cellOf(board).desks[0]).toEqual(before)
+    })
+
+    it('D&D で別の講師（鈴木 机 1 → 空き机 3）だけを動かす → 田中の記録は残る', () => {
+      const result = computeTeacherMove({ weeks: staleBoard(), weekIndex: 0, cellId: CELL_ID, sourceDeskIndex: 1, targetDeskIndex: 3, teachers })
+      if (result.status !== 'moved') throw new Error(result.message)
+      expect(cellOf(result.nextWeeks).desks[0].teacherRest).toEqual({ teacher: '田中', teacherId: 't1' })
+    })
+
+    it('保留の下の行の講師（田中）を採用: 別の机（代わりの高橋の机）の田中の記録が消える。高橋の机のほかの項目は不変。渡した weeks は変えない', () => {
+      const weeks = (): SlotCell[][] => [[{
+        id: 'c1', dateKey: DATE, dayLabel: '水', dateLabel: '10/7', slotLabel: '5限', slotNumber: 5, timeLabel: '', isOpenDay: true,
+        desks: [
+          { id: 'd1', teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't4', memoSlots: ['連絡', null], teacherRest: { teacher: '田中', teacherId: 't1' } },
+          { id: 'd2', teacher: '鈴木', teacherAssignmentTeacherId: 't2' },
+          { id: 'd3', teacher: '', teacherRest: { teacher: '佐藤', teacherId: 't3' } },
+        ],
+      }]]
+      const pending: TemplatePendingDeskMap = { 'c1::d2': { lower: { teacher: { teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't1' } }, effectiveStartDate: DATE, createdAt: '2026-10-01T00:00:00.000Z' } }
+      const input = weeks()
+      const result = computePendingTeacherChoice({ weeks: input, templatePendingDesks: pending, cellId: 'c1', deskId: 'd2', choice: 'manual', teacherAliases: aliases })
+      if (result.status !== 'applied') throw new Error(result.message)
+      const desksAfter = result.nextWeeks[0][0].desks
+      expect(desksAfter[1]).toMatchObject({ teacher: '田中' })
+      expect(desksAfter[0].teacherRest).toBeUndefined()
+      const { teacherRest: _drop, ...substitute } = weeks()[0][0].desks[0]
+      expect(desksAfter[0]).toEqual(substitute)
+      expect(desksAfter[2]).toEqual(input[0][0].desks[2])
+      expect(input).toEqual(weeks())
+    })
   })
 })
