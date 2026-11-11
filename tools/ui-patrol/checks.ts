@@ -7,6 +7,8 @@
 // ★所見の message は日本語 1 行。場所は「11/19(木) 3限 机5」、人は仮名(伏せ字のあとの名前)と生徒 ID だけ。
 // ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
 import type { InvAuditFinding, InvAuditResult } from '../invAuditEntry'
+import { isTemplateBlockingRecordStatus } from '../../src/components/schedule-board/templateConflictRules'
+import type { StudentStatusKind } from '../../src/components/schedule-board/types'
 import { countPendingDesksFrom, diffBoardFacts, type BoardFacts, type DeskChange, type DeskChangeField, type DeskFact, type StudentFact } from './boardFacts'
 
 export const PATROL_FINDING_CODES = [
@@ -733,12 +735,15 @@ function checkAttendanceSeatApplied(before: BoardFacts, after: BoardFacts, op: A
   }]
 }
 
-/** 「記録が勝つ」の対象の記録(休み・振無休・出席)。移動(移)・休日の記録(休))は見ない。 */
-const RECORD_WINS_STATUSES = new Set(['absent', 'absent-no-makeup', 'attended'])
+/**
+ * 「記録が勝つ」の対象の記録(休み・振無休・出席・「移)」)。判定はテンプレ保存が同じ判断に使う権威関数 isTemplateBlockingRecordStatus
+ * (templateConflictRules.ts・§2-4)をそのまま使う(休日の表示専用の記録〔休)〕は入らない)。「移)」も入るので、台本 b が付けた記録も守る。
+ */
+const isRecordWinsStatus = (kind: string) => isTemplateBlockingRecordStatus(kind as StudentStatusKind)
 
 /**
  * テンプレ保存が、出欠記録のあるコマにその生徒を置き直していないか(spec-template-conflict-v2 §2-4「生徒の記録が勝つ」)。
- * 操作の前にそのコマ(上段の記録)に休み・振無休・出席の記録があり、同じコマのどの席(上段・保留の下段)にもその生徒がいなかったのに、
+ * 操作の前にそのコマ(上段の記録)に休み・振無休・出席・「移)」の記録があり、同じコマのどの席(上段・保留の下段)にもその生徒がいなかったのに、
  * 操作のあと同じコマの上段の席に座ったら stop attendance-record-overridden。fromDateKey(反映日)より前のコマは見ない(テンプレ保存は触らない)。
  * 生徒は生徒キーで見る(科目は見ない。同じコマに同じ生徒が 2 か所は INV-12 で別に止まる)。コマ×生徒ごとに 1 件。
  */
@@ -755,7 +760,7 @@ export function checkAttendanceRecordsHold(before: BoardFacts, after: BoardFacts
       for (const student of [...desk.students, ...desk.pendingStudents]) if (student) seatedBefore.add(student.key)
       for (const record of desk.statuses) {
         const [studentKey = '', kind = ''] = record.split('|')
-        if (studentKey && RECORD_WINS_STATUSES.has(kind) && !recordedKeys.has(studentKey)) recordedKeys.set(studentKey, desk)
+        if (studentKey && isRecordWinsStatus(kind) && !recordedKeys.has(studentKey)) recordedKeys.set(studentKey, desk)
       }
     }
     for (const [studentKey, recordDesk] of recordedKeys) {

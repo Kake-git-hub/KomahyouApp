@@ -660,10 +660,10 @@ describe('台本 e の点検', () => {
     expect(codes(checkAttendanceApplied(before, facts([cell(D, 4, [desk('d1'), desk('d2', [student(), null], { teacher: '講師B' })])]), op))).toEqual(['stop:attendance-not-applied'])
   })
 
-  it('記録が勝つ(§2-4): 前に出欠記録があり席にいなかった生徒が、操作のあと同じコマの席に座ったら stop attendance-record-overridden。反映日より前・移動の記録・前から座っていた生徒は見ない', () => {
+  it('記録が勝つ(§2-4): 前に出欠記録があり席にいなかった生徒が、操作のあと同じコマの席に座ったら stop attendance-record-overridden。反映日より前・休日の表示の記録・前から座っていた生徒は見ない', () => {
     const recorded = (kind) => facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D, status: kind }), null] }), desk('d2', [null, null], { teacher: '講師B' })])])
     const replaced = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] }), desk('d2', [student({ origin: 'template' }), null], { teacher: '講師B' })])])
-    for (const kind of ['absent', 'absent-no-makeup', 'attended']) {
+    for (const kind of ['absent', 'absent-no-makeup', 'attended', 'moved']) {
       const found = checkAttendanceRecordsHold(recorded(kind), replaced, { fromDateKey: '2026-11-16' })
       expect(codes(found)).toEqual(['stop:attendance-record-overridden'])
       expect(found[0]).toMatchObject({ dateKey: D, slotNumber: 3, studentId: 's1' })
@@ -672,8 +672,8 @@ describe('台本 e の点検', () => {
     expect(checkAttendanceRecordsHold(recorded('absent'), recorded('absent'), { fromDateKey: '2026-11-16' })).toEqual([])
     // 反映日より前のコマは見ない
     expect(checkAttendanceRecordsHold(recorded('absent'), replaced, { fromDateKey: '2026-11-23' })).toEqual([])
-    // 移動の記録(移)は見ない
-    expect(checkAttendanceRecordsHold(recorded('moved'), replaced, { fromDateKey: '2026-11-16' })).toEqual([])
+    // 「移)」も記録が勝つ(§2-4・台本 b が付けた記録も守る)。休日の表示専用の記録(休))は見ない
+    expect(checkAttendanceRecordsHold(recorded('holiday'), replaced, { fromDateKey: '2026-11-16' })).toEqual([])
     // 前から同じコマに座っていた(記録と授業が並んでいた)なら新しく置き直したのではない
     const seatedBefore = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] }), desk('d2', [student(), null], { teacher: '講師B' })])])
     expect(checkAttendanceRecordsHold(seatedBefore, replaced, { fromDateKey: '2026-11-16' })).toEqual([])

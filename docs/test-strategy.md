@@ -178,7 +178,7 @@ Playwright E2E（9 spec・約148ケース）を廃止し、全挙動をユニッ
 - 台本 e: 在庫の増減が仕様と合わない（数えるのはアプリの権威関数 `buildMakeupStockEntries`・`buildLecturePendingItemsByEntryKey` で、入力の作り方は保証台帳の洗い出しと共有＝`tools/invAuditEntry.ts` の
   `collectSnapshotMakeupStockEntries`・`tools/ui-patrol/stock.ts`。道具の側に別の数え方は作らない）。出欠を押したのに記録が付かない・生徒が席に残る・振替先に座らない。
   操作した机の中で、ほかの席の生徒・講師・メモ・保留の下段・ほかの生徒の記録が変わった。休みで増えた振替が未消化振替の一覧から選べない。元に戻す・やり直し・保存・読み込み直しで在庫が変わった。
-- テンプレ保存（a・d）: 操作の前に休み・振無休・出席の記録があり、そのコマの席にいなかった生徒を、同じコマの席に置き直した（`docs/spec-template-conflict-v2.md` §2-4「生徒の記録が勝つ」・`checkAttendanceRecordsHold`）。
+- テンプレ保存（a・d）: 操作の前に休み・振無休・出席・「移)」の記録があり（判定はテンプレ保存と同じ `isTemplateBlockingRecordStatus`）、そのコマの席にいなかった生徒を、同じコマの席に置き直した（`docs/spec-template-conflict-v2.md` §2-4「生徒の記録が勝つ」・`checkAttendanceRecordsHold`）。
 - localhost 以外への通信を試みた。画面でエラーが出た。
 
 **知らせるだけのもの**

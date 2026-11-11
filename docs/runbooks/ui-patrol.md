@@ -44,7 +44,7 @@ echo "終了コード: $?"
 | `--seed-file <path>` | 前に作った伏せ字の種データ(`<out>/<教室ID>.seed.json`)で流し直す(取得しない)。`--classroom` と同じ数・同じ順 |
 | `--headed` | ブラウザを画面に出す(手元の PC で動きを見たいとき) |
 | `--baseline-ref <git の ref>` | **変更前のコードと自動で比べる**(§4)。その ref のアプリで同じ台本を先に流し、今の作業ツリーの結果と比べて「変」を 新しい／前から／消えた に分ける。例 `--baseline-ref origin/main` |
-| `--baseline <report.json>` | 前に流した報告(`<out>/report.json`)と比べる。同じ種データ(`--seed-file`)で流したものどうしだけ |
+| `--baseline <report.json>` | 前に流した報告(`<out>/report.json`)と比べる。同じ種データ(`--seed-file`)で流したものどうしだけ。台本を足す前(この版より前)に取った報告とは比べない(取り直す)。`--baseline-ref` は同じ台本で 2 回流すので影響なし |
 
 台本(教室ごとにこの順で流れる。操作は室長と同じ画面操作。設計は `docs/test-strategy.md` 層 5):
 
@@ -193,6 +193,7 @@ node tools/ui-patrol.mjs --out "$S" --classroom KzFnOQoTFLsCxwUp1tvh --key 2026-
 |---|---|---|
 | `ScheduleBoardScreen.tsx` の `computeStudentAbsentMark`: 通常の休みで振替元を台帳へ積まない | 休みで在庫が増えない(INV-06) | `[変・新] 在庫の増減が仕様と違う: 未消化振替 s011 算国 残 0 → 0(増減 0・仕様では +1)`＋`[変・新] 休みで増えた振替を未消化振替の一覧から選べない`・終了コード 1 |
 | `markStudentAbsentNoMakeupAt`: 振無休の記録を付けない／`handleMarkStudentAttended`: 隣の席の生徒も外す | 記録が付かない／ほかの生徒が変わる | `[変・新] 出欠を付けたのに盤面に効いていない(記録「振無休」が付かない)`＋`[変・新] 出欠の操作で同じ机のほかの部分が変わった(席1の生徒)`ほか・終了コード 1 |
+| (参考)テンプレ保存の §2-4「記録が勝つ」: `templateConflictRules.ts` の `collectTemplateBlockersInCell` で休みの記録を根拠に数えない(1 行)。さらに 休みで抑止キーを積まない(`computeStudentAbsentMark`)・管理セルの抑止を当てない(`buildTemplateDiffTemplateCells`)・盤面から導く抑止を当てない(`buildAppliedManagedPostFreezeCells`)を最大 3 行まで重ねた | 記録のコマに生徒を置き直す | 日大前校の形・`--scenario e,a`(2026-11-11)。**どれも盤面は壊す前と同じ**(a の変わった机 319 机のまま)・終了コード 0。記録のコマへの置き直しは別の守りでも止まっていて、1〜3 行では盤面に出なかった(どこで止まっているかは未調査)。点検 `checkAttendanceRecordsHold` そのものはユニット(偽のテンプレ保存が置き直す形 → a で stop)で確かめてある |
 
 **変更前との比較が効くか**: `computeStudentMove` に「関係ない机にメモを書く」1 行を一時的に足して `--scenario b --baseline-ref HEAD` で流すと、
 変更前は 0 件・今回は `[変・新] 変わってよい範囲の外の机が変わった` 6 件で終了コード 1(確かめたあと戻した・コミットなし)。
