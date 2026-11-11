@@ -11,7 +11,7 @@ type: project
 
 **決定(オーナー回答 2026-11-11)**: データは毎回の最新だけ(過去は `--key`)／台本は標準(移動 6 か所)／マージ前に回して「変」が出たら止める／毎朝の健診には入れない。
 
-**回し方**: `node tools/ui-patrol.mjs --out <スクラッチ領域>/…`(約 6 分〔台本 d を足す前は約 4 分〕・終了コード 0/1/2・手順 docs/runbooks/ui-patrol.md・設計 docs/test-strategy.md 層 5)。
+**回し方**: `node tools/ui-patrol.mjs --out <スクラッチ領域>/…`(約 7 分〔台本 e を足す前は約 6 分・d を足す前は約 4 分〕・終了コード 0/1/2・手順 docs/runbooks/ui-patrol.md・設計 docs/test-strategy.md 層 5)。
 盤面のロジック・画面・テンプレ・保存/読み込みを変えたら回す(safe-release のチェックリスト)。
 
 **作り**
@@ -22,7 +22,7 @@ type: project
 - 読み口: `window.__komahyouUiPatrol.readClassroom()`(`src/utils/uiPatrolHook.ts`・開発用ビルド かつ ローカルモードだけ)。本番ビルドの番人 `tools/check-dist-dev-hooks.mjs`。
 - 点検(`boardFacts.ts`・`checks.ts`): 盤面の「意味」(本物の講師・生徒・出自・出欠記録・メモ・保留の下段)で比べる。出自・講師なしはアプリの権威関数。
 - 台本(`scenarios.mjs`): 起動 → c 保存→読み込み直し → b 生徒の移動(長押しドラッグ・元に戻す・やり直し) → a テンプレを何も変えずに保存(反映日=来週の月曜)
-  → d テンプレを実際に変えて保存(第 2 段・2026-11-11。生徒を 1 人足す → 講師を替える → 机を消す を 1 回の保存に 1 種類ずつ・別々のコマ・最後に保存→読み込み直し)。`--random n` はでたらめ操作(試験的)。
+  (a の前に e 出欠〔第 2 段の 2 本目・2026-11-11〕)→ d テンプレを実際に変えて保存(第 2 段・2026-11-11。生徒を 1 人足す → 講師を替える → 机を消す を 1 回の保存に 1 種類ずつ・別々のコマ・最後に保存→読み込み直し)。`--random n` はでたらめ操作(試験的)。
 - 台本 d の候補選びは `tools/ui-patrol/templateEdit.ts`(テンプレ作成の画面と同じ机を `resolveTemplateDiffBaseline` で作る・盤面で前の版のその机が当たり手入力の無い机だけ・
   生徒と講師は画面のプルダウンの選択肢から `--seed` の種で選ぶ)。点検は `checks.ts` の `checkTemplateEditApplied`(起きるはずの変化・規則で置かれない日は知らせるだけ)と
   `checkTemplateEditSaved`(保存したテンプレに変更が入っているか)。テンプレ保存の点検の組み合わせは a と d で `collectTemplateSaveFindings` 1 つ。
@@ -47,6 +47,15 @@ type: project
   `templateDiffApply.ts` の `stripUnmarkedRegularStudents`・`resolveTemplateDeskTeacher` を 1 行壊しても巡回の盤面は変わらなかった。講師の置き場は保存後の読み直し(再マージ)が
   通常授業の行から作り直すので、反映の途中の講師の選び方を壊しても室長に見える不具合にならない。「わざと壊す」は盤面に出る所(手入力の拾い上げ・画面の追加)で行う。
 - (台本 d) d だけ流すと(`--scenario d`)1 回目の保存で先の版(反映日が来週より先)の中身も当たり、変わった机にその分が混ざる(注に出る)。ふだんは a のあと。
+
+- (台本 e・2026-11-11) 出欠の入口は盤面の生徒メニュー(`menu-absence-button` など。保留の机の上段は「出席」が無い)。振替先は ツールバー「未消化振替」→ 生徒の行
+  (`makeup-stock-entry-{生徒キー__- の記号を - に}`・JS の置換は UTF-16 の 1 文字ずつ)→ 振替元の行(`stock-origin-item-N`・文字は「科目 2026/11/17(火) 4限 (理由)」)→ 空欄の席。
+  選択の取り消しは `cancel-selection-button`(prop で付くので `PROP_TESTIDS` で別に見張る)。在庫は `tools/ui-patrol/stock.ts`(アプリの関数・入力の作り方は `invAuditEntry.ts` の `readSnapshotInputs` を共有)。
+- (台本 e) 手動追加(`manualAdded`)・編集で振替にした生徒(`editedToMakeup`・`editedFromRegular`)は未消化振替の消化に数えない(`collectMakeupUsageByKey`)ので「休み +1」で確かめられない。
+  生徒の事実(`boardFacts.ts`)はこの印を持たない(署名に入れると読み込み直しで誤報しうる)ので、教室データから席を集めて除く(`collectStockIneligibleSeatKeys`)。
+- (台本 e) 範囲は机単位だと、同じ机の隣の席の生徒が消えても素通りした(「わざと壊す」で分かった)。机の中は操作した席とその生徒の記録 1 件だけ変わってよい(`checkAttendanceApplied`)。
+- (台本 e) 振替先を先に選ぶと、出欠の候補の生徒の机の空いた席を取ってしまい候補が減った。出欠の操作を先に選び、振替先は残りの机から選ぶ。
+- (台本 e) 振替の休みは台帳に振替元を積まない(消化が外れて元の振替元が戻る＝+1)。偽のアプリで両方積むと +2 になる(テストの作り方の注意)。
 
 **効くことの確かめ**: 緑が丘 11/10 朝の形(`--key 2026-11-10T03-00`)・台本 a・反映日 11/16。修正前(v1.5.714)= 止める所見 29(うち「手入力の生徒の講師が変わった」8)。今のコード= その所見 0。
 戻し方は `git checkout 7014a07a -- src/components/schedule-board/{ScheduleBoardScreen.tsx,templateDeskOrderRestore.ts,templateDiffApply.ts,templateTransferFollow.ts,checklistPrep.ts}` → 流す → `git checkout HEAD -- …`。
@@ -74,5 +83,9 @@ type: project
 
 **次のセッションへの引き継ぎ(2026-11-11 オーナー回答)**: 第 2 段の残りは推奨順(台本 → 事故の日の形 → でたらめ操作 → 毎晩)。手順は `docs/plan-2026-11-11-ui-patrol-stage2-handoff.md`。休みの講師を同じコマへ手で置いたら休みをコマ全体で解除する(案 1)は v1.5.723 で済み(spec-template-conflict-v2 §9-25)。
 
-**第 2 段の残り(台帳 `ui-patrol-stage2`)**: 台本を足す(出欠・講師の移動・丸ごと振替・休日設定・講習の自動割振。テンプレを実際に変えて保存=台本 d は済み)／でたらめ操作を既定に／毎晩の自動実行／過去の事故の日の形の一覧。
+**台本 e が効くこと(2026-11-11)**: 緑が丘の形・`--scenario e`・壊す前の報告と `--baseline` で比べた(どれも戻した)。通常の休みで振替元を積まない(`computeStudentAbsentMark`)=
+`[変・新]` 在庫の増減 0(仕様 +1)＋一覧から選べない・終了コード 1。振無休の記録を付けない＋出席で隣の席も外す=`[変・新]` 記録が付かない＋同じ机のほかの部分が変わった・終了コード 1。
+今のコードの本番 2 校(11/11 19:45)は止める所見 0・全体 7 分 19 秒(e は 2 校で約 1 分 10 秒)。
+
+**第 2 段の残り(台帳 `ui-patrol-stage2`)**: 台本を足す(講師の移動・丸ごと振替・休日設定・講習の自動割振。テンプレを実際に変えて保存=台本 d・出欠=台本 e は済み)／でたらめ操作を既定に／毎晩の自動実行／過去の事故の日の形の一覧。
 カード 1(テンプレ保存前の自己点検)が同じ数え方を使うときは `tools/ui-patrol/boardFacts.ts` を `src/` へ移して共有する。

@@ -6,12 +6,15 @@ import { collectBoardFacts } from './boardFacts.ts'
 import {
   PATROL_FINDING_CODES,
   applyKnownIssues,
+  checkAttendanceApplied,
+  checkAttendanceRecordsHold,
   checkAuditNotWorse,
   checkManualInputsNotLost,
   checkManualStudentsKeepTeacher,
   checkOutsideAllowedRange,
   checkPendingCountMatchesPreview,
   checkSameState,
+  checkStockDeltas,
   checkTeacherlessStudentsNotAdded,
   checkTemplateEditApplied,
   checkTemplateEditSaved,
@@ -79,7 +82,9 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   expect(PATROL_FINDING_CODES).toContain('template-edit-not-applied')
   expect(PATROL_FINDING_CODES).toContain('template-edit-not-saved')
   expect(PATROL_FINDING_CODES).toContain('template-edit-held-by-rule')
-  expect(PATROL_FINDING_CODES).toHaveLength(25)
+  // 台本 e(出欠・2026-11-11 第 2 段の 2 本目)
+  for (const code of ['stock-delta-mismatch', 'attendance-not-applied', 'attendance-blocked', 'attendance-record-overridden']) expect(PATROL_FINDING_CODES).toContain(code)
+  expect(PATROL_FINDING_CODES).toHaveLength(29)
 })
 
 describe('変わってよい範囲', () => {
@@ -592,5 +597,85 @@ describe('テンプレを変えて保存したとき、起きるはずの変化�
     expect(checkTemplateEditSaved({ effectiveStartDate: '2026-11-16', cells: [] }, deleteEdit)).toEqual([])
     expect(codes(checkTemplateEditSaved(template({ students: [null, null] }), deleteEdit))).toEqual(['stop:template-edit-not-saved'])
     expect(codes(checkTemplateEditSaved(null, addEdit))).toEqual(['stop:template-edit-not-saved'])
+  })
+})
+
+// ── 台本 e(出欠): 在庫の増減・出欠記録が付いたか・テンプレ保存が出欠記録のコマに生徒を置き直さないか(§2-4 記録が勝つ)
+describe('台本 e の点検', () => {
+  const codes = (findings) => findings.map((finding) => `${finding.level}:${finding.code}`)
+  const facts = (cells, board) => collectBoardFacts(payload(cells, { board }))
+  const D = '2026-11-19'
+
+  it('在庫の増減: 仕様の増減(休み +1 など)と合えば所見なし。合わない鍵・仕様に無い鍵の増減は stop stock-delta-mismatch(生徒 ID と科目と数)', () => {
+    const before = { makeup: { 's1__数': 1, 's2__英': 2 }, lecture: { 'L1': 3 } }
+    expect(checkStockDeltas(before, { makeup: { 's1__数': 2, 's2__英': 2 }, lecture: { 'L1': 3 } }, { makeup: { 's1__数': 1 } })).toEqual([])
+    // 休みなのに増えない
+    const notIncreased = checkStockDeltas(before, before, { makeup: { 's1__数': 1 } })
+    expect(codes(notIncreased)).toEqual(['stop:stock-delta-mismatch'])
+    expect(notIncreased[0].message).toContain('s1 数')
+    expect(notIncreased[0].message).toContain('+1')
+    expect(notIncreased[0].studentId).toBe('s1')
+    // 2 増える
+    expect(codes(checkStockDeltas(before, { ...before, makeup: { ...before.makeup, 's1__数': 3 } }, { makeup: { 's1__数': 1 } }))).toEqual(['stop:stock-delta-mismatch'])
+    // ほかの生徒の在庫が動いた(残 0 になって行が消えたのも -2)・講習の残が動いた
+    expect(codes(checkStockDeltas(before, { makeup: { 's1__数': 2 }, lecture: { 'L1': 2 } }, { makeup: { 's1__数': 1 } }))).toEqual(['stop:stock-delta-mismatch', 'stop:stock-delta-mismatch'])
+    // 元に戻す・読み込み直しの点検にも使う(増減 0 が仕様・コードを指定できる)
+    expect(codes(checkStockDeltas(before, { ...before, makeup: { 's1__数': 2, 's2__英': 2 } }, {}, { code: 'undo-not-restored', label: '元に戻すで操作前に戻らない' }))).toEqual(['stop:undo-not-restored'])
+  })
+
+  it('出欠記録が付いたか: 席から外れ、その机にその生徒のその記録が増えていれば所見なし。付かない・席に残ったは stop attendance-not-applied', () => {
+    const op = { kind: 'mark', status: 'absent', seat: { cellId: `${D}_3`, deskIndex: 0, seat: 0 }, studentKey: 's1', subject: '数', lessonType: 'regular' }
+    const before = facts([cell(D, 3, [desk('d1', [student(), studentB()], { teacher: '講師A' })])])
+    const marked = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] })])])
+    expect(checkAttendanceApplied(before, marked, op)).toEqual([])
+    // 記録の種類が違う(振無休を押したのに休み)
+    expect(codes(checkAttendanceApplied(before, marked, { ...op, status: 'absent-no-makeup' }))).toEqual(['stop:attendance-not-applied'])
+    // 記録が付かない(生徒だけ消えた)
+    expect(codes(checkAttendanceApplied(before, facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A' })])]), op))).toEqual(['stop:attendance-not-applied'])
+    // 記録は付いたが生徒が席に残った
+    expect(codes(checkAttendanceApplied(before, facts([cell(D, 3, [desk('d1', [student(), studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] })])]), op))).toEqual(['stop:attendance-not-applied'])
+  })
+
+  it('操作した机でも、ほかの席の生徒・講師・メモ・保留の下段が変わったら stop outside-allowed-range(机の中の巻き込み)', () => {
+    const op = { kind: 'mark', status: 'absent', seat: { cellId: `${D}_3`, deskIndex: 0, seat: 0 }, studentKey: 's1', subject: '数', lessonType: 'regular' }
+    const before = facts([cell(D, 3, [desk('d1', [student(), studentB()], { teacher: '講師A' })])])
+    const record = { statusSlots: [status({ dateKey: D }), null] }
+    // 隣の生徒が消えた
+    expect(codes(checkAttendanceApplied(before, facts([cell(D, 3, [desk('d1', [null, null], { teacher: '講師A', ...record })])]), op))).toEqual(['stop:outside-allowed-range'])
+    // 講師が変わった
+    expect(codes(checkAttendanceApplied(before, facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師B', ...record })])]), op))).toEqual(['stop:outside-allowed-range'])
+    // 振替先へ置く: 先の机の講師・隣の席・記録は変わらない
+    const place = { kind: 'place', to: { cellId: `${D}_3`, deskIndex: 0, seat: 1 }, studentKey: 's1', subject: '数' }
+    const target = facts([cell(D, 3, [desk('d1', [studentB(), null], { teacher: '講師A' })])])
+    expect(checkAttendanceApplied(target, facts([cell(D, 3, [desk('d1', [studentB(), makeupA()], { teacher: '講師A' })])]), place)).toEqual([])
+    expect(codes(checkAttendanceApplied(target, facts([cell(D, 3, [desk('d1', [null, makeupA()], { teacher: '講師A' })])]), place))).toEqual(['stop:outside-allowed-range'])
+  })
+
+  it('振替先へ置いたか: 先の席にその生徒の振替(同じ科目)が座っていれば所見なし。いない・別の種類は stop attendance-not-applied', () => {
+    const op = { kind: 'place', to: { cellId: `${D}_4`, deskIndex: 1, seat: 0 }, studentKey: 's1', subject: '数' }
+    const before = facts([cell(D, 4, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])])
+    const placed = facts([cell(D, 4, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [makeupA(), null], { teacher: '講師B' })])])
+    expect(checkAttendanceApplied(before, placed, op)).toEqual([])
+    expect(codes(checkAttendanceApplied(before, before, op))).toEqual(['stop:attendance-not-applied'])
+    expect(codes(checkAttendanceApplied(before, facts([cell(D, 4, [desk('d1'), desk('d2', [student(), null], { teacher: '講師B' })])]), op))).toEqual(['stop:attendance-not-applied'])
+  })
+
+  it('記録が勝つ(§2-4): 前に出欠記録があり席にいなかった生徒が、操作のあと同じコマの席に座ったら stop attendance-record-overridden。反映日より前・移動の記録・前から座っていた生徒は見ない', () => {
+    const recorded = (kind) => facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D, status: kind }), null] }), desk('d2', [null, null], { teacher: '講師B' })])])
+    const replaced = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] }), desk('d2', [student({ origin: 'template' }), null], { teacher: '講師B' })])])
+    for (const kind of ['absent', 'absent-no-makeup', 'attended']) {
+      const found = checkAttendanceRecordsHold(recorded(kind), replaced, { fromDateKey: '2026-11-16' })
+      expect(codes(found)).toEqual(['stop:attendance-record-overridden'])
+      expect(found[0]).toMatchObject({ dateKey: D, slotNumber: 3, studentId: 's1' })
+    }
+    // 置き直されていなければ所見なし
+    expect(checkAttendanceRecordsHold(recorded('absent'), recorded('absent'), { fromDateKey: '2026-11-16' })).toEqual([])
+    // 反映日より前のコマは見ない
+    expect(checkAttendanceRecordsHold(recorded('absent'), replaced, { fromDateKey: '2026-11-23' })).toEqual([])
+    // 移動の記録(移)は見ない
+    expect(checkAttendanceRecordsHold(recorded('moved'), replaced, { fromDateKey: '2026-11-16' })).toEqual([])
+    // 前から同じコマに座っていた(記録と授業が並んでいた)なら新しく置き直したのではない
+    const seatedBefore = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] }), desk('d2', [student(), null], { teacher: '講師B' })])])
+    expect(checkAttendanceRecordsHold(seatedBefore, replaced, { fromDateKey: '2026-11-16' })).toEqual([])
   })
 })

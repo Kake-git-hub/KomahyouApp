@@ -1,0 +1,74 @@
+// 画面の自動巡回(tools/ui-patrol.mjs・台本 e「出欠」)の在庫の数え方。操作の前後の教室データから、未消化振替と未消化講習の残を読む。
+// ★数え方はアプリの権威関数をそのまま使う(道具の側に別の数え方を作らない・INV-06):
+//   未消化振替 = buildMakeupStockEntries(盤面画面の rawMakeupStockEntries と同じ入力。入力の作り方は保証台帳の洗い出しと共有＝
+//   tools/invAuditEntry.ts の collectSnapshotMakeupStockEntries)・未消化講習 = buildLectureStockEntries → buildLecturePendingItemsByEntryKey
+//   (盤面画面の lecturePendingItemsByEntryKey と同じ)。
+// ★純関数。入力を書き換えない。ネットワークにもファイルにも触れない。
+import { buildLecturePendingItemsByEntryKey, buildLectureStockEntries } from '../../src/components/schedule-board/lectureStock'
+import type { SpecialSessionRow } from '../../src/components/special-data/specialSessionModel'
+import type { StudentRow } from '../../src/components/basic-data/basicDataModel'
+import type { AppSnapshotPayload, LectureStockCountMap, ManualLectureStockOrigin } from '../../src/types/appState'
+import { collectSnapshotMakeupStockEntries } from '../invAuditEntry'
+
+/** 未消化振替の 1 行(画面の「未消化振替」の行と同じ中身のうち、点検と振替元の選び方に使うものだけ)。 */
+export type MakeupStockRow = {
+  /** `${生徒キー}__${科目}`(buildMakeupStockKey)。 */
+  key: string
+  balance: number
+  remainingOriginDates: string[]
+  remainingOriginSlots: Array<number | null>
+  remainingOriginLabels: string[]
+}
+
+/** makeup: 未消化振替の残(鍵＝生徒キー__科目)。lecture: 未消化講習の残(鍵＝講習の在庫の行の鍵・残 0 の行は入らない)。 */
+export type StockBalances = { makeup: Record<string, number>; lecture: Record<string, number>; makeupRows: MakeupStockRow[] }
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+export function collectStockBalances(payload: AppSnapshotPayload, today: string): StockBalances {
+  const makeup: Record<string, number> = {}
+  const makeupRows: MakeupStockRow[] = []
+  for (const entry of collectSnapshotMakeupStockEntries(payload, today)) {
+    makeup[entry.key] = (makeup[entry.key] ?? 0) + entry.balance
+    makeupRows.push({
+      key: entry.key,
+      balance: entry.balance,
+      remainingOriginDates: [...entry.remainingOriginDates],
+      remainingOriginSlots: [...entry.remainingOriginSlots],
+      remainingOriginLabels: [...entry.remainingOriginLabels],
+    })
+  }
+  const safe = (isPlainObject(payload) ? payload : {}) as Partial<AppSnapshotPayload>
+  const boardState = (isPlainObject(safe.boardState) ? safe.boardState : {}) as Record<string, unknown>
+  const specialSessions = asArray<SpecialSessionRow>(safe.specialSessions)
+  const pending = buildLecturePendingItemsByEntryKey({
+    rawLectureStockEntries: buildLectureStockEntries({ specialSessions, students: asArray<StudentRow>(safe.students) }),
+    specialSessions,
+    manualLectureStockCounts: (isPlainObject(boardState.manualLectureStockCounts) ? boardState.manualLectureStockCounts : {}) as LectureStockCountMap,
+    manualLectureStockOrigins: (isPlainObject(boardState.manualLectureStockOrigins) ? boardState.manualLectureStockOrigins : {}) as Record<string, ManualLectureStockOrigin[]>,
+    fallbackLectureStockStudents: (isPlainObject(boardState.fallbackLectureStockStudents) ? boardState.fallbackLectureStockStudents : {}) as Record<string, { displayName: string }>,
+  })
+  const lecture: Record<string, number> = {}
+  for (const [entryKey, scoped] of pending) {
+    if (scoped.pendingItems.length > 0) lecture[entryKey] = scoped.pendingItems.length
+  }
+  return { makeup, lecture, makeupRows }
+}
+
+/**
+ * 振替元(日付×時限)の画面の文字(未消化振替の一覧の「元の授業」の文字・remainingOriginLabels)。台本が「選んで置く」振替元を画面の行から探すのに使う。
+ * 時限が一致する行を先に、無ければ同じ日付の行。見つからなければ ''。
+ */
+export function findMakeupOriginLabel(balances: StockBalances, stockKey: string, dateKey: string, slotNumber: number): string {
+  const row = balances.makeupRows.find((item) => item.key === stockKey)
+  if (!row) return ''
+  const exact = row.remainingOriginDates.findIndex((date, index) => date === dateKey && row.remainingOriginSlots[index] === slotNumber)
+  const index = exact >= 0 ? exact : row.remainingOriginDates.findIndex((date) => date === dateKey)
+  return index >= 0 ? (row.remainingOriginLabels[index] ?? '') : ''
+}

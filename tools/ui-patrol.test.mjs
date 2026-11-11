@@ -453,7 +453,7 @@ describe('ui-patrol --baseline-ref(変更前のコードを道具が自分で流
       const { out: baselineOut, ...baselineOptions } = calls[0].options
       const { out: currentOut, ...currentOptions } = calls[1].options
       expect(baselineOptions).toEqual(currentOptions)
-      expect([currentOptions.moves, currentOptions.seed, currentOptions.random, currentOptions.scenarios]).toEqual([3, 7, 2, ['boot', 'c', 'b', 'a', 'd']])
+      expect([currentOptions.moves, currentOptions.seed, currentOptions.random, currentOptions.scenarios]).toEqual([3, 7, 2, ['boot', 'c', 'b', 'e', 'a', 'd']])
       expect(baselineOut).toBe(path.join(env.dir, 'out', 'baseline'))
       expect(currentOut).toBe(path.join(env.dir, 'out'))
       expect(calls[1].backupKey).toBe(calls[0].backupKey)

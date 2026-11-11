@@ -108,15 +108,13 @@ function parseTodayDate(today: string) {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed
 }
 
-export function auditClassroomSnapshot(input: {
-  classroomId: string
-  payload: AppSnapshotPayload
-  /** YYYY-MM-DD。これより前の日付の所見は past に数える。 */
-  today: string
-  known?: KnownIssue[]
-}): InvAuditResult {
-  const { classroomId, today } = input
-  const payload = (isPlainObject(input.payload) ? input.payload : {}) as Partial<AppSnapshotPayload>
+/**
+ * 教室データから、盤面画面と同じ形の入力(机の数・開校日を当てた週・台帳・生徒キーの引き方)を作る。
+ * 保証台帳の洗い出し(auditClassroomSnapshot)と画面の自動巡回の在庫の数え方(collectSnapshotMakeupStockEntries)が同じものを使う
+ * (在庫の数え方を 2 つ作らない・tools/ui-patrol/stock.ts)。
+ */
+function readSnapshotInputs(rawPayload: unknown) {
+  const payload = (isPlainObject(rawPayload) ? rawPayload : {}) as Partial<AppSnapshotPayload>
   const boardState = isPlainObject(payload.boardState) ? payload.boardState : null
   const rawWeeks = normalizeWeeks(boardState?.weeks)
   const classroomSettings = normalizeSettings(payload.classroomSettings, rawWeeks)
@@ -126,14 +124,12 @@ export function auditClassroomSnapshot(input: {
   const specialSessions = asArray<SpecialSessionRow>(payload.specialSessions)
   // 盤面画面の normalizedWeeks と同じ(机の数・開校日)。
   const weeks = applyClassroomAvailability(rawWeeks, classroomSettings)
-  const cells = weeks.flat()
-  const cellById = new Map(cells.map((cell) => [cell.id, cell]))
   const suppressed = asArray<string>(boardState?.suppressedRegularLessonOccurrences)
   const wholeDayPairKeys = suppressed.filter((key) => typeof key === 'string' && key.startsWith(WHOLE_DAY_PAIR_PREFIX))
   const templatePendingDesks = normalizeTemplatePendingDeskMap(boardState?.templatePendingDesks)
   const manualMakeupAdjustments = (isPlainObject(boardState?.manualMakeupAdjustments) ? boardState.manualMakeupAdjustments : {}) as Record<string, ManualMakeupOrigin[]>
   const suppressedMakeupOrigins = (isPlainObject(boardState?.suppressedMakeupOrigins) ? boardState.suppressedMakeupOrigins : {}) as Record<string, ManualMakeupOrigin[]>
-  const todayDate = parseTodayDate(today)
+  const fallbackMakeupStudents = (isPlainObject(boardState?.fallbackMakeupStudents) ? boardState.fallbackMakeupStudents : {}) as Record<string, { studentName: string; displayName: string; subject: string }>
 
   // 盤面画面の managedStudentByAnyName / managedStudentNameMap と同じ作り方(登録名・表示名の両方を引く・vanishedMakeupReportEntry と同じ)。
   const studentByAnyName = new Map<string, StudentRow>()
@@ -155,6 +151,53 @@ export function auditClassroomSnapshot(input: {
     const fallbackId = `name:${displayNameByAnyName.get(student.name) ?? student.name}`
     return student.manualAdded ? `manual:${fallbackId}` : fallbackId
   }
+  return {
+    payload, boardState, rawWeeks, classroomSettings, students, teachers, regularLessons, specialSessions, weeks,
+    suppressed, wholeDayPairKeys, templatePendingDesks, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents,
+    resolveManagedId, resolveComparableKey, resolveStockKey,
+  }
+}
+
+type SnapshotInputs = ReturnType<typeof readSnapshotInputs>
+
+function buildSnapshotMakeupStockEntries(inputs: SnapshotInputs, todayDate: Date) {
+  return buildMakeupStockEntries({
+    students: inputs.students, teachers: inputs.teachers, regularLessons: inputs.regularLessons, classroomSettings: inputs.classroomSettings, weeks: inputs.weeks,
+    manualAdjustments: inputs.manualMakeupAdjustments,
+    suppressedOrigins: inputs.suppressedMakeupOrigins,
+    fallbackStudents: inputs.fallbackMakeupStudents,
+    resolveStudentKey: inputs.resolveStockKey,
+    today: todayDate,
+    templatePendingDesks: inputs.templatePendingDesks,
+    wholeDayPairKeys: inputs.wholeDayPairKeys,
+  })
+}
+
+/**
+ * 未消化振替の一覧(盤面画面の rawMakeupStockEntries と同じ権威関数 buildMakeupStockEntries・同じ入力)。残が 0 の行は入らない(アプリと同じ)。
+ * today(YYYY-MM-DD)は保証台帳の洗い出しと同じ扱い(休日の自動発生の基準日)。
+ */
+export function collectSnapshotMakeupStockEntries(payload: AppSnapshotPayload, today: string) {
+  return buildSnapshotMakeupStockEntries(readSnapshotInputs(payload), parseTodayDate(today))
+}
+
+export function auditClassroomSnapshot(input: {
+  classroomId: string
+  payload: AppSnapshotPayload
+  /** YYYY-MM-DD。これより前の日付の所見は past に数える。 */
+  today: string
+  known?: KnownIssue[]
+}): InvAuditResult {
+  const { classroomId, today } = input
+  const snapshotInputs = readSnapshotInputs(input.payload)
+  const {
+    payload, boardState, rawWeeks, classroomSettings, students, teachers, regularLessons, specialSessions, weeks,
+    suppressed, wholeDayPairKeys, templatePendingDesks, manualMakeupAdjustments, suppressedMakeupOrigins,
+    resolveManagedId, resolveComparableKey, resolveStockKey,
+  } = snapshotInputs
+  const cells = weeks.flat()
+  const cellById = new Map(cells.map((cell) => [cell.id, cell]))
+  const todayDate = parseTodayDate(today)
 
   const findings: InvAuditFinding[] = []
   const notes: string[] = []
@@ -187,16 +230,7 @@ export function auditClassroomSnapshot(input: {
   }
 
   // ── INV-06 在庫が負(未消化振替の残・未消化講習の残) ──
-  const makeupEntries = buildMakeupStockEntries({
-    students, teachers, regularLessons, classroomSettings, weeks,
-    manualAdjustments: manualMakeupAdjustments,
-    suppressedOrigins: suppressedMakeupOrigins,
-    fallbackStudents: (isPlainObject(boardState?.fallbackMakeupStudents) ? boardState.fallbackMakeupStudents : {}) as Record<string, { studentName: string; displayName: string; subject: string }>,
-    resolveStudentKey: resolveStockKey,
-    today: todayDate,
-    templatePendingDesks,
-    wholeDayPairKeys,
-  })
+  const makeupEntries = buildSnapshotMakeupStockEntries(snapshotInputs, todayDate)
   // 未消化振替の残(balance)はアプリが 0 を下限にしている(spec-makeup-stock §4「マイナス残廃止」)。ここは下限が外れたときの番人で、
   // 今の作りでは出ない。振替元の根拠が無い振替(＝実質の過剰消化)は下の collectOrphanedMakeups で見る。
   for (const entry of makeupEntries) {

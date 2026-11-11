@@ -5,7 +5,7 @@
 //   待ちが時間切れになったら PatrolAbortError を投げる(台本が画面写真を撮って教室を「中断」にする。所見にはしない)。
 // ★Playwright は package.json に入れない(この環境の全体の node_modules から読む)。読めなければ loadPlaywright() が null を返す。
 import { createRequire } from 'node:module'
-import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, TESTIDS, byTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { DRIVER_TIMING, PROP_TESTIDS, SEARCHABLE_SELECT_TESTIDS, TESTIDS, TESTID_PREFIXES, byTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 export class PatrolAbortError extends Error {
   constructor(message) {
@@ -457,6 +457,81 @@ export async function closeTemplateEditor(session) {
   const { page } = session
   await page.locator(byTestId(TESTIDS.templateClose)).click()
   await withTimeout(page.locator(byTestId(TESTIDS.openTemplate)).waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS }), 'テンプレ編集が閉じませんでした(コマ表に戻る)。')
+}
+
+// ── 台本 e(出欠): 盤面の生徒メニューで出欠を付ける・未消化振替の一覧から振替先へ置く。室長と同じく、席を押してメニューのボタンを押す
+// (ScheduleBoardScreen.tsx の handleStudentClick → 生徒メニュー「出席」「休み」「振無休」／ツールバー「未消化振替」→ 生徒の行 → 振替元 → 空欄の席)。
+
+const ATTENDANCE_BUTTONS = { attended: TESTIDS.menuAttendance, absent: TESTIDS.menuAbsence, 'absent-no-makeup': TESTIDS.menuAbsenceNoMakeup }
+
+/**
+ * 盤面の生徒の席を押して生徒メニューを開き、出欠のボタン(status: absent / absent-no-makeup / attended)を押す。ステータスの文を返す。
+ * メニューにそのボタンが無ければ(保留の机の上段は出席が無いなど)メニューを閉じて、押す前と同じ文を返す(台本は「何も起きない」と見て中断する)。
+ */
+export async function markStudentAttendance(session, seat, status) {
+  const { page } = session
+  const testId = ATTENDANCE_BUTTONS[status]
+  if (!testId) throw new PatrolAbortError(`知らない出欠の種類です: ${status}`)
+  const statusBefore = await readStatusText(session)
+  const seatCell = page.locator(byTestId(studentCellTestId(seat)))
+  await waitVisible(seatCell, `盤面の席 ${describeTemplatePosition(seat)} が画面にありません。`)
+  await seatCell.click()
+  const menu = page.locator(byTestId(TESTIDS.studentMenu))
+  await waitVisible(menu, `盤面の席 ${describeTemplatePosition(seat)} の生徒メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const button = menu.locator(byTestId(testId))
+  if ((await button.count()) === 0) {
+    await closeMenu(menu)
+    return statusBefore
+  }
+  await button.first().click()
+  await waitHidden(menu, `出欠を付けたあと生徒メニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  return waitForStatusChange(session, statusBefore)
+}
+
+async function closeMakeupStockPanels(session) {
+  const { page } = session
+  const modal = page.locator(byTestId(TESTIDS.stockActionModal))
+  if (await modal.isVisible().catch(() => false)) await modal.locator(byTestId(TESTIDS.stockActionModalCancel)).first().click().catch(() => {})
+  const panel = page.locator(byTestId(TESTIDS.makeupStockPanel))
+  if (await panel.isVisible().catch(() => false)) await panel.locator(byTestId(TESTIDS.makeupStockClose)).first().click().catch(() => {})
+}
+
+/**
+ * 未消化振替から振替先へ置く: ツールバー「未消化振替」→ 生徒の行(stockStudentKey)→ 振替元を選ぶ画面の行の文字を choose(items) に渡して選ぶ → 先の空欄の席を押す。
+ * 戻り値 { placed, status, reason, chosenText(選んだ振替元の行の文字) }。一覧に生徒が無い・選べる振替元が無いときは画面を閉じて placed: false。
+ * 置いても盤面が変わらなかった(アプリが断った)ときに選択が残らないよう、選択の取り消しボタンが出ていれば押す。
+ */
+export async function placeMakeupFromStock(session, { stockStudentKey, choose }, to) {
+  const { page } = session
+  const statusBefore = await readStatusText(session)
+  await page.locator(byTestId(TESTIDS.makeupStockChip)).click()
+  const panel = page.locator(byTestId(TESTIDS.makeupStockPanel))
+  await waitVisible(panel, `未消化振替の一覧が開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const row = panel.locator(byTestId(makeupStockEntryTestId(stockStudentKey)))
+  if ((await row.count()) === 0 || (await row.first().isDisabled())) {
+    await closeMakeupStockPanels(session)
+    return { placed: false, status: await readStatusText(session), reason: '未消化振替の一覧にその生徒の行が無い(または押せない)' }
+  }
+  await row.first().click()
+  const modal = page.locator(byTestId(TESTIDS.stockActionModal))
+  await waitVisible(modal, `振替元を選ぶ画面が開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const items = modal.locator(`[data-testid^="${TESTID_PREFIXES.stockOriginItem}"]`)
+  const texts = (await items.allInnerTexts()).map((text) => text.replace(/\s+/g, ' ').trim())
+  const index = choose(texts)
+  if (index < 0 || index >= texts.length) {
+    await closeMakeupStockPanels(session)
+    return { placed: false, status: await readStatusText(session), reason: `振替元を選ぶ画面に合う行が無い(行 ${texts.length})` }
+  }
+  await items.nth(index).click()
+  await waitHidden(modal, '振替元を選んだあと画面が閉じませんでした。')
+  await waitHidden(panel, '振替元を選んだあと未消化振替の一覧が閉じませんでした。')
+  const target = page.locator(byTestId(studentCellTestId(to)))
+  await waitVisible(target, `振替先の席 ${describeTemplatePosition(to)} が画面にありません。`)
+  await target.click()
+  const status = await waitForStatusChange(session, statusBefore)
+  const cancel = page.locator(byTestId(PROP_TESTIDS.cancelSelection))
+  if (await cancel.isVisible().catch(() => false)) await cancel.first().click().catch(() => {})
+  return { placed: true, status, chosenText: texts[index] }
 }
 
 export async function takeScreenshot(session, file) {
