@@ -1,5 +1,6 @@
 // 画面の自動巡回(tools/ui-patrol.mjs・docs/test-strategy.md 層 5「台本(第 1 段)」)の台本。
-// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (e) 出欠 → (f) 講師の移動・入れ替え・休み → (a) テンプレ保存 → (d) テンプレを実際に変えて保存 の順で、室長と同じ画面操作をし、
+// 教室ごとに 起動 → (c) 保存→読み込み直し → (b) 生徒の移動 → (e) 出欠 → (f) 講師の移動・入れ替え・休み → (a) テンプレ保存 → (d) テンプレを実際に変えて保存
+// (→ (g) 休日設定と解除・丸ごと振替〔既定では流さない・--scenario で挙げたときだけ〕)の順で、室長と同じ画面操作をし、
 // 操作のたびに「前の状態を読む → 操作 → 後の状態を読む → 点検 → 既知を外す → 報告へ足す」。
 // ★点検は tools/ui-patrol/checks.ts、盤面の事実は boardFacts.ts(どちらも esbuild で束ねた app から呼ぶ)。ここで規則を書き直さない。
 // ★報告に出すのは仮名・ID・件数・経路だけ(所見の message は checks.ts が作る。ここで足す注も ID と件数だけ)。
@@ -465,6 +466,53 @@ export function isTeacherInCell(facts, cellId, teacherName) {
   return false
 }
 
+// ── 台本 g(休日設定と解除・丸ごと振替〔作成と解除〕・2026-11-11 第 2 段の 4 本目・既定では流さない)。盤面の日付の見出しを押して出るメニュー
+// 「休日設定」「丸ごと振替」「丸ごと振替を解除」と、休日の見出しを押す(解除)・丸ごと振替の振替先の見出しを押す。入口は ScheduleBoardScreen.tsx の
+// handleDayHeaderClick → handleToggleHolidayDate(休日にする・解除は逆操作〔computeHolidayReleaseRestoration〕)・handleWholeDayTransferTargetClick →
+// handleWholeDayTransferPairTarget(付け替えの組 WHOLE_DAY_PAIR__・同じ曜日だけ・在庫中立)・handleReleaseWholeDayTransferPair(§9-20 作成→解除で元の形)。
+// 日付の選び方・休日設定の在庫の仕様の増減は tools/ui-patrol/dayOps.ts(束ねた app)。
+
+/**
+ * 休日設定で、その日の机のほかに変わってよい部分。根拠(handleToggleHolidayDate の休日にする側の commitWeeks):
+ * - classroomSettings.other: 休日の日付(holidayDates)・定休日を開けた日(forceOpenDates)。
+ * - 在庫の台帳: reconcileHolidayDeskStockReturns の ledgers(manualMakeupAdjustments・fallbackMakeupStudents・manualLectureStockCounts・
+ *   manualLectureStockOrigins・fallbackLectureStockStudents)と、科目だけ編集したテンプレの授業の自動発生を重ねない suppressedMakeupOrigins
+ *   (collectHolidayTemplateSubjectSuppressions)。
+ * 入れていないもの: 抑止キー(suppressedRegularLessonOccurrences)・回数の調整(scheduleCountAdjustments)・保留(templatePendingDesks)。休日にする側は渡さない。
+ */
+export const HOLIDAY_ALLOWED_SECTIONS = [
+  'classroomSettings.other',
+  'boardState.manualMakeupAdjustments',
+  'boardState.suppressedMakeupOrigins',
+  'boardState.fallbackMakeupStudents',
+  'boardState.manualLectureStockCounts',
+  'boardState.manualLectureStockOrigins',
+  'boardState.fallbackLectureStockStudents',
+]
+
+/**
+ * 休日の解除で変わってよい部分: 休日設定と同じ(台帳を控えどおり巻き戻す)＋抑止キー(resolveHolidayReleaseSuppressedOccurrences が、席へ戻せなかった
+ * 通常授業がテンプレから湧き直さないよう積み、席へ戻した授業の鍵は外す)。保留(下段へ戻す・決定記録 48)は机の事実に入るので部分には足さない。
+ * ★解除のあとは、休日にする前の盤面・在庫と全部同じか(作成→解除)を別に確かめる(round-trip-not-restored)。ここは操作 1 回の範囲だけ。
+ */
+export const HOLIDAY_RELEASE_ALLOWED_SECTIONS = [...HOLIDAY_ALLOWED_SECTIONS, 'boardState.suppressedRegularLessonOccurrences']
+
+/**
+ * 丸ごと振替(付け替え)の作成と解除で、振替元 D・振替先 D' の机のほかに変わってよい部分。根拠(handleWholeDayTransferPairTarget・
+ * handleReleaseWholeDayTransferPair の commitWeeks は盤面・抑止キー・保留だけを渡す): 組の鍵 WHOLE_DAY_PAIR__D__D'__0 と、差分反映が積む抑止キー
+ * (settleWholeDayTransferPairDates の addedSuppressedRegularLessonOccurrences)。保留は D・D' の机の事実に入る。在庫の台帳は渡さない(在庫中立)。
+ * ほかの日の机を範囲に入れない理由: 組を当てるのは D と D' のコマだけ(settleWholeDayTransferPairDates が日付で絞る)で、その日を振替元に持つ
+ * 「休)」の作り直し(settleWholeDayPairBlockedRecords)も組の振替元の日だけを触る。台本は前から組のある日・その日を含む抑止キーのある日を選ばない。
+ */
+export const WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS = ['boardState.suppressedRegularLessonOccurrences']
+
+/** dateKey(YYYY-MM-DD)の週の月曜(盤面の週は月曜から)。 */
+export function mondayOf(dateKey) {
+  const time = Date.parse(`${dateKey}T00:00:00Z`)
+  const offset = (new Date(time).getUTCDay() + 6) % 7
+  return new Date(time - offset * 86400000).toISOString().slice(0, 10)
+}
+
 /** dateKey(YYYY-MM-DD)から 7 日分。 */
 export function weekDateKeysFrom(mondayKey) {
   const start = Date.parse(`${mondayKey}T00:00:00Z`)
@@ -502,13 +550,67 @@ function describeCandidate(candidate) {
   return `${KIND_LABELS[candidate.kind] ?? candidate.kind}: ${describeSeat(candidate.from)} → ${describeSeat(candidate.to)}(生徒 ${candidate.studentId.startsWith('name:') ? 'ID なし' : candidate.studentId})`
 }
 
+const SECTION_DIFF_LIMIT = 40
+/** 差分ファイルの値 1 つの大きさの上限(テンプレのように大きい値は長さだけ残す)。 */
+const SECTION_VALUE_CHAR_LIMIT = 2000
+const clipValue = (value) => {
+  const text = JSON.stringify(value)
+  return text !== undefined && text.length > SECTION_VALUE_CHAR_LIMIT ? { clipped: true, length: text.length } : value
+}
+
 /**
- * stop の所見が指すコマ(日付×時限)の、操作の前後の机の事実をファイルに残す(人が画面写真と突き合わせて見立てるため)。
- * 中身は伏せ字のあとの仮名と ID だけ(出力先はスクラッチ領域)。コマは 40 まで。
+ * 部分(boardFacts.ts の sections の署名＝キーを並べ替えた JSON)の違いを、人が読める形にする。配列は増えた・減った要素(数で突き合わせる)、
+ * オブジェクトは値の違う鍵の前と後。40 件まで(越えた数は more)。署名が JSON でなければ前と後の文字列の長さだけ。
+ */
+export function summarizeSectionDiff(beforeSignature, afterSignature) {
+  let left
+  let right
+  try {
+    left = JSON.parse(beforeSignature)
+    right = JSON.parse(afterSignature)
+  } catch {
+    return { beforeLength: String(beforeSignature).length, afterLength: String(afterSignature).length }
+  }
+  if (Array.isArray(left) || Array.isArray(right) || left === null || right === null) {
+    if ((left === null || Array.isArray(left)) && (right === null || Array.isArray(right))) {
+      const counts = new Map()
+      for (const item of left ?? []) { const key = JSON.stringify(item); counts.set(key, (counts.get(key) ?? 0) + 1) }
+      const added = []
+      for (const item of right ?? []) {
+        const key = JSON.stringify(item)
+        const count = counts.get(key) ?? 0
+        if (count > 0) counts.set(key, count - 1)
+        else added.push(item)
+      }
+      const removed = [...counts.entries()].flatMap(([key, count]) => Array.from({ length: count }, () => JSON.parse(key)))
+      const total = added.length + removed.length
+      const result = { added: added.slice(0, SECTION_DIFF_LIMIT).map(clipValue), removed: removed.slice(0, Math.max(0, SECTION_DIFF_LIMIT - Math.min(added.length, SECTION_DIFF_LIMIT))).map(clipValue) }
+      if (total > SECTION_DIFF_LIMIT) result.more = total - SECTION_DIFF_LIMIT
+      return result
+    }
+  }
+  const changed = {}
+  let total = 0
+  for (const key of [...new Set([...Object.keys(left ?? {}), ...Object.keys(right ?? {})])].sort()) {
+    const beforeValue = left?.[key] ?? null
+    const afterValue = right?.[key] ?? null
+    if (JSON.stringify(beforeValue) === JSON.stringify(afterValue)) continue
+    total += 1
+    if (total <= SECTION_DIFF_LIMIT) changed[key] = { before: clipValue(beforeValue), after: clipValue(afterValue) }
+  }
+  return total > SECTION_DIFF_LIMIT ? { changed, more: total - SECTION_DIFF_LIMIT } : { changed }
+}
+
+/**
+ * stop の所見が指すコマ(日付×時限)の、操作の前後の机の事実と、前後で違う部分(sections・summarizeSectionDiff)をファイルに残す
+ * (人が画面写真と突き合わせて見立てるため)。中身は伏せ字のあとの仮名と ID だけ(出力先はスクラッチ領域)。コマは 40 まで。
  */
 function writeStopDiff(file, stops, before, after) {
   const cells = [...new Set(stops.filter((finding) => finding.dateKey && finding.slotNumber !== undefined).map((finding) => `${finding.dateKey}_${finding.slotNumber}`))].slice(0, 40)
-  if (cells.length === 0) return null
+  const sections = Object.fromEntries(Object.keys({ ...before.sections, ...after.sections })
+    .filter((name) => (before.sections[name] ?? 'null') !== (after.sections[name] ?? 'null'))
+    .map((name) => [name, summarizeSectionDiff(before.sections[name] ?? 'null', after.sections[name] ?? 'null')]))
+  if (cells.length === 0 && Object.keys(sections).length === 0) return null
   const pick = (facts, cellId) => [...facts.desks.values()].filter((desk) => desk.cellId === cellId).map((desk) => {
     // メモの中身は出さず件数だけ(伏せ字で「メモ」になっているが二重の守り)。出欠記録の文字列は生徒キー・状態・科目・種類だけなのでそのまま。
     const { memos, pendingMemos } = desk
@@ -516,7 +618,7 @@ function writeStopDiff(file, stops, before, after) {
     return { ...rest, memoCount: memos.length, pendingMemoCount: pendingMemos.length }
   })
   try {
-    writeFileSync(file, JSON.stringify({ findings: stops, cells: cells.map((cellId) => ({ cellId, before: pick(before, cellId), after: pick(after, cellId) })) }, null, 1))
+    writeFileSync(file, JSON.stringify({ findings: stops, cells: cells.map((cellId) => ({ cellId, before: pick(before, cellId), after: pick(after, cellId) })), sections }, null, 1))
     return file
   } catch {
     return null
@@ -1298,6 +1400,222 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       current = await timedRead()
       persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
       await finish('d', persistStep)
+    }
+
+    // ── (g) 休日設定と解除・丸ごと振替〔作成と解除〕(既定では流さない・--scenario で挙げたときだけ)。来週から 4 週を開き、今日より後の日から
+    // 種つきの乱数で選ぶ(dayOps.ts の pickDayOpsPlan)。作ったものは解除して元の形へ戻すので最後に流す。
+    // 休日: メニュー「休日設定」→ 在庫が仕様どおり戻る → 元に戻す・やり直し → 保存→読み込み直し → 休日の見出しを押して解除 → 休日にする前と同じ。
+    // 丸ごと振替: メニュー「丸ごと振替」→ 振替先(同じ曜日)の見出し → 在庫 ±0 → 保存→読み込み直し → メニュー「丸ごと振替を解除」→ 作成の前と同じ。
+    // ★ローカルモードの控えの罠(台本 f と同じ): 前に保存した形へ戻る操作(元に戻す・やり直し・解除)の前に保存ボタンを押す。
+    if (scenarios.includes('g')) {
+      lastScenario = 'g'
+      const openedWeeks = weekStartsFrom(nextMonday)
+      for (const monday of openedWeeks) await d.gotoWeekOf(session, monday)
+      current = await timedRead()
+      const plan = app.pickDayOpsPlan({
+        facts: current.facts, payload: current.payload, dateKeys: openedWeeks.flatMap((monday) => weekDateKeysFrom(monday)), todayKey: today,
+        random: createSeededRandom((Number(options.seed) || 0) + 0x9a),
+      })
+      const prepStep = newStep(`日付の操作の準備(${openedWeeks[0]}〜の 4 週)`)
+      prepStep.notes.push(`開いた週: ${openedWeeks.join('・')}`)
+      if (plan.holiday) prepStep.notes.push(`休日にする日: ${plan.holiday.dateKey}(席の生徒 ${plan.holiday.studentCount} 人)`)
+      if (plan.transfer) prepStep.notes.push(`丸ごと振替: 振替元 ${plan.transfer.sourceDateKey}(席の生徒 ${plan.transfer.studentCount} 人)→ 振替先の候補 ${plan.transfer.targetDateKeys.join('・')}(近い順・断られたら次)`)
+      for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
+      await finish('g', prepStep)
+
+      const ineligibleSeatKeys = collectStockIneligibleSeatKeys(current.payload)
+      // 日付の操作を 1 回: 押す → 読む。盤面が変わらなければ、アプリが断った(文が変わった・断りの画面)か何も起きない(中断)。
+      const runDayOp = async (step, label, press) => {
+        const before = current
+        const dialogsBefore = session.dialogs.length
+        const statusBefore = await d.readStatusText(session)
+        const pressed = await press()
+        if (pressed.missing) {
+          step.notes.push(`飛ばした: ${label}(メニューにボタンが無い・ステータス: ${pressed.status ?? ''})`)
+          return { outcome: 'missing', before, after: before }
+        }
+        step.operations += 1
+        step.notes.push(`ステータス: ${pressed.status ?? ''}`)
+        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
+        if (pressed.blocked) step.notes.push(`断りの画面: ${pressed.blocked}`)
+        const after = await timedRead()
+        const diff = app.diffBoardFacts(before.facts, after.facts)
+        if (diff.desks.length === 0 && diff.sections.length === 0) {
+          if (!pressed.blocked && (pressed.status ?? '') === statusBefore) {
+            await finish('g', step)
+            throw new PatrolAbortError(`${label}をしても盤面もステータスの文も変わらず、何も起きません。`)
+          }
+          step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが日付の操作を断った: ${label}(${pressed.blocked || pressed.status || ''})` })
+          return { outcome: 'blocked', before, after }
+        }
+        step.diff = { before: before.facts, after: after.facts }
+        return { outcome: 'applied', before, after }
+      }
+      // 日付の操作のあとに毎回当てる点検(範囲・手入力・講師のコマの形・保証台帳)。exclude は操作した日の机。
+      const dayOpFindings = (before, after, dateKeys, sections, { restedPresentAsInfoDates } = {}) => {
+        const allowed = { deskKeys: app.collectDateDeskKeys([before.facts, after.facts], dateKeys), sections: new Set(sections) }
+        const exclude = { excludeDeskKeys: allowed.deskKeys }
+        return [
+          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+          ...app.checkTeacherCellIntegrity(before.facts, after.facts, { restedPresentAsInfoDates }),
+          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
+        ]
+      }
+      // 保存 → 読み込み直し で盤面と在庫が変わらない(作った休日・丸ごと振替の組が保存を通って残るか)。
+      const persist = async (title, { restedPresentAsInfoDates } = {}) => {
+        const step = newStep(title)
+        if (await d.clickSave(session)) step.operations += 1
+        else step.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
+        const saved = await timedRead()
+        step.findings.push(...sameState(current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
+        await d.reloadApp(session)
+        step.operations += 1
+        const reloaded = await timedRead()
+        step.findings.push(
+          ...sameState(saved, reloaded, 'reload-changed'),
+          ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }),
+          ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts, { restedPresentAsInfoDates }),
+        )
+        step.diff = { before: saved.facts, after: reloaded.facts }
+        current = reloaded
+        await finish('g', step)
+      }
+      // 解除のあと、作る前(base)と盤面・部分・在庫が全部同じか(休日解除は逆操作・§9-20 作成→解除で元の形)。
+      // 休日は、休日のまま読み込み直す(再マージ)と消える休日の日のメモ・生徒の居ない机の手入力の講師と、その日の抑止キーの出入りだけ仕様なので知らせるだけ(checkHolidayRoundTrip)。
+      const roundTripFindings = (base, after, what, holidayDateKey = null) => [
+        ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey) : sameState(base, after, 'round-trip-not-restored')),
+        ...app.checkStockDeltas(stockOf(base), stockOf(after), {}, { code: 'round-trip-not-restored', label: `${what}を解除しても在庫が元に戻らない` }),
+      ]
+      let effectiveOps = 0
+
+      if (plan.holiday) {
+        const H = plan.holiday.dateKey
+        await d.gotoWeekOf(session, mondayOf(H))
+        const base = current
+        const step = newStep(`休日設定(${H})`)
+        step.notes.push(`休日にする: ${H}(席の生徒 ${plan.holiday.studentCount} 人・授業はすべて未消化へ)`)
+        const set = await runDayOp(step, `${H} を休日にする`, () => d.chooseDayMenuItem(session, H, 'holiday'))
+        let holidayActive = false
+        if (set.outcome === 'applied') {
+          effectiveOps += 1
+          holidayActive = true
+          const { before, after } = set
+          const stockPlan = app.expectedHolidayStockDeltas(before.facts, H, ineligibleSeatKeys)
+          step.notes.push(`在庫: 比べた鍵 ${stockPlan.checkedCount}(未消化振替 +1)・比べない鍵 ${stockPlan.ignore.makeup.size + stockPlan.ignore.lecturePrefixes.length}(講習・手動追加・編集で振替・同じ日に同じ科目 2 つ など。ほかの鍵は ±0)`)
+          step.findings.push(
+            ...dayOpFindings(before, after, [H], HOLIDAY_ALLOWED_SECTIONS),
+            ...app.checkHolidayApplied(before.facts, after.facts, H),
+            ...app.checkStockDeltas(stockOf(before), stockOf(after), stockPlan.expected, { ignore: stockPlan.ignore, label: '休日設定で在庫の増減が仕様と違う' }),
+          )
+          current = after
+          // 元に戻す → やり直し(1 か所だけ)。どちらも前に保存した形へ戻りうるので、先に保存する(ローカルモードの控えの罠)。
+          if (await d.clickSave(session)) step.operations += 1
+          if (await d.clickUndo(session)) {
+            step.operations += 1
+            const undone = await timedRead()
+            step.findings.push(...sameState(before, undone, 'undo-not-restored'), ...app.checkStockDeltas(stockOf(before), stockOf(undone), {}, { code: 'undo-not-restored', label: '元に戻すで在庫が休日にする前に戻らない' }))
+            current = undone
+            step.notes.push('元に戻す: 休日にする前の盤面・在庫に戻るかを確かめた。')
+            if (await d.clickSave(session)) step.operations += 1
+            if (await d.clickRedo(session)) {
+              step.operations += 1
+              step.notes.push('やり直し: 休日にしたあとの盤面・在庫に戻るかを確かめた。')
+              const redone = await timedRead()
+              step.findings.push(...sameState(after, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(after), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が休日のあとに戻らない' }))
+              current = redone
+            } else {
+              step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `休日設定を元に戻したあとやり直しが押せない(ボタンが無効): ${H}` })
+              holidayActive = false
+            }
+          } else {
+            step.findings.push({ level: 'stop', code: 'undo-not-restored', message: `休日設定のあと元に戻すが押せない(ボタンが無効): ${H}` })
+          }
+        }
+        await finish('g', step)
+        if (holidayActive) {
+          await persist(`休日設定のあと 保存→読み込み直し(${H})`)
+          await d.gotoWeekOf(session, mondayOf(H))
+          const releaseStep = newStep(`休日を解除(${H})`)
+          releaseStep.notes.push(`休日の見出しを押して解除: ${H}(休日にする前の盤面・在庫に戻るかを確かめる)`)
+          const released = await runDayOp(releaseStep, `${H} の休日を解除する`, () => d.clickDayHeader(session, H))
+          if (released.outcome === 'applied') {
+            releaseStep.findings.push(
+              ...dayOpFindings(released.before, released.after, [H], HOLIDAY_RELEASE_ALLOWED_SECTIONS),
+              ...roundTripFindings(base, released.after, '休日', H),
+            )
+            releaseStep.diff = { before: base.facts, after: released.after.facts }
+            current = released.after
+          } else if (released.outcome === 'blocked') {
+            releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `休日を解除できない(アプリが断った): ${H}` })
+          }
+          await finish('g', releaseStep)
+        }
+      }
+
+      if (plan.transfer) {
+        const D = plan.transfer.sourceDateKey
+        const base = current
+        const step = newStep(`丸ごと振替(振替元 ${D})`)
+        let applied = null
+        for (const T of plan.transfer.targetDateKeys) {
+          await d.gotoWeekOf(session, mondayOf(D))
+          const started = await d.chooseDayMenuItem(session, D, 'transfer')
+          if (started.missing) {
+            step.notes.push(`飛ばした: ${D} のメニューに「丸ごと振替」がありません。`)
+            break
+          }
+          step.operations += 1
+          if (started.blocked) {
+            step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが丸ごと振替を断った(振替元 ${D}): ${started.blocked}` })
+            break
+          }
+          await d.gotoWeekOf(session, mondayOf(T))
+          step.notes.push(`丸ごと振替: ${D} → ${T}(同じ曜日)`)
+          const result = await runDayOp(step, `${D} → ${T} の丸ごと振替`, () => d.clickDayHeader(session, T))
+          if (result.outcome === 'applied') {
+            applied = { T, ...result }
+            break
+          }
+          // 断られた(振替先の手入力・机の数など)。選ぶ状態を取り消して次の振替先を試す。
+          if (await d.cancelWholeDayTransfer(session)) step.operations += 1
+        }
+        if (applied) {
+          effectiveOps += 1
+          const { T, before, after } = applied
+          step.findings.push(
+            ...dayOpFindings(before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
+            ...app.checkWholeDayTransferApplied(before.facts, after.facts, { sourceDateKey: D, targetDateKey: T }),
+            ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '丸ごと振替で在庫が動いた(移送は在庫中立)' }),
+          )
+          current = after
+          await finish('g', step)
+          await persist(`丸ごと振替のあと 保存→読み込み直し(${D} → ${T})`, { restedPresentAsInfoDates: new Set([D, T]) })
+          await d.gotoWeekOf(session, mondayOf(T))
+          const releaseStep = newStep(`丸ごと振替を解除(${D} → ${T})`)
+          releaseStep.notes.push(`メニュー「丸ごと振替を解除」: ${T}(作成の前の盤面・在庫に戻るかを確かめる・§9-20)`)
+          const released = await runDayOp(releaseStep, `${D} → ${T} の丸ごと振替を解除する`, () => d.chooseDayMenuItem(session, T, 'transfer-release'))
+          if (released.outcome === 'applied') {
+            releaseStep.findings.push(
+              ...dayOpFindings(released.before, released.after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
+              ...roundTripFindings(base, released.after, '丸ごと振替'),
+            )
+            releaseStep.diff = { before: base.facts, after: released.after.facts }
+            current = released.after
+          } else {
+            releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `丸ごと振替を解除できない(${released.outcome === 'missing' ? 'メニューに「丸ごと振替を解除」が無い' : 'アプリが断った'}): ${D} → ${T}` })
+          }
+          await finish('g', releaseStep)
+        } else {
+          step.notes.push('丸ごと振替は、どの振替先でもできませんでした(上の理由)。')
+          await finish('g', step)
+        }
+      }
+      // 効いた操作が 1 回も無い台本 g は、中身が無いまま緑になる。台本 g を指定しているなら中断(台本 b・d・e・f と同じ扱い)。
+      if (effectiveOps === 0) throw new PatrolAbortError('台本 g で効いた日付の操作が 1 回もありません(候補が無い・全部断られた)。')
+      await persist('日付の操作のあと 保存→読み込み直し')
     }
   } catch (error) {
     const file = await shoot(`${lastScenario}-aborted`)

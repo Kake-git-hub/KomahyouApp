@@ -5,8 +5,9 @@ import { DEFAULT_CLASSROOMS } from './fetchData.mjs'
 
 export const USAGE = [
   '使い方: node tools/ui-patrol.mjs --out <出力先(リポジトリの外)> [--classroom <id>]... [--key <YYYY-MM-DDTHH-mm>] [--seed-file <path>]...',
-  '          [--scenario boot,c,b,e,f,a,d] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
+  '          [--scenario boot,c,b,e,f,a,d(,g)] [--moves <n>] [--seed <n>] [--random <n>] [--known <json>] [--port <n>] [--headed] [--prepare-only] [--json]',
   '          [--baseline <前に流した report.json> | --baseline-ref <git の ref>]',
+  '  --scenario: 既定は boot,c,b,e,f,a,d。g(休日設定と解除・丸ごと振替)は既定では流れない。休日設定・丸ごと振替・在庫の会計を触った変更のときに足す(例 c,b,e,f,a,d,g)。',
   '  --prepare-only: 取得・伏せ字・自己点検・種データの書き出しまで(ブラウザは動かさない)。',
   '  --baseline <report.json>: 前に流した報告と突き合わせ、「変」を 新しい／前から／消えた に分ける。同じ種データ(指紋が同じ)でないと比べない(2)。',
   '                 新しい変が 1 件でもあれば 1・新しい変が 0 なら前からの変が残っていても 0。',
@@ -16,10 +17,15 @@ export const USAGE = [
   '  終了コード: 0=変なし／1=変あり／2=流せなかった・途中で止まった・何も操作できなかった。',
 ].join('\n')
 
-// 流れる順は tools/ui-patrol/scenarios.mjs の runClassroomPatrol が決める(boot → c → b → でたらめ → e → f → a → d)。d はテンプレを変えるので最後。
+// 流れる順は tools/ui-patrol/scenarios.mjs の runClassroomPatrol が決める(boot → c → b → でたらめ → e → f → a → d → g)。d はテンプレを変えるので既定の最後。
 // e(出欠)は a の前(付けた出欠記録のコマに、a・d のテンプレ保存が生徒を置き直さないかも見える)。
 // f(講師の移動・入れ替え・休み)も a の前(手で置いた講師・休みの講師を a・d のテンプレ保存がどう扱うかも見える)。
-export const SCENARIO_NAMES = ['boot', 'c', 'b', 'e', 'f', 'a', 'd']
+// g(休日設定と解除・丸ごと振替〔作成と解除〕)は既定では流さない(--scenario で挙げたときだけ・DEFAULT_SCENARIO_NAMES に入れない)。
+//   巡回の所要時間が約 10 分になりオーナー決定「5 分前後」を超えて決め直し待ち(2026-11-11)なので、これ以上既定を延ばさない。
+//   休日設定・丸ごと振替・在庫の会計を触った変更のときに足す(例 --scenario c,b,e,f,a,d,g)。g は作ったものを解除して元の形へ戻すので最後に流す。
+export const SCENARIO_NAMES = ['boot', 'c', 'b', 'e', 'f', 'a', 'd', 'g']
+/** --scenario を指定しないときに流す台本(g は入れない)。 */
+export const DEFAULT_SCENARIO_NAMES = ['boot', 'c', 'b', 'e', 'f', 'a', 'd']
 const VALUE_FLAGS = {
   '--out': 'out', '--classroom': 'classroom', '--key': 'key', '--seed-file': 'seedFile', '--scenario': 'scenario',
   '--moves': 'moves', '--seed': 'seed', '--random': 'random', '--known': 'known', '--port': 'port',
@@ -56,8 +62,8 @@ export function parseArgs(argv) {
     options.stray.push(arg)
   }
   if (options.classrooms.length === 0) options.classrooms = DEFAULT_CLASSROOMS.map((room) => room.id)
-  // boot(起動の確認)は必ず流す。台本の指定が無ければ全部。
-  options.scenarios = options.scenarios.length === 0 ? [...SCENARIO_NAMES] : ['boot', ...options.scenarios.filter((name) => name !== 'boot')]
+  // boot(起動の確認)は必ず流す。台本の指定が無ければ既定の並び(g は入らない)。
+  options.scenarios = options.scenarios.length === 0 ? [...DEFAULT_SCENARIO_NAMES] : ['boot', ...options.scenarios.filter((name) => name !== 'boot')]
   return options
 }
 

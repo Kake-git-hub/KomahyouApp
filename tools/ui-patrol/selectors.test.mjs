@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, PROP_TESTIDS, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { CLASS_SELECTORS, DRIVER_TIMING, SEARCHABLE_SELECT_TESTIDS, SOURCE_FILES_WITH_TESTIDS, TESTIDS, TESTID_PREFIXES, PROP_TESTIDS, dayHeaderTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 
@@ -70,6 +70,22 @@ describe('selectors', () => {
     expect(screen).toContain(".closest<HTMLElement>('.sa-teacher[data-cell-id]')")
     expect(grid).toMatch(/'sa-teacher',\n/)
     expect(grid).toContain('data-desk-index={deskIndex}')
+  })
+
+  it('台本 g(休日設定と解除・丸ごと振替)が使う 日付の見出し・日付のメニューのボタン・丸ごと振替の選ぶ状態と断りの画面の testid がアプリと同じ', () => {
+    for (const name of ['dayHeaderMenuHoliday', 'dayHeaderMenuTransfer', 'dayHeaderMenuTransferRelease', 'wholeDayTransferBanner', 'wholeDayTransferCancel', 'wholeDayTransferBlockedModal', 'wholeDayTransferBlockedClose']) expect(TESTIDS[name]).toBeTruthy()
+    const grid = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/BoardGrid.tsx'), 'utf8')
+    expect(grid).toContain('data-testid={`day-header-${day.dateKey}`}')
+    expect(grid).toContain('onClick={(e) => onDayHeaderClick(day.dateKey, e.clientX, e.clientY)}')
+    expect(dayHeaderTestId('2026-11-19')).toBe('day-header-2026-11-19')
+    // メニューの外を押すと閉じる(押す場所は左上の隅)・休日の見出しはメニューを出さずに解除する(handleDayHeaderClick)
+    const screen = readFileSync(path.join(REPO_ROOT, 'src/components/schedule-board/ScheduleBoardScreen.tsx'), 'utf8')
+    expect(screen).toContain('<div className="day-header-menu-backdrop" onClick={() => setDayHeaderMenu(null)}>')
+    // メニューそのものに testid は無いので class で待つ(CLASS_SELECTORS)
+    expect(screen).toContain('className="day-header-menu"')
+    expect(CLASS_SELECTORS.dayHeaderMenu).toBe('.day-header-menu')
+    expect(CLASS_SELECTORS.dayHeaderMenuBackdrop).toBe('.day-header-menu-backdrop')
+    expect(screen).toContain('if (isHoliday || isForceOpen || isClosedWeekday) {\n      handleToggleHolidayDate(dateKey)')
   })
 
   it('長押しの長さと取り消しの距離がアプリと合っている', () => {

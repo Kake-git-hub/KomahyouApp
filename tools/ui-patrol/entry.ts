@@ -2,6 +2,7 @@
 export * from './anonymize'
 export * from './boardFacts'
 export * from './checks'
+export * from './dayOps'
 export * from './stock'
 export * from './templateEdit'
 export { isActiveOnDate } from '../../src/components/basic-data/basicDataModel'

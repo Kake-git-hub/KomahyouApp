@@ -32,6 +32,21 @@ export const PATROL_FINDING_CODES = [
   // 休みの記録があるコマにその講師が居る(stop・§9-25)／同じ講師が 1 コマに 2 机(stop・INV-01)／前からある同じ形(info・起動のときだけ)／
   // 講師の操作が盤面に効いていない・別の所まで変わった(stop)／アプリが講師の操作を断った(info)。
   'teacher-rested-but-present', 'teacher-duplicated-in-cell', 'teacher-cell-anomaly-existing', 'teacher-op-not-applied', 'teacher-op-blocked',
+  // 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目): 日付の操作が盤面に効いていない(stop)／休日の解除・丸ごと振替の解除で
+  // 操作の前の盤面・在庫に戻らない(stop・§9-20・休日解除は逆操作)／アプリが日付の操作を断った(info)／丸ごと振替の作成・解除でできた
+  // 「休みの記録があるコマにその講師が居る」(info・§9-25 の対象外でオーナー判断待ちの既知の形・2026-11-11 の裁定)。
+  'day-op-not-applied', 'round-trip-not-restored', 'day-op-blocked', 'teacher-rested-present-by-whole-day-transfer',
+  // 休日のまま読み込み直す(再マージ)とそのコマのメモは消え、解除しても戻らない(休日にした時点では残る＝convertHolidayDeskEntriesToRecords は触らない)
+  // (info・仕様: 休日のコマは再マージで授業・講師・メモを持ち込まない＝spec-makeup-stock §B-2-2c・
+  // inv06-holiday-record-retention.matrix.test.ts で固定)。室長から見ると手入力が消えるので知らせる。
+  'holiday-memo-dropped',
+  // 休日の解除で、その日の抑止キーが休日にする前と違う(info・仕様: 席へ戻した通常授業の鍵は外し、戻せなかった授業の鍵は積む＝
+  // ScheduleBoardScreen.tsx の resolveHolidayReleaseSuppressedOccurrences。盤面の机が同じかは別に止める)。
+  'holiday-release-suppression-changed',
+  // 休日のまま読み込み直す(再マージ)と、その日の生徒も出欠記録も無い机の手入力の講師は消え、解除しても戻らない(休日にした時点では残る・
+  // テンプレの講師が戻ることはある)(info・仕様: 休日のコマは再マージで
+  // 記録のある机に限り講師を引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定)。
+  'holiday-teacher-dropped',
 ] as const
 export type PatrolFindingCode = (typeof PATROL_FINDING_CODES)[number]
 export type PatrolFinding = { level: 'stop' | 'info'; code: PatrolFindingCode; message: string; dateKey?: string; slotNumber?: number; deskIndex?: number; studentId?: string; subject?: string }
@@ -374,14 +389,18 @@ export function checkManualInputsNotLost(before: BoardFacts, after: BoardFacts, 
   return findings
 }
 
-const SAME_STATE_LABELS: Record<'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed', string> = {
+type SameStateCode = 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored'
+
+const SAME_STATE_LABELS: Record<SameStateCode, string> = {
   'undo-not-restored': '元に戻すで操作前に戻らない',
+  // 台本 g: 休日設定 → 解除・丸ごと振替 → 解除 で、操作の前の盤面に戻らない(休日解除は逆操作・§9-20 作成→解除で元の形)。
+  'round-trip-not-restored': '解除しても操作の前の盤面に戻らない',
   'redo-not-restored': 'やり直しで操作後に戻らない',
   'save-changed': '保存で盤面が変わった',
   'reload-changed': '読み込み直しで盤面が変わった',
 }
 
-export function checkSameState(before: BoardFacts, after: BoardFacts, code: 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed'): PatrolFinding[] {
+export function checkSameState(before: BoardFacts, after: BoardFacts, code: SameStateCode): PatrolFinding[] {
   const diff = diffBoardFacts(before, after)
   const label = SAME_STATE_LABELS[code]
   const deskFindings: PatrolFinding[] = diff.desks.map((change) => ({
@@ -631,7 +650,12 @@ export function checkTemplateEditSaved(template: unknown, edit: TemplateEdit): P
 
 /** 在庫の残(tools/ui-patrol/stock.ts の collectStockBalances の makeup・lecture)。鍵ごとの残。無い鍵は 0。 */
 export type StockBalanceMaps = { makeup: Record<string, number>; lecture: Record<string, number> }
-export type StockDeltaCode = 'stock-delta-mismatch' | 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed'
+export type StockDeltaCode = 'stock-delta-mismatch' | 'undo-not-restored' | 'redo-not-restored' | 'save-changed' | 'reload-changed' | 'round-trip-not-restored'
+/**
+ * 比べない鍵(台本 g の休日設定)。数え方が通常と違う生徒(手動追加・編集で振替にした・講習・同じ日に同じ科目が 2 つ)の鍵は、仕様の増減を
+ * 1 つに決められないので比べない(dayOps.ts の expectedHolidayStockDeltas が集める)。lecturePrefixes は講習の在庫の行の鍵の頭(生徒キー__)。
+ */
+export type StockDeltaIgnore = { makeup?: ReadonlySet<string>; lecturePrefixes?: ReadonlyArray<string> }
 
 const signed = (value: number) => (value > 0 ? `+${value}` : String(value))
 
@@ -640,7 +664,7 @@ const signed = (value: number) => (value > 0 ? `+${value}` : String(value))
  * (道具の側に別の数え方を作らない・INV-06)。合わない鍵ごとに 1 件(20 件まで＋「ほか n 件」)。
  * 元に戻す・読み込み直しでも使う(expected を空にし、code と label を渡す)。
  */
-export function checkStockDeltas(before: StockBalanceMaps, after: StockBalanceMaps, expected: { makeup?: Record<string, number>; lecture?: Record<string, number> }, options: { code?: StockDeltaCode; label?: string } = {}): PatrolFinding[] {
+export function checkStockDeltas(before: StockBalanceMaps, after: StockBalanceMaps, expected: { makeup?: Record<string, number>; lecture?: Record<string, number> }, options: { code?: StockDeltaCode; label?: string; ignore?: StockDeltaIgnore } = {}): PatrolFinding[] {
   const code = options.code ?? 'stock-delta-mismatch'
   const label = options.label ?? '在庫の増減が仕様と違う'
   const findings: PatrolFinding[] = []
@@ -650,6 +674,8 @@ export function checkStockDeltas(before: StockBalanceMaps, after: StockBalanceMa
     const want = expected[part] ?? {}
     const keys = [...new Set([...Object.keys(left), ...Object.keys(right), ...Object.keys(want)])].sort()
     for (const key of keys) {
+      if (part === 'makeup' && options.ignore?.makeup?.has(key)) continue
+      if (part === 'lecture' && (options.ignore?.lecturePrefixes ?? []).some((prefix) => key.startsWith(prefix))) continue
       const delta = (right[key] ?? 0) - (left[key] ?? 0)
       const wanted = want[key] ?? 0
       if (delta === wanted) continue
@@ -794,12 +820,13 @@ const TEACHER_ANOMALY_LABELS: Record<TeacherCellAnomaly['kind'], { code: PatrolF
  * 操作の前に無かった形(種類×コマ×講師・数で突き合わせる)が操作のあとにできたら stop。前からある形は止めない
  * (種データに最初からある形＝丸ごと振替の付け替えでできうる休みの講師〔§9-25 の対象外〕など)。reportExisting なら前からある形を info で知らせる(起動のときだけ使う)。
  */
-export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts, options: { reportExisting?: boolean } = {}): PatrolFinding[] {
+export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts, options: { reportExisting?: boolean; restedPresentAsInfoDates?: ReadonlySet<string> } = {}): PatrolFinding[] {
   const keyOf = (item: TeacherCellAnomaly) => `${item.kind}\u0000${item.cellId}\u0000${item.teacher}`
   const left = new Map<string, number>()
   for (const item of before?.teacherAnomalies ?? []) left.set(keyOf(item), (left.get(keyOf(item)) ?? 0) + 1)
   const stops: PatrolFinding[] = []
   const existing: PatrolFinding[] = []
+  const transferRested: PatrolFinding[] = []
   for (const item of after?.teacherAnomalies ?? []) {
     const { code, label } = TEACHER_ANOMALY_LABELS[item.kind]
     const location = { dateKey: item.dateKey, slotNumber: item.slotNumber, deskIndex: item.deskIndex }
@@ -810,6 +837,13 @@ export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts,
       if (options.reportExisting) existing.push({ level: 'info', code: 'teacher-cell-anomaly-existing', message: `前からある形: ${label}: ${where}`, ...location })
       continue
     }
+    // 台本 g: 丸ごと振替(付け替え)は講師の欄だけを別の日へ移し、休みの記録は元の日に残る(§9-25 の対象外・作成→解除で元の形 §9-20 と両立させるため)。
+    // 作成・解除でできた「休みなのに居る」は仕様の範囲でできうる既知の形(オーナー判断待ち)なので知らせるだけ。同じ講師が 2 机は止める。
+    // 知らせるだけにするのは、丸ごと振替の振替元・振替先の日のコマにできた形だけ(ほかの日にできたものは止める・手直し 1 M-1)。
+    if (options.restedPresentAsInfoDates?.has(item.dateKey) && item.kind === 'rested-present') {
+      transferRested.push({ level: 'info', code: 'teacher-rested-present-by-whole-day-transfer', message: `丸ごと振替でできた形(知らせるだけ・オーナー判断待ち): ${label}: ${where}`, ...location })
+      continue
+    }
     stops.push({ level: 'stop', code, message: `${label}: ${where}`, ...location })
   }
   // まとめる行の code は種類ごと(休みの講師が居る形を「2 机」の code にまとめない・手直し 1 M-4)。
@@ -817,7 +851,11 @@ export function checkTeacherCellIntegrity(before: BoardFacts, after: BoardFacts,
     const { code, label } = TEACHER_ANOMALY_LABELS[kind]
     return limitDeskFindings(stops.filter((finding) => finding.code === code), 'stop', code, label)
   })
-  return [...limited, ...limitDeskFindings(existing, 'info', 'teacher-cell-anomaly-existing', '前からある講師のコマの形')]
+  return [
+    ...limited,
+    ...limitDeskFindings(transferRested, 'info', 'teacher-rested-present-by-whole-day-transfer', '丸ごと振替でできた休みの講師の形'),
+    ...limitDeskFindings(existing, 'info', 'teacher-cell-anomaly-existing', '前からある講師のコマの形'),
+  ]
 }
 
 /**
@@ -905,4 +943,152 @@ export function checkTeacherOpApplied(before: BoardFacts, after: BoardFacts, op:
     }
   }
   return findings
+}
+
+// ── 台本 g(休日設定と解除・丸ごと振替)の点検 ───────────────────────────────────────────────
+
+const desksOnDate = (facts: BoardFacts, dateKey: string) => [...facts.desks.values()].filter((fact) => fact.dateKey === dateKey)
+
+/**
+ * 休日設定が盤面に効いたか(ScheduleBoardScreen.tsx の handleToggleHolidayDate・休日にする側)。その日の机ごとに、
+ * 前に席(上段)に居た生徒が席から外れ、同じ机にその生徒の「休)」の記録(status='holiday'・convertHolidayDeskEntriesToRecords〔フラグ
+ * transferSourceRestDisplay・全教室〕)が付いていれば所見なし。体験(trial)は記録を作らない(仕様)ので席から外れたことだけ見る。
+ * 在庫の増減は checkStockDeltas(dayOps.ts の expectedHolidayStockDeltas)・ほかの日が変わらないかは checkOutsideAllowedRange が見る。
+ */
+export function checkHolidayApplied(before: BoardFacts, after: BoardFacts, dateKey: string): PatrolFinding[] {
+  const findings: PatrolFinding[] = []
+  for (const left of desksOnDate(before, dateKey).sort((a, b) => a.slotNumber - b.slotNumber || a.deskIndex - b.deskIndex)) {
+    const right = after.desks.get(left.key)
+    left.students.forEach((entry, seat) => {
+      if (!entry) return
+      const what = `${placeOf(left)} 席${seat + 1} ${personOf(entry)} ${lessonOf(entry)}`
+      if (right?.students[seat]?.key === entry.key) {
+        findings.push({ level: 'stop', code: 'day-op-not-applied', message: `休日にしたのに生徒が席に残った: ${what}`, ...locationOf(left), studentId: entry.key })
+        return
+      }
+      if (entry.lessonType === 'trial') return
+      const prefix = `${entry.key}|holiday|${entry.subject}|`
+      if (!(right?.statuses ?? []).some((record) => record.startsWith(prefix))) {
+        findings.push({ level: 'stop', code: 'day-op-not-applied', message: `休日にしたのに「休)」の記録が付かない: ${what}`, ...locationOf(left), studentId: entry.key })
+      }
+    })
+  }
+  return limitDeskFindings(findings, 'stop', 'day-op-not-applied', '休日設定が盤面に効いていない')
+}
+
+/**
+ * 丸ごと振替(付け替え・docs/spec-template-conflict-v2.md §3)が盤面に効いたか。振替先 D' の机ごとに、同じ時限・同じ机番号の振替元 D の机の
+ * 席(生徒と科目)がそのまま乗っていれば所見なし(授業の種類は振替〔振)〕に変わるので比べない・D' 自身のテンプレの授業は出さない＝決定記録 2)。
+ * 振替元に生徒が居た机は、講師も振替元の講師(D のテンプレの講師・手置きの講師は移る)。振替元の席は空になり、テンプレの生徒の席には
+ * 表示専用の「休)」(status='moved'・wholeDayPairDerived)が付く。D' の保留の下段に人が居るのも形が違う(台本は手入力の無い D' を選ぶ)。
+ * 在庫は全部の鍵で ±0(移送は在庫中立)を checkStockDeltas で別に見る。
+ */
+export function checkWholeDayTransferApplied(before: BoardFacts, after: BoardFacts, op: { sourceDateKey: string; targetDateKey: string }): PatrolFinding[] {
+  const findings: PatrolFinding[] = []
+  const seatText = (entry: StudentFact | null) => (entry ? `${personOf(entry)} ${entry.subject}` : '空き')
+  const sourceBySlotDesk = new Map(desksOnDate(before, op.sourceDateKey).map((fact) => [`${fact.slotNumber}#${fact.deskIndex}`, fact]))
+  for (const right of desksOnDate(after, op.targetDateKey).sort((a, b) => a.slotNumber - b.slotNumber || a.deskIndex - b.deskIndex)) {
+    const source = sourceBySlotDesk.get(`${right.slotNumber}#${right.deskIndex}`)
+    // D' で前から置いてあった手入力の生徒は残る(§9-20)。台本は振替元の授業と重ならない D' を選ぶ(dayOps.ts の isTargetCompatible)。
+    const targetBefore = before.desks.get(right.key)
+    const wrong: string[] = []
+    for (const seat of [0, 1]) {
+      const kept = targetBefore?.students[seat]?.origin === 'manual' ? targetBefore.students[seat] : null
+      const want = source?.students[seat] ?? kept ?? null
+      const got = right.students[seat] ?? null
+      const same = want === null ? got === null : got !== null && got.key === want.key && got.subject === want.subject
+      if (!same) wrong.push(`席${seat + 1} ${seatText(got)}(振替元は ${seatText(want)})`)
+    }
+    if (source && source.students.some(Boolean) && right.teacher !== source.teacher) wrong.push(`講師 ${teacherText(right.teacher)}(振替元は ${teacherText(source.teacher)})`)
+    if (right.pendingStudents.length > 0) wrong.push(`保留の下段に ${right.pendingStudents.map(personOf).join('・')}`)
+    if (wrong.length > 0) findings.push({ level: 'stop', code: 'day-op-not-applied', message: `丸ごと振替の振替先が振替元と同じ形になっていない: ${placeOf(right)} ${wrong.join('・')}`, ...locationOf(right) })
+  }
+  for (const left of desksOnDate(before, op.sourceDateKey).sort((a, b) => a.slotNumber - b.slotNumber || a.deskIndex - b.deskIndex)) {
+    const right = after.desks.get(left.key)
+    left.students.forEach((entry, seat) => {
+      if (!entry) return
+      const what = `${placeOf(left)} 席${seat + 1} ${personOf(entry)} ${entry.subject}`
+      if (right?.students[seat]?.key === entry.key) {
+        findings.push({ level: 'stop', code: 'day-op-not-applied', message: `丸ごと振替したのに振替元の席に生徒が残った: ${what}`, ...locationOf(left), studentId: entry.key })
+        return
+      }
+      if (entry.origin !== 'template' || entry.key.startsWith('name:')) return
+      const prefix = `${entry.key}|moved|${entry.subject}|`
+      if (!(right?.statuses ?? []).some((record) => record.startsWith(prefix))) {
+        findings.push({ level: 'stop', code: 'day-op-not-applied', message: `丸ごと振替したのに振替元の席に「休)」が付かない: ${what}`, ...locationOf(left), studentId: entry.key })
+      }
+    })
+  }
+  return limitDeskFindings(findings, 'stop', 'day-op-not-applied', '丸ごと振替が盤面に効いていない')
+}
+
+/**
+ * 休日を解除したあと、休日にする前(base)と盤面・部分が同じか(休日解除は休日設定の逆操作・2026-09-20 オーナー確定)。checkSameState と同じに比べ、
+ * 休日にした日の机で、仕様で戻らないものだけが違う机は知らせるだけにする(消えて戻らないことを室長目線で知らせる。休日にした時点では残るが、休日のまま読み込み直す
+ * 〔再マージ〕と、休日のコマは授業・講師・メモを持ち込まず、
+ * 講師は記録のある机に限り引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定):
+ * メモが消えた(holiday-memo-dropped)・生徒も出欠記録も無い机の手入力の講師が消えたかテンプレの講師に替わった(holiday-teacher-dropped)。
+ * その日の抑止キーの出入りも知らせるだけ(holiday-release-suppression-changed)。
+ * メモの中身が変わった・生徒の居る机の講師・テンプレの講師が消えた・ほかの日・ほかの部分の違いは stop round-trip-not-restored。
+ */
+export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateKey: string): PatrolFinding[] {
+  const diff = diffBoardFacts(base, after)
+  const label = SAME_STATE_LABELS['round-trip-not-restored']
+  const findings: PatrolFinding[] = []
+  const stops: PatrolFinding[] = []
+  for (const change of diff.desks) {
+    const fact = (change.after ?? change.before)!
+    const left = change.before
+    const right = change.after
+    // 休日にした日の机で、仕様で戻らないもの(メモ・生徒も記録も無い机の手入力の講師)だけが違う机は知らせるだけ。
+    const memoDropped = !change.fields.includes('memos') || (right?.memos.length ?? 0) === 0
+    const teacherDropped = !change.fields.includes('teacher') || Boolean(left && right
+      && left.students.every((entry) => entry === null) && left.statuses.length === 0 && left.teacherOrigin === 'manual' && !left.teacherRest && !right.teacherRest
+      && (right.teacher === '' || right.teacherOrigin === 'template'))
+    if (fact.dateKey === dateKey && change.fields.every((field) => field === 'memos' || field === 'teacher') && memoDropped && teacherDropped) {
+      if (change.fields.includes('teacher')) {
+        findings.push({ level: 'info', code: 'holiday-teacher-dropped', message: `休日のまま読み込み直すと生徒の居ない机の手入力の講師は消え、解除しても戻らない(仕様・休日にした時点では残るが、再マージで休日のコマは記録のある机の講師だけ引き継ぐ): ${placeOf(fact)} 講師 ${teacherText(left?.teacher ?? '')} → ${teacherText(right?.teacher ?? '')}${right?.teacher ? '(テンプレ)' : ''}`, ...locationOf(fact) })
+      }
+      if (change.fields.includes('memos')) {
+        findings.push({ level: 'info', code: 'holiday-memo-dropped', message: `休日のまま読み込み直すとメモは消え、解除しても戻らない(仕様・休日にした時点では残るが、再マージで休日のコマはメモを持ち込まない): ${placeOf(fact)} メモ ${left?.memos.length ?? 0} 件`, ...locationOf(fact) })
+      }
+      continue
+    }
+    stops.push({ level: 'stop', code: 'round-trip-not-restored', message: `${label}: ${describeDeskChange(change)}`, ...locationOf(fact) })
+  }
+  const SUPPRESSED = 'boardState.suppressedRegularLessonOccurrences'
+  const sectionFindings: PatrolFinding[] = []
+  for (const section of diff.sections) {
+    if (section === SUPPRESSED) {
+      const keysOf = (signature: string | undefined) => {
+        try {
+          const value = JSON.parse(signature ?? 'null')
+          return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+        } catch {
+          return null
+        }
+      }
+      const left = keysOf(base.sections[section])
+      const right = keysOf(after.sections[section])
+      if (left && right) {
+        const removed = left.filter((key) => !right.includes(key))
+        const added = right.filter((key) => !left.includes(key))
+        const noDuplicates = JSON.stringify([...left].sort()) === JSON.stringify([...new Set(left)].sort()) && JSON.stringify([...right].sort()) === JSON.stringify([...new Set(right)].sort())
+        // その日の通常授業の抑止キー(生徒__科目__日付__時限)の出入りだけなら仕様(席へ戻した授業の鍵を外す・戻せなかった授業の鍵を積む)。
+        if (noDuplicates && [...removed, ...added].every((key) => key.includes(`__${dateKey}__`))) {
+          sectionFindings.push({ level: 'info', code: 'holiday-release-suppression-changed', message: `休日の解除で、その日の抑止キーが休日にする前と違う(仕様・席へ戻した授業の鍵は外し戻せなかった授業の鍵は積む): 外れた ${removed.length}・増えた ${added.length}(盤面の机は別に比べる)`, dateKey })
+          continue
+        }
+      }
+    }
+    sectionFindings.push({ level: 'stop', code: 'round-trip-not-restored', message: `${label}: ${section}` })
+  }
+  // 止めるものは 20 件＋「ほか n 机」、知らせるものも同じ。机の並び順(日付・時限・机)で 1 本にまとめる。
+  const position = (finding: PatrolFinding) => `${finding.dateKey ?? '\uffff'}\u0000${String(finding.slotNumber ?? 0).padStart(3, '0')}\u0000${String(finding.deskIndex ?? 0).padStart(3, '0')}`
+  const merged = [
+    ...limitDeskFindings(stops, 'stop', 'round-trip-not-restored', label),
+    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-teacher-dropped'), 'info', 'holiday-teacher-dropped', '休日のまま読み込み直すと消えて戻らない手入力の講師'),
+    ...limitDeskFindings(findings.filter((finding) => finding.code === 'holiday-memo-dropped'), 'info', 'holiday-memo-dropped', '休日のまま読み込み直すと消えて戻らないメモ'),
+  ].sort((left, right) => position(left).localeCompare(position(right)))
+  return [...merged, ...sectionFindings]
 }

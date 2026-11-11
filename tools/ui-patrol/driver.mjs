@@ -5,7 +5,7 @@
 //   待ちが時間切れになったら PatrolAbortError を投げる(台本が画面写真を撮って教室を「中断」にする。所見にはしない)。
 // ★Playwright は package.json に入れない(この環境の全体の node_modules から読む)。読めなければ loadPlaywright() が null を返す。
 import { createRequire } from 'node:module'
-import { DRIVER_TIMING, PROP_TESTIDS, SEARCHABLE_SELECT_TESTIDS, TESTIDS, TESTID_PREFIXES, byTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
+import { CLASS_SELECTORS, DRIVER_TIMING, PROP_TESTIDS, SEARCHABLE_SELECT_TESTIDS, TESTIDS, TESTID_PREFIXES, byTestId, dayHeaderTestId, makeupStockEntryTestId, studentCellTestId, studentNameTestId, teacherCellTestId, weekJumpDayTestId } from './selectors.mjs'
 
 export class PatrolAbortError extends Error {
   constructor(message) {
@@ -617,6 +617,79 @@ export async function toggleTeacherRest(session, position) {
   await button.first().click()
   await waitHidden(menu, `休みのボタンを押したあと講師メニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
   return { status: await waitForStatusChange(session, statusOpened), label }
+}
+
+// ── 台本 g(休日設定と解除・丸ごと振替): 盤面の日付の見出しを押す。開いている日はメニュー(休日設定・丸ごと振替・丸ごと振替を解除)が出る。
+// 休日の見出しはメニューを出さずに解除する(確認のダイアログは accept)。丸ごと振替の振替先を選ぶ状態では、見出しを押すと振替先になる
+// (ScheduleBoardScreen.tsx の handleDayHeaderClick)。できないときは画面中央の断りの画面(whole-day-transfer-blocked-modal)が出る。
+
+const DAY_MENU_ITEMS = { holiday: TESTIDS.dayHeaderMenuHoliday, transfer: TESTIDS.dayHeaderMenuTransfer, 'transfer-release': TESTIDS.dayHeaderMenuTransferRelease }
+
+/** ステータスの文が変わるか、断りの画面が出るまで待つ。断りの画面は文を読んで閉じる。戻り値 { status, blocked(断りの文・無ければ '') }。 */
+async function waitDayOpOutcome(session, statusBefore) {
+  const { page } = session
+  const modal = page.locator(byTestId(TESTIDS.wholeDayTransferBlockedModal))
+  const started = Date.now()
+  while (Date.now() - started < STATUS_CHANGE_TIMEOUT_MS) {
+    if (await modal.isVisible().catch(() => false)) {
+      const blocked = ((await modal.innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim()
+      await modal.locator(byTestId(TESTIDS.wholeDayTransferBlockedClose)).click()
+      await waitHidden(modal, '丸ごと振替の断りの画面が閉じませんでした。')
+      return { status: await readStatusText(session), blocked }
+    }
+    if ((await readStatusText(session)) !== statusBefore) break
+    await page.waitForTimeout(100)
+  }
+  // 文が変わった直後に断りの画面が出ることもある(notifyWholeDayTransferBlocked は文と画面を同時に出す)。
+  if (await modal.isVisible().catch(() => false)) return waitDayOpOutcome(session, '')
+  return { status: await readStatusText(session), blocked: '' }
+}
+
+async function clickDayHeaderElement(session, dateKey) {
+  const header = session.page.locator(byTestId(dayHeaderTestId(dateKey)))
+  await waitVisible(header, `${dateKey} の日付の見出しが画面にありません(その週を開いていない)。`)
+  await header.scrollIntoViewIfNeeded()
+  await header.click()
+}
+
+/**
+ * 日付の見出しを押してメニューを開き、item('holiday'=休日設定・'transfer'=丸ごと振替・'transfer-release'=丸ごと振替を解除)を押す。
+ * メニューにそのボタンが無ければメニューの外を押して閉じ、{ missing: true }。押したら { status, blocked }(確認のダイアログは accept)。
+ */
+export async function chooseDayMenuItem(session, dateKey, item) {
+  const { page } = session
+  const testId = DAY_MENU_ITEMS[item]
+  if (!testId) throw new PatrolAbortError(`知らない日付のメニューです: ${item}`)
+  const statusBefore = await readStatusText(session)
+  await clickDayHeaderElement(session, dateKey)
+  const menu = page.locator(CLASS_SELECTORS.dayHeaderMenu)
+  await waitVisible(menu, `${dateKey} の日付のメニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  const button = menu.locator(byTestId(testId))
+  if ((await button.count()) === 0) {
+    await page.locator(CLASS_SELECTORS.dayHeaderMenuBackdrop).click({ position: { x: 5, y: 5 } })
+    await waitHidden(menu, '日付のメニューが閉じませんでした。')
+    return { missing: true, status: await readStatusText(session) }
+  }
+  await button.first().click()
+  await waitHidden(menu, `日付のメニューのボタンを押したあとメニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+  return waitDayOpOutcome(session, statusBefore)
+}
+
+/** 日付の見出しを押す(休日の日は解除・丸ごと振替の振替先を選ぶ状態では振替先)。戻り値 { status, blocked }。 */
+export async function clickDayHeader(session, dateKey) {
+  const statusBefore = await readStatusText(session)
+  await clickDayHeaderElement(session, dateKey)
+  return waitDayOpOutcome(session, statusBefore)
+}
+
+/** 丸ごと振替の振替先を選ぶ状態を取り消す(帯の「キャンセル」)。帯が出ていなければ何もしない(false)。 */
+export async function cancelWholeDayTransfer(session) {
+  const { page } = session
+  const banner = page.locator(byTestId(TESTIDS.wholeDayTransferBanner))
+  if (!(await banner.isVisible().catch(() => false))) return false
+  await banner.locator(byTestId(TESTIDS.wholeDayTransferCancel)).click()
+  await waitHidden(banner, '丸ごと振替の選ぶ状態が取り消せませんでした。')
+  return true
 }
 
 export async function takeScreenshot(session, file) {
