@@ -688,7 +688,8 @@ export function collectTemplateSaveFindings({ app, before, after, fromDateKey, c
   return [
     ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
     ...manualFindings,
-    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
+    // §9-15 で X のテンプレの机に講師を置かなかった生徒は知らせるだけ(保存のあとのテンプレで判定・手直し 1)。
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless, templateManualKeep: { template: after.payload?.classroomSettings?.regularLessonTemplate } }),
     ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
     // 台本 e(出欠)が先に流れていれば、出欠記録のあるコマに生徒を置き直さないか(§2-4 記録が勝つ)もここで見える。
     ...app.checkAttendanceRecordsHold(before.facts, after.facts, { fromDateKey }),
@@ -997,7 +998,8 @@ function collectDayOpFindings(ctx, before, after, dateKeys, sections, { restedPr
 function collectRoundTripFindings(ctx, base, after, what, holidayDateKey = null) {
   const { app, stockOf } = ctx
   return [
-    ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey) : app.checkSameState(base.facts, after.facts, 'round-trip-not-restored')),
+    // 科目だけ編集したテンプレの授業の抑止は、休日にする前の教室設定のテンプレ(その日に効いていた版)の科目と照合する(手直し 1 Minor-1)。
+    ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey, { classroomSettings: base.payload?.classroomSettings }) : app.checkSameState(base.facts, after.facts, 'round-trip-not-restored')),
     ...app.checkStockDeltas(stockOf(base), stockOf(after), {}, { code: 'round-trip-not-restored', label: `${what}を解除しても在庫が元に戻らない` }),
   ]
 }
@@ -1044,10 +1046,12 @@ export async function runHolidayFlow(ctx, io, { holiday, ineligibleSeatKeys }) {
     holidayActive = true
     const { before, after } = set
     const stockPlan = app.expectedHolidayStockDeltas(before.facts, H, ineligibleSeatKeys)
-    // 振替の借りのある鍵(前から振替を置きすぎ・振替元を足しても残が増えない＝アプリの数え方)は +1 を確かめられないので比べない(2026-11-12 でたらめ操作の実走・緑が丘の形)。
-    const debtKeys = [...(app.collectMakeupDebtKeys?.(before.payload, ctx.today, Object.keys(stockPlan.expected.makeup ?? {})) ?? [])]
-    for (const key of debtKeys) stockPlan.ignore.makeup.add(key)
-    step.notes.push(`在庫: 比べた鍵 ${stockPlan.checkedCount - debtKeys.length}(未消化振替 +1)・比べない鍵 ${stockPlan.ignore.makeup.size + stockPlan.ignore.lecturePrefixes.length}(講習・手動追加・編集で振替・同じ日に同じ科目 2 つ など${debtKeys.length > 0 ? `・振替の借り ${debtKeys.length}(${debtKeys.slice(0, 5).join('・')}・前から置きすぎで +1 が借りの返済に消える)` : ''}。ほかの鍵は ±0)`)
+    // 振替の借りのある鍵(前から振替を置きすぎ)は、足した振替元が借りの返済に消える。+1 の代わりに「振替元を 1 つ足したときの残の増え方」(アプリの数え方)を期待値にする
+    // (借りの鍵で残が増えたら二重計上として止まる・2026-11-12 でたらめ操作の実走・緑が丘の形・手直し 1 Minor-2)。
+    const gains = app.collectMakeupOriginGains?.(before.payload, ctx.today, Object.keys(stockPlan.expected.makeup ?? {})) ?? {}
+    const debtKeys = Object.keys(gains).filter((key) => gains[key] < (stockPlan.expected.makeup[key] ?? 0))
+    for (const key of debtKeys) stockPlan.expected.makeup[key] = gains[key]
+    step.notes.push(`在庫: 比べた鍵 ${stockPlan.checkedCount}(未消化振替 +1${debtKeys.length > 0 ? `・うち振替の借り ${debtKeys.length}(${debtKeys.slice(0, 5).join('・')}・前から置きすぎで足した振替元が借りの返済に消えるので、振替元を 1 つ足したときの残の増え方 ${debtKeys.map((key) => gains[key]).join('・')} を期待値にする)` : ''})・比べない鍵 ${stockPlan.ignore.makeup.size + stockPlan.ignore.lecturePrefixes.length}(講習・手動追加・編集で振替・同じ日に同じ科目 2 つ など。ほかの鍵は ±0)`)
     step.findings.push(
       ...collectDayOpFindings(ctx, before, after, [H], HOLIDAY_ALLOWED_SECTIONS),
       ...app.checkHolidayApplied(before.facts, after.facts, H),

@@ -107,14 +107,13 @@ export function findMakeupOriginLabel(balances: StockBalances, stockKey: string,
 const MAKEUP_DEBT_PROBE_DATE = '1999-01-01'
 
 /**
- * 振替の借りのある鍵(生徒キー__科目): 置いた振替が振替元より多い(前から置きすぎ)ので、振替元を 1 つ足しても残が増えない鍵。
- * 仮の振替元を keys の全部に 1 つずつ足して、アプリの数え方(collectStockBalances)で残が増えなかった鍵を返す(数え方を 2 つ作らない)。
- * 休日設定の在庫の点検は、この鍵の「+1」を確かめられない(足した振替元は借りの返済に消え、残 0 のまま＝アプリの数え方どおり・マイナス残の表示は無い)。
- * 入力は書き換えない。
+ * 振替元を 1 つ足したときの残の増え方(鍵＝生徒キー__科目 → 増えた数)。仮の振替元を keys の全部に 1 つずつ足して、アプリの数え方(collectStockBalances)で
+ * 残の差を取る(数え方を 2 つ作らない)。ふつうは 1。置いた振替が振替元より多い(前から置きすぎ＝振替の借り)鍵は、足した振替元が借りの返済に消えて 0。
+ * 休日設定の在庫の点検は、この増え方を期待値にする(借りの鍵で残が増えたら二重計上を拾える・手直し 1 Minor-2)。入力は書き換えない。
  */
-export function collectMakeupDebtKeys(payload: AppSnapshotPayload, today: string, keys: Iterable<string>): Set<string> {
+export function collectMakeupOriginGains(payload: AppSnapshotPayload, today: string, keys: Iterable<string>): Record<string, number> {
   const wanted = [...new Set(keys)]
-  if (wanted.length === 0) return new Set()
+  if (wanted.length === 0) return {}
   const probed = structuredClone(payload) as AppSnapshotPayload & { boardState: Record<string, unknown> }
   const boardState = (isPlainObject(probed.boardState) ? probed.boardState : {}) as Record<string, unknown>
   const ledger = (isPlainObject(boardState.manualMakeupAdjustments) ? boardState.manualMakeupAdjustments : {}) as Record<string, unknown>
@@ -123,5 +122,5 @@ export function collectMakeupDebtKeys(payload: AppSnapshotPayload, today: string
   probed.boardState = boardState as typeof probed.boardState
   const before = collectStockBalances(payload, today).makeup
   const after = collectStockBalances(probed, today).makeup
-  return new Set(wanted.filter((key) => (after[key] ?? 0) <= (before[key] ?? 0)))
+  return Object.fromEntries(wanted.map((key) => [key, (after[key] ?? 0) - (before[key] ?? 0)]))
 }

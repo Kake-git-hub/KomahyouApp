@@ -22,6 +22,10 @@ export const PATROL_FINDING_CODES = [
   'teacherless-student-by-template',
   // 室長が講師を消した机(講師の削除記録)にテンプレの生徒が置かれた。仕様どおり(オーナー決定 2026-11-11・Issue #85・spec-template-conflict-v2)なので info。
   'teacherless-student-at-deleted-teacher-desk',
+  // テンプレ保存の §9-15(spec-template-conflict-v2 §2-3 の表「W がそのコマにいる・X は別の机 B」・§9-23 の順番 1): 手置きの講師 X が別の講師 W の
+  // テンプレの授業の机に居て、W が新しいテンプレのそのコマに居るので、その机は X のまま・X のテンプレの机 B には X を置かない → B の生徒は講師なしで残る(仕様・info・
+  // 2026-11-12 でたらめ操作の実走の手直し 1。調査係が純関数で再現して仕様どおりと確かめた)。
+  'teacherless-student-by-manual-teacher-kept',
   // 台本 d(テンプレを実際に変えて保存・2026-11-11 第 2 段): 変えたテンプレの机で起きるはずの変化が盤面に起きない(stop)／
   // 保存したテンプレにその変更が入っていない(stop)／§2 の規則(手入力・出欠記録・講師の休みが勝つ・在籍していない日)で置かれない(info)。
   'template-edit-not-applied', 'template-edit-not-saved', 'template-edit-held-by-rule',
@@ -279,7 +283,48 @@ function dayOfWeekOf(dateKey: string): number {
  */
 export type TemplateTeacherless = { keys: ReadonlySet<string>; fromDateKey: string }
 
-export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; templateTeacherless?: TemplateTeacherless } = {}): PatrolFinding[] {
+/**
+ * テンプレ保存の手で、§9-15 で説明できる講師なしの机か(テンプレ保存の点検だけが渡す・template は保存のあとのテンプレ＝反映日以降に効く版)。
+ * 全部そろうときだけ真: 反映日以降 ∧ 生徒はテンプレ由来 ∧ この机(B)の新しいテンプレの講師 X(講師 ID)がいて、この生徒は B のテンプレの生徒 ∧
+ * 同じコマの別の机 A に手置き(teacherOrigin manual・休みでない)の X が居る ∧ A の番号の新しいテンプレの講師 W がいて X と別人(W が新しいテンプレのそのコマに居る)∧
+ * A に W のテンプレの生徒(テンプレ由来)が 1 人以上座っている(A は W の授業の机＝§9-15 で机 A は W の番号へ行く)。講師の照合はアプリの権威関数(facts.isSameTeacher)。
+ */
+export type TemplateManualKeep = { template: unknown }
+
+type TemplateDeskLite = { deskIndex: number; teacherId: string; studentIds: string[] }
+
+function templateCellDesks(template: unknown, dayOfWeek: number, slotNumber: number): TemplateDeskLite[] {
+  const cells = (template as { cells?: unknown })?.cells
+  if (!Array.isArray(cells)) return []
+  const found = cells.find((item) => item?.dayOfWeek === dayOfWeek && item?.slotNumber === slotNumber)
+  if (!found || !Array.isArray(found.desks)) return []
+  return found.desks.map((item: { deskIndex?: unknown; teacherId?: unknown; students?: unknown }) => ({
+    // テンプレの deskIndex は 1 始まり(机番号)。盤面の机(0 始まり)に合わせる(templateEdit.ts と同じ対応)。
+    deskIndex: typeof item?.deskIndex === 'number' ? item.deskIndex - 1 : -1,
+    teacherId: typeof item?.teacherId === 'string' ? item.teacherId.trim() : '',
+    studentIds: (Array.isArray(item?.students) ? item.students : []).map((entry: { studentId?: unknown } | null) => (typeof entry?.studentId === 'string' ? entry.studentId : '')).filter(Boolean),
+  }))
+}
+
+function isExplainedByManualTeacherKept(after: BoardFacts, desk: DeskFact, student: StudentFact, keep: TemplateManualKeep): boolean {
+  const fromDateKey = (keep.template as { effectiveStartDate?: unknown })?.effectiveStartDate
+  if (typeof fromDateKey !== 'string' || desk.dateKey < fromDateKey || student.origin !== 'template') return false
+  const templateDesks = templateCellDesks(keep.template, dayOfWeekOf(desk.dateKey), desk.slotNumber)
+  const own = templateDesks.find((item) => item.deskIndex === desk.deskIndex)
+  if (!own || own.teacherId === '' || !own.studentIds.includes(student.key)) return false
+  const x = { teacher: '', teacherId: own.teacherId }
+  for (const other of after.desks.values()) {
+    if (other.cellId !== desk.cellId || other.key === desk.key || other.teacherOrigin !== 'manual' || other.teacherRest || other.teacher === '') continue
+    if (!after.isSameTeacher({ teacher: other.teacher, teacherId: other.teacherId || undefined }, x)) continue
+    const lessonDesk = templateDesks.find((item) => item.deskIndex === other.deskIndex)
+    if (!lessonDesk || lessonDesk.teacherId === '' || lessonDesk.teacherId === own.teacherId) continue
+    if (after.isSameTeacher({ teacher: '', teacherId: lessonDesk.teacherId }, x)) continue
+    if (other.students.some((entry) => entry !== null && entry.origin === 'template' && lessonDesk.studentIds.includes(entry.key))) return true
+  }
+  return false
+}
+
+export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: BoardFacts, options: { excludeDeskKeys?: ReadonlySet<string>; templateTeacherless?: TemplateTeacherless; templateManualKeep?: TemplateManualKeep } = {}): PatrolFinding[] {
   const beforeCounts = new Map<string, number>()
   for (const desk of before.desks.values()) {
     if (options.excludeDeskKeys?.has(desk.key) || !isTeacherlessStudentDesk(desk)) continue
@@ -326,6 +371,15 @@ export function checkTeacherlessStudentsNotAdded(before: BoardFacts, after: Boar
         findings.push({
           level: 'info', code: 'teacherless-student-at-deleted-teacher-desk',
           message: `講師を消した机にテンプレの生徒が置かれた(仕様どおり): ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
+          ...locationOf(desk), studentId: student.key,
+        })
+        continue
+      }
+      // テンプレ保存の §9-15(手置きの X が W の授業の机に居て W が新しいテンプレに居る)で X のテンプレの机に講師を置かなかった生徒は仕様どおり(テンプレ保存の点検だけ)。
+      if (options.templateManualKeep && isExplainedByManualTeacherKept(after, desk, student, options.templateManualKeep)) {
+        findings.push({
+          level: 'info', code: 'teacherless-student-by-manual-teacher-kept',
+          message: `手で置いた同じ講師が同じコマの別の講師の授業の机に居るので、テンプレのこの机に講師を置かなかった(仕様どおり・§9-15): ${placeOf(desk)} ${personOf(student)} ${lessonOf(student)}`,
           ...locationOf(desk), studentId: student.key,
         })
         continue
@@ -1062,7 +1116,18 @@ const MAKEUP_SUPPRESSED = 'boardState.suppressedMakeupOrigins'
  * そうでなければ null。認めるのは、前の抑止が全部残り、増えた抑止がどれも 休日にした日・時限つきで、休日にする前(base)のその日その時限にその生徒が
  * 抑止の科目と違う科目で座っている(か、休日の表示の記録でない出欠記録がある)ものだけ(collectHolidayTemplateSubjectSuppressions → ensureTemplateSubjectMakeupSuppression と同じ条件の外形)。
  */
-function collectKeptTemplateSubjectSuppressions(base: BoardFacts, after: BoardFacts, dateKey: string): string[] | null {
+/** その日に効いていたテンプレの版(保存のあとのテンプレと版の履歴のうち、反映日がその日以前で一番新しいもの)。無ければ null。 */
+function resolveTemplateOnDate(classroomSettings: unknown, dateKey: string): unknown {
+  const settings = (classroomSettings ?? {}) as { regularLessonTemplate?: unknown; regularLessonTemplateHistory?: unknown }
+  const versions = [settings.regularLessonTemplate, ...(Array.isArray(settings.regularLessonTemplateHistory) ? settings.regularLessonTemplateHistory : [])]
+    .filter((version): version is { effectiveStartDate: string } => typeof (version as { effectiveStartDate?: unknown })?.effectiveStartDate === 'string')
+    .filter((version) => version.effectiveStartDate <= dateKey)
+    .sort((left, right) => right.effectiveStartDate.localeCompare(left.effectiveStartDate))
+  return versions[0] ?? null
+}
+
+function collectKeptTemplateSubjectSuppressions(base: BoardFacts, after: BoardFacts, dateKey: string, template: unknown): string[] | null {
+  if (!template) return null
   const parse = (signature: string | undefined): Record<string, unknown> | null => {
     try {
       const value = JSON.parse(signature ?? 'null')
@@ -1102,6 +1167,12 @@ function collectKeptTemplateSubjectSuppressions(base: BoardFacts, after: BoardFa
         })
       ))
       if (!seatedOtherSubject) return null
+      // 抑止の科目が、その日に効いていたテンプレのその曜日・時限のその生徒の科目か(ensureTemplateSubjectMakeupSuppression が積むのはテンプレの科目だけ・手直し 1 Minor-1)。
+      const templateCells = (template as { cells?: unknown }).cells
+      const templateCell = Array.isArray(templateCells) ? templateCells.find((item) => item?.dayOfWeek === dayOfWeekOf(dateKey) && item?.slotNumber === slotNumber) : null
+      const inTemplate = Array.isArray(templateCell?.desks) && templateCell.desks.some((item: { students?: unknown }) => (Array.isArray(item?.students) ? item.students : [])
+        .some((entry: { studentId?: unknown; subject?: unknown } | null) => entry?.studentId === studentKey && entry?.subject === subject))
+      if (!inTemplate) return null
       kept.push(`${studentIdText(studentKey)} ${subject} ${dateKey} ${slotNumber}限`)
     }
   }
@@ -1118,7 +1189,7 @@ function collectKeptTemplateSubjectSuppressions(base: BoardFacts, after: BoardFa
  * (holiday-template-subject-suppression-kept・collectKeptTemplateSubjectSuppressions)。
  * メモの中身が変わった・生徒の居る机の講師・テンプレの講師が消えた・ほかの日・ほかの部分の違いは stop round-trip-not-restored。
  */
-export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateKey: string): PatrolFinding[] {
+export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateKey: string, options: { classroomSettings?: unknown } = {}): PatrolFinding[] {
   const diff = diffBoardFacts(base, after)
   const label = SAME_STATE_LABELS['round-trip-not-restored']
   const findings: PatrolFinding[] = []
@@ -1197,7 +1268,7 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
       }
     }
     if (section === MAKEUP_SUPPRESSED) {
-      const kept = collectKeptTemplateSubjectSuppressions(base, after, dateKey)
+      const kept = collectKeptTemplateSubjectSuppressions(base, after, dateKey, resolveTemplateOnDate(options.classroomSettings, dateKey))
       if (kept && kept.length > 0) {
         sectionFindings.push({
           level: 'info', code: 'holiday-template-subject-suppression-kept',

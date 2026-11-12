@@ -169,12 +169,12 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   // ── やること(Claude) ────────────────────────────────────────────────────────
   {
     id: 'ui-patrol-stage2',
-    title: '画面の自動巡回が見つけた形(指示待ち)',
+    title: '画面の自動巡回が見つけた不具合(指示待ち)',
     stage: 'awaiting-owner',
     who: 'owner',
-    summary: '画面の自動巡回の第 2 段は全部済んだ(でたらめ操作も選んだときに数十手流せる)。巡回が見つけた形のうち報告済みの「気づいた点」が指示待ち。',
-    nextAction: 'オーナーが、引き継ぎ文書の「気づいた点」それぞれの扱いを決める。',
-    notes: '第 2 段(台本 d・e・f・g・h・過去の事故の日の形 --incidents・変更前との自動比較 --baseline-ref・でたらめ操作 --random)は 2026-11-12 までに済み。既定の点検は約 10 分のまま(boot・c・b・e・f・a・d・オーナー決定 2026-11-11)。g・h・--incidents・--random は選んだときだけ流す。毎晩の自動実行はやらない(取り下げ)。でたらめ操作(2026-11-12): 部品(生徒の移動・出欠〔休み・振無休・出席・振替先・解除〕・講師〔移動・入替・席入替・メニュー・休み・解除〕・休日・丸ごと振替・テンプレ・元に戻す・やり直し・保存・読み込み直し)を重みつき・種つきで選び 1 手ごとに点検(tools/ui-patrol/randomOps.mjs・同じ種なら同じ列・--random k で k 手目まで流し直せる)。残りは docs/plan-2026-11-11-ui-patrol-stage2-handoff.md の「気づいた点」(オーナーへ報告済み・指示待ち)と「ついでに直す候補」(Claude が気づいたときに)。設計は docs/test-strategy.md の層 5、手順は docs/runbooks/ui-patrol.md。',
+    summary: '画面の自動巡回の第 2 段は全部済んだ。巡回が見つけた不具合 2 つ(テンプレ保存で講師日程表に生徒が二重に出る・古い丸ごと振替の日を休日にすると振替が 2 つ増える)は直していない。',
+    nextAction: 'オーナーが、この 2 つの不具合を直すかと、引き継ぎ文書の「気づいた点」の扱いを決める。',
+    notes: '第 2 段(台本 d・e・f・g・h・過去の事故の日の形 --incidents・変更前との自動比較 --baseline-ref・でたらめ操作 --random)は 2026-11-12 までに済み。既定の点検は約 10 分のまま(boot・c・b・e・f・a・d・オーナー決定 2026-11-11)。g・h・--incidents・--random は選んだときだけ流す。毎晩の自動実行はやらない(取り下げ)。でたらめ操作(2026-11-12): 部品を重みつき・種つきで選び 1 手ごとに点検(tools/ui-patrol/randomOps.mjs・同じ種なら同じ列・--random k で k 手目まで流し直せる)。でたらめ操作の実走で見つけた 2 件(主セッションが起票・未修正・オーナー判断待ち): Issue #88(INV-01・s2・机に移動の記録と手入力の生徒が居て、テンプレでその生徒が同じコマの別の講師の担当のとき、テンプレ保存で机の講師の ID が消え講師日程表で 2 人の講師に出る・何も変えない保存でも出る・再現は日大前校の形で --scenario boot --random 30 --seed 1 の 28 手目)、Issue #89(INV-06・s3・古い作り方の丸ごと振替〔組の鍵が無い〕の振替先を休日にしたとき、テンプレでその曜日の科目か時限が変わっていると未消化振替が +2・今の本番データでは起きない・再現は日大前校の形で --seed 3 の 9 手目)。同じ 28 手目の「講師のいない机に座る生徒が増えた」は §9-15 で仕様どおり(巡回の点検を知らせるだけに直した)。残りは docs/plan-2026-11-11-ui-patrol-stage2-handoff.md の「気づいた点」と「ついでに直す候補」。設計は docs/test-strategy.md の層 5、手順は docs/runbooks/ui-patrol.md。',
     references: ['docs/plan-2026-11-11-ui-patrol-stage2-handoff.md', 'docs/test-strategy.md', 'docs/runbooks/ui-patrol.md'],
     updatedOn: '2026-11-12',
   },

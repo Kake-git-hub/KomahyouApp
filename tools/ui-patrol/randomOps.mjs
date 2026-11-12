@@ -81,7 +81,7 @@ export function pickNextRandomPart(model, random, weights = DEFAULT_WEIGHTS) {
  * - board の効いた手: 元に戻すが 1 つ積まれ、やり直しは捨てられる・未保存・候補なしの印は消える(盤面が変わった)。断られた/候補なし: その部品に印。
  * - heavy の効いた手: 保存→読み込み直しで終わるので履歴は空・保存済み。
  * - undo / redo: 深さを 1 つ動かす・未保存。save: 押せなかったときも実際の状態を正として保存済み。
- * - reload: 効いた=履歴は空・保存済み(盤面は変わらないので印は残す)。押せなかった(保存ボタンが clean でなかった)=未保存に直す。
+ * - reload: 効いた=履歴は空・保存済み(盤面は変わらないので印は残す)。'skipped'=未保存に直す(今の runRandomOps は保存ボタンが clean になるまで待つので使わない)。
  * maxUndo: 元に戻す・やり直しの履歴の上限(アプリの MAX_HISTORY_DEPTH＝10・appendHistoryEntry は古いものから捨てる)。
  */
 export function advanceRandomModel(model, name, outcome, { maxUndo = Infinity } = {}) {
@@ -273,6 +273,9 @@ export function pickRandomTeacherRelease(facts, { weekDateKeys, todayKey, random
 
 // 台本と乱数の列を分ける(同じ --seed でも、台本の候補選びと同じ乱数を消費しない)。部品の選び方と、候補の選び方も分ける
 // (候補が無いときなど、片方の消費のしかたでもう片方の列がずれないように)。
+/** 読み込み直しの前に保存ボタンが clean になるまで待つ回数と間(合わせて 15 秒)。 */
+const SAVE_WAIT_TRIES = 30
+const SAVE_WAIT_MS = 500
 const OP_STREAM = 0x52414e44
 const CANDIDATE_STREAM = 0x4d4f5645
 const MENU_STREAM = 0x4d454e55
@@ -294,8 +297,10 @@ export async function runRandomOps({ ctx, io, options, today, weekStart, nextMon
   const pickMenuTeacher = makeMenuTeacherPicker(createSeededRandom((seed + MENU_STREAM) >>> 0), () => io.current.facts)
   const weekDateKeys = weekDateKeysFrom(weekStart)
   const candidateOptions = () => ({ weekDateKeys, todayKey: today, random: pickRandom })
-  // 元に戻すの履歴はアプリと同じ上限まで(ScheduleBoardScreen.tsx の MAX_HISTORY_DEPTH・古いものから捨てる)。束ねた app から読む(無ければ 10)。
-  const maxUndo = Number(app.MAX_HISTORY_DEPTH) > 0 ? Number(app.MAX_HISTORY_DEPTH) : 10
+  // 元に戻すの履歴はアプリと同じ上限まで(ScheduleBoardScreen.tsx の MAX_HISTORY_DEPTH・古いものから捨てる)。束ねた app から読む。
+  // 読めなければ流さない(予備の値で流すと、アプリの上限が変わったときに黙って食い違う・手直し 1 Minor-4)。
+  const maxUndo = Number(app.MAX_HISTORY_DEPTH)
+  if (!Number.isInteger(maxUndo) || maxUndo <= 0) throw new Error('でたらめ操作: 元に戻すの履歴の上限(MAX_HISTORY_DEPTH)を束ねた app から読めません(tools/ui-patrol/entry.ts の再輸出を確かめる)。')
   const advance = (current, name, outcome) => advanceRandomModel(current, name, outcome, { maxUndo })
   let model = createInitialRandomModel()
   const ops = []
@@ -340,12 +345,21 @@ export async function runRandomOps({ ctx, io, options, today, weekStart, nextMon
     return pressed
   }
   const reloadHand = async (step) => {
-    // 未保存のまま読み込み直すと beforeunload が出る。保存ボタンが clean であることを確かめてから(食い違えば実際の状態を正とする)。
-    const saveState = await driver.readSaveState(session)
+    // 未保存のまま読み込み直すと beforeunload が出る。保存ボタンが clean になるまで待ってから読み込み直す(見送らない)。
+    // 見送るかを保存ボタンの今の状態(ローカルモードの 5 秒後の自動保存・保存中の表示の時間差)で決めると、同じ種でも手の列がずれる(手直し 1 Minor-3)。
+    // 未保存なら保存を押し、待っても clean にならなければ保存ボタンの状態の食い違いとして「変」にする。
+    let saveState = await driver.readSaveState(session)
+    for (let attempt = 0; attempt < SAVE_WAIT_TRIES && saveState !== 'clean'; attempt += 1) {
+      if (saveState === 'dirty' && await driver.clickSave(session)) {
+        step.operations += 1
+        step.notes.push('読み込み直す前に保存した(保存ボタンが未保存だった)')
+      }
+      await (driver.wait ? driver.wait(SAVE_WAIT_MS) : new Promise((resolve) => setTimeout(resolve, SAVE_WAIT_MS)))
+      saveState = await driver.readSaveState(session)
+    }
     if (saveState !== 'clean') {
-      step.notes.push(`保存ボタンが ${saveState} なので読み込み直さない(見込みを未保存に直す・操作に数えない)`)
-      model = advance(model, 'reload', 'skipped')
-      return false
+      step.findings.push({ level: 'stop', code: 'save-changed', message: `保存しても保存ボタンが clean にならず、読み込み直せない(保存ボタンの状態 ${saveState}・${(SAVE_WAIT_TRIES * SAVE_WAIT_MS) / 1000} 秒待った)` })
+      return true
     }
     await driver.reloadApp(session)
     step.operations += 1

@@ -100,7 +100,9 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   for (const code of ['auto-assign-outside-placement', 'auto-assign-rule-violated', 'auto-assign-count-mismatch', 'auto-assign-blocked', 'auto-assign-rerun-changed']) expect(PATROL_FINDING_CODES).toContain(code)
   // でたらめ操作の実走で通った形(2026-11-12): 休日の解除で科目だけ編集したテンプレの授業の振替の抑止が残る(仕様・info)
   expect(PATROL_FINDING_CODES).toContain('holiday-template-subject-suppression-kept')
-  expect(PATROL_FINDING_CODES).toHaveLength(47)
+  // テンプレ保存の §9-15 で X のテンプレの机の生徒が講師なしで残る(仕様・info・手直し 1)
+  expect(PATROL_FINDING_CODES).toContain('teacherless-student-by-manual-teacher-kept')
+  expect(PATROL_FINDING_CODES).toHaveLength(48)
 })
 
 describe('変わってよい範囲', () => {
@@ -360,6 +362,41 @@ describe('講師なしの机・手入力・同じ状態・保証台帳・保留�
     // 同じ机に 2 人: テンプレは info・手入力は stop(生徒ごとに分ける)
     const mixedAfter = facts([cell(D, 3, [desk('d1'), desk('d2', [student({ origin: 'template' }), studentB({ lessonType: 'makeup', makeupSourceDate: '2026-11-12' })], deleted), desk('d3')])])
     expect(codes(checkTeacherlessStudentsNotAdded(before, mixedAfter))).toEqual(['info:teacherless-student-at-deleted-teacher-desk', 'stop:teacherless-student-added'])
+  })
+
+  it('テンプレ保存の §9-15(手置きの講師 X が別の講師 W の授業の机に居て、W が新しいテンプレのそのコマに居る)で X のテンプレの机の生徒が講師なしで残るのは仕様なので info。条件が 1 つでも欠ければ stop', () => {
+    const teachers = [{ id: 't1', name: '講師A', displayName: '講師A' }, { id: 't2', name: '講師B', displayName: '講師B' }, { id: 't3', name: '講師C', displayName: '講師C' }]
+    const f = (cells) => facts(cells, { extra: { teachers } })
+    // 新しいテンプレ: 木 3限 机1 = W(講師B)・生徒B(s2)、机2 = X(講師A)・生徒A(s1)
+    const template = (overrides = {}) => ({ effectiveStartDate: '2026-11-16', cells: [{ dayOfWeek: 4, slotNumber: 3, desks: [
+      // テンプレの deskIndex は 1 始まり(机番号)・盤面は 0 始まり(templateEdit.ts と同じ対応)
+      { deskIndex: 1, teacherId: overrides.w ?? 't2', students: [{ studentId: 's2', subject: '数' }, null] },
+      { deskIndex: 2, teacherId: 't1', students: [{ studentId: overrides.xStudent ?? 's1', subject: '数' }, null] },
+    ] }] })
+    const manual = (name) => ({ teacher: name, manualTeacher: true, teacherAssignmentSource: 'manual' })
+    const before = f([cell(D, 3, [desk('d1', [studentB({ origin: 'template' }), null], manual('講師A')), desk('d2')])])
+    // 後: 机1(W の番号)に手置きの X とテンプレの W の生徒、机2(X のテンプレの机)は講師なしで X のテンプレの生徒
+    const after = (deskA = manual('講師A')) => f([cell(D, 3, [desk('d1', [studentB({ origin: 'template' }), null], deskA), desk('d2', [student({ origin: 'template' }), null])])])
+    const kept = checkTeacherlessStudentsNotAdded(before, after(), { templateManualKeep: { template: template() } })
+    expect(codes(kept)).toEqual(['info:teacherless-student-by-manual-teacher-kept'])
+    expect(kept[0]).toMatchObject({ dateKey: D, slotNumber: 3, deskIndex: 1, studentId: 's1' })
+    // テンプレ保存の手でない(範囲を渡さない)→ stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after()))).toEqual(['stop:teacherless-student-added'])
+    // X がそのコマに居ない(机1 は別の講師 C の手置き)→ stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after(manual('講師C')), { templateManualKeep: { template: template() } }))).toEqual(['stop:teacherless-student-added'])
+    // X は居るが手置きでない(テンプレ由来の講師)→ stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after({ teacher: '講師A' }), { templateManualKeep: { template: template() } }))).toEqual(['stop:teacherless-student-added'])
+    // W が新しいテンプレのそのコマに居ない(机1 のテンプレの講師が無い)→ stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after(), { templateManualKeep: { template: template({ w: '' }) } }))).toEqual(['stop:teacherless-student-added'])
+    // W の机のテンプレの講師が X 自身(別の講師の授業でない)→ stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after(), { templateManualKeep: { template: template({ w: 't1' }) } }))).toEqual(['stop:teacherless-student-added'])
+    // 講師なしの机の生徒が X のテンプレの机の生徒でない → stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after(), { templateManualKeep: { template: template({ xStudent: 's9' }) } }))).toEqual(['stop:teacherless-student-added'])
+    // 机1 の生徒が W のテンプレの授業の生徒でない(W の授業の机でない)→ stop
+    const otherLesson = f([cell(D, 3, [desk('d1', [makeupA({ id: 'm9', managedStudentId: 's9', name: '生徒C' }), null], manual('講師A')), desk('d2', [student({ origin: 'template' }), null])])])
+    expect(codes(checkTeacherlessStudentsNotAdded(before, otherLesson, { templateManualKeep: { template: template() } }))).toEqual(['stop:teacherless-student-added'])
+    // 反映日より前のコマ → stop
+    expect(codes(checkTeacherlessStudentsNotAdded(before, after(), { templateManualKeep: { template: { ...template(), effectiveStartDate: '2026-11-20' } } }))).toEqual(['stop:teacherless-student-added'])
   })
 
   it('削除記録の判定はコマ単位: 机の並べ直しで記録ごと別の机の番号へ動いても info。操作が記録を増やしたら stop', () => {
@@ -967,22 +1004,34 @@ describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
     expect(codes(checkHolidayRoundTrip(base, board(['s1__数__2026-11-19__3', 's9__英__2026-11-12__2'], { manualMakeupAdjustments: { 's1__数': [{ dateKey: '2026-10-19' }] } }), H))).toEqual(['stop:round-trip-not-restored'])
   })
 
-  it('休日の解除で元に戻るか: 科目だけ編集したテンプレの授業の振替の抑止(休日の日・その時限・今の科目と違う科目)が残ったのは仕様なので info(collectHolidayTemplateSubjectSuppressions は解除で外さない・INV-06)。ほかは stop', () => {
-    // 休日の日 3 限に生徒 s1 が 数 で座っている(テンプレは 国)。休日設定が s1__国 の (H, 3) の抑止を積み、解除しても残す。
+  it('休日の解除で元に戻るか: 科目だけ編集したテンプレの授業の振替の抑止(休日の日・その時限・今の科目と違い、テンプレのその曜日・時限の科目)が残ったのは仕様なので info(collectHolidayTemplateSubjectSuppressions は解除で外さない・INV-06)。ほかは stop', () => {
+    // 休日の日(木) 3 限に生徒 s1 が 数 で座っている(テンプレは 国)。休日設定が s1__国 の (H, 3) の抑止を積み、解除しても残す。
     const board = (origins) => g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' })])], { suppressedMakeupOrigins: origins })
+    const settingsWith = (subject, { history = false } = {}) => {
+      const version = { effectiveStartDate: '2026-11-02', cells: [{ dayOfWeek: 4, slotNumber: 3, desks: [{ deskIndex: 0, teacherId: 't1', students: [{ studentId: 's1', subject }, null] }] }] }
+      // 先の版(反映日が休日より後)が保存済みでも、休日の日に効いていた版で照合する
+      const later = { effectiveStartDate: '2027-02-01', cells: [] }
+      return history ? { regularLessonTemplate: later, regularLessonTemplateHistory: [version] } : { regularLessonTemplate: version }
+    }
     const base = board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }] })
-    const kept = checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 3 }] }), H)
+    const keptAfter = board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 3 }] })
+    const kept = checkHolidayRoundTrip(base, keptAfter, H, { classroomSettings: settingsWith('国') })
     expect(codes(kept)).toEqual(['info:holiday-template-subject-suppression-kept'])
     expect(kept[0].message).toContain('s1')
+    expect(codes(checkHolidayRoundTrip(base, keptAfter, H, { classroomSettings: settingsWith('国', { history: true }) }))).toEqual(['info:holiday-template-subject-suppression-kept'])
+    // 抑止の科目がテンプレのその曜日・時限の科目でない(テンプレは 英)・テンプレを渡さない → stop
+    expect(codes(checkHolidayRoundTrip(base, keptAfter, H, { classroomSettings: settingsWith('英') }))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, keptAfter, H))).toEqual(['stop:round-trip-not-restored'])
+    const options = { classroomSettings: settingsWith('国') }
     // 出欠記録(振無休など)で残っている授業も同じ(記録の科目と違う科目)
     const recorded = (origins) => g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [status({ dateKey: H, status: 'absent-no-makeup' }), null] })])], { suppressedMakeupOrigins: origins })
-    expect(codes(checkHolidayRoundTrip(recorded({}), recorded({ 's1__国': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['info:holiday-template-subject-suppression-kept'])
+    expect(codes(checkHolidayRoundTrip(recorded({}), recorded({ 's1__国': [{ dateKey: H, slotNumber: 3 }] }), H, options))).toEqual(['info:holiday-template-subject-suppression-kept'])
     // 今の科目と同じ科目の抑止が増えた・別の日・別の時限・その時限に居ない生徒・抑止が消えた は stop
-    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's1__数': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
-    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: '2026-11-20', slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
-    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 4 }] }), H))).toEqual(['stop:round-trip-not-restored'])
-    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's2__国': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
-    expect(codes(checkHolidayRoundTrip(base, board({}), H))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's1__数': [{ dateKey: H, slotNumber: 3 }] }), H, options))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: '2026-11-20', slotNumber: 3 }] }), H, options))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 4 }] }), H, options))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's2__国': [{ dateKey: H, slotNumber: 3 }] }), H, options))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({}), H, options))).toEqual(['stop:round-trip-not-restored'])
   })
 
   it('丸ごと振替: 振替先の手入力(振替元の席と重ならない)は残る(D\' で置いた手入力は残す・§9-20)', () => {

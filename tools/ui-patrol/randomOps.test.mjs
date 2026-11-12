@@ -89,7 +89,7 @@ const STATUS_BY_KIND = { absent: 'absent', 'absent-no-makeup': 'absent-no-makeup
  * behavior.undoBreaks: n 回目の元に戻すで盤面を戻し損ねる。behavior.noStock: 通常の休みで台帳へ積まない。behavior.swapMovesStudents: 講師だけ入替で生徒も動く。
  */
 function makeFakeDriver(initialPayload, behavior = {}) {
-  const state = { payload: clone(initialPayload), saved: clone(initialPayload), dirty: false, status: '初期', undo: [], redo: [], gotoWeeks: [], undoCount: 0, reloads: 0, saves: 0, calls: [] }
+  const state = { payload: clone(initialPayload), saved: clone(initialPayload), dirty: false, status: '初期', undo: [], redo: [], gotoWeeks: [], undoCount: 0, reloads: 0, saves: 0, calls: [], lag: 0 }
   const session = { dialogs: [], downloads: 0, externalRequests: [], pageErrors: [] }
   const changed = () => { state.dirty = !behavior.autoSaved; if (behavior.autoSaved) state.saved = clone(state.payload) }
   // アプリと同じく元に戻すの履歴は MAX_HISTORY_DEPTH まで(古いものから捨てる・appendHistoryEntry)。
@@ -107,12 +107,17 @@ function makeFakeDriver(initialPayload, behavior = {}) {
     seedAndOpen: async (_session, seed) => { state.payload = clone(seed.classrooms[0].data); state.saved = clone(state.payload) },
     readClassroom: async () => ({ classroomId: ROOM, payload: clone(state.payload) }),
     readStatusText: async () => state.status,
-    readSaveState: async () => (state.dirty ? 'dirty' : 'clean'),
+    // behavior.lagReads: 保存のあと n 回は保存ボタンがまだ「保存中」に見える(自動保存・保存の時間差)。
+    readSaveState: async () => {
+      if (state.lag > 0) { state.lag -= 1; return 'saving' }
+      return state.dirty ? 'dirty' : 'clean'
+    },
     clickSave: async () => {
       if (!state.dirty) return false
       state.saved = clone(state.payload)
       state.dirty = false
       state.saves += 1
+      state.lag = behavior.lagReads ?? 0
       return true
     },
     reloadApp: async () => {
@@ -234,6 +239,8 @@ function makeFakeDriver(initialPayload, behavior = {}) {
       return true
     },
     takeScreenshot: async () => null,
+    // 待ち(保存ボタンが clean になるまで)。偽のアプリでは待たない。
+    wait: async () => {},
   }
   return { state, session, driver }
 }
@@ -482,6 +489,16 @@ describe('runRandomOps(偽のアプリで流す)', () => {
     for (const name of ['move', 'attend-absent', 'attend-clear', 'teacher-rest', 'teacher-swap', 'undo']) expect(parts).toContain(name)
   })
 
+  it('元に戻すの履歴の上限を束ねた app から読めなければ流さずに例外(予備の値で黙って流さない)', async () => {
+    const saved = app.MAX_HISTORY_DEPTH
+    try {
+      delete app.MAX_HISTORY_DEPTH
+      await expect(runRandom(roomyWeek(), { count: 2 })).rejects.toThrow(/MAX_HISTORY_DEPTH/)
+    } finally {
+      app.MAX_HISTORY_DEPTH = saved
+    }
+  })
+
   it('k 手で止めて流し直すと、n 手の流しの最初の k 手と同じ列(所見を短く再現できる・--random <k>)', async () => {
     const long = await runRandom(richWeek(), { seed: 9, count: 25, weights: LIGHT })
     const short = await runRandom(richWeek(), { seed: 9, count: 12, weights: LIGHT })
@@ -535,6 +552,30 @@ describe('runRandomOps(偽のアプリで流す)', () => {
     // 元に戻すを押す前には保存ボタンを押している(未保存なら)。
     const { fake } = await runRandom(roomyWeek(), { seed: 3, count: 12, weights: ONLY(['move', 'undo']) })
     expect(fake.state.saves).toBeGreaterThan(0)
+  })
+
+  it('読み込み直すかは保存ボタンの時間差で変わらない: 保存中に見えるあいだは clean になるまで待ってから読み込み直す(同じ種なら同じ列)', async () => {
+    const weights = ONLY(['move', 'save', 'reload'])
+    const plain = await runRandom(roomyWeek(), { seed: 6, count: 16, weights })
+    const lagged = await runRandom(roomyWeek(), { seed: 6, count: 16, weights, behavior: { lagReads: 3 } })
+    expect(lagged.result.ops).toEqual(plain.result.ops)
+    expect(lagged.fake.state.reloads).toBe(plain.fake.state.reloads)
+    expect(plain.fake.state.reloads).toBeGreaterThan(0)
+    expect(stopsOf(lagged.findings)).toEqual([])
+    expect(lagged.notes.join('\n')).not.toContain('読み込み直さない')
+  })
+
+  it('保存ボタンが clean にならないまま読み込み直せないのは「変」(保存ボタンの状態の食い違い)', async () => {
+    let sawStop = false
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const { findings, result } = await runRandom(roomyWeek(), { seed, count: 24, weights: ONLY(['move', 'save', 'reload']), behavior: { lagReads: 1000 } })
+      const stops = stopsOf(findings)
+      if (stops.length === 0) continue
+      sawStop = true
+      expect(stops.map((finding) => finding.code)).toEqual(['save-changed'])
+      expect(result.stoppedAt).not.toBeNull()
+    }
+    expect(sawStop).toBe(true)
   })
 
   it('ローカルモードが自分で保存して clean のとき、保存は操作に数えず注に書く(中断にしない)', async () => {
