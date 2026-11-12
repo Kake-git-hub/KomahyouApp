@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- chore: 画面の自動巡回のでたらめ操作(`--random <n>`)を育てた(第 2 段の最後・既定では流さない)。台本 b・d・e・f・g の操作を部品にし、重みつき・種つきで選んで 1 手ごとに点検(出欠の解除・講師の休みの解除を部品に足し、台本の操作は `scenarios.mjs` の共有の関数へ外へ出した)。同じ種なら同じ列・`--random <k>` で k 手目まで流し直せる・`--baseline-ref` で列が違い始めた手を出す。実走で分かった点検の誤報 3 つを最小に直した(アプリの元に戻すの履歴は 10 まで・休日解除で科目だけ編集したテンプレの授業の振替の抑止が残るのは仕様・振替の借りのある生徒は休日の +1 を比べない)。アプリは変えていない(tools/ui-patrol/randomOps.mjs・scenarios.mjs・checks.ts・stock.ts・driver.mjs・baseline.mjs・report.mjs・docs/runbooks/ui-patrol.md・docs/test-strategy.md)
+
 ## v1.5.732 (2026-11-12)
 
 - fix: 丸ごと振替で、元の日の手置きの講師 X が振替先の同じ時限の**別の机**にも居ると、作成のあと振替先のそのコマで X が 2 机になっていた(INV-01・Issue #87・画面の自動巡回の台本 g が発見)。重なりの検査が同じ番号の机どうししか見ていなかったため。オーナー決定(2026-11-12「作る前に止める」・spec-template-conflict-v2 §3・§9-28)で、作成の結果の盤面(差分反映と再マージの後)でそのコマの同じ講師が新しく 2 机になるなら作らずに理由の画面を出す(同じ講師かは講師の一意の権威 `isTeacherElsewhereInCell`・埋め草・休みの記録だけの机・削除記録は数えない・操作の前から 2 机だった分は数えない)。結果が 1 机に収まる形(振替先自身のテンプレの X が処分で外れる・元の日のテンプレの X が手置きの X に譲る)は今どおり作れる。兄弟の解除(作成で移した X を元の日へ戻す時限の別の机に、あとから X を置いた)も同じ考えで止める(文は「振替元の日に後から置いた講師を外してから、解除してください」)。前から 2 机のコマに 3 机目ができる形も止める。画面の自動巡回の台本 g は、振替先が全部断られたら次の振替元を試す(`otherSources`)。確認リスト wd-1(`ScheduleBoardScreen.tsx` の `collectNewDuplicateTeachersInCells`・`wholeDayTransferPairTeacherUnique.test.ts`・`inv01-teacher-attribution.matrix.test.ts`・`tools/ui-patrol/dayOps.ts`・`scenarios.mjs`)。

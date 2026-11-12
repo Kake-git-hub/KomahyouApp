@@ -510,6 +510,31 @@ export async function markStudentAttendance(session, seat, status) {
   return waitForStatusChange(session, statusBefore)
 }
 
+const CLEAR_ATTENDANCE_BUTTONS = [TESTIDS.menuClearAttendance, TESTIDS.menuClearAbsence, TESTIDS.menuClearAbsenceNoMakeup]
+
+/**
+ * 出欠の解除(でたらめ操作): 記録のある空いた席を押して生徒メニューを開き、出席解除・休み解除・振無休解除のどれか(出ているもの)を押す。ステータスの文を返す。
+ * 解除のボタンが無ければメニューを閉じて、押す前と同じ文を返す(呼んだ側は「何も起きない」と見て中断する＝台本が画面に合っていない)。
+ */
+export async function clearStudentAttendance(session, seat) {
+  const { page } = session
+  const statusBefore = await readStatusText(session)
+  const seatCell = page.locator(byTestId(studentCellTestId(seat)))
+  await waitVisible(seatCell, `盤面の席 ${describeTemplatePosition(seat)} が画面にありません。`)
+  await seatCell.click()
+  const menu = page.locator(byTestId(TESTIDS.studentMenu))
+  await waitVisible(menu, `盤面の席 ${describeTemplatePosition(seat)} の生徒メニューが開きませんでした(ステータス: ${await readStatusText(session)})。`)
+  for (const testId of CLEAR_ATTENDANCE_BUTTONS) {
+    const button = menu.locator(byTestId(testId))
+    if ((await button.count()) === 0) continue
+    await button.first().click()
+    await waitHidden(menu, `出欠を解除したあと生徒メニューが閉じませんでした(ステータス: ${await readStatusText(session)})。`)
+    return waitForStatusChange(session, statusBefore)
+  }
+  await closeMenu(menu)
+  return statusBefore
+}
+
 async function closeMakeupStockPanels(session) {
   const { page } = session
   const modal = page.locator(byTestId(TESTIDS.stockActionModal))

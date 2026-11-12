@@ -17,6 +17,8 @@ export const TESTIDS = {
   teacherMenu: 'teacher-action-menu', teacherConfirm: 'teacher-select-confirm-button', teacherDelete: 'teacher-delete-button',
   // 台本 e(出欠): 盤面の生徒メニューの出欠ボタン(ScheduleBoardScreen.tsx)と、未消化振替の一覧(ツールバーのボタン・一覧・振替元を選ぶ画面)。
   menuAttendance: 'menu-attendance-button', menuAbsence: 'menu-absence-button', menuAbsenceNoMakeup: 'menu-absence-no-makeup-button',
+  // でたらめ操作の「出欠の解除」: 記録のある空いた席を押して出る生徒メニューの 出席解除・休み解除・振無休解除(ScheduleBoardScreen.tsx の handleClearStudentStatus)。
+  menuClearAttendance: 'menu-clear-attendance-button', menuClearAbsence: 'menu-clear-absence-button', menuClearAbsenceNoMakeup: 'menu-clear-absence-no-makeup-button',
   makeupStockChip: 'makeup-stock-chip', makeupStockPanel: 'makeup-stock-panel', makeupStockClose: 'makeup-stock-close-button',
   stockActionModal: 'stock-action-modal', stockActionModalCancel: 'stock-action-modal-cancel',
   // 台本 f(講師の移動・入れ替え・休み): 盤面の講師メニューの「休み」／「休みを解除する(講師名)」と、講師を生徒のいる机へ落としたときに選ぶ画面(ScheduleBoardScreen.tsx)。

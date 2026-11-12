@@ -108,6 +108,16 @@ describe('baseline ありの報告(第 2 段の 2)', () => {
     expect(resolveExitCode(withBaseline([], { resolved: [{ step: 'a', title: 'x', finding: stopFinding() }] }))).toBe(0)
   })
 
+  it('文: でたらめ操作の部品の列が変更前と違い始めた教室は、何手目からかと「以降の所見は同じ手どうしの比べではない」を出す', () => {
+    const report = withBaseline([stopFinding({ baseline: 'new' })])
+    report.classrooms[0] = { ...report.classrooms[0], randomDivergedAt: 4 }
+    const text = formatPatrolReportText(report)
+    expect(text).toContain('でたらめ操作の手の列が変更前と 4 手目から違います')
+    const same = withBaseline([stopFinding({ baseline: 'new' })])
+    same.classrooms[0] = { ...same.classrooms[0], randomDivergedAt: null }
+    expect(formatPatrolReportText(same)).not.toContain('手目から違います')
+  })
+
   it('baseline なしは今までどおり(stop があれば 1)', () => {
     expect(resolveExitCode(patrol([classroom([step({ findings: [stopFinding()] })])]))).toBe(1)
   })

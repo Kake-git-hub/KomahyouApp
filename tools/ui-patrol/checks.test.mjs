@@ -98,7 +98,9 @@ it('所見の種類はこの一覧(台本と既知の表が使う)', () => {
   // 台本 g(休日設定と解除・丸ごと振替・2026-11-11 第 2 段の 4 本目)の 4 つ
   // 台本 h(講習の自動割振・2026-11-11 第 2 段の 5 本目)の 5 つ
   for (const code of ['auto-assign-outside-placement', 'auto-assign-rule-violated', 'auto-assign-count-mismatch', 'auto-assign-blocked', 'auto-assign-rerun-changed']) expect(PATROL_FINDING_CODES).toContain(code)
-  expect(PATROL_FINDING_CODES).toHaveLength(46)
+  // でたらめ操作の実走で通った形(2026-11-12): 休日の解除で科目だけ編集したテンプレの授業の振替の抑止が残る(仕様・info)
+  expect(PATROL_FINDING_CODES).toContain('holiday-template-subject-suppression-kept')
+  expect(PATROL_FINDING_CODES).toHaveLength(47)
 })
 
 describe('変わってよい範囲', () => {
@@ -665,6 +667,21 @@ describe('台本 e の点検', () => {
     expect(codes(checkAttendanceApplied(target, facts([cell(D, 3, [desk('d1', [null, makeupA()], { teacher: '講師A' })])]), place))).toEqual(['stop:outside-allowed-range'])
   })
 
+  it('出欠の解除(でたらめ操作): その席にその生徒(同じ科目・種類)が戻り、その記録が 1 件減れば所見なし。戻らない・記録が残るは stop attendance-not-applied', () => {
+    const op = { kind: 'clear', status: 'absent', seat: { cellId: `${D}_3`, deskIndex: 0, seat: 0 }, studentKey: 's1', subject: '数', lessonType: 'regular' }
+    const marked = facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] })])])
+    const cleared = facts([cell(D, 3, [desk('d1', [student(), studentB()], { teacher: '講師A' })])])
+    expect(checkAttendanceApplied(marked, cleared, op)).toEqual([])
+    // 生徒は戻ったが記録が残った
+    expect(codes(checkAttendanceApplied(marked, facts([cell(D, 3, [desk('d1', [student(), studentB()], { teacher: '講師A', statusSlots: [status({ dateKey: D }), null] })])]), op))).toEqual(['stop:attendance-not-applied'])
+    // 記録は消えたが生徒が戻らない
+    expect(codes(checkAttendanceApplied(marked, facts([cell(D, 3, [desk('d1', [null, studentB()], { teacher: '講師A' })])]), op))).toEqual(['stop:attendance-not-applied'])
+    // 別の種類で戻った(振替で戻った)
+    expect(codes(checkAttendanceApplied(marked, facts([cell(D, 3, [desk('d1', [makeupA(), studentB()], { teacher: '講師A' })])]), op))).toEqual(['stop:attendance-not-applied'])
+    // 隣の生徒が消えた(机の中の巻き込み)
+    expect(codes(checkAttendanceApplied(marked, facts([cell(D, 3, [desk('d1', [student(), null], { teacher: '講師A' })])]), op))).toEqual(['stop:outside-allowed-range'])
+  })
+
   it('振替先へ置いたか: 先の席にその生徒の振替(同じ科目)が座っていれば所見なし。いない・別の種類は stop attendance-not-applied', () => {
     const op = { kind: 'place', to: { cellId: `${D}_4`, deskIndex: 1, seat: 0 }, studentKey: 's1', subject: '数' }
     const before = facts([cell(D, 4, [desk('d1', [null, null], { teacher: '講師A' }), desk('d2', [null, null], { teacher: '講師B' })])])
@@ -948,6 +965,24 @@ describe('台本 g(休日設定と解除・丸ごと振替)の点検', () => {
     expect(codes(checkHolidayRoundTrip(base, board(['s1__数__2026-11-19__3']), H))).toEqual(['stop:round-trip-not-restored'])
     // 台帳(振替元)が違う
     expect(codes(checkHolidayRoundTrip(base, board(['s1__数__2026-11-19__3', 's9__英__2026-11-12__2'], { manualMakeupAdjustments: { 's1__数': [{ dateKey: '2026-10-19' }] } }), H))).toEqual(['stop:round-trip-not-restored'])
+  })
+
+  it('休日の解除で元に戻るか: 科目だけ編集したテンプレの授業の振替の抑止(休日の日・その時限・今の科目と違う科目)が残ったのは仕様なので info(collectHolidayTemplateSubjectSuppressions は解除で外さない・INV-06)。ほかは stop', () => {
+    // 休日の日 3 限に生徒 s1 が 数 で座っている(テンプレは 国)。休日設定が s1__国 の (H, 3) の抑止を積み、解除しても残す。
+    const board = (origins) => g([cell(H, 3, [desk('d1', [student(), null], { teacher: '講師A' })])], { suppressedMakeupOrigins: origins })
+    const base = board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }] })
+    const kept = checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 3 }] }), H)
+    expect(codes(kept)).toEqual(['info:holiday-template-subject-suppression-kept'])
+    expect(kept[0].message).toContain('s1')
+    // 出欠記録(振無休など)で残っている授業も同じ(記録の科目と違う科目)
+    const recorded = (origins) => g([cell(H, 3, [desk('d1', [null, null], { teacher: '講師A', statusSlots: [status({ dateKey: H, status: 'absent-no-makeup' }), null] })])], { suppressedMakeupOrigins: origins })
+    expect(codes(checkHolidayRoundTrip(recorded({}), recorded({ 's1__国': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['info:holiday-template-subject-suppression-kept'])
+    // 今の科目と同じ科目の抑止が増えた・別の日・別の時限・その時限に居ない生徒・抑止が消えた は stop
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's1__数': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: '2026-11-20', slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }, { dateKey: H, slotNumber: 4 }] }), H))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({ 's1__国': [{ dateKey: '2026-10-30', slotNumber: 3 }], 's2__国': [{ dateKey: H, slotNumber: 3 }] }), H))).toEqual(['stop:round-trip-not-restored'])
+    expect(codes(checkHolidayRoundTrip(base, board({}), H))).toEqual(['stop:round-trip-not-restored'])
   })
 
   it('丸ごと振替: 振替先の手入力(振替元の席と重ならない)は残る(D\' で置いた手入力は残す・§9-20)', () => {

@@ -1,7 +1,7 @@
 // tools/ui-patrol/stock.ts(台本 e の在庫の数え方)を固定する。数え方はアプリの権威関数そのもの(ここでは鍵の形と読み方だけを見る)。
 // フィクスチャはこのファイル内の架空データだけ(生徒A・講師A)。
 import { describe, it, expect } from 'vitest'
-import { collectStockBalances, findMakeupOriginLabel } from './stock.ts'
+import { collectMakeupDebtKeys, collectStockBalances, findMakeupOriginLabel } from './stock.ts'
 
 const TODAY = '2026-11-11'
 const roster = [{ id: 's1', name: '生徒A', displayName: '生徒A', entryDate: '', withdrawDate: '', birthDate: '2012-05-01', email: '', memo: '' }]
@@ -29,6 +29,23 @@ describe('collectStockBalances', () => {
     const placed = { id: 'm1', name: '生徒A', managedStudentId: 's1', grade: '中1', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-11-10', makeupSourceLabel: '11/10(火) 1限' }
     const used = collectStockBalances(payloadOf({ studentSlots: [placed, null], manualMakeupAdjustments: ledger }), TODAY)
     expect(used.makeup).toEqual({})
+  })
+
+  it('振替の借り: 振替元より置いた振替が多い(前から置きすぎ)鍵は、振替元を 1 つ足しても残が増えない(アプリの数え方で確かめる)。借りの無い鍵は入らない', () => {
+    const ledger = { 's1__数': [{ dateKey: '2026-11-10', slotNumber: 1 }] }
+    const makeup = (id) => ({ id, name: '生徒A', managedStudentId: 's1', grade: '中1', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-11-10', makeupSourceLabel: '11/10(火) 1限' })
+    // 振替元 1 つに振替 2 コマ(借り 1)
+    const owing = payloadOf({ studentSlots: [makeup('m1'), makeup('m2')], manualMakeupAdjustments: ledger })
+    expect(collectStockBalances(owing, TODAY).makeup).toEqual({})
+    expect([...collectMakeupDebtKeys(owing, TODAY, ['s1__数', 's1__英'])]).toEqual(['s1__数'])
+    // 振替元 1 つに振替 1 コマ(借りなし・残 0)/置いていない(残 1)
+    expect([...collectMakeupDebtKeys(payloadOf({ studentSlots: [makeup('m1'), null], manualMakeupAdjustments: ledger }), TODAY, ['s1__数'])]).toEqual([])
+    expect([...collectMakeupDebtKeys(payloadOf({ manualMakeupAdjustments: ledger }), TODAY, ['s1__数'])]).toEqual([])
+    // 入力を書き換えない
+    const before = JSON.stringify(owing)
+    collectMakeupDebtKeys(owing, TODAY, ['s1__数'])
+    expect(JSON.stringify(owing)).toBe(before)
+    expect([...collectMakeupDebtKeys(owing, TODAY, [])]).toEqual([])
   })
 
   it('入力を書き換えない・壊れた教室データでも落ちない', () => {

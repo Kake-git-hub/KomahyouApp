@@ -43,6 +43,10 @@ export const PATROL_FINDING_CODES = [
   // 休日の解除で、その日の抑止キーが休日にする前と違う(info・仕様: 席へ戻した通常授業の鍵は外し、戻せなかった授業の鍵は積む＝
   // ScheduleBoardScreen.tsx の resolveHolidayReleaseSuppressedOccurrences。盤面の机が同じかは別に止める)。
   'holiday-release-suppression-changed',
+  // 休日の解除で、科目だけ編集したテンプレの授業(休日の日のその時限に、テンプレと違う科目で座っている・記録がある生徒)のテンプレの科目の振替の抑止が残った
+  // (info・仕様: 休日設定が collectHolidayTemplateSubjectSuppressions で積み、休日解除では外さない＝「科目がテンプレと違えば抑止 1 件」の規則・INV-06 2026-11-07・
+  // inv06-holiday-record-retention.matrix.test.ts で固定)。でたらめ操作の実走(2026-11-12・日大前の形)で初めて通った形。
+  'holiday-template-subject-suppression-kept',
   // 休日のまま読み込み直す(再マージ)と、その日の生徒も出欠記録も無い机の手入力の講師は消え、解除しても戻らない(休日にした時点では残る・
   // テンプレの講師が戻ることはある)(info・仕様: 休日のコマは再マージで
   // 記録のある机に限り講師を引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定)。
@@ -703,11 +707,14 @@ export type AttendanceSeat = { cellId: string; deskIndex: number; seat: number }
 export type AttendanceOp =
   | { kind: 'mark'; status: 'absent' | 'absent-no-makeup' | 'attended'; seat: AttendanceSeat; studentKey: string; subject: string; lessonType: string }
   | { kind: 'place'; to: AttendanceSeat; studentKey: string; subject: string }
+  // でたらめ操作の「出欠の解除」(生徒メニューの 休み解除・振無休解除・出席解除＝handleClearStudentStatus)。seat は記録のある席。
+  | { kind: 'clear'; status: 'absent' | 'absent-no-makeup' | 'attended'; seat: AttendanceSeat; studentKey: string; subject: string; lessonType: string }
 
 /**
  * 出欠の操作が盤面に効いたか。
  * - 休み・振無休・出席: その席からその生徒が外れ、その机にその生徒のその記録(生徒キー|状態|科目|種類)が 1 件増えた(buildStudentStatusEntry の形)。
  * - 振替先へ置く: 先の席にその生徒の振替(同じ科目・種類 makeup)が座った(computeMakeupStockPlacement の形)。
+ * - 解除(でたらめ操作だけ): その席にその生徒(同じ科目・種類)が戻り、その机のその記録が 1 件減った(clearStudentStatusFromDesk の形)。
  * 効いていなければ stop attendance-not-applied(押したのに記録が付かない・置かれない)。
  */
 export function checkAttendanceApplied(before: BoardFacts, after: BoardFacts, op: AttendanceOp): PatrolFinding[] {
@@ -743,6 +750,25 @@ function checkAttendanceDeskNeighbors(before: BoardFacts, after: BoardFacts, op:
 }
 
 function checkAttendanceSeatApplied(before: BoardFacts, after: BoardFacts, op: AttendanceOp): PatrolFinding[] {
+  if (op.kind === 'clear') {
+    // 解除: その席にその生徒(同じ科目・種類)が戻り、その机のその記録が 1 件減る(clearStudentStatusFromDesk の形)。
+    const key = `${op.seat.cellId}#${op.seat.deskIndex}`
+    const beforeDesk = before.desks.get(key)
+    const afterDesk = after.desks.get(key)
+    const record = `${op.studentKey}|${op.status}|${op.subject}|${op.lessonType}`
+    const count = (desk: DeskFact | undefined) => (desk?.statuses ?? []).filter((item) => item === record).length
+    const seated = afterDesk?.students[op.seat.seat]
+    const restored = Boolean(seated && seated.key === op.studentKey && seated.subject === op.subject && seated.lessonType === op.lessonType)
+    const removed = count(afterDesk) < count(beforeDesk)
+    if (restored && removed) return []
+    const place = afterDesk ?? beforeDesk
+    const why = [removed ? '' : `記録「${STATUS_LABELS[op.status] ?? op.status}」が残った`, restored ? '' : `生徒が席に戻らない${seated ? `(座っているのは ${personOf(seated)} ${lessonOf(seated)})` : ''}`].filter(Boolean).join('・')
+    return [{
+      level: 'stop', code: 'attendance-not-applied',
+      message: `出欠を解除したのに盤面に効いていない(${why}): ${place ? placeOf(place) : key} 席${op.seat.seat + 1} ${studentIdText(op.studentKey)} ${op.subject} ${LESSON_TYPE_LABELS[op.lessonType] ?? op.lessonType}`,
+      ...(place ? locationOf(place) : {}), studentId: op.studentKey,
+    }]
+  }
   if (op.kind === 'place') {
     const desk = after.desks.get(`${op.to.cellId}#${op.to.deskIndex}`)
     const seated = desk?.students[op.to.seat]
@@ -1029,13 +1055,67 @@ export function checkWholeDayTransferApplied(before: BoardFacts, after: BoardFac
   return limitDeskFindings(findings, 'stop', 'day-op-not-applied', '丸ごと振替が盤面に効いていない')
 }
 
+const MAKEUP_SUPPRESSED = 'boardState.suppressedMakeupOrigins'
+
+/**
+ * 休日の解除のあと、振替の抑止(suppressedMakeupOrigins)の違いが「科目だけ編集したテンプレの授業の抑止が増えただけ」か。そうなら増えた抑止の文字(生徒 ID 科目 日付 時限)、
+ * そうでなければ null。認めるのは、前の抑止が全部残り、増えた抑止がどれも 休日にした日・時限つきで、休日にする前(base)のその日その時限にその生徒が
+ * 抑止の科目と違う科目で座っている(か、休日の表示の記録でない出欠記録がある)ものだけ(collectHolidayTemplateSubjectSuppressions → ensureTemplateSubjectMakeupSuppression と同じ条件の外形)。
+ */
+function collectKeptTemplateSubjectSuppressions(base: BoardFacts, after: BoardFacts, dateKey: string): string[] | null {
+  const parse = (signature: string | undefined): Record<string, unknown> | null => {
+    try {
+      const value = JSON.parse(signature ?? 'null')
+      if (value === null) return {}
+      return typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+    } catch {
+      return null
+    }
+  }
+  const left = parse(base.sections[MAKEUP_SUPPRESSED])
+  const right = parse(after.sections[MAKEUP_SUPPRESSED])
+  if (!left || !right) return null
+  type Origin = { dateKey?: unknown; slotNumber?: unknown }
+  const listOf = (value: unknown): Origin[] => (Array.isArray(value) ? value.filter((item): item is Origin => Boolean(item) && typeof item === 'object') : [])
+  const originKey = (origin: Origin) => `${String(origin.dateKey ?? '')}\u0000${String(origin.slotNumber ?? '')}`
+  const kept: string[] = []
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    const counts = new Map<string, Origin[]>()
+    for (const origin of listOf(right[key])) counts.set(originKey(origin), [...(counts.get(originKey(origin)) ?? []), origin])
+    for (const origin of listOf(left[key])) {
+      const remaining = counts.get(originKey(origin)) ?? []
+      if (remaining.length === 0) return null
+      counts.set(originKey(origin), remaining.slice(1))
+    }
+    const split = key.lastIndexOf('__')
+    if (split <= 0) return null
+    const studentKey = key.slice(0, split)
+    const subject = key.slice(split + 2)
+    for (const origin of [...counts.values()].flat()) {
+      if (origin.dateKey !== dateKey || typeof origin.slotNumber !== 'number') return null
+      const slotNumber = origin.slotNumber
+      const seatedOtherSubject = [...base.desks.values()].some((fact) => fact.dateKey === dateKey && fact.slotNumber === slotNumber && (
+        fact.students.some((entry) => entry !== null && entry.key === studentKey && entry.subject !== subject)
+        || fact.statuses.some((record) => {
+          const [recordKey, recordStatus, recordSubject] = record.split('|')
+          return recordKey === studentKey && recordStatus !== 'holiday' && recordSubject !== subject
+        })
+      ))
+      if (!seatedOtherSubject) return null
+      kept.push(`${studentIdText(studentKey)} ${subject} ${dateKey} ${slotNumber}限`)
+    }
+  }
+  return kept
+}
+
 /**
  * 休日を解除したあと、休日にする前(base)と盤面・部分が同じか(休日解除は休日設定の逆操作・2026-09-20 オーナー確定)。checkSameState と同じに比べ、
  * 休日にした日の机で、仕様で戻らないものだけが違う机は知らせるだけにする(消えて戻らないことを室長目線で知らせる。休日にした時点では残るが、休日のまま読み込み直す
  * 〔再マージ〕と、休日のコマは授業・講師・メモを持ち込まず、
  * 講師は記録のある机に限り引き継ぐ＝spec-makeup-stock §B-2-2c・inv06-holiday-record-retention.matrix.test.ts で固定):
  * メモが消えた(holiday-memo-dropped)・生徒も出欠記録も無い机の手入力の講師が消えたかテンプレの講師に替わった(holiday-teacher-dropped)。
- * その日の抑止キーの出入りも知らせるだけ(holiday-release-suppression-changed)。
+ * その日の抑止キーの出入りも知らせるだけ(holiday-release-suppression-changed)。科目だけ編集したテンプレの授業の振替の抑止が残ったのも知らせるだけ
+ * (holiday-template-subject-suppression-kept・collectKeptTemplateSubjectSuppressions)。
  * メモの中身が変わった・生徒の居る机の講師・テンプレの講師が消えた・ほかの日・ほかの部分の違いは stop round-trip-not-restored。
  */
 export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateKey: string): PatrolFinding[] {
@@ -1114,6 +1194,17 @@ export function checkHolidayRoundTrip(base: BoardFacts, after: BoardFacts, dateK
           sectionFindings.push({ level: 'info', code: 'holiday-release-suppression-changed', message: `休日の解除で、その日の抑止キーが休日にする前と違う(仕様・席へ戻した授業の鍵は外し戻せなかった授業の鍵は積む): 外れた ${removed.length}・増えた ${added.length}(盤面の机は別に比べる)`, dateKey })
           continue
         }
+      }
+    }
+    if (section === MAKEUP_SUPPRESSED) {
+      const kept = collectKeptTemplateSubjectSuppressions(base, after, dateKey)
+      if (kept && kept.length > 0) {
+        sectionFindings.push({
+          level: 'info', code: 'holiday-template-subject-suppression-kept',
+          message: `休日の解除で、科目だけ編集したテンプレの授業の振替の抑止が残った(仕様・休日設定が積み、解除では外さない＝科目がテンプレと違えば抑止 1 件): ${kept.length} 件(${kept.slice(0, 5).join('・')}${kept.length > 5 ? '・…' : ''})`,
+          dateKey,
+        })
+        continue
       }
     }
     sectionFindings.push({ level: 'stop', code: 'round-trip-not-restored', message: `${label}: ${section}` })

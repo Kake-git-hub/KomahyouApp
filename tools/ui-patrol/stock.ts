@@ -102,3 +102,26 @@ export function findMakeupOriginLabel(balances: StockBalances, stockKey: string,
   const index = exact >= 0 ? exact : row.remainingOriginDates.findIndex((date) => date === dateKey)
   return index >= 0 ? (row.remainingOriginLabels[index] ?? '') : ''
 }
+
+/** 振替の借りを確かめる仮の振替元の日付(どの授業・振替の日付とも重ならない昔の日。対応の取れない使用は古い振替元から消すので、借りがあればこれが消える)。 */
+const MAKEUP_DEBT_PROBE_DATE = '1999-01-01'
+
+/**
+ * 振替の借りのある鍵(生徒キー__科目): 置いた振替が振替元より多い(前から置きすぎ)ので、振替元を 1 つ足しても残が増えない鍵。
+ * 仮の振替元を keys の全部に 1 つずつ足して、アプリの数え方(collectStockBalances)で残が増えなかった鍵を返す(数え方を 2 つ作らない)。
+ * 休日設定の在庫の点検は、この鍵の「+1」を確かめられない(足した振替元は借りの返済に消え、残 0 のまま＝アプリの数え方どおり・マイナス残の表示は無い)。
+ * 入力は書き換えない。
+ */
+export function collectMakeupDebtKeys(payload: AppSnapshotPayload, today: string, keys: Iterable<string>): Set<string> {
+  const wanted = [...new Set(keys)]
+  if (wanted.length === 0) return new Set()
+  const probed = structuredClone(payload) as AppSnapshotPayload & { boardState: Record<string, unknown> }
+  const boardState = (isPlainObject(probed.boardState) ? probed.boardState : {}) as Record<string, unknown>
+  const ledger = (isPlainObject(boardState.manualMakeupAdjustments) ? boardState.manualMakeupAdjustments : {}) as Record<string, unknown>
+  for (const key of wanted) ledger[key] = [...asArray<unknown>(ledger[key]), { dateKey: MAKEUP_DEBT_PROBE_DATE }]
+  boardState.manualMakeupAdjustments = ledger
+  probed.boardState = boardState as typeof probed.boardState
+  const before = collectStockBalances(payload, today).makeup
+  const after = collectStockBalances(probed, today).makeup
+  return new Set(wanted.filter((key) => (after[key] ?? 0) <= (before[key] ?? 0)))
+}
