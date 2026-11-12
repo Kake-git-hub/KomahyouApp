@@ -223,6 +223,18 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   マトリクス: `inv01-teacher-attribution.matrix.test.ts` に describe「INV-01 × 丸ごと振替の付け替え（Issue #87）: 同じ講師が 1 コマに 2 机にならない」4 行（作成で止まる・盤面は変わらない／
   止めない 2 形〔D' 自身のテンプレの X・D のテンプレの X〕で作成・再マージ 2 回とも X は 1 机／解除で止まる）を追加。経路テストは `wholeDayTransferPairTeacherUnique.test.ts`。
   丸ごと振替の講師帰属の既存の行（`inv06-whole-day-transfer.matrix.test.ts`）は変えていない。保証文・既存行・既存 assert の変更なし（差分は追加だけ）。
+  **2026-11-12 追記 2（Issue #88・オーナー指示「今すぐ直す」・`spec-template-conflict-v2.md` §2-3・画面の自動巡回のでたらめ操作が発見）**：机のテンプレの生徒を別の日へ移した（「移)」の記録）机に
+  手入力の生徒 S が居て、テンプレでは S が同じコマの別の講師 Y の担当だと、テンプレ保存（何も変えない保存でも）で机の講師 X の名前は残るのに講師の ID が消え、講師日程表の書き出しが
+  基本データ行の担当講師（`regularTeacherIds`）と机の講師名の両方へ S を載せ、S が X と Y の 2 人に出ていた。真因は 3 か所（どれか 1 つでも残ると落ちる・再マージで戻る＝INV-03）:
+  差分反映でテンプレの生徒が全員置かれない机のテンプレの机は `buildFullySuppressedManagedDesk` で ID を外した講師だけの机になり、その講師を置くと ID なし（`templateConflictRules.ts`）／
+  `alignTeacherIdentityWithRemerge`（`templateDiffApply.ts`）と再マージ `mergeManagedWeek` の「管理授業でない机」の枝（`ScheduleBoardScreen.tsx`・2026-03 由来）が非 manual の講師の ID を外していた。
+  修正: 授業か記録が残る講師名のある机は ID を外さない（再マージ・揃え）。差分反映は同じ講師の ID を元の机（無ければ抑止前のテンプレの同じ机）から写す（`keepTemplateTeacherIdOnKeptDesk`・
+  既に ID のある机・別の講師・講師だけの机〔足場〕は変えない）。どの机に誰を置くか・保留・知らせは変えない（本番 2 校の形でテンプレ保存を試算し、差は ID の有無だけと確認）。
+  v1.5.388（移動生徒の除外）・v1.5.436（講師名から ID を補う）のガードはそのまま。書き出しの側の守り（講師名から講師が引けるときは `regularTeacherIds` を足さない）は入れていない。
+  マトリクス: `inv01-teacher-attribution.matrix.test.ts` に describe「INV-01 × テンプレ保存（Issue #88）」4 行（何も変えない保存・机を 1 つ変える保存で ID が残り S は X のページにだけ出る〔再マージ 2 回とも〕／
+  同じテンプレの再保存で盤面が同じ／対照: 移動の記録が無い机は今までどおり）。兄弟（保留の解決で上の行の生徒を採用した机も同じ揃えを通る）で、
+  `inv02-manual-teacher-pending.matrix.test.ts` S-3 の前提の行「生徒を先に採用した机の講師に ID が無い」（`toBeUndefined`）を「ID が残る」（`toBe('tD')`）に改め、S-3 の本題（ID の無い机でも
+  呼び名から補う）は修正前に保存された ID の無い机の形を作って続けて確かめる（assert は減らしていない・保証文・ほかの既存行の変更なし）。
 
 ---
 
