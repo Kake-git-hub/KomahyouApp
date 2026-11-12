@@ -101,6 +101,8 @@ export function formatPatrolReportText(report) {
       for (const note of step.notes ?? []) lines.push(`    注: ${note}`)
     }
     for (const item of room.resolved ?? []) lines.push(`    [消えた] ${item.title ?? item.step}: ${item.finding.message}`)
+    // でたらめ操作の部品の列が変更前と違い始めた(baseline.mjs の findRandomDivergence)。以降の手の所見は同じ手どうしの比べではない。
+    if (room.randomDivergedAt) lines.push(`  [注意] でたらめ操作の手の列が変更前と ${room.randomDivergedAt} 手目から違います(変更前と今でアプリの答えが違った)。それより後の手の所見は同じ手どうしの比べではありません。違い始めた手の前後を両方の報告で読み比べてください。`)
     if (room.knownCount > 0) lines.push(`  既知で外した ${room.knownCount} 件`)
     if (room.aborted) lines.push(`  [中断] ${room.aborted}`)
   }

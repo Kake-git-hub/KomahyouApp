@@ -98,7 +98,7 @@ function shuffled(list, random) {
 }
 
 /** 保留(2 行)の机か(下段に何かある)。保留の机には動かせない・保留の机の上段を掴むと保留の解消になる(Q26-5)ので元にも先にもしない。 */
-function isPendingDesk(fact) {
+export function isPendingDesk(fact) {
   return fact.pendingStudents.length > 0 || fact.pendingTeacher !== '' || fact.pendingStatuses.length > 0 || fact.pendingMemos.length > 0
 }
 
@@ -205,23 +205,31 @@ export const ATTENDANCE_ALLOWED_SECTIONS = {
   'absent-no-makeup': ['boardState.suppressedRegularLessonOccurrences'],
   attended: ['boardState.suppressedRegularLessonOccurrences'],
   place: [],
+  // でたらめ操作の「出欠の解除」(handleClearStudentStatus の commitWeeks): 抑止キーを外す・休み(通常・振替元が時限で結べる授業)は台帳の振替元を外す。
+  // 講習の休みの解除(講習の在庫の台帳)は選ばないので入れない。振無休・出席の解除は抑止キーだけ。
+  'clear-absent': ['boardState.manualMakeupAdjustments', 'boardState.suppressedRegularLessonOccurrences'],
+  clear: ['boardState.suppressedRegularLessonOccurrences'],
 }
 
 const attendanceDeskKey = (op) => (op.kind === 'place' ? `${op.to.cellId}#${op.to.deskIndex}` : `${op.seat.cellId}#${op.seat.deskIndex}`)
+const attendanceSectionsKey = (op) => (op.kind === 'place' ? 'place' : op.kind === 'clear' ? (op.status === 'absent' ? 'clear-absent' : 'clear') : op.status)
 
-/** 出欠の操作で変わってよい範囲: 操作した机(休み・振無休・出席はその生徒の席の机、振替先へ置くは先の机)と ATTENDANCE_ALLOWED_SECTIONS。 */
+/** 出欠の操作で変わってよい範囲: 操作した机(休み・振無休・出席・解除はその生徒の席の机、振替先へ置くは先の机)と ATTENDANCE_ALLOWED_SECTIONS。 */
 export function buildAttendanceAllowedChange(op) {
-  return { deskKeys: new Set([attendanceDeskKey(op)]), sections: new Set(ATTENDANCE_ALLOWED_SECTIONS[op.kind === 'place' ? 'place' : op.status] ?? []) }
+  return { deskKeys: new Set([attendanceDeskKey(op)]), sections: new Set(ATTENDANCE_ALLOWED_SECTIONS[attendanceSectionsKey(op)] ?? []) }
 }
 
 /**
  * 在庫の仕様の増減(INV-06・鍵は 生徒キー__科目＝buildMakeupStockKey)。書いていない鍵はすべて ±0。
- * 休み(通常・振替)= 未消化振替 +1(通常は振替元を台帳へ積む・振替は消化が外れて元の振替元が戻る)／振無休・出席 = ±0／振替先へ置く = −1。
+ * 休み(通常・振替)= 未消化振替 +1(通常は振替元を台帳へ積む・振替は消化が外れて元の振替元が戻る)／振無休・出席 = ±0／振替先へ置く = −1／
+ * 解除(でたらめ操作)= 休みの解除 −1・振無休/出席の解除 ±0。
  * 講習の休みは選ばない(講習の在庫を戻すかは講習の期間で変わる・shouldReturnLectureStockOnAbsence)ので、未消化講習はどの操作も ±0。
  */
 export function expectedStockDeltas(op) {
   const key = `${op.studentKey}__${op.subject}`
   if (op.kind === 'place') return { makeup: { [key]: -1 }, lecture: {} }
+  // でたらめ操作の「出欠の解除」: 休み(通常・振替)の解除は、戻した授業がまた消化するので −1(休みの +1 の逆)。振無休・出席の解除は ±0。講習は選ばない。
+  if (op.kind === 'clear') return op.status === 'absent' && op.lessonType !== 'special' ? { makeup: { [key]: -1 }, lecture: {} } : { makeup: {}, lecture: {} }
   if (op.status === 'absent' && op.lessonType !== 'special') return { makeup: { [key]: 1 }, lecture: {} }
   return { makeup: {}, lecture: {} }
 }
@@ -253,6 +261,24 @@ export function collectStockIneligibleSeatKeys(payload) {
   return keys
 }
 
+/** 出欠を付ける・振替先に置く机に使えるか: 本物の講師がいて、講師の休み・保留・出欠記録・メモの無い机(台本 e とでたらめ操作の共有)。 */
+export function isAttendanceUsableDesk(desk) {
+  return desk.teacher !== '' && !desk.teacherRest && !isPendingDesk(desk) && !desk.pendingRecorded && desk.statuses.length === 0 && desk.memos.length === 0
+}
+
+/**
+ * 振替先の空いた席の候補: isAttendanceUsableDesk の机で、使っていない机・休みのコマ(sourceCellId)でなく・その生徒がまだいない(keysByCell)コマ。
+ * 台本 e(pickAttendancePlan)とでたらめ操作(pickRandomMakeupPlace)の共有。
+ */
+export function collectMakeupPlaceOptions(desks, { keysByCell, usedDesks = new Set(), sourceCellId, studentKey }) {
+  const options = []
+  for (const desk of desks) {
+    if (!isAttendanceUsableDesk(desk) || usedDesks.has(desk.key) || desk.cellId === sourceCellId || keysByCell.get(desk.cellId)?.has(studentKey)) continue
+    desk.students.forEach((entry, seat) => { if (entry === null) options.push({ desk, seat }) })
+  }
+  return options
+}
+
 /**
  * 台本 e の操作を選ぶ(ATTENDANCE_SLOTS の順に 1 つずつ・種つきの乱数)。対象＝その週で今日以降の開いている日のコマの生徒で、
  * 本物の講師がいて、講師の休み・保留・出欠記録・メモの無い机(生徒の移動の候補選び pickMoveCandidates と同じ考え。記録のある机は上書きの確定〔Issue #57〕が
@@ -270,7 +296,7 @@ export function pickAttendancePlan(facts, { weekDateKeys, todayKey, seed, exclud
     for (const record of [...desk.statuses, ...desk.pendingStatuses]) keys.add(record.split('|')[0])
     keysByCell.set(desk.cellId, keys)
   }
-  const usable = (desk) => desk.teacher !== '' && !desk.teacherRest && !isPendingDesk(desk) && !desk.pendingRecorded && desk.statuses.length === 0 && desk.memos.length === 0
+  const usable = isAttendanceUsableDesk
   const random = createSeededRandom(seed)
   const usedDesks = new Set()
   const usedStudents = new Set()
@@ -299,11 +325,7 @@ export function pickAttendancePlan(facts, { weekDateKeys, todayKey, seed, exclud
   const absentOp = chosen.get('regular-absent') ?? null
   const placeSlot = ATTENDANCE_SLOTS.find((slot) => slot.kind === 'place')
   if (absentOp) {
-    const options = []
-    for (const desk of desks) {
-      if (!usable(desk) || usedDesks.has(desk.key) || desk.cellId === absentOp.seat.cellId || keysByCell.get(desk.cellId)?.has(absentOp.studentKey)) continue
-      desk.students.forEach((entry, seat) => { if (entry === null) options.push({ desk, seat }) })
-    }
+    const options = collectMakeupPlaceOptions(desks, { keysByCell, usedDesks, sourceCellId: absentOp.seat.cellId, studentKey: absentOp.studentKey })
     if (options.length > 0) {
       const target = options[Math.floor(random() * options.length)]
       usedDesks.add(target.desk.key)
@@ -335,8 +357,9 @@ export function chooseMakeupOriginItem(items, { subject, label }) {
   return exact >= 0 ? exact : items.findIndex((text) => text.includes(subject))
 }
 
-function describeAttendanceOp(op) {
+export function describeAttendanceOp(op) {
   const person = `${op.studentName}(${op.studentKey})`
+  if (op.kind === 'clear') return `${op.label}: ${describeSeat(op.seat)} ${person} ${op.subject}(${({ absent: '休み', 'absent-no-makeup': '振無休', attended: '出席' })[op.status] ?? op.status}の記録を解除)`
   if (op.kind === 'place') return `${op.label}: ${person} ${op.subject}(元 ${op.sourceDateKey} ${op.sourceSlotNumber}限の休み)→ ${describeSeat(op.to)}`
   return `${op.label}: ${describeSeat(op.seat)} ${person} ${op.subject}`
 }
@@ -367,8 +390,9 @@ export const TEACHER_REST_DRAG_NOTE = '休みの講師を置くのは講師メ�
  * - 講師だけ入替・生徒ごと席入替: 講師の机が 2 つ以上で、どちらかに生徒がいるコマ(生徒が絡むと選ぶ画面が出る)。
  * - 講師メニューで替える・休みと解除: 講師の机のあるコマ。
  * 空き机が要る操作から先に選ぶ(残りのコマを取り合わないように)。候補の無い操作は飛ばし、skipped に理由。
+ * only(でたらめ操作): その 1 種類だけを選ぶ(ほかの種類にコマを取られない)。
  */
-export function pickTeacherPlan(facts, { weekDateKeys, todayKey, seed }) {
+export function pickTeacherPlan(facts, { weekDateKeys, todayKey, seed, only = null }) {
   const week = new Set(weekDateKeys)
   const byCell = new Map()
   for (const desk of [...facts.desks.values()].filter((item) => week.has(item.dateKey) && item.dateKey >= todayKey && item.cellOpen).sort(comparePosition)) {
@@ -414,10 +438,10 @@ export function pickTeacherPlan(facts, { weekDateKeys, todayKey, seed }) {
     usedCells.add(source.cellId)
     chosen.set(name, { ...base(source, label, name), ...(target ? { targetDeskIndex: target.deskIndex, targetTeacher: target.teacher } : {}) })
   }
-  for (const name of ['rest-flow', 'move', 'teacher-swap', 'seat-swap', 'menu-teacher', 'rest-toggle']) pickFor(name)
+  for (const name of only ? [only] : ['rest-flow', 'move', 'teacher-swap', 'seat-swap', 'menu-teacher', 'rest-toggle']) pickFor(name)
   const ops = []
   const skipped = []
-  for (const { name, label } of TEACHER_OPS) {
+  for (const { name, label } of only ? TEACHER_OPS.filter((item) => item.name === only) : TEACHER_OPS) {
     const op = chosen.get(name)
     if (op) ops.push(op)
     else skipped.push(`${label}: ${name === 'move' || name === 'rest-flow' ? '講師の机と空き机のある別のコマが無い' : name.endsWith('swap') ? '講師が 2 人以上いて生徒のいる別のコマが無い' : '講師の机のある別のコマが無い'}`)
@@ -664,7 +688,8 @@ export function collectTemplateSaveFindings({ app, before, after, fromDateKey, c
   return [
     ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
     ...manualFindings,
-    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless }),
+    // §9-15 で X のテンプレの机に講師を置かなかった生徒は知らせるだけ(保存のあとのテンプレで判定・手直し 1)。
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, { templateTeacherless, templateManualKeep: { template: after.payload?.classroomSettings?.regularLessonTemplate } }),
     ...app.checkManualInputsNotLost(before.facts, after.facts, { releasedMovedStatuses }),
     // 台本 e(出欠)が先に流れていれば、出欠記録のあるコマに生徒を置き直さないか(§2-4 記録が勝つ)もここで見える。
     ...app.checkAttendanceRecordsHold(before.facts, after.facts, { fromDateKey }),
@@ -756,6 +781,513 @@ export async function searchMoveWeek({ session, driver, read, nextMonday, today,
   return { searchedWeeks, weekStart: null, candidates: [], base }
 }
 
+// ── 台本とでたらめ操作が共有する操作の部品(第 2 段の最後・でたらめ操作を育てたときに台本の中から外へ出した)。
+// ctx = { session, driver, app, read, audit, stockOf, today }(read は状態を読む・audit は保証台帳・stockOf は在庫の残〔状態にためて使い回す〕・today は JST の今日)。
+// io = { current(直前の読み取り・読み書きする), newStep(title), finish(step)(報告へ足し、既知を外したあとの所見を返す) }。
+// 点検の組み合わせ・「変わってよい範囲」はここで 1 か所にする(台本とでたらめ操作で書き直さない)。
+
+/** 講師の仮名と ID(報告の「何をどこへ」)。 */
+export function describeTeacher(app, payload, name) {
+  if (!name) return '講師なし'
+  return `${name}(${app.resolveTeacherIdByDisplayName?.(payload?.teachers, name) || 'ID なし'})`
+}
+const atDesk = (cellId, deskIndex) => `${cellId} 机${deskIndex + 1}`
+
+/**
+ * 出欠の操作を 1 回: 押す → 読む → 点検(台本 e とでたらめ操作の共有)。op は pickAttendancePlan の形(mark・place)か、でたらめ操作の解除(clear)。
+ * 戻り値 { outcome: 'applied' | 'blocked'(盤面が変わらず文が変わった・info attendance-blocked) | 'nothing'(盤面も文も変わらない・呼んだ側が中断) |
+ *   'not-placed'(振替元を一覧から選べない・stop attendance-not-applied), notes, findings, operations, after, diff, message }。
+ */
+export async function attemptAttendanceOp(ctx, { before, op }) {
+  const { session, driver: d, app, read, audit, stockOf } = ctx
+  const notes = []
+  const findings = []
+  const dialogsBefore = session.dialogs.length
+  const statusBefore = await d.readStatusText(session)
+  let status = ''
+  if (op.kind === 'place') {
+    const label = app.findMakeupOriginLabel(stockOf(before), `${op.studentKey}__${op.subject}`, op.sourceDateKey, op.sourceSlotNumber)
+    const result = await d.placeMakeupFromStock(session, { stockStudentKey: op.studentKey, choose: (items) => chooseMakeupOriginItem(items, { subject: op.subject, label }) }, op.to)
+    status = result.status ?? ''
+    if (result.chosenText) notes.push(`選んだ振替元: ${result.chosenText}${label && !result.chosenText.includes(label) ? `(休みにしたコマ ${label} の行が無く、同じ科目の行を選んだ)` : ''}`)
+    if (!result.placed) {
+      // 休みで増えたはずの振替が、未消化振替の一覧から選べない(室長は置けない)。
+      findings.push({ level: 'stop', code: 'attendance-not-applied', message: `休みで増えた振替を未消化振替の一覧から選べない: ${op.studentName}(${op.studentKey}) ${op.subject}(${result.reason ?? '一覧に無い'})`, studentId: op.studentKey })
+      return { outcome: 'not-placed', notes, findings, operations: 0, after: before, diff: null }
+    }
+  } else if (op.kind === 'clear') {
+    status = await d.clearStudentAttendance(session, op.seat)
+  } else {
+    status = await d.markStudentAttendance(session, op.seat, op.status)
+  }
+  notes.push(`ステータス: ${status}`)
+  for (const dialog of session.dialogs.slice(dialogsBefore)) notes.push(`ダイアログ: ${dialog}`)
+  const after = await read()
+  const diff = app.diffBoardFacts(before.facts, after.facts)
+  if (diff.desks.length === 0 && diff.sections.length === 0) {
+    if (status === statusBefore) return { outcome: 'nothing', notes, findings, operations: 1, after, diff: null, message: `出欠を付けても盤面もステータスの文も変わらず、何も起きません: ${describeAttendanceOp(op)}` }
+    findings.push({ level: 'info', code: 'attendance-blocked', message: `アプリが出欠の操作を断った: ${describeAttendanceOp(op)}(${status})`, studentId: op.studentKey })
+    return { outcome: 'blocked', notes, findings, operations: 1, after, diff: null }
+  }
+  const allowed = buildAttendanceAllowedChange(op)
+  const exclude = { excludeDeskKeys: allowed.deskKeys }
+  findings.push(
+    ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+    ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+    ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+    ...app.checkTeacherCellIntegrity(before.facts, after.facts),
+    ...app.checkAuditNotWorse(audit(before), audit(after)),
+    ...app.checkAttendanceApplied(before.facts, after.facts, op),
+    ...app.checkStockDeltas(stockOf(before), stockOf(after), expectedStockDeltas(op)),
+  )
+  return { outcome: 'applied', notes, findings, operations: 1, after, diff: { before: before.facts, after: after.facts } }
+}
+
+/**
+ * 講師の操作を 1 回: press(画面で押す)→ 読む → 点検(範囲・講師のコマの形・中身・在庫・保証台帳)。台本 f とでたらめ操作の共有。
+ * press は { status, skip? } を返す(skip は押さずに飛ばした理由)。title は報告の手順の題名(断った・何も起きないの文に入れる)。
+ * 戻り値 { outcome: 'applied' | 'blocked' | 'nothing' | 'skipped', notes, findings, operations, after, diff, message }。
+ */
+export async function attemptTeacherOp(ctx, { before, op, press, title }) {
+  const { session, driver: d, app, read, audit, stockOf } = ctx
+  const notes = []
+  const findings = []
+  const dialogsBefore = session.dialogs.length
+  const statusBefore = await d.readStatusText(session)
+  const pressed = await press()
+  if (pressed.skip) {
+    notes.push(`飛ばした: ${pressed.skip}`)
+    return { outcome: 'skipped', notes, findings, operations: 0, after: before, diff: null }
+  }
+  notes.push(`ステータス: ${pressed.status ?? ''}`)
+  for (const dialog of session.dialogs.slice(dialogsBefore)) notes.push(`ダイアログ: ${dialog}`)
+  const after = await read()
+  const diff = app.diffBoardFacts(before.facts, after.facts)
+  if (diff.desks.length === 0 && diff.sections.length === 0) {
+    if ((pressed.status ?? '') === statusBefore) return { outcome: 'nothing', notes, findings, operations: 1, after, diff: null, message: `講師の操作をしても盤面もステータスの文も変わらず、何も起きません: ${title}` }
+    findings.push({ level: 'info', code: 'teacher-op-blocked', message: `アプリが講師の操作を断った: ${title}(${pressed.status ?? ''})` })
+    return { outcome: 'blocked', notes, findings, operations: 1, after, diff: null }
+  }
+  const placedDesk = op.kind === 'place-rested' ? after.facts.desks.get(`${op.cellId}#${op.deskIndex}`) : null
+  const released = placedDesk ? [...collectRestReleasedDeskKeys(before.facts, after.facts, op.cellId, { teacher: placedDesk.teacher || op.teacher, teacherId: placedDesk.teacherId || undefined })] : []
+  const allowed = buildTeacherOpAllowedChange(op, released)
+  const exclude = { excludeDeskKeys: allowed.deskKeys }
+  findings.push(
+    ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+    ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+    ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+    ...app.checkTeacherCellIntegrity(before.facts, after.facts),
+    ...app.checkTeacherOpApplied(before.facts, after.facts, op),
+    ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '講師の操作で在庫が変わった' }),
+    ...app.checkAuditNotWorse(audit(before), audit(after)),
+  )
+  return { outcome: 'applied', notes, findings, operations: 1, after, diff: { before: before.facts, after: after.facts } }
+}
+
+/**
+ * attemptTeacherOp を手順(step)へ足す: 何も起きなければ手順を報告へ足して中断(PatrolAbortError)・効けば io.current を進める。
+ * 戻り値 { outcome, after }(台本 f の runTeacherOp と同じ)。
+ */
+export async function runTeacherOpOn(ctx, io, step, op, press) {
+  const attempt = await attemptTeacherOp(ctx, { before: io.current, op, press, title: step.title })
+  step.operations += attempt.operations
+  step.notes.push(...attempt.notes)
+  step.findings.push(...attempt.findings)
+  if (attempt.outcome === 'nothing') {
+    await io.finish(step)
+    throw new PatrolAbortError(attempt.message)
+  }
+  if (attempt.outcome === 'applied') {
+    step.diff = attempt.diff
+    io.current = attempt.after
+  }
+  return { outcome: attempt.outcome, after: attempt.after }
+}
+
+/** 講師メニューの選択肢から、そのコマに居ない講師(講師欄・保留の下段・休みの記録)を種つきの乱数で選ぶ。無ければ null(その操作は飛ばす)。 */
+export function makeMenuTeacherPicker(random, getFacts) {
+  // 今の講師・休みの講師もそのコマに居る扱いなので、ここで別に外さない(照合を 2 つ作らない)。
+  return (cellId) => (choices) => {
+    const options = choices.filter((choice) => choice.value && !isTeacherInCell(getFacts(), cellId, choice.value))
+    return options.length > 0 ? options[Math.floor(random() * options.length)].value : null
+  }
+}
+
+/**
+ * 講師の移動・講師だけ入替・生徒ごと席入替(長押しドラッグ)・講師メニューで替える を 1 回(planned は pickTeacherPlan の形)。台本 f とでたらめ操作の共有。
+ * 戻り値 { outcome, after }。
+ */
+export async function runSimpleTeacherOp(ctx, io, step, planned, { pickMenuTeacher }) {
+  const { session, driver: d, app } = ctx
+  const who = (name) => describeTeacher(app, io.current?.payload, name)
+  if (planned.name === 'move' || planned.name === 'teacher-swap' || planned.name === 'seat-swap') {
+    const swapMode = planned.name === 'seat-swap' ? 'seat' : 'teacher'
+    step.notes.push(`${planned.label}: ${atDesk(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${atDesk(planned.cellId, planned.targetDeskIndex)} ${who(planned.targetTeacher)}`)
+    const op = { kind: planned.name, cellId: planned.cellId, deskIndex: planned.deskIndex, targetDeskIndex: planned.targetDeskIndex }
+    return runTeacherOpOn(ctx, io, step, op, async () => {
+      const dragged = await d.dragTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, swapMode)
+      step.notes.push(dragged.modal ? `選ぶ画面: ${swapMode === 'seat' ? '生徒ごと席を入れ替え' : '講師だけ入れ替え'} を押した` : '選ぶ画面は出なかった(どちらの机にも生徒がいない)')
+      return dragged
+    })
+  }
+  if (planned.name === 'menu-teacher') {
+    const op = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
+    return runTeacherOpOn(ctx, io, step, op, async () => {
+      const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId))
+      if (!set.teacher) return { skip: `${atDesk(planned.cellId, planned.deskIndex)} で選べる講師(そのコマに居ない講師)が講師メニューにありません。` }
+      op.teacher = set.teacher
+      step.notes.push(`${planned.label}: ${atDesk(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${who(set.teacher)}`)
+      return set
+    })
+  }
+  throw new Error(`runSimpleTeacherOp が扱わない講師の操作です: ${planned.name}`)
+}
+
+// ── 台本 g の部品(休日設定と解除・丸ごと振替〔作成と解除〕)。
+
+/** 日付の操作を 1 回: 押す → 読む。盤面が変わらなければ、アプリが断った(文が変わった・断りの画面)か何も起きない(手順を足して中断)。 */
+async function runDayOpOn(ctx, io, step, label, press) {
+  const { session, driver: d, app, read } = ctx
+  const before = io.current
+  const dialogsBefore = session.dialogs.length
+  const statusBefore = await d.readStatusText(session)
+  const pressed = await press()
+  if (pressed.missing) {
+    step.notes.push(`飛ばした: ${label}(メニューにボタンが無い・ステータス: ${pressed.status ?? ''})`)
+    return { outcome: 'missing', before, after: before }
+  }
+  step.operations += 1
+  step.notes.push(`ステータス: ${pressed.status ?? ''}`)
+  for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
+  if (pressed.blocked) step.notes.push(`断りの画面: ${pressed.blocked}`)
+  const after = await read()
+  const diff = app.diffBoardFacts(before.facts, after.facts)
+  if (diff.desks.length === 0 && diff.sections.length === 0) {
+    if (!pressed.blocked && (pressed.status ?? '') === statusBefore) {
+      await io.finish(step)
+      throw new PatrolAbortError(`${label}をしても盤面もステータスの文も変わらず、何も起きません。`)
+    }
+    step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが日付の操作を断った: ${label}(${pressed.blocked || pressed.status || ''})` })
+    return { outcome: 'blocked', before, after }
+  }
+  step.diff = { before: before.facts, after: after.facts }
+  return { outcome: 'applied', before, after }
+}
+
+/** 日付の操作のあとに毎回当てる点検(範囲・手入力・講師のコマの形・保証台帳)。exclude は操作した日の机。 */
+function collectDayOpFindings(ctx, before, after, dateKeys, sections, { restedPresentAsInfoDates } = {}) {
+  const { app, audit } = ctx
+  const allowed = { deskKeys: app.collectDateDeskKeys([before.facts, after.facts], dateKeys), sections: new Set(sections) }
+  const exclude = { excludeDeskKeys: allowed.deskKeys }
+  return [
+    ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
+    ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
+    ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
+    ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
+    ...app.checkTeacherCellIntegrity(before.facts, after.facts, { restedPresentAsInfoDates }),
+    ...app.checkAuditNotWorse(audit(before), audit(after)),
+  ]
+}
+
+/**
+ * 解除のあと、作る前(base)と盤面・部分・在庫が全部同じか(休日解除は逆操作・§9-20 作成→解除で元の形)。
+ * 休日は、休日のまま読み込み直す(再マージ)と消える休日の日のメモ・生徒の居ない机の手入力の講師と、その日の抑止キーの出入りだけ仕様なので知らせるだけ(checkHolidayRoundTrip)。
+ */
+function collectRoundTripFindings(ctx, base, after, what, holidayDateKey = null) {
+  const { app, stockOf } = ctx
+  return [
+    // 科目だけ編集したテンプレの授業の抑止は、休日にする前の教室設定のテンプレ(その日に効いていた版)の科目と照合する(手直し 1 Minor-1)。
+    ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey, { classroomSettings: base.payload?.classroomSettings }) : app.checkSameState(base.facts, after.facts, 'round-trip-not-restored')),
+    ...app.checkStockDeltas(stockOf(base), stockOf(after), {}, { code: 'round-trip-not-restored', label: `${what}を解除しても在庫が元に戻らない` }),
+  ]
+}
+
+/** 保存 → 読み込み直し で盤面と在庫が変わらない(作った休日・丸ごと振替の組が保存を通って残るか)。台本 g とでたらめ操作の重い部品の共有。 */
+export async function persistDayOps(ctx, io, title, { restedPresentAsInfoDates } = {}) {
+  const { session, driver: d, app, read, stockOf } = ctx
+  const step = io.newStep(title)
+  if (await d.clickSave(session)) step.operations += 1
+  else step.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
+  const saved = await read()
+  step.findings.push(...app.checkSameState(io.current.facts, saved.facts, 'save-changed'), ...app.checkStockDeltas(stockOf(io.current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
+  await d.reloadApp(session)
+  step.operations += 1
+  const reloaded = await read()
+  step.findings.push(
+    ...app.checkSameState(saved.facts, reloaded.facts, 'reload-changed'),
+    ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }),
+    ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts, { restedPresentAsInfoDates }),
+  )
+  step.diff = { before: saved.facts, after: reloaded.facts }
+  io.current = reloaded
+  return io.finish(step)
+}
+
+/**
+ * 休日設定 → 在庫が仕様どおり戻る → 元に戻す・やり直し → 保存→読み込み直し → 休日の見出しを押して解除 → 休日にする前と同じ(台本 g とでたらめ操作の共有)。
+ * holiday は dayOps.ts の pickDayOpsPlan の holiday。戻り値 { effective(効いた日付の操作の数) }。
+ * ★ローカルモードの控えの罠: 前に保存した形へ戻る操作(元に戻す・やり直し・解除)の前に保存ボタンを押す。
+ */
+export async function runHolidayFlow(ctx, io, { holiday, ineligibleSeatKeys }) {
+  const { session, driver: d, app, read, stockOf } = ctx
+  const sameState = (before, after, code) => app.checkSameState(before.facts, after.facts, code)
+  let effective = 0
+  const H = holiday.dateKey
+  await d.gotoWeekOf(session, mondayOf(H))
+  const base = io.current
+  const step = io.newStep(`休日設定(${H})`)
+  step.notes.push(`休日にする: ${H}(席の生徒 ${holiday.studentCount} 人・授業はすべて未消化へ)`)
+  const set = await runDayOpOn(ctx, io, step, `${H} を休日にする`, () => d.chooseDayMenuItem(session, H, 'holiday'))
+  let holidayActive = false
+  if (set.outcome === 'applied') {
+    effective += 1
+    holidayActive = true
+    const { before, after } = set
+    const stockPlan = app.expectedHolidayStockDeltas(before.facts, H, ineligibleSeatKeys)
+    // 振替の借りのある鍵(前から振替を置きすぎ)は、足した振替元が借りの返済に消える。+1 の代わりに「振替元を 1 つ足したときの残の増え方」(アプリの数え方)を期待値にする
+    // (借りの鍵で残が増えたら二重計上として止まる・2026-11-12 でたらめ操作の実走・緑が丘の形・手直し 1 Minor-2)。
+    const gains = app.collectMakeupOriginGains?.(before.payload, ctx.today, Object.keys(stockPlan.expected.makeup ?? {})) ?? {}
+    const debtKeys = Object.keys(gains).filter((key) => gains[key] < (stockPlan.expected.makeup[key] ?? 0))
+    for (const key of debtKeys) stockPlan.expected.makeup[key] = gains[key]
+    step.notes.push(`在庫: 比べた鍵 ${stockPlan.checkedCount}(未消化振替 +1${debtKeys.length > 0 ? `・うち振替の借り ${debtKeys.length}(${debtKeys.slice(0, 5).join('・')}・前から置きすぎで足した振替元が借りの返済に消えるので、振替元を 1 つ足したときの残の増え方 ${debtKeys.map((key) => gains[key]).join('・')} を期待値にする)` : ''})・比べない鍵 ${stockPlan.ignore.makeup.size + stockPlan.ignore.lecturePrefixes.length}(講習・手動追加・編集で振替・同じ日に同じ科目 2 つ など。ほかの鍵は ±0)`)
+    step.findings.push(
+      ...collectDayOpFindings(ctx, before, after, [H], HOLIDAY_ALLOWED_SECTIONS),
+      ...app.checkHolidayApplied(before.facts, after.facts, H),
+      ...app.checkStockDeltas(stockOf(before), stockOf(after), stockPlan.expected, { ignore: stockPlan.ignore, label: '休日設定で在庫の増減が仕様と違う' }),
+    )
+    io.current = after
+    // 元に戻す → やり直し(1 か所だけ)。どちらも前に保存した形へ戻りうるので、先に保存する(ローカルモードの控えの罠)。
+    if (await d.clickSave(session)) step.operations += 1
+    if (await d.clickUndo(session)) {
+      step.operations += 1
+      const undone = await read()
+      step.findings.push(...sameState(before, undone, 'undo-not-restored'), ...app.checkStockDeltas(stockOf(before), stockOf(undone), {}, { code: 'undo-not-restored', label: '元に戻すで在庫が休日にする前に戻らない' }))
+      io.current = undone
+      step.notes.push('元に戻す: 休日にする前の盤面・在庫に戻るかを確かめた。')
+      if (await d.clickSave(session)) step.operations += 1
+      if (await d.clickRedo(session)) {
+        step.operations += 1
+        step.notes.push('やり直し: 休日にしたあとの盤面・在庫に戻るかを確かめた。')
+        const redone = await read()
+        step.findings.push(...sameState(after, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(after), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が休日のあとに戻らない' }))
+        io.current = redone
+      } else {
+        step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `休日設定を元に戻したあとやり直しが押せない(ボタンが無効): ${H}` })
+        holidayActive = false
+      }
+    } else {
+      step.findings.push({ level: 'stop', code: 'undo-not-restored', message: `休日設定のあと元に戻すが押せない(ボタンが無効): ${H}` })
+    }
+  }
+  await io.finish(step)
+  if (holidayActive) {
+    await persistDayOps(ctx, io, `休日設定のあと 保存→読み込み直し(${H})`)
+    await d.gotoWeekOf(session, mondayOf(H))
+    const releaseStep = io.newStep(`休日を解除(${H})`)
+    releaseStep.notes.push(`休日の見出しを押して解除: ${H}(休日にする前の盤面・在庫に戻るかを確かめる)`)
+    const released = await runDayOpOn(ctx, io, releaseStep, `${H} の休日を解除する`, () => d.clickDayHeader(session, H))
+    if (released.outcome === 'applied') {
+      releaseStep.findings.push(
+        ...collectDayOpFindings(ctx, released.before, released.after, [H], HOLIDAY_RELEASE_ALLOWED_SECTIONS),
+        ...collectRoundTripFindings(ctx, base, released.after, '休日', H),
+      )
+      releaseStep.diff = { before: base.facts, after: released.after.facts }
+      io.current = released.after
+    } else if (released.outcome === 'blocked') {
+      releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `休日を解除できない(アプリが断った): ${H}` })
+    }
+    await io.finish(releaseStep)
+  }
+  return { effective }
+}
+
+/**
+ * 丸ごと振替: メニュー「丸ごと振替」→ 振替先(同じ曜日)の見出し → 在庫 ±0 → 保存→読み込み直し → メニュー「丸ごと振替を解除」→ 作成の前と同じ
+ * (台本 g とでたらめ操作の共有)。transfer は pickDayOpsPlan の transfer。振替先が全部断られたら次の振替元(otherSources・Issue #87)。
+ * 戻り値 { effective }。
+ */
+export async function runWholeDayTransferFlow(ctx, io, { transfer }) {
+  const { session, driver: d, app, stockOf } = ctx
+  let effective = 0
+  const base = io.current
+  const step = io.newStep(`丸ごと振替(振替元 ${transfer.sourceDateKey})`)
+  let applied = null
+  // 振替先が全部断られたら次の振替元を試す(otherSources・Issue #87: 振替元の手置きの講師が振替先の同じ時限の別の机にも居るとアプリが止める)。
+  sourceLoop: for (const candidate of [transfer, ...(transfer.otherSources ?? [])]) {
+    const D = candidate.sourceDateKey
+    if (candidate !== transfer) step.notes.push(`次の振替元を試す: ${D}(席の生徒 ${candidate.studentCount} 人)→ 振替先の候補 ${candidate.targetDateKeys.join('・')}`)
+    for (const T of candidate.targetDateKeys) {
+      await d.gotoWeekOf(session, mondayOf(D))
+      const started = await d.chooseDayMenuItem(session, D, 'transfer')
+      if (started.missing) {
+        step.notes.push(`飛ばした: ${D} のメニューに「丸ごと振替」がありません。`)
+        continue sourceLoop
+      }
+      step.operations += 1
+      if (started.blocked) {
+        step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが丸ごと振替を断った(振替元 ${D}): ${started.blocked}` })
+        continue sourceLoop
+      }
+      await d.gotoWeekOf(session, mondayOf(T))
+      step.notes.push(`丸ごと振替: ${D} → ${T}(同じ曜日)`)
+      const result = await runDayOpOn(ctx, io, step, `${D} → ${T} の丸ごと振替`, () => d.clickDayHeader(session, T))
+      if (result.outcome === 'applied') {
+        applied = { D, T, ...result }
+        break sourceLoop
+      }
+      // 断られた(振替先の手入力・机の数・同じ講師が 2 机になる など)。選ぶ状態を取り消して次の振替先を試す。
+      if (await d.cancelWholeDayTransfer(session)) step.operations += 1
+    }
+  }
+  if (applied) {
+    effective += 1
+    const { D, T, before, after } = applied
+    // 題名の振替元を、実際に作れた振替元に直す(でたらめ操作の手の見出しは前に残す)。
+    step.title = step.title.replace(/丸ごと振替\(振替元 [^)]*\)$/, `丸ごと振替(振替元 ${D})`)
+    step.findings.push(
+      ...collectDayOpFindings(ctx, before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
+      ...app.checkWholeDayTransferApplied(before.facts, after.facts, { sourceDateKey: D, targetDateKey: T }),
+      ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '丸ごと振替で在庫が動いた(移送は在庫中立)' }),
+    )
+    io.current = after
+    await io.finish(step)
+    await persistDayOps(ctx, io, `丸ごと振替のあと 保存→読み込み直し(${D} → ${T})`, { restedPresentAsInfoDates: new Set([D, T]) })
+    await d.gotoWeekOf(session, mondayOf(T))
+    const releaseStep = io.newStep(`丸ごと振替を解除(${D} → ${T})`)
+    releaseStep.notes.push(`メニュー「丸ごと振替を解除」: ${T}(作成の前の盤面・在庫に戻るかを確かめる・§9-20)`)
+    const released = await runDayOpOn(ctx, io, releaseStep, `${D} → ${T} の丸ごと振替を解除する`, () => d.chooseDayMenuItem(session, T, 'transfer-release'))
+    if (released.outcome === 'applied') {
+      releaseStep.findings.push(
+        ...collectDayOpFindings(ctx, released.before, released.after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
+        ...collectRoundTripFindings(ctx, base, released.after, '丸ごと振替'),
+      )
+      releaseStep.diff = { before: base.facts, after: released.after.facts }
+      io.current = released.after
+    } else {
+      releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `丸ごと振替を解除できない(${released.outcome === 'missing' ? 'メニューに「丸ごと振替を解除」が無い' : 'アプリが断った'}): ${D} → ${T}` })
+    }
+    await io.finish(releaseStep)
+  } else {
+    step.notes.push('丸ごと振替は、どの振替先でもできませんでした(上の理由)。')
+    await io.finish(step)
+  }
+  return { effective }
+}
+
+// ── 台本 d の部品(テンプレを 1 か所変えて保存)。
+
+/**
+ * テンプレを 1 か所変えて保存(kind は TEMPLATE_EDIT_KINDS の 1 つ): テンプレ編集を開く → 反映日 → 机を変える → 保存 → 確認 → 読む → 点検。
+ * 台本 d とでたらめ操作の共有。候補が無い・選べる生徒/講師が無いときは手順に理由を書いて飛ばす。戻り値 { done }。
+ */
+export async function runTemplateEditOnce(ctx, io, { kind, index, random, usedCellIds, nextMonday, today }) {
+  const { session, driver: d, app, read, audit } = ctx
+  const rosterById = new Map((io.current.payload?.students ?? []).map((row) => [row.id, row]))
+  const isStudentActiveOnDate = (studentKey, dateKey) => {
+    const row = rosterById.get(studentKey)
+    return row ? app.isActiveOnDate(row.entryDate ?? '', row.withdrawDate ?? '', row.birthDate ?? '', dateKey) : true
+  }
+  const step = io.newStep(`テンプレを変えて保存 ${index + 1}(${TEMPLATE_EDIT_LABELS[kind]}・反映日 ${nextMonday})`)
+  const before = io.current
+  const target = app.pickTemplateEditTarget({ kind, desks: app.buildTemplateEditorDesks(before.payload, today), facts: before.facts, fromDateKey: nextMonday, random, excludeCellIds: usedCellIds })
+  if (target.skip) {
+    step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${target.skip}`)
+    await io.finish(step)
+    return { done: false }
+  }
+  const { desk } = target
+  usedCellIds.add(desk.cellId)
+  const anchorDates = [...new Set(target.anchorCellIds.map((cellId) => cellId.split('_')[0]))].sort()
+  const presence = app.collectCellPresence(before.facts, target.anchorCellIds)
+  const position = { cellId: desk.cellId, deskIndex: desk.deskIndex }
+  const defaultDate = await d.openTemplateEditor(session)
+  step.operations += 1
+  step.notes.push(`反映開始日の既定: ${defaultDate}`)
+  // 台本 a を流さずに d だけ流すと、1 回目の保存は先の版の中身も手前の日付で当てる(変わった机にその分も混ざる)。読む人が取り違えないよう注を出す。
+  if (defaultDate && defaultDate > nextMonday) step.notes.push(`保存済みのテンプレ(反映日 ${defaultDate})を手前の日付で当てています(${nextMonday} 以降に、その版の中身も当たる)。`)
+  await d.setTemplateStartDate(session, nextMonday)
+  step.operations += 1
+  let edit = null
+  let studentName = ''
+  if (kind === 'add-student') {
+    const inTemplateCell = new Set()
+    for (const other of app.buildTemplateEditorDesks(before.payload, today)) {
+      if (other.cellId !== desk.cellId) continue
+      for (const entry of other.students) if (entry) inTemplateCell.add(entry.studentId)
+    }
+    const { studentId } = await d.templateAddStudent(session, { ...position, seat: target.seat }, (choices) => app.pickTemplateEditOption({
+      options: choices, exclude: inTemplateCell, random,
+      prefer: (value) => !presence.studentKeys.has(value) && anchorDates.every((dateKey) => isStudentActiveOnDate(value, dateKey)),
+    }))
+    if (studentId) {
+      edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, seat: target.seat, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: [studentId], anchorCellIds: target.anchorCellIds }
+      const row = rosterById.get(studentId)
+      studentName = row ? (row.displayName || row.name || '') : ''
+    }
+  } else if (kind === 'change-teacher') {
+    // 確かめる日のコマに既に居る講師へ替えると「新しい講師が居る」が素通りするので、居ない講師が選べなければこの種類は飛ばす(レビュー M-2)。
+    const { teacher } = await d.templateChangeTeacher(session, position, (choices) => app.pickTemplateEditOption({
+      options: choices, exclude: new Set([desk.teacher]), random, prefer: (value) => !presence.teachers.has(value), requirePreferred: true,
+    }))
+    if (teacher) {
+      edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, newTeacher: teacher, newTeacherId: app.resolveTeacherIdByDisplayName(before.payload?.teachers, teacher), studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
+    }
+  } else {
+    await d.templateDeleteDesk(session, { ...position, seats: [0, 1].filter((seat) => desk.students[seat] !== null) })
+    edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
+  }
+  if (!edit) {
+    // 選べる生徒・講師が画面に無かった。テンプレ編集を保存せずに閉じる。
+    await d.closeTemplateEditor(session)
+    step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${describeTemplateDesk(desk)} で選べる${kind === 'add-student' ? '生徒' : '講師(確かめる日のコマに居ない講師)'}が画面にありません。`)
+    await io.finish(step)
+    return { done: false }
+  }
+  step.operations += 1
+  step.notes.push(describeTemplateEdit(edit, desk, { studentName, anchorDates }))
+  const { confirmMessage, detailText } = await d.requestTemplateSave(session)
+  step.operations += 1
+  step.notes.push(`確認の画面: ${confirmMessage}`)
+  if (detailText) {
+    const lines = detailText.split('\n').map((line) => line.trim()).filter(Boolean)
+    step.notes.push(`確認の画面の詳細(${lines.length} 行): ${lines.slice(0, 12).join(' / ')}${lines.length > 12 ? ' / …' : ''}`)
+  } else step.notes.push('確認の画面の詳細: なし')
+  await d.confirmTemplateSave(session)
+  step.operations += 1
+  const after = await read()
+  step.diff = { before: before.facts, after: after.facts }
+  step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`)
+  step.findings.push(
+    ...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit, allowed: buildTemplateEditAllowedChange(nextMonday) }),
+    ...app.checkTemplateEditSaved(after.payload?.classroomSettings?.regularLessonTemplate, edit),
+    ...app.checkTemplateEditApplied(before.facts, after.facts, edit, {
+      isStudentActiveOnDate,
+      // 保存の前からある削除記録だけ(この保存が自分で積んだ抑止キーで「置かない」を説明させない)。
+      suppressedOccurrences: before.payload?.boardState?.suppressedRegularLessonOccurrences ?? [],
+    }),
+  )
+  await io.finish(step)
+  io.current = after
+  return { done: true }
+}
+
+/** テンプレを変えて保存のあと 保存→読み込み直し(盤面は変わらない)。台本 d とでたらめ操作の共有。 */
+export async function persistTemplateEdit(ctx, io, title) {
+  const { session, driver: d, app, read } = ctx
+  const step = io.newStep(title)
+  if (await d.clickSave(session)) step.operations += 1
+  else step.notes.push('保存ボタンは既に clean で押せませんでした。')
+  const saved = await read()
+  step.findings.push(...app.checkSameState(io.current.facts, saved.facts, 'save-changed'))
+  await d.reloadApp(session)
+  step.operations += 1
+  io.current = await read()
+  step.findings.push(...app.checkSameState(saved.facts, io.current.facts, 'reload-changed'))
+  return io.finish(step)
+}
+
 /**
  * 教室 1 つぶんの台本を流し、教室の報告(report.mjs の形)を返す。driver は差し替えられる(テストの偽の driver・既定は driver.mjs)。
  * 操作の数え方: 実際に押せた/効いたものだけ(断られた移動は 1、押せなかった元に戻す・やり直しは 0。週へ移るだけの準備は数えない)。
@@ -806,10 +1338,21 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       }
     }
     report = addStep(report, { name: scenario, title: step.title, durationMs: Date.now() - step.started, operations: step.operations, findings: filtered.findings, notes })
+    // 既知を外したあとの所見(でたらめ操作が「変」でその手を打ち切るのに使う)。
+    return filtered.findings
   }
   const newStep = (title) => ({ title, started: Date.now(), operations: 0, findings: [], notes: [] })
 
-  let current = null
+  // 台本の間で受け渡す「直前の読み取り」。台本の外へ出した部品(attempt*・run*Flow)とでたらめ操作は io.current で同じものを読み書きする。
+  const live = { current: null }
+  const ctx = { session, driver: d, app, read: timedRead, audit: timedAudit, stockOf, today }
+  /** 台本 scenario の io(直前の読み取り live.current を共有・手順はその台本の名前で報告へ足す)。 */
+  const ioFor = (scenario) => ({
+    get current() { return live.current },
+    set current(value) { live.current = value },
+    newStep,
+    finish: (step) => finish(scenario, step),
+  })
   // 候補なしで飛ばした台本(g・h だけ。中断にしない)。
   const skippedNoCandidates = new Set()
   // 台本 b が使った週(でたらめ操作も同じ週で動かす)。
@@ -824,16 +1367,16 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const before = toState({ payload: seededClassroom.data })
       await d.seedAndOpen(session, seedSnapshot)
       step.operations += 1
-      current = await timedRead()
-      step.diff = { before: before.facts, after: current.facts }
+      live.current = await timedRead()
+      step.diff = { before: before.facts, after: live.current.facts }
       step.findings.push(
-        ...app.checkManualStudentsKeepTeacher(before.facts, current.facts),
-        ...app.checkTeacherlessStudentsNotAdded(before.facts, current.facts),
-        ...app.checkManualInputsNotLost(before.facts, current.facts),
+        ...app.checkManualStudentsKeepTeacher(before.facts, live.current.facts),
+        ...app.checkTeacherlessStudentsNotAdded(before.facts, live.current.facts),
+        ...app.checkManualInputsNotLost(before.facts, live.current.facts),
         // 前からある講師のコマの形(種データにある休みの講師・2 机の講師)は知らせるだけ。開いたときに新しくできたら「変」。
-        ...app.checkTeacherCellIntegrity(before.facts, current.facts, { reportExisting: true }),
-        ...app.checkAuditNotWorse(timedAudit(before), timedAudit(current)),
-        ...app.summarizeChanges(before.facts, current.facts),
+        ...app.checkTeacherCellIntegrity(before.facts, live.current.facts, { reportExisting: true }),
+        ...app.checkAuditNotWorse(timedAudit(before), timedAudit(live.current)),
+        ...app.summarizeChanges(before.facts, live.current.facts),
       )
       step.notes.push(`開いた直後のステータス: ${await d.readStatusText(session)}`, `保存ボタン: ${await d.readSaveState(session)}`)
       await finish('boot', step)
@@ -847,11 +1390,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       if (pressed) step.operations += 1
       else step.notes.push('保存ボタンは既に clean で押せませんでした(保存する変更が無い・ローカルモードは変更の 5 秒後に自分で保存する)。')
       const saved = await timedRead()
-      step.findings.push(...sameState(current, saved, 'save-changed'))
+      step.findings.push(...sameState(live.current, saved, 'save-changed'))
       await d.reloadApp(session)
       step.operations += 1
-      current = await timedRead()
-      step.findings.push(...sameState(saved, current, 'reload-changed'))
+      live.current = await timedRead()
+      step.findings.push(...sameState(saved, live.current, 'reload-changed'))
       step.notes.push(`読み込み直しのあとの保存ボタン: ${await d.readSaveState(session)}`)
       await finish('c', step)
     }
@@ -862,7 +1405,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       // 候補のある最初の週を使う(来週＋3 週先まで・searchMoveWeek)。
       const { searchedWeeks, weekStart, candidates, base } = await searchMoveWeek({ session, driver: d, read: timedRead, nextMonday, today, count: options.moves, seed: options.seed })
       moveWeekStart = weekStart
-      current = base
+      live.current = base
       const step = newStep(`生徒の移動の準備(${weekStart ?? nextMonday} の週)`)
       const kinds = new Set(candidates.map((candidate) => candidate.kind))
       if (weekStart) step.notes.push(`使った週: ${weekStart} の週${weekStart !== nextMonday ? `(${searchedWeeks.slice(0, -1).join('・')} の週は開いても候補が無かった)` : ''}`)
@@ -892,7 +1435,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         const cannotPress = (label, code) => ({ level: 'stop', code, message: `${label}が押せない(ボタンが無効): ${describeCandidate(candidate)}`, studentId: candidate.studentId })
         if (!(await d.clickUndo(session))) {
           moveStep.findings.push(cannotPress('移動のあと元に戻す', 'undo-not-restored'))
-          current = moved
+          live.current = moved
           moveStep.notes.push('盤面が移動のあとのまま戻せないので、残りの移動は流しません。')
           await finish('b', moveStep)
           break
@@ -904,7 +1447,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           moveStep.findings.push(...sameState(moved, await timedRead(), 'redo-not-restored'))
           if (!(await d.clickUndo(session))) {
             moveStep.findings.push(cannotPress('やり直しのあと元に戻す', 'undo-not-restored'))
-            current = await timedRead()
+            live.current = await timedRead()
             moveStep.notes.push('盤面が移動のあとのまま戻せないので、残りの移動は流しません。')
             await finish('b', moveStep)
             break
@@ -918,36 +1461,27 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       }
       // 効いた移動が 1 回も無い台本 b は、中身が無いまま緑になる。台本 b を指定しているなら中断(作業 5 修正 1)。
       if (effectiveMoves === 0) throw new PatrolAbortError('台本 b で効いた移動が 1 回もありません(候補が無い・全部断られた)。')
-      current = await timedRead()
+      live.current = await timedRead()
     }
 
-    // ── でたらめ操作(試験的・--random n が 1 以上のときだけ): 台本 b のあと・a の前。b が無くても流す(週は b と同じ探し方)。
-    // 移動・元に戻す・やり直し・保存・読み込み直しを種つきの乱数で組み合わせる(tools/ui-patrol/randomOps.mjs)。
+    // ── でたらめ操作(--random n が 1 以上のときだけ・既定では流さない＝2026-11-11 オーナー決定で既定の点検は約 10 分のまま): 台本 b のあと・a の前。
+    // b が無くても流す(週は b と同じ探し方)。部品(移動・出欠・講師・休日・丸ごと振替・テンプレ・元に戻す・やり直し・保存・読み込み直し)を
+    // 重みつき・種つきの乱数で選び、1 手ごとに手順を 1 本足す(tools/ui-patrol/randomOps.mjs)。部品の操作と点検は台本と同じ関数を呼ぶ。
     if ((options.random ?? 0) > 0) {
       lastScenario = 'random'
       let weekStart = moveWeekStart
       if (!weekStart) {
         const searched = await searchMoveWeek({ session, driver: d, read: timedRead, nextMonday, today, count: options.moves, seed: options.seed })
         weekStart = searched.weekStart ?? nextMonday
-        current = searched.base
+        live.current = searched.base
       }
-      const step = newStep(`でたらめ操作 ${options.random} 回(試験的・${weekStart} の週)`)
-      let result
-      try {
-        result = await runRandomOps({
-          session, app, options, today, driver: d, start: current, weekStart, read: timedRead, audit: timedAudit,
-          onFinding: (finding) => step.findings.push(finding), onNote: (note) => step.notes.push(note),
-        })
-      } catch (error) {
-        // driver の時間切れなどで抜けても、手順の 1 行(runRandomOps が notes へ出す)を報告に残してから中断する。
-        await finish('random', step)
-        throw error
-      }
-      step.operations = result.operations
-      step.diff = result.diff
-      await finish('random', step)
+      const ioR = ioFor('random')
+      // 途中で driver の待ちが時間切れになって例外で抜けても、runRandomOps が手順の 1 行(まとめの手順)を報告に残してから投げ直す。
+      // options.randomWeights はテスト用の部品の重みの差し替え(引数には無い・既定は randomOps.mjs の RANDOM_PARTS)。
+      const result = await runRandomOps({ ctx, io: ioR, options, today, weekStart, nextMonday, ...(options.randomWeights ? { weights: options.randomWeights } : {}) })
+      report = { ...report, randomTrace: result.ops }
       if (result.aborted) throw new PatrolAbortError(result.aborted)
-      current = result.current
+      if (result.effective === 0) skippedNoCandidates.add('random')
     }
 
     // ── (e) 出欠: 生徒メニューで 休み・振無休・出席、未消化振替から振替先へ置く(ATTENDANCE_SLOTS の順・1 回ずつ)。a の前に流す
@@ -961,9 +1495,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       for (const monday of weekStartsFrom(nextMonday)) {
         searchedWeeks.push(monday)
         await d.gotoWeekOf(session, monday)
-        current = await timedRead()
-        plan = pickAttendancePlan(current.facts, {
-          weekDateKeys: weekDateKeysFrom(monday), todayKey: today, seed: (Number(options.seed) || 0) + 0xe5, excludeSeatKeys: collectStockIneligibleSeatKeys(current.payload),
+        live.current = await timedRead()
+        plan = pickAttendancePlan(live.current.facts, {
+          weekDateKeys: weekDateKeysFrom(monday), todayKey: today, seed: (Number(options.seed) || 0) + 0xe5, excludeSeatKeys: collectStockIneligibleSeatKeys(live.current.payload),
         })
         if (plan.ops.length > 0) {
           weekStart = monday
@@ -982,61 +1516,35 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const recordedCells = []
       for (const [index, op] of plan.ops.entries()) {
         const step = newStep(`出欠 ${index + 1}(${op.label.split('(')[0]})`)
-        const before = current
+        const before = live.current
         step.notes.push(describeAttendanceOp(op))
         if (op.kind === 'place' && !absentApplied) {
           step.notes.push('飛ばした: 先の「通常・休み」が効いていないので、置く振替がありません。')
           await finish('e', step)
           continue
         }
-        const dialogsBefore = session.dialogs.length
-        const statusBefore = await d.readStatusText(session)
-        let status = ''
-        if (op.kind === 'place') {
-          const label = app.findMakeupOriginLabel(stockOf(before), `${op.studentKey}__${op.subject}`, op.sourceDateKey, op.sourceSlotNumber)
-          const result = await d.placeMakeupFromStock(session, { stockStudentKey: op.studentKey, choose: (items) => chooseMakeupOriginItem(items, { subject: op.subject, label }) }, op.to)
-          status = result.status ?? ''
-          if (result.chosenText) step.notes.push(`選んだ振替元: ${result.chosenText}${label && !result.chosenText.includes(label) ? `(休みにしたコマ ${label} の行が無く、同じ科目の行を選んだ)` : ''}`)
-          if (!result.placed) {
-            // 休みで増えたはずの振替が、未消化振替の一覧から選べない(室長は置けない)。
-            step.findings.push({ level: 'stop', code: 'attendance-not-applied', message: `休みで増えた振替を未消化振替の一覧から選べない: ${op.studentName}(${op.studentKey}) ${op.subject}(${result.reason ?? '一覧に無い'})`, studentId: op.studentKey })
-            await finish('e', step)
-            continue
-          }
-        } else {
-          status = await d.markStudentAttendance(session, op.seat, op.status)
-        }
-        step.operations += 1
-        step.notes.push(`ステータス: ${status}`)
-        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
-        const after = await timedRead()
-        const diff = app.diffBoardFacts(before.facts, after.facts)
-        if (diff.desks.length === 0 && diff.sections.length === 0) {
-          if (status === statusBefore) {
-            await finish('e', step)
-            throw new PatrolAbortError(`出欠を付けても盤面もステータスの文も変わらず、何も起きません: ${describeAttendanceOp(op)}`)
-          }
-          step.findings.push({ level: 'info', code: 'attendance-blocked', message: `アプリが出欠の操作を断った: ${describeAttendanceOp(op)}(${status})`, studentId: op.studentKey })
+        const attempt = await attemptAttendanceOp(ctx, { before, op })
+        step.operations += attempt.operations
+        step.notes.push(...attempt.notes)
+        step.findings.push(...attempt.findings)
+        if (attempt.outcome === 'not-placed') {
           await finish('e', step)
           continue
         }
+        if (attempt.outcome === 'nothing') {
+          await finish('e', step)
+          throw new PatrolAbortError(attempt.message)
+        }
+        if (attempt.outcome === 'blocked') {
+          await finish('e', step)
+          continue
+        }
+        const { after } = attempt
         effectiveOps += 1
         if (op.slot === 'regular-absent') absentApplied = true
         if (op.kind === 'mark') recordedCells.push(op.seat.cellId)
-        step.diff = { before: before.facts, after: after.facts }
-        const allowed = buildAttendanceAllowedChange(op)
-        const exclude = { excludeDeskKeys: allowed.deskKeys }
-        step.findings.push(
-          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
-          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
-          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
-          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
-          ...app.checkTeacherCellIntegrity(before.facts, after.facts),
-          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
-          ...app.checkAttendanceApplied(before.facts, after.facts, op),
-          ...app.checkStockDeltas(stockOf(before), stockOf(after), expectedStockDeltas(op)),
-        )
-        current = after
+        step.diff = attempt.diff
+        live.current = after
         // 最初の「通常・休み」だけ: 元に戻す → 操作の前と同じ(盤面と在庫)→ やり直し → 操作のあとと同じ。
         if (op.slot === 'regular-absent') {
           if (!(await d.clickUndo(session))) {
@@ -1049,10 +1557,10 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
               step.operations += 1
               const redone = await timedRead()
               step.findings.push(...sameState(after, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(after), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が操作後に戻らない' }))
-              current = redone
+              live.current = redone
             } else {
               step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `出欠を元に戻したあとやり直しが押せない(ボタンが無効): ${describeAttendanceOp(op)}`, studentId: op.studentKey })
-              current = undone
+              live.current = undone
               absentApplied = false
             }
           }
@@ -1067,12 +1575,12 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       if (await d.clickSave(session)) persistStep.operations += 1
       else persistStep.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
       const saved = await timedRead()
-      persistStep.findings.push(...sameState(current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
+      persistStep.findings.push(...sameState(live.current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(live.current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
       await d.reloadApp(session)
       persistStep.operations += 1
       const reloaded = await timedRead()
       persistStep.findings.push(...sameState(saved, reloaded, 'reload-changed'), ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }))
-      current = reloaded
+      live.current = reloaded
       await finish('e', persistStep)
     }
 
@@ -1087,8 +1595,8 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       for (const monday of weekStartsFrom(nextMonday)) {
         searchedWeeks.push(monday)
         await d.gotoWeekOf(session, monday)
-        current = await timedRead()
-        plan = pickTeacherPlan(current.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, seed: (Number(options.seed) || 0) + 0xf6 })
+        live.current = await timedRead()
+        plan = pickTeacherPlan(live.current.facts, { weekDateKeys: weekDateKeysFrom(monday), todayKey: today, seed: (Number(options.seed) || 0) + 0xf6 })
         if (plan.ops.length > 0) {
           weekStart = monday
           break
@@ -1102,84 +1610,19 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       prepStep.notes.push(TEACHER_REST_DRAG_NOTE)
       await finish('f', prepStep)
 
-      const teacherIdOf = (name) => (name ? (app.resolveTeacherIdByDisplayName?.(current.payload?.teachers, name) || 'ID なし') : '')
-      const who = (name) => (name ? `${name}(${teacherIdOf(name)})` : '講師なし')
+      const ioF = ioFor('f')
+      const who = (name) => describeTeacher(app, live.current?.payload, name)
       const at = (cellId, deskIndex) => `${cellId} 机${deskIndex + 1}`
-      // 講師の操作を 1 回: 画面で押す → 読む → 点検(範囲・講師のコマの形・中身・在庫・保証台帳)。戻り値 { outcome: 'applied' | 'blocked' | 'nothing', after }。
-      const runTeacherOp = async (step, op, press) => {
-        const before = current
-        const dialogsBefore = session.dialogs.length
-        const statusBefore = await d.readStatusText(session)
-        const pressed = await press()
-        if (pressed.skip) {
-          step.notes.push(`飛ばした: ${pressed.skip}`)
-          return { outcome: 'skipped', after: before }
-        }
-        step.operations += 1
-        step.notes.push(`ステータス: ${pressed.status ?? ''}`)
-        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
-        const after = await timedRead()
-        const diff = app.diffBoardFacts(before.facts, after.facts)
-        if (diff.desks.length === 0 && diff.sections.length === 0) {
-          if ((pressed.status ?? '') === statusBefore) {
-            await finish('f', step)
-            throw new PatrolAbortError(`講師の操作をしても盤面もステータスの文も変わらず、何も起きません: ${step.title}`)
-          }
-          step.findings.push({ level: 'info', code: 'teacher-op-blocked', message: `アプリが講師の操作を断った: ${step.title}(${pressed.status ?? ''})` })
-          return { outcome: 'blocked', after }
-        }
-        step.diff = { before: before.facts, after: after.facts }
-        const placedDesk = op.kind === 'place-rested' ? after.facts.desks.get(`${op.cellId}#${op.deskIndex}`) : null
-        const released = placedDesk ? [...collectRestReleasedDeskKeys(before.facts, after.facts, op.cellId, { teacher: placedDesk.teacher || op.teacher, teacherId: placedDesk.teacherId || undefined })] : []
-        const allowed = buildTeacherOpAllowedChange(op, released)
-        const exclude = { excludeDeskKeys: allowed.deskKeys }
-        step.findings.push(
-          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
-          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
-          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
-          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
-          ...app.checkTeacherCellIntegrity(before.facts, after.facts),
-          ...app.checkTeacherOpApplied(before.facts, after.facts, op),
-          ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '講師の操作で在庫が変わった' }),
-          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
-        )
-        current = after
-        return { outcome: 'applied', after }
-      }
+      // 講師の操作を 1 回: 画面で押す → 読む → 点検(範囲・講師のコマの形・中身・在庫・保証台帳)。戻り値 { outcome: 'applied' | 'blocked' | 'skipped', after }(何も起きなければ中断)。
+      const runTeacherOp = (step, op, press) => runTeacherOpOn(ctx, ioF, step, op, press)
       const menuRandom = createSeededRandom((Number(options.seed) || 0) + 0xf7)
-      // 講師メニューの選択肢から、そのコマに居ない講師(講師欄・保留の下段・休みの記録)を種つきの乱数で選ぶ。無ければ null(その操作は飛ばす)。
-      // 今の講師・休みの講師もそのコマに居る扱いなので、ここで別に外さない(照合を 2 つ作らない)。
-      const pickMenuTeacher = (cellId) => (choices) => {
-        const options = choices.filter((choice) => choice.value && !isTeacherInCell(current.facts, cellId, choice.value))
-        return options.length > 0 ? options[Math.floor(menuRandom() * options.length)].value : null
-      }
+      const pickMenuTeacher = makeMenuTeacherPicker(menuRandom, () => live.current.facts)
       let effectiveOps = 0
       for (const [index, planned] of plan.ops.entries()) {
         const label = planned.label.split('(')[0]
-        if (planned.name === 'move' || planned.name === 'teacher-swap' || planned.name === 'seat-swap') {
-          const swapMode = planned.name === 'seat-swap' ? 'seat' : 'teacher'
+        if (planned.name === 'move' || planned.name === 'teacher-swap' || planned.name === 'seat-swap' || planned.name === 'menu-teacher') {
           const step = newStep(`講師 ${index + 1}(${label})`)
-          step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${at(planned.cellId, planned.targetDeskIndex)} ${who(planned.targetTeacher)}`)
-          const op = { kind: planned.name, cellId: planned.cellId, deskIndex: planned.deskIndex, targetDeskIndex: planned.targetDeskIndex }
-          const result = await runTeacherOp(step, op, async () => {
-            const dragged = await d.dragTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, swapMode)
-            step.notes.push(dragged.modal ? `選ぶ画面: ${swapMode === 'seat' ? '生徒ごと席を入れ替え' : '講師だけ入れ替え'} を押した` : '選ぶ画面は出なかった(どちらの机にも生徒がいない)')
-            return dragged
-          })
-          if (result.outcome === 'applied') effectiveOps += 1
-          await finish('f', step)
-          continue
-        }
-        if (planned.name === 'menu-teacher') {
-          const step = newStep(`講師 ${index + 1}(${label})`)
-          const op = { kind: 'menu-teacher', cellId: planned.cellId, deskIndex: planned.deskIndex }
-          const result = await runTeacherOp(step, op, async () => {
-            const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.deskIndex }, pickMenuTeacher(planned.cellId))
-            if (!set.teacher) return { skip: `${at(planned.cellId, planned.deskIndex)} で選べる講師(そのコマに居ない講師)が講師メニューにありません。` }
-            op.teacher = set.teacher
-            step.notes.push(`${planned.label}: ${at(planned.cellId, planned.deskIndex)} ${who(planned.teacher)} → ${who(set.teacher)}`)
-            return set
-          })
+          const result = await runSimpleTeacherOp(ctx, ioF, step, planned, { pickMenuTeacher })
           if (result.outcome === 'applied') effectiveOps += 1
           await finish('f', step)
           continue
@@ -1198,7 +1641,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
               if (toggled.label) step.notes.push(`2 回目のボタン: ${toggled.label}`)
               return toggled
             })
-            if (release.outcome === 'applied') step.notes.push(`休みを解除した(記録が消えた。講師欄: ${who(current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)?.teacher ?? '')}・解除のあとの再マージでテンプレの講師が戻るのは仕様どおり・§2-4)。`)
+            if (release.outcome === 'applied') step.notes.push(`休みを解除した(記録が消えた。講師欄: ${who(live.current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)?.teacher ?? '')}・解除のあとの再マージでテンプレの講師が戻るのは仕様どおり・§2-4)。`)
           }
           await finish('f', step)
           continue
@@ -1211,7 +1654,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         await finish('f', restStep)
         if (rested.outcome !== 'applied') continue
         effectiveOps += 1
-        const restedDesk = current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)
+        const restedDesk = live.current.facts.desks.get(`${planned.cellId}#${planned.deskIndex}`)
         const restedName = restedDesk?.teacherRestName || X
         const restRecord = restedDesk?.teacherRestRecord ?? { teacher: X }
         const subStep = newStep(`講師 ${index + 1}(休みの流れ 2: 休みの机に代わりの講師を置く)`)
@@ -1225,11 +1668,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         })
         await finish('f', subStep)
         if (substituted.outcome !== 'applied') continue
-        const baseBeforePlace = current
+        const baseBeforePlace = live.current
         const placeStep = newStep(`講師 ${index + 1}(休みの流れ 3: 休みの講師を同じコマの別の机へ手で置く・§9-25)`)
         const placeOp = { kind: 'place-rested', cellId: planned.cellId, deskIndex: planned.targetDeskIndex, teacher: X, restedName }
         const placed = await runTeacherOp(placeStep, placeOp, async () => {
-          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, (choices) => (choices.find((choice) => choice.value && current.facts.restMatchesTeacher(restRecord, { teacher: choice.value }))?.value ?? null))
+          const set = await d.setBoardTeacher(session, { cellId: planned.cellId, deskIndex: planned.targetDeskIndex }, (choices) => (choices.find((choice) => choice.value && live.current.facts.restMatchesTeacher(restRecord, { teacher: choice.value }))?.value ?? null))
           if (!set.teacher) return { skip: `${at(planned.cellId, planned.targetDeskIndex)} の講師メニューに休みの講師 ${who(X)} がありません。` }
           placeOp.teacher = set.teacher
           placeStep.notes.push(`休みの講師を置く: ${at(planned.cellId, planned.targetDeskIndex)} ← ${who(X)}(代わりの講師 ${who(subOp.teacher)} と ${at(planned.cellId, planned.deskIndex)} の生徒はそのまま)`)
@@ -1242,7 +1685,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
             placeStep.operations += 1
             const undone = await timedRead()
             placeStep.findings.push(...sameState(baseBeforePlace, undone, 'undo-not-restored'))
-            current = undone
+            live.current = undone
             placeStep.notes.push('元に戻す: 休みの講師の配置と休みの記録が戻るかを確かめた。')
           } else {
             placeStep.findings.push({ level: 'stop', code: 'undo-not-restored', message: `休みの講師を置いたあと元に戻すが押せない(ボタンが無効): ${at(planned.cellId, planned.targetDeskIndex)} ${X}` })
@@ -1257,13 +1700,13 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       if (await d.clickSave(session)) persistStep.operations += 1
       else persistStep.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
       const saved = await timedRead()
-      persistStep.findings.push(...sameState(current, saved, 'save-changed'))
+      persistStep.findings.push(...sameState(live.current, saved, 'save-changed'))
       await d.reloadApp(session)
       persistStep.operations += 1
       const reloaded = await timedRead()
       persistStep.findings.push(...sameState(saved, reloaded, 'reload-changed'), ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts))
       persistStep.diff = { before: saved.facts, after: reloaded.facts }
-      current = reloaded
+      live.current = reloaded
       await finish('f', persistStep)
     }
 
@@ -1271,7 +1714,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
     if (scenarios.includes('a')) {
       lastScenario = 'a'
       const step = newStep(`テンプレ保存(反映日 ${nextMonday}・何も変えない)`)
-      const before = current
+      const before = live.current
       const defaultDate = await d.openTemplateEditor(session)
       step.operations += 1
       step.notes.push(`反映開始日の既定: ${defaultDate}`)
@@ -1298,17 +1741,17 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`, `テンプレ保存前の盤面の PDF: ${session.downloads - downloadsBefore} 件(保存せず取り消し)`)
       step.findings.push(...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit: timedAudit }))
       await finish('a', step)
-      current = after
+      live.current = after
 
       const persistStep = newStep('テンプレ保存のあと 保存→読み込み直し')
       if (await d.clickSave(session)) persistStep.operations += 1
       else persistStep.notes.push('保存ボタンは既に clean で押せませんでした。')
       const saved = await timedRead()
-      persistStep.findings.push(...sameState(current, saved, 'save-changed'))
+      persistStep.findings.push(...sameState(live.current, saved, 'save-changed'))
       await d.reloadApp(session)
       persistStep.operations += 1
-      current = await timedRead()
-      persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
+      live.current = await timedRead()
+      persistStep.findings.push(...sameState(saved, live.current, 'reload-changed'))
       await finish('a', persistStep)
     }
 
@@ -1320,109 +1763,16 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       const random = createSeededRandom((Number(options.seed) || 0) + 0x5d)
       const usedCellIds = new Set()
       let editsDone = 0
-      const rosterById = new Map((current.payload?.students ?? []).map((row) => [row.id, row]))
-      const isStudentActiveOnDate = (studentKey, dateKey) => {
-        const row = rosterById.get(studentKey)
-        return row ? app.isActiveOnDate(row.entryDate ?? '', row.withdrawDate ?? '', row.birthDate ?? '', dateKey) : true
-      }
+      const ioD = ioFor('d')
       const kinds = app.TEMPLATE_EDIT_KINDS ?? ['add-student', 'change-teacher', 'delete-desk']
       for (const [index, kind] of kinds.entries()) {
-        const step = newStep(`テンプレを変えて保存 ${index + 1}(${TEMPLATE_EDIT_LABELS[kind]}・反映日 ${nextMonday})`)
-        const before = current
-        const target = app.pickTemplateEditTarget({ kind, desks: app.buildTemplateEditorDesks(before.payload, today), facts: before.facts, fromDateKey: nextMonday, random, excludeCellIds: usedCellIds })
-        if (target.skip) {
-          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${target.skip}`)
-          await finish('d', step)
-          continue
-        }
-        const { desk } = target
-        usedCellIds.add(desk.cellId)
-        const anchorDates = [...new Set(target.anchorCellIds.map((cellId) => cellId.split('_')[0]))].sort()
-        const presence = app.collectCellPresence(before.facts, target.anchorCellIds)
-        const position = { cellId: desk.cellId, deskIndex: desk.deskIndex }
-        const defaultDate = await d.openTemplateEditor(session)
-        step.operations += 1
-        step.notes.push(`反映開始日の既定: ${defaultDate}`)
-        // 台本 a を流さずに d だけ流すと、1 回目の保存は先の版の中身も手前の日付で当てる(変わった机にその分も混ざる)。読む人が取り違えないよう注を出す。
-        if (defaultDate && defaultDate > nextMonday) step.notes.push(`保存済みのテンプレ(反映日 ${defaultDate})を手前の日付で当てています(${nextMonday} 以降に、その版の中身も当たる)。`)
-        await d.setTemplateStartDate(session, nextMonday)
-        step.operations += 1
-        let edit = null
-        let studentName = ''
-        if (kind === 'add-student') {
-          const inTemplateCell = new Set()
-          for (const other of app.buildTemplateEditorDesks(before.payload, today)) {
-            if (other.cellId !== desk.cellId) continue
-            for (const entry of other.students) if (entry) inTemplateCell.add(entry.studentId)
-          }
-          const { studentId } = await d.templateAddStudent(session, { ...position, seat: target.seat }, (choices) => app.pickTemplateEditOption({
-            options: choices, exclude: inTemplateCell, random,
-            prefer: (value) => !presence.studentKeys.has(value) && anchorDates.every((dateKey) => isStudentActiveOnDate(value, dateKey)),
-          }))
-          if (studentId) {
-            edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, seat: target.seat, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: [studentId], anchorCellIds: target.anchorCellIds }
-            const row = rosterById.get(studentId)
-            studentName = row ? (row.displayName || row.name || '') : ''
-          }
-        } else if (kind === 'change-teacher') {
-          // 確かめる日のコマに既に居る講師へ替えると「新しい講師が居る」が素通りするので、居ない講師が選べなければこの種類は飛ばす(レビュー M-2)。
-          const { teacher } = await d.templateChangeTeacher(session, position, (choices) => app.pickTemplateEditOption({
-            options: choices, exclude: new Set([desk.teacher]), random, prefer: (value) => !presence.teachers.has(value), requirePreferred: true,
-          }))
-          if (teacher) {
-            edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, newTeacher: teacher, newTeacherId: app.resolveTeacherIdByDisplayName(before.payload?.teachers, teacher), studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
-          }
-        } else {
-          await d.templateDeleteDesk(session, { ...position, seats: [0, 1].filter((seat) => desk.students[seat] !== null) })
-          edit = { kind, dayOfWeek: desk.dayOfWeek, slotNumber: desk.slotNumber, deskIndex: desk.deskIndex, teacher: desk.teacher, teacherId: desk.teacherId, studentKeys: desk.students.filter(Boolean).map((entry) => entry.studentId), anchorCellIds: target.anchorCellIds }
-        }
-        if (!edit) {
-          // 選べる生徒・講師が画面に無かった。テンプレ編集を保存せずに閉じる。
-          await d.closeTemplateEditor(session)
-          step.notes.push(`飛ばした(${TEMPLATE_EDIT_LABELS[kind]}): ${describeTemplateDesk(desk)} で選べる${kind === 'add-student' ? '生徒' : '講師(確かめる日のコマに居ない講師)'}が画面にありません。`)
-          await finish('d', step)
-          continue
-        }
-        step.operations += 1
-        editsDone += 1
-        step.notes.push(describeTemplateEdit(edit, desk, { studentName, anchorDates }))
-        const { confirmMessage, detailText } = await d.requestTemplateSave(session)
-        step.operations += 1
-        step.notes.push(`確認の画面: ${confirmMessage}`)
-        if (detailText) {
-          const lines = detailText.split('\n').map((line) => line.trim()).filter(Boolean)
-          step.notes.push(`確認の画面の詳細(${lines.length} 行): ${lines.slice(0, 12).join(' / ')}${lines.length > 12 ? ' / …' : ''}`)
-        } else step.notes.push('確認の画面の詳細: なし')
-        await d.confirmTemplateSave(session)
-        step.operations += 1
-        const after = await timedRead()
-        step.diff = { before: before.facts, after: after.facts }
-        step.notes.push(`保存のあとのステータス: ${await d.readStatusText(session)}`)
-        step.findings.push(
-          ...collectTemplateSaveFindings({ app, before, after, fromDateKey: nextMonday, confirmMessage, detailText, audit: timedAudit, allowed: buildTemplateEditAllowedChange(nextMonday) }),
-          ...app.checkTemplateEditSaved(after.payload?.classroomSettings?.regularLessonTemplate, edit),
-          ...app.checkTemplateEditApplied(before.facts, after.facts, edit, {
-            isStudentActiveOnDate,
-            // 保存の前からある削除記録だけ(この保存が自分で積んだ抑止キーで「置かない」を説明させない)。
-            suppressedOccurrences: before.payload?.boardState?.suppressedRegularLessonOccurrences ?? [],
-          }),
-        )
-        await finish('d', step)
-        current = after
+        const { done } = await runTemplateEditOnce(ctx, ioD, { kind, index, random, usedCellIds, nextMonday, today })
+        if (done) editsDone += 1
       }
       // 3 種類とも 1 度もできなければ、中身が無いまま緑になる。台本 d を指定しているなら中断(台本 b と同じ扱い)。
       if (editsDone === 0) throw new PatrolAbortError('台本 d でテンプレの変更が 1 回もできませんでした(候補の机・生徒・講師が無い)。')
 
-      const persistStep = newStep('テンプレを変えて保存のあと 保存→読み込み直し')
-      if (await d.clickSave(session)) persistStep.operations += 1
-      else persistStep.notes.push('保存ボタンは既に clean で押せませんでした。')
-      const saved = await timedRead()
-      persistStep.findings.push(...sameState(current, saved, 'save-changed'))
-      await d.reloadApp(session)
-      persistStep.operations += 1
-      current = await timedRead()
-      persistStep.findings.push(...sameState(saved, current, 'reload-changed'))
-      await finish('d', persistStep)
+      await persistTemplateEdit(ctx, ioD, 'テンプレを変えて保存のあと 保存→読み込み直し')
     }
 
     // ── (g) 休日設定と解除・丸ごと振替〔作成と解除〕(既定では流さない・--scenario で挙げたときだけ)。来週から 4 週を開き、今日より後の日から
@@ -1434,9 +1784,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       lastScenario = 'g'
       const openedWeeks = weekStartsFrom(nextMonday)
       for (const monday of openedWeeks) await d.gotoWeekOf(session, monday)
-      current = await timedRead()
+      live.current = await timedRead()
       const plan = app.pickDayOpsPlan({
-        facts: current.facts, payload: current.payload, dateKeys: openedWeeks.flatMap((monday) => weekDateKeysFrom(monday)), todayKey: today,
+        facts: live.current.facts, payload: live.current.payload, dateKeys: openedWeeks.flatMap((monday) => weekDateKeysFrom(monday)), todayKey: today,
         random: createSeededRandom((Number(options.seed) || 0) + 0x9a),
       })
       const prepStep = newStep(`日付の操作の準備(${openedWeeks[0]}〜の 4 週)`)
@@ -1446,201 +1796,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
       for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
       await finish('g', prepStep)
 
-      const ineligibleSeatKeys = collectStockIneligibleSeatKeys(current.payload)
-      // 日付の操作を 1 回: 押す → 読む。盤面が変わらなければ、アプリが断った(文が変わった・断りの画面)か何も起きない(中断)。
-      const runDayOp = async (step, label, press) => {
-        const before = current
-        const dialogsBefore = session.dialogs.length
-        const statusBefore = await d.readStatusText(session)
-        const pressed = await press()
-        if (pressed.missing) {
-          step.notes.push(`飛ばした: ${label}(メニューにボタンが無い・ステータス: ${pressed.status ?? ''})`)
-          return { outcome: 'missing', before, after: before }
-        }
-        step.operations += 1
-        step.notes.push(`ステータス: ${pressed.status ?? ''}`)
-        for (const dialog of session.dialogs.slice(dialogsBefore)) step.notes.push(`ダイアログ: ${dialog}`)
-        if (pressed.blocked) step.notes.push(`断りの画面: ${pressed.blocked}`)
-        const after = await timedRead()
-        const diff = app.diffBoardFacts(before.facts, after.facts)
-        if (diff.desks.length === 0 && diff.sections.length === 0) {
-          if (!pressed.blocked && (pressed.status ?? '') === statusBefore) {
-            await finish('g', step)
-            throw new PatrolAbortError(`${label}をしても盤面もステータスの文も変わらず、何も起きません。`)
-          }
-          step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが日付の操作を断った: ${label}(${pressed.blocked || pressed.status || ''})` })
-          return { outcome: 'blocked', before, after }
-        }
-        step.diff = { before: before.facts, after: after.facts }
-        return { outcome: 'applied', before, after }
-      }
-      // 日付の操作のあとに毎回当てる点検(範囲・手入力・講師のコマの形・保証台帳)。exclude は操作した日の机。
-      const dayOpFindings = (before, after, dateKeys, sections, { restedPresentAsInfoDates } = {}) => {
-        const allowed = { deskKeys: app.collectDateDeskKeys([before.facts, after.facts], dateKeys), sections: new Set(sections) }
-        const exclude = { excludeDeskKeys: allowed.deskKeys }
-        return [
-          ...app.checkOutsideAllowedRange(before.facts, after.facts, allowed),
-          ...app.checkManualStudentsKeepTeacher(before.facts, after.facts, exclude),
-          ...app.checkTeacherlessStudentsNotAdded(before.facts, after.facts, exclude),
-          ...app.checkManualInputsNotLost(before.facts, after.facts, exclude),
-          ...app.checkTeacherCellIntegrity(before.facts, after.facts, { restedPresentAsInfoDates }),
-          ...app.checkAuditNotWorse(timedAudit(before), timedAudit(after)),
-        ]
-      }
-      // 保存 → 読み込み直し で盤面と在庫が変わらない(作った休日・丸ごと振替の組が保存を通って残るか)。
-      const persist = async (title, { restedPresentAsInfoDates } = {}) => {
-        const step = newStep(title)
-        if (await d.clickSave(session)) step.operations += 1
-        else step.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
-        const saved = await timedRead()
-        step.findings.push(...sameState(current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
-        await d.reloadApp(session)
-        step.operations += 1
-        const reloaded = await timedRead()
-        step.findings.push(
-          ...sameState(saved, reloaded, 'reload-changed'),
-          ...app.checkStockDeltas(stockOf(saved), stockOf(reloaded), {}, { code: 'reload-changed', label: '読み込み直しで在庫が変わった' }),
-          ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts, { restedPresentAsInfoDates }),
-        )
-        step.diff = { before: saved.facts, after: reloaded.facts }
-        current = reloaded
-        await finish('g', step)
-      }
-      // 解除のあと、作る前(base)と盤面・部分・在庫が全部同じか(休日解除は逆操作・§9-20 作成→解除で元の形)。
-      // 休日は、休日のまま読み込み直す(再マージ)と消える休日の日のメモ・生徒の居ない机の手入力の講師と、その日の抑止キーの出入りだけ仕様なので知らせるだけ(checkHolidayRoundTrip)。
-      const roundTripFindings = (base, after, what, holidayDateKey = null) => [
-        ...(holidayDateKey ? app.checkHolidayRoundTrip(base.facts, after.facts, holidayDateKey) : sameState(base, after, 'round-trip-not-restored')),
-        ...app.checkStockDeltas(stockOf(base), stockOf(after), {}, { code: 'round-trip-not-restored', label: `${what}を解除しても在庫が元に戻らない` }),
-      ]
+      const ineligibleSeatKeys = collectStockIneligibleSeatKeys(live.current.payload)
+      const ioG = ioFor('g')
       let effectiveOps = 0
-
-      if (plan.holiday) {
-        const H = plan.holiday.dateKey
-        await d.gotoWeekOf(session, mondayOf(H))
-        const base = current
-        const step = newStep(`休日設定(${H})`)
-        step.notes.push(`休日にする: ${H}(席の生徒 ${plan.holiday.studentCount} 人・授業はすべて未消化へ)`)
-        const set = await runDayOp(step, `${H} を休日にする`, () => d.chooseDayMenuItem(session, H, 'holiday'))
-        let holidayActive = false
-        if (set.outcome === 'applied') {
-          effectiveOps += 1
-          holidayActive = true
-          const { before, after } = set
-          const stockPlan = app.expectedHolidayStockDeltas(before.facts, H, ineligibleSeatKeys)
-          step.notes.push(`在庫: 比べた鍵 ${stockPlan.checkedCount}(未消化振替 +1)・比べない鍵 ${stockPlan.ignore.makeup.size + stockPlan.ignore.lecturePrefixes.length}(講習・手動追加・編集で振替・同じ日に同じ科目 2 つ など。ほかの鍵は ±0)`)
-          step.findings.push(
-            ...dayOpFindings(before, after, [H], HOLIDAY_ALLOWED_SECTIONS),
-            ...app.checkHolidayApplied(before.facts, after.facts, H),
-            ...app.checkStockDeltas(stockOf(before), stockOf(after), stockPlan.expected, { ignore: stockPlan.ignore, label: '休日設定で在庫の増減が仕様と違う' }),
-          )
-          current = after
-          // 元に戻す → やり直し(1 か所だけ)。どちらも前に保存した形へ戻りうるので、先に保存する(ローカルモードの控えの罠)。
-          if (await d.clickSave(session)) step.operations += 1
-          if (await d.clickUndo(session)) {
-            step.operations += 1
-            const undone = await timedRead()
-            step.findings.push(...sameState(before, undone, 'undo-not-restored'), ...app.checkStockDeltas(stockOf(before), stockOf(undone), {}, { code: 'undo-not-restored', label: '元に戻すで在庫が休日にする前に戻らない' }))
-            current = undone
-            step.notes.push('元に戻す: 休日にする前の盤面・在庫に戻るかを確かめた。')
-            if (await d.clickSave(session)) step.operations += 1
-            if (await d.clickRedo(session)) {
-              step.operations += 1
-              step.notes.push('やり直し: 休日にしたあとの盤面・在庫に戻るかを確かめた。')
-              const redone = await timedRead()
-              step.findings.push(...sameState(after, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(after), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が休日のあとに戻らない' }))
-              current = redone
-            } else {
-              step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `休日設定を元に戻したあとやり直しが押せない(ボタンが無効): ${H}` })
-              holidayActive = false
-            }
-          } else {
-            step.findings.push({ level: 'stop', code: 'undo-not-restored', message: `休日設定のあと元に戻すが押せない(ボタンが無効): ${H}` })
-          }
-        }
-        await finish('g', step)
-        if (holidayActive) {
-          await persist(`休日設定のあと 保存→読み込み直し(${H})`)
-          await d.gotoWeekOf(session, mondayOf(H))
-          const releaseStep = newStep(`休日を解除(${H})`)
-          releaseStep.notes.push(`休日の見出しを押して解除: ${H}(休日にする前の盤面・在庫に戻るかを確かめる)`)
-          const released = await runDayOp(releaseStep, `${H} の休日を解除する`, () => d.clickDayHeader(session, H))
-          if (released.outcome === 'applied') {
-            releaseStep.findings.push(
-              ...dayOpFindings(released.before, released.after, [H], HOLIDAY_RELEASE_ALLOWED_SECTIONS),
-              ...roundTripFindings(base, released.after, '休日', H),
-            )
-            releaseStep.diff = { before: base.facts, after: released.after.facts }
-            current = released.after
-          } else if (released.outcome === 'blocked') {
-            releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `休日を解除できない(アプリが断った): ${H}` })
-          }
-          await finish('g', releaseStep)
-        }
-      }
-
-      if (plan.transfer) {
-        const base = current
-        const step = newStep(`丸ごと振替(振替元 ${plan.transfer.sourceDateKey})`)
-        let applied = null
-        // 振替先が全部断られたら次の振替元を試す(otherSources・Issue #87: 振替元の手置きの講師が振替先の同じ時限の別の机にも居るとアプリが止める)。
-        sourceLoop: for (const candidate of [plan.transfer, ...(plan.transfer.otherSources ?? [])]) {
-          const D = candidate.sourceDateKey
-          if (candidate !== plan.transfer) step.notes.push(`次の振替元を試す: ${D}(席の生徒 ${candidate.studentCount} 人)→ 振替先の候補 ${candidate.targetDateKeys.join('・')}`)
-          for (const T of candidate.targetDateKeys) {
-            await d.gotoWeekOf(session, mondayOf(D))
-            const started = await d.chooseDayMenuItem(session, D, 'transfer')
-            if (started.missing) {
-              step.notes.push(`飛ばした: ${D} のメニューに「丸ごと振替」がありません。`)
-              continue sourceLoop
-            }
-            step.operations += 1
-            if (started.blocked) {
-              step.findings.push({ level: 'info', code: 'day-op-blocked', message: `アプリが丸ごと振替を断った(振替元 ${D}): ${started.blocked}` })
-              continue sourceLoop
-            }
-            await d.gotoWeekOf(session, mondayOf(T))
-            step.notes.push(`丸ごと振替: ${D} → ${T}(同じ曜日)`)
-            const result = await runDayOp(step, `${D} → ${T} の丸ごと振替`, () => d.clickDayHeader(session, T))
-            if (result.outcome === 'applied') {
-              applied = { D, T, ...result }
-              break sourceLoop
-            }
-            // 断られた(振替先の手入力・机の数・同じ講師が 2 机になる など)。選ぶ状態を取り消して次の振替先を試す。
-            if (await d.cancelWholeDayTransfer(session)) step.operations += 1
-          }
-        }
-        if (applied) {
-          effectiveOps += 1
-          const { D, T, before, after } = applied
-          step.title = `丸ごと振替(振替元 ${D})`
-          step.findings.push(
-            ...dayOpFindings(before, after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
-            ...app.checkWholeDayTransferApplied(before.facts, after.facts, { sourceDateKey: D, targetDateKey: T }),
-            ...app.checkStockDeltas(stockOf(before), stockOf(after), {}, { label: '丸ごと振替で在庫が動いた(移送は在庫中立)' }),
-          )
-          current = after
-          await finish('g', step)
-          await persist(`丸ごと振替のあと 保存→読み込み直し(${D} → ${T})`, { restedPresentAsInfoDates: new Set([D, T]) })
-          await d.gotoWeekOf(session, mondayOf(T))
-          const releaseStep = newStep(`丸ごと振替を解除(${D} → ${T})`)
-          releaseStep.notes.push(`メニュー「丸ごと振替を解除」: ${T}(作成の前の盤面・在庫に戻るかを確かめる・§9-20)`)
-          const released = await runDayOp(releaseStep, `${D} → ${T} の丸ごと振替を解除する`, () => d.chooseDayMenuItem(session, T, 'transfer-release'))
-          if (released.outcome === 'applied') {
-            releaseStep.findings.push(
-              ...dayOpFindings(released.before, released.after, [D, T], WHOLE_DAY_TRANSFER_ALLOWED_SECTIONS, { restedPresentAsInfoDates: new Set([D, T]) }),
-              ...roundTripFindings(base, released.after, '丸ごと振替'),
-            )
-            releaseStep.diff = { before: base.facts, after: released.after.facts }
-            current = released.after
-          } else {
-            releaseStep.findings.push({ level: 'stop', code: 'round-trip-not-restored', message: `丸ごと振替を解除できない(${released.outcome === 'missing' ? 'メニューに「丸ごと振替を解除」が無い' : 'アプリが断った'}): ${D} → ${T}` })
-          }
-          await finish('g', releaseStep)
-        } else {
-          step.notes.push('丸ごと振替は、どの振替先でもできませんでした(上の理由)。')
-          await finish('g', step)
-        }
-      }
+      if (plan.holiday) effectiveOps += (await runHolidayFlow(ctx, ioG, { holiday: plan.holiday, ineligibleSeatKeys })).effective
+      if (plan.transfer) effectiveOps += (await runWholeDayTransferFlow(ctx, ioG, { transfer: plan.transfer })).effective
       // 選んだときだけ流す台本(g・h)は、候補なしは中断せず「飛ばす」(手順 1 の注に理由・手直し 1 I-1)。中断にすると、既定＋g で流したときに
       // 前の台本の「変」が終了コード 2 に隠れる。候補はあったのに 1 回も効かなかった(全部断られた)ときは、中身が無いまま緑になるので今までどおり中断。
       // 選んだ台本がどの教室でも候補なしなら、report.mjs の resolveExitCode が noScenarioRan を見て 2 にする(何も確かめていない)。
@@ -1649,7 +1809,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         await finish('g', { ...newStep('日付の操作は候補なしで飛ばした'), notes: ['休日にする日も丸ごと振替の振替元も選べなかった(理由は準備の段の「飛ばした」)。台本 g は何も操作していない。'] })
       } else {
         if (effectiveOps === 0) throw new PatrolAbortError('台本 g で効いた日付の操作が 1 回もありません(候補はあったが全部断られた)。')
-        await persist('日付の操作のあと 保存→読み込み直し')
+        await persistDayOps(ctx, ioG, '日付の操作のあと 保存→読み込み直し')
       }
     }
 
@@ -1659,11 +1819,11 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
     // 最後に 保存→読み込み直し。★ローカルモードの控えの罠(台本 f・g と同じ): 元に戻す・やり直しの前に保存ボタンを押す。
     if (scenarios.includes('h')) {
       lastScenario = 'h'
-      current = await timedRead()
-      const plan = app.pickAutoAssignPlan({ stock: stockOf(current), payload: current.payload, todayKey: today, random: createSeededRandom((Number(options.seed) || 0) + 0x48) })
+      live.current = await timedRead()
+      const plan = app.pickAutoAssignPlan({ stock: stockOf(live.current), payload: live.current.payload, todayKey: today, random: createSeededRandom((Number(options.seed) || 0) + 0x48) })
       const prepStep = newStep('講習の自動割振の準備')
       prepStep.notes.push(...AUTO_ASSIGN_NOTES)
-      prepStep.notes.push(`未消化講習の行 ${(stockOf(current).lectureRows ?? []).length} 行・操作 ${plan.ops.length} 回(${plan.ops.map((op) => `${op.studentKey}・${op.sessionId}・${op.periodStart}〜${op.periodEnd}・残 ${op.count}${op.includeMakeup ? `・振替の残 ${op.makeupBalance}` : ''}`).join('／') || 'なし'})`)
+      prepStep.notes.push(`未消化講習の行 ${(stockOf(live.current).lectureRows ?? []).length} 行・操作 ${plan.ops.length} 回(${plan.ops.map((op) => `${op.studentKey}・${op.sessionId}・${op.periodStart}〜${op.periodEnd}・残 ${op.count}${op.includeMakeup ? `・振替の残 ${op.makeupBalance}` : ''}`).join('／') || 'なし'})`)
       for (const reason of plan.skipped) prepStep.notes.push(`飛ばした: ${reason}`)
       await finish('h', prepStep)
 
@@ -1690,7 +1850,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         }
         step.notes.push(`講習の期間の週を開いた: ${weeks.length - unopened.length}/${weeks.length} 週(${weeks[0] ?? ''}〜${weeks.at(-1) ?? ''})${unopened.length > 0 ? `・開けなかった週 ${unopened.join('・')}(盤面のデータに無い間の週)` : ''}`)
         const before = await timedRead()
-        current = before
+        live.current = before
         const dialogsBefore = session.dialogs.length
         const statusBefore = await d.readStatusText(session)
         const pressed = await d.runLectureAutoAssign(session, { entryKey: op.entryKey, includeMakeup: op.includeMakeup })
@@ -1735,7 +1895,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           ...rules.findings,
           ...app.checkStockDeltas(stockOf(before), stockOf(after), app.expectedAutoAssignStockDeltas(op, placements), { label: '自動割振で在庫の増減が仕様と違う' }),
         )
-        current = after
+        live.current = after
         // もう一度押す: 置けるものは 1 回目で置き切る(割振のループは候補が無くなるまで回る)ので、何も変わらない(INV-03 相当)。
         const again = await d.runLectureAutoAssign(session, { entryKey: op.entryKey, includeMakeup: op.includeMakeup })
         if (again.found) {
@@ -1746,25 +1906,25 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
             ...sameState(after, rerun, 'auto-assign-rerun-changed'),
             ...app.checkStockDeltas(stockOf(after), stockOf(rerun), {}, { code: 'auto-assign-rerun-changed', label: '2 回目の自動割振で在庫が変わった' }),
           )
-          current = rerun
+          live.current = rerun
         } else {
           step.notes.push('2 回目: 残りを置き切ったので、未消化講習の一覧にこの行が無い(押せない)。')
         }
         // 元に戻す → やり直し。どちらも前に保存した形へ戻りうるので、先に保存する(ローカルモードの控えの罠)。
-        const afterAll = current
+        const afterAll = live.current
         if (await d.clickSave(session)) step.operations += 1
         if (await d.clickUndo(session)) {
           step.operations += 1
           const undone = await timedRead()
           step.findings.push(...sameState(before, undone, 'undo-not-restored'), ...app.checkStockDeltas(stockOf(before), stockOf(undone), {}, { code: 'undo-not-restored', label: '元に戻すで在庫が自動割振の前に戻らない' }))
-          current = undone
+          live.current = undone
           step.notes.push('元に戻す: 自動割振の前の盤面・在庫に戻るかを確かめた。')
           if (await d.clickSave(session)) step.operations += 1
           if (await d.clickRedo(session)) {
             step.operations += 1
             const redone = await timedRead()
             step.findings.push(...sameState(afterAll, redone, 'redo-not-restored'), ...app.checkStockDeltas(stockOf(afterAll), stockOf(redone), {}, { code: 'redo-not-restored', label: 'やり直しで在庫が自動割振のあとに戻らない' }))
-            current = redone
+            live.current = redone
             step.notes.push('やり直し: 自動割振のあとの盤面・在庫に戻るかを確かめた。')
           } else {
             step.findings.push({ level: 'stop', code: 'redo-not-restored', message: `自動割振を元に戻したあとやり直しが押せない(ボタンが無効): ${describeOp(op)}`, studentId: op.studentKey })
@@ -1785,7 +1945,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
         if (await d.clickSave(session)) persistStep.operations += 1
         else persistStep.notes.push('保存ボタンは既に clean で押せませんでした(ローカルモードは変更の 5 秒後に自分で保存する)。')
         const saved = await timedRead()
-        persistStep.findings.push(...sameState(current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
+        persistStep.findings.push(...sameState(live.current, saved, 'save-changed'), ...app.checkStockDeltas(stockOf(live.current), stockOf(saved), {}, { code: 'save-changed', label: '保存で在庫が変わった' }))
         await d.reloadApp(session)
         persistStep.operations += 1
         const reloaded = await timedRead()
@@ -1795,7 +1955,7 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
           ...app.checkTeacherCellIntegrity(saved.facts, reloaded.facts),
         )
         persistStep.diff = { before: saved.facts, after: reloaded.facts }
-        current = reloaded
+        live.current = reloaded
         await finish('h', persistStep)
       }
     }
@@ -1806,8 +1966,9 @@ export async function runClassroomPatrol({ session, app, classroom, seedSnapshot
   }
 
   // 選んだ台本(起動のほか)がどれも候補なしで飛んだ(でたらめ操作も流していない)教室。終了コードの決め方は report.mjs の resolveExitCode。
-  const selectedScenarios = scenarios.filter((name) => name !== 'boot')
-  if (!report.aborted && (options.random ?? 0) === 0 && selectedScenarios.length > 0 && selectedScenarios.every((name) => skippedNoCandidates.has(name))) report = { ...report, noScenarioRan: true }
+  // でたらめ操作を選んだときは、それも 1 つの選んだ台本として数える(盤面を変えた手が 1 つも無ければ「候補なしで飛んだ」)。
+  const selectedScenarios = [...scenarios.filter((name) => name !== 'boot'), ...((options.random ?? 0) > 0 ? ['random'] : [])]
+  if (!report.aborted && selectedScenarios.length > 0 && selectedScenarios.every((name) => skippedNoCandidates.has(name))) report = { ...report, noScenarioRan: true }
 
   // ── 最後に、外への通信の試みと画面のエラーを所見にする(途中で止まっても出す)。
   const browserStep = newStep('ブラウザの記録(外への通信・画面のエラー)')

@@ -9,3 +9,5 @@ export * from './templateEdit'
 export { isActiveOnDate } from '../../src/components/basic-data/basicDataModel'
 export { auditClassroomSnapshot } from '../invAuditEntry'
 export { resolveNextMondayDateKey } from '../../src/components/schedule-board/templateDefinitionDiff'
+// でたらめ操作が元に戻すの履歴の上限をアプリと合わせる(randomOps.mjs)。
+export { MAX_HISTORY_DEPTH } from '../../src/components/schedule-board/ScheduleBoardScreen'

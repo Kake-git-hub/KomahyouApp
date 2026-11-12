@@ -1097,10 +1097,10 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     cell('2026-11-20', 2, [desk('f0', '講師C', [student('ef', 'sF', 'regular', { origin: 'template' }), student('eg', 'sG', 'regular', { origin: 'template' })])]),
   ])
 
-  async function runG(payload, { broken, scenarios = ['boot', 'g'] } = {}) {
+  async function runG(payload, { broken, scenarios = ['boot', 'g'], app: appOverride } = {}) {
     const fake = makeDayDriver(payload, broken)
     const report = await runClassroomPatrol({
-      session: fake.session, app: appG, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
+      session: fake.session, app: appOverride ?? appG, classroom: { classroomId: ROOM, label: 'A', backupKey: 'k' },
       seedSnapshot: { actingClassroomId: ROOM, classrooms: [{ id: ROOM, data: clone(payload) }] },
       options: { scenarios, moves: 1, seed: 1 }, outDir: '/nonexistent-patrol-out', known: [], today: PATROL_TODAY, driver: fake.driver,
     })
@@ -1135,6 +1135,19 @@ describe('runClassroomPatrol(台本 g のつなぎ)', () => {
     expect(stopsOf((await runG(gPayload(), { broken: { holidayNoStock: true } })).report)).toContain('stock-delta-mismatch')
     expect(stopsOf((await runG(gPayload(), { broken: { holidayDoubleStock: true } })).report)).toContain('stock-delta-mismatch')
     expect(stopsOf((await runG(gPayload(), { broken: { releaseKeepsStock: true } })).report)).toContain('round-trip-not-restored')
+  })
+
+  it('振替の借りのある鍵(前から振替を置きすぎ)は、休日の +1 の代わりに「振替元を 1 つ足したときの残」(stock.ts の collectMakeupOriginGains)を期待値にして比べる。借りの鍵で残が増えたら(二重計上)stop', async () => {
+    const owingApp = { ...appG, collectMakeupOriginGains: (_payload, _today, keys) => Object.fromEntries([...keys].map((key) => [key, 0])) }
+    // 借りの返済に消えて残が増えない(偽のアプリが在庫を戻さない)→ 期待 0 どおりで所見なし
+    const owing = await runG(gPayload(), { broken: { holidayNoStock: true }, app: owingApp })
+    expect(stopsOf(owing.report)).not.toContain('stock-delta-mismatch')
+    expect(stepsOf(owing.report, 'g').map((step) => step.notes.join('\n')).join('\n')).toMatch(/振替の借り[^0-9]*\d+/)
+    // 借りの鍵なのに残が +1(見かけの +1＝二重計上)→ stop
+    expect(stopsOf((await runG(gPayload(), { app: owingApp })).report)).toContain('stock-delta-mismatch')
+    // 借りの無い鍵(増え方 +1)は今までどおり +1 を比べる
+    const none = await runG(gPayload(), { broken: { holidayNoStock: true }, app: { ...appG, collectMakeupOriginGains: (_payload, _today, keys) => Object.fromEntries([...keys].map((key) => [key, 1])) } })
+    expect(stopsOf(none.report)).toContain('stock-delta-mismatch')
   })
 
   it('わざと壊す: 丸ごと振替で在庫が動く → stop stock-delta-mismatch／解除で振替元へ戻さない → stop round-trip-not-restored', async () => {

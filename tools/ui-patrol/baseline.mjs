@@ -109,6 +109,15 @@ export function checkBaselineUsable(baselineReport, currentRooms) {
   return errors
 }
 
+/** でたらめ操作の部品の列が違い始めた手(1 始まり)。同じなら null。片方が短いだけなら短い方の次の手。 */
+export function findRandomDivergence(baseTrace, currentTrace) {
+  const length = Math.max(baseTrace.length, currentTrace.length)
+  for (let index = 0; index < length; index += 1) {
+    if (baseTrace[index] !== currentTrace[index]) return index + 1
+  }
+  return null
+}
+
 /**
  * 今回の報告の stop を新しい/前からに分け、baseline にだけある stop を教室ごとの resolved(消えた)に出す。
  * 戻り値: { ok: true, report } か { ok: false, errors }。元の報告は書き換えない。
@@ -167,6 +176,11 @@ export function compareWithBaseline(currentReport, baselineReport, { source = ''
     }))
     const resolved = items.filter((item) => !item.used).map(({ step, finding }) => ({ step: step.name, title: step.title ?? step.name, finding }))
     resolvedStops += resolved.length
+    // でたらめ操作(--random)は、同じ種データ・同じ種なら同じ部品の列になる。ただ、変更前と今とでアプリの答え(効いた/断られた)が違うと、
+    // その手から先の列がずれ、同じ手どうしの比べでなくなる(2 段目の突き合わせも、別の手の所見を拾えない)。違い始めた手を記録して文に出す。
+    if (Array.isArray(room.randomTrace) || Array.isArray(base.randomTrace)) {
+      return { ...room, steps, resolved, randomDivergedAt: findRandomDivergence(base.randomTrace ?? [], room.randomTrace ?? []) }
+    }
     return { ...room, steps, resolved }
   })
   return { ok: true, report: { ...currentReport, classrooms, baseline: { source, newStops, carriedStops, resolvedStops } } }

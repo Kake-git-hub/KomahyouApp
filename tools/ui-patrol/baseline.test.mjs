@@ -210,6 +210,19 @@ describe('compareWithBaseline', () => {
     expect(JSON.stringify(currentReport)).toBe(snapshot)
   })
 
+  it('でたらめ操作の部品の列(randomTrace)が変更前と違えば、違い始めた手を教室に記録する(以降の所見は同じ手どうしの比べではない)', () => {
+    const base = patrol([room([step()], { randomTrace: ['move', 'attend-absent', 'undo', 'save'] })])
+    const same = compareWithBaseline(patrol([room([step()], { randomTrace: ['move', 'attend-absent', 'undo', 'save'] })]), base, { source: 's' })
+    expect(same.report.classrooms[0].randomDivergedAt).toBeNull()
+    const diverged = compareWithBaseline(patrol([room([step()], { randomTrace: ['move', 'attend-absent(断)', 'move'] })]), base, { source: 's' })
+    expect(diverged.report.classrooms[0].randomDivergedAt).toBe(2)
+    // 片方が先で打ち切った(短い)だけなら、短い方の終わりの次の手
+    const shorter = compareWithBaseline(patrol([room([step()], { randomTrace: ['move', 'attend-absent'] })]), base, { source: 's' })
+    expect(shorter.report.classrooms[0].randomDivergedAt).toBe(3)
+    // でたらめ操作を流していない報告どうしは見ない
+    expect(compareWithBaseline(patrol([room()]), patrol([room()]), { source: 's' }).report.classrooms[0].randomDivergedAt).toBeUndefined()
+  })
+
   it('指紋が違えば比べず ok:false と理由(report は返さない)', () => {
     const result = compareWithBaseline(patrol([room()]), patrol([room([step()], { seedFingerprint: 'bbbbbbbbbbbbbbbb' })]), { source: 's' })
     expect(result.ok).toBe(false)
