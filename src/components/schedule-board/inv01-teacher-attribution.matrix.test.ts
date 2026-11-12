@@ -1354,3 +1354,105 @@ describe('INV-01 × 丸ごと振替の付け替え（Issue #87）: 同じ講師�
     expect(result.status).toBe('blocked')
   })
 })
+
+// Issue #88（2026-11-12・画面の自動巡回のでたらめ操作が見つけた・オーナー「今すぐ直す」）: テンプレ保存で、移動の記録（移)）と手入力の生徒が居る机の
+// 講師の ID（teacherAssignmentTeacherId）が消え、講師日程表の書き出しが基本データ行の担当講師（regularTeacherIds）と机の講師名の両方へ手入力の生徒を載せていた。
+// 形: 机のテンプレの生徒（井上）を別の日へ移した（移)の記録）→ 同じ机に手で入れた三好（テンプレでは同じコマの山本の担当）→ テンプレを保存。
+// 真因: テンプレの生徒が居ないので机の授業は机固有の授業（_template_kept）に付け替わり、差分反映の alignTeacherIdentityWithRemerge と再マージの
+// 「管理授業でない机」の枝が、非 manual の講師（テンプレの講師）から ID を外していた（どちらか片方だけ直すと再マージで戻る＝INV-03）。
+describe('INV-01 × テンプレ保存（Issue #88）: 移動の記録と手入力の生徒の机でも講師の ID が残り、手入力の生徒は机の講師 1 人にだけ出る', () => {
+  const THU = '2026-07-23'
+  const studentS3 = createStudent({ id: 'student-miyoshi', name: '三好 三郎', displayName: '三好' })
+  const teacherZ = createTeacher({ id: 't_kato', name: '加藤 次郎', displayName: '加藤', subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '高3' }] })
+  const teachers = [teacherX, teacherY, teacherZ]
+  const students = [studentS1, studentS2, studentS3]
+  const diffSettings = { ...classroomSettings, deskCount: 3, templateFreezeBeforeDate: FRI }
+  // テンプレ: 机0=落合(井上・英)・机1=山本(青木・数／三好・英)。
+  const rows: RegularLessonRow[] = [
+    createRegularLesson({ id: 'r0', teacherId: 't_ochiai', student1Id: 'student-inoue', subject1: '英' }),
+    createRegularLesson({ id: 'r1', teacherId: 't_yamamoto', student1Id: 'student-aoki', subject1: '数', student2Id: 'student-miyoshi', subject2: '英' }),
+  ]
+  const managedByName = new Map<string, StudentRow>(students.flatMap((student) => [[student.name, student], [student.displayName ?? student.name, student]] as Array<[string, StudentRow]>))
+  const fri5 = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL_ID)!
+
+  // 盤面: テンプレどおりに作り、三好を落合の机（机0）の空いた席へ手で入れ（山本の机からは外す＝同じコマに同じ生徒は 1 人）、
+  // withMove なら井上を木曜の空き机へ移す（移)の記録が机0 に残る）。
+  function buildBoard(withMove: boolean) {
+    const week = buildManagedScheduleCellsForRange({
+      range: RANGE, fallbackStartDate: RANGE.startDate, fallbackEndDate: RANGE.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 }, teachers, students, regularLessons: rows, boardWeeks: [], suppressedRegularLessonOccurrences: [],
+    })
+    const cell = week.find((entry) => entry.id === CELL_ID)!
+    const ochiaiDesk = cell.desks.find((desk) => desk.teacher === '落合')!
+    const yamamotoDesk = cell.desks.find((desk) => desk.teacher === '山本')!
+    expect(ochiaiDesk.teacherAssignmentTeacherId).toBe('t_ochiai')
+    yamamotoDesk.lesson!.studentSlots = yamamotoDesk.lesson!.studentSlots.map((student) => (student?.managedStudentId === 'student-miyoshi' ? null : student)) as [StudentEntry | null, StudentEntry | null]
+    ochiaiDesk.lesson!.studentSlots[1] = mkStudentEntry({ id: 'miyoshi-hand', name: '三好', managedStudentId: 'student-miyoshi', subject: '英', manualAdded: true })
+    if (!withMove) return { weeks: [week], suppressed: [] as string[] }
+    const inoue = ochiaiDesk.lesson!.studentSlots.find((student) => student?.managedStudentId === 'student-inoue')!
+    const move = computeStudentMove({
+      weeks: [week], weekIndex: 0, cells: week, movingStudentId: inoue.id, cellId: `${THU}_5`, deskIndex: 0, studentIndex: 0,
+      suppressedRegularLessonOccurrences: [], managedStudentByAnyName: managedByName, resolveBoardStudentDisplayName: (name: string) => name,
+      templateOriginRules: true, sourceSeat: { cellId: CELL_ID, deskIndex: cell.desks.indexOf(ochiaiDesk), studentIndex: 0 },
+    })
+    if (move.status !== 'moved') throw new Error(`move failed: ${move.status}`)
+    const moved = fri5(move.nextWeeks).desks.find((desk) => desk.teacher === '落合')!
+    expect((moved.statusSlots ?? []).some((entry) => entry?.status === 'moved' && entry.managedStudentId === 'student-inoue')).toBe(true)
+    return { weeks: move.nextWeeks, suppressed: move.nextSuppressedRegularLessonOccurrences }
+  }
+
+  // テンプレ保存（本番と同じく保存前の行を渡す＝並べ直しを通る）→ 再マージ 2 回 → 日程表（boardOnly）→ 講師日程表の書き出し。
+  function save(weeks: SlotCell[][], suppressed: string[], newRows: RegularLessonRow[], pendingDesks = {}) {
+    const saved = computeTemplateDiffApplyForBoard({
+      scheduleCountAdjustments: [], weeks, classroomSettings: diffSettings, teachers, students, regularLessons: newRows,
+      effectiveStartDate: FRI, suppressedRegularLessonOccurrences: suppressed, templatePendingDesks: pendingDesks, createdAt: '2026-07-20T00:00:00.000Z', manualMakeupAdjustments: {},
+      previousRegularLessons: rows,
+    })
+    const nextSuppressed = [...suppressed, ...saved.addedSuppressedRegularLessonOccurrences]
+    const remerge = (input: SlotCell[][]) => remergeBoardWeeksWithManagedData(input, {
+      classroomSettings: diffSettings, teachers, students, regularLessons: newRows, suppressedRegularLessonOccurrences: nextSuppressed, todayKey: '2026-07-20',
+      templateOriginRules: { pendingDesks: saved.nextPendingDesks },
+    })
+    const once = remerge(saved.nextWeeks)
+    const boardWeeks = remerge(once)
+    const scheduleCells = buildScheduleCellsForRange({
+      range: RANGE, fallbackStartDate: RANGE.startDate, fallbackEndDate: RANGE.endDate, classroomSettings: diffSettings, teachers, students,
+      regularLessons: newRows, boardWeeks, suppressedRegularLessonOccurrences: nextSuppressed, boardOnly: true,
+    })
+    const pagesOf = (name: string) => teachers.filter((teacher) => serializedTeacherStudentNames(scheduleCells, asTeacherKey(teacher), { teachers, students, regularLessons: newRows }).includes(name)).map((teacher) => teacher.displayName)
+    const miyoshiDesk = (input: SlotCell[][]) => fri5(input).desks.find((desk) => (desk.lesson?.studentSlots ?? []).some((student) => student?.managedStudentId === 'student-miyoshi'))!
+    return { saved, once, boardWeeks, nextSuppressed, pagesOf, miyoshiDesk }
+  }
+
+  // 机を 1 つ変える保存: 加藤の講師だけの机を足す（三好の机には関係しない）。
+  const rowsWithKato = [...rows, createRegularLesson({ id: 'r2', teacherId: 't_kato', student1Id: '', subject1: '' })]
+
+  it.each([
+    ['何も変えないテンプレ保存', rows],
+    ['机を 1 つ変えるテンプレ保存', rowsWithKato],
+  ] as const)('移動の記録あり × %s → 三好の机は落合のまま講師の ID が残り、三好は落合のページにだけ出る（再マージ 2 回とも）', (_label, newRows) => {
+    const { weeks, suppressed } = buildBoard(true)
+    const { saved, once, boardWeeks, pagesOf, miyoshiDesk } = save(weeks, suppressed, newRows)
+    for (const result of [saved.nextWeeks, once, boardWeeks]) {
+      expect(miyoshiDesk(result)).toMatchObject({ teacher: '落合', teacherAssignmentTeacherId: 't_ochiai' })
+    }
+    expect(pagesOf('三好')).toEqual(['落合'])
+    expect(pagesOf('青木')).toEqual(['山本'])
+  })
+
+  it('移動の記録あり × 同じテンプレをもう一度保存（INV-03）→ 盤面は 1 回目の保存と同じ', () => {
+    const { weeks, suppressed } = buildBoard(true)
+    const first = save(weeks, suppressed, rows)
+    const second = save(first.boardWeeks, first.nextSuppressed, rows, first.saved.nextPendingDesks)
+    expect(fri5(second.saved.nextWeeks)).toEqual(fri5(first.boardWeeks))
+    expect(second.pagesOf('三好')).toEqual(['落合'])
+  })
+
+  it('対照: 移動の記録が無い机（井上がテンプレどおり居る）→ 今までどおり落合の ID つき・三好は落合のページにだけ出る', () => {
+    const { weeks, suppressed } = buildBoard(false)
+    const { boardWeeks, pagesOf, miyoshiDesk } = save(weeks, suppressed, rows)
+    expect(miyoshiDesk(boardWeeks)).toMatchObject({ teacher: '落合', teacherAssignmentTeacherId: 't_ochiai', manualTeacher: false })
+    expect(pagesOf('三好')).toEqual(['落合'])
+    expect(pagesOf('井上')).toEqual(['落合'])
+  })
+})
