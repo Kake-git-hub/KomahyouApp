@@ -5681,7 +5681,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
           manualTeacher: isScaffoldSlot ? false : desk.manualTeacher,
           teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
           teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
-          teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : undefined,
+          // 回帰防止（Issue #88・2026-11-12・INV-01）: 授業か記録が残って講師名を残す机は、非 manual の講師（テンプレの講師）でも講師の ID を外さない。
+          // 外すと講師日程表の書き出しが机の講師名と基本データ行の担当講師（regularTeacherIds）の両方へ生徒を載せ、同じ生徒が 2 人の講師に出る
+          // （テンプレ保存で「移)の記録＋手入力の生徒」の机の授業が机固有の授業になった形）。差分反映の alignTeacherIdentityWithRemerge も同じ形に揃える。
+          teacherAssignmentTeacherId: desk.manualTeacher || (!isScaffoldSlot && desk.teacher.trim()) ? desk.teacherAssignmentTeacherId : undefined,
           lesson: lesson ? cloneDeskLesson(lesson) : undefined,
         }
       }
