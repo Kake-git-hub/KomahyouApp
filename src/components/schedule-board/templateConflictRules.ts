@@ -323,6 +323,23 @@ function templateTeacherFields(templateDesk: Pick<DeskCell, 'teacher' | 'teacher
   return { teacher, manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentSessionId: undefined, teacherAssignmentTeacherId: teacher ? templateDesk.teacherAssignmentTeacherId : undefined }
 }
 
+/**
+ * 回帰防止（Issue #88・2026-11-12・INV-01）: 机のテンプレの生徒が全員置かれない（移)の記録・同じコマの手入力が先・抑止）と、テンプレの机は
+ * buildFullySuppressedManagedDesk で講師の ID を外した「講師だけの机」になり、その講師を手入力の生徒・記録が残る机へ置くと講師名だけで ID が無くなる。
+ * ID の無い講師名の机は講師日程表の書き出しが基本データ行の担当講師（regularTeacherIds）へも生徒を載せ、同じ生徒が 2 人の講師に出る。
+ * 授業か記録が残る非 manual の講師の机に限り、同じ講師の ID を元の机（無ければ抑止前のテンプレの同じ机）から写す。既に ID を持つ机・
+ * 別の講師・講師だけの机（足場・再マージが ID を決める）は変えない（再マージは授業か記録の残る机の ID を外さない＝不動点・INV-03）。
+ */
+function keepTemplateTeacherIdOnKeptDesk(fields: TemplatePendingLowerTeacher, keepsLessonOrRecord: boolean, desk: DeskCell, rawTemplateDesk: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | undefined, aliases: TeacherAliasResolver): TemplatePendingLowerTeacher {
+  const teacher = fields.teacher?.trim() ?? ''
+  if (!keepsLessonOrRecord || fields.manualTeacher || fields.teacherAssignmentTeacherId || !teacher) return fields
+  const sameTeacherId = (source: Pick<DeskCell, 'teacher' | 'teacherAssignmentTeacherId'> | undefined) => (
+    source?.teacherAssignmentTeacherId?.trim() && isSameTeacherByAliases(source.teacher, teacher, aliases) ? source.teacherAssignmentTeacherId : undefined
+  )
+  const teacherId = sameTeacherId(desk) ?? sameTeacherId(rawTemplateDesk)
+  return teacherId ? { ...fields, teacherAssignmentTeacherId: teacherId } : fields
+}
+
 function cloneStatus(entry: StudentStatusEntry): StudentStatusEntry {
   return { ...entry, ...(entry.holidayStockReturn ? { holidayStockReturn: { ...entry.holidayStockReturn } } : {}) }
 }
@@ -501,6 +518,7 @@ function applyRulesToDesk(params: {
     else lowerStatus[seat] = cloneStatus(entry)
   })
 
+  upperTeacher = keepTemplateTeacherIdOnKeptDesk(upperTeacher, Boolean(upperLesson) || Boolean(upperStatus[0] || upperStatus[1]), desk, params.cellTemplateTeachers[deskIndex], params.aliases)
   const base = withTeacher(desk, upperTeacher)
   const nextDesk: DeskCell = { ...base }
   // 取り下げの記録は、テンプレがこの机に同じ講師を置き続ける間だけ残す（別の講師・講師なしになった反映で使い切り。戻ってきたら新しいぶつかりとして 2 行）。

@@ -2541,15 +2541,19 @@ function applyTemplateDiffToCell(context: {
   }
 }
 
-// 再マージ（mergeManagedWeek）は、管理授業でない机（手置きの授業・記録だけの机）の非 manual 講師から
+// 再マージ（mergeManagedWeek）は、管理授業でない机（手置きの授業・記録だけの机）の非 manual 講師から、講師名が空のときだけ
 // teacherAssignmentTeacherId を外す。差分反映の結果を再マージの不動点にするため、同じ形に揃える（講師名は変えない）。
 // export は第 1 段 (B) の解決操作（下段を机へ戻した机・templatePendingResolution.ts / computePendingDeskResolution）でも同じ形に揃えるため。
+// 回帰防止（Issue #88・2026-11-12・INV-01）: 以前は講師名があっても ID を外していた。テンプレ保存で「移)の記録＋手入力の生徒」の机の授業が
+// 机固有の授業（_template_kept）になると、テンプレの講師の ID が消え、講師日程表で手入力の生徒が机の講師と基本データ行の担当講師の 2 人に出た。
+// 講師名のある机の ID は外さない（再マージ側も同じ・片方だけ戻すと再マージで ID が消える＝INV-03）。
 export function alignTeacherIdentityWithRemerge(desk: DeskCell): DeskCell {
   if (desk.manualTeacher || desk.teacherAssignmentTeacherId === undefined) return desk
   const hasManagedLesson = Boolean(desk.lesson) && isTemplateManagedLesson(desk.lesson)
   if (hasManagedLesson) return desk
   const keepsTeacherWithoutTemplateLesson = Boolean(desk.lesson) || Boolean(desk.statusSlots?.some(Boolean))
   if (!keepsTeacherWithoutTemplateLesson) return desk
+  if (desk.teacher.trim()) return desk
   return { ...desk, teacherAssignmentTeacherId: undefined }
 }
 

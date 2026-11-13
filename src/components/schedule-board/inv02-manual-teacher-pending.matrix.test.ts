@@ -977,8 +977,13 @@ describe('講師欄の採用の記録の兄弟（regression-reviewer 2026-11-07�
     const saved = save(boardWith(MAKEUP_A), NEW_ROWS)
     const studentsFirst = resolve('adopt-existing', saved.nextWeeks, saved.nextPendingDesks)
     if (studentsFirst.status !== 'applied') throw new Error('adopt-existing failed')
-    expect(desk0(studentsFirst.nextWeeks).teacherAssignmentTeacherId).toBeUndefined()
-    const manual = adoptManualAt(studentsFirst.nextWeeks, studentsFirst.nextTemplatePendingDesks, aliases)
+    // Issue #88（2026-11-12・INV-01）: 生徒を先に採用した机（D＋手入力の A・管理授業でない授業）も講師の ID を外さなくなった（以前は undefined だった）。
+    expect(desk0(studentsFirst.nextWeeks).teacherAssignmentTeacherId).toBe('tD')
+    // S-3 の本題（上の行の D に ID が無い机でも呼び名の対応表から補う）は、修正前に保存された ID の無い机で確かめる。
+    const idLessWeeks = structuredClone(studentsFirst.nextWeeks)
+    delete desk0(idLessWeeks).teacherAssignmentTeacherId
+    expect(desk0(idLessWeeks).teacherAssignmentTeacherId).toBeUndefined()
+    const manual = adoptManualAt(idLessWeeks, studentsFirst.nextTemplatePendingDesks, aliases)
     expect(desk0(manual.nextWeeks).templateTeacherDeclined).toEqual({ teacher: '田村', teacherId: 'tD', adopted: { teacher: '倉島', teacherId: 'tB' } })
     const renamed = teachers.map((teacher) => (teacher.id === 'tD' ? { ...teacher, name: '田村改' } : teacher))
     const suppressed = [...saved.addedSuppressedRegularLessonOccurrences, ...studentsFirst.ledgers.suppressedRegularLessonOccurrences]
