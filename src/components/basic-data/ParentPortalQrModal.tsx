@@ -1,11 +1,11 @@
-import { PARENT_PORTAL_QR_TEXT } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrBulkProgressLabel } from './parentPortalQr'
 
 // 基本データ画面の「保護者用QR」モーダル(spec-parent-portal.md §K-6 / P-7)。
 // 盤面の配布用QR(ScheduleBoardScreen distributionQrModal)と同じ .distribution-qr-* を流用し、
 // 保護者用に固有の要素(案内文・エラー・3 ボタン)だけ App.css 末尾の .parent-portal-qr-* で足す。
 // 発行・再発行・印刷の判断は呼び出し側(BasicDataScreen)が持ち、ここは表示だけ。
 
-type ParentPortalQrModalProps = {
+export type ParentPortalQrModalProps = {
   classroomName: string
   studentName: string
   url: string
@@ -18,14 +18,26 @@ type ParentPortalQrModalProps = {
   onReissue: () => void
   onPrint: () => void
   onClose: () => void
+  // 全員分印刷(spec-parent-portal §K-6・オーナー指示 2026-11-14)。無ければボタンを出さない。
+  // 1 人分の QR がエラーでも押せる(全員分は独立)。読み込み中・再発行中は押せない。
+  onPrintAll?: () => void
+  // 保存待ちの生徒がいる・在籍 0 人など、押せない理由があるとき true。理由は bulkPrintNote に出す。
+  bulkPrintDisabled?: boolean
+  bulkPrintNote?: string | null
+  // 実行中の進み具合。あるあいだはボタンに「作成中 n/N」を出し、ほかのボタンも閉じるも押せない。
+  bulkProgress?: { done: number; total: number } | null
+  // 全員分印刷の結果(失敗した生徒の名前・保存の案内)。
+  bulkMessage?: string | null
 }
 
-export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLoading, error, busy, onReissue, onPrint, onClose }: ParentPortalQrModalProps) {
-  const canAct = !isLoading && !busy && !error && Boolean(svg)
+export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLoading, error, busy, onReissue, onPrint, onClose, onPrintAll, bulkPrintDisabled = false, bulkPrintNote = null, bulkProgress = null, bulkMessage = null }: ParentPortalQrModalProps) {
+  const bulkRunning = Boolean(bulkProgress)
+  const canAct = !isLoading && !busy && !bulkRunning && !error && Boolean(svg)
+  const canClose = !busy && !isLoading && !bulkRunning
   return (
     <div
       className="distribution-qr-modal-overlay"
-      onClick={(event) => { if (event.target === event.currentTarget && !busy && !isLoading) onClose() }}
+      onClick={(event) => { if (event.target === event.currentTarget && canClose) onClose() }}
     >
       <div className="distribution-qr-modal parent-portal-qr-modal" role="dialog" aria-modal="true" aria-label={PARENT_PORTAL_QR_TEXT.title} data-testid="parent-portal-qr-modal">
         {classroomName ? <div className="distribution-qr-classroom">{classroomName}</div> : null}
@@ -48,9 +60,16 @@ export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLo
         <p className="parent-portal-qr-caution">{PARENT_PORTAL_QR_TEXT.caution}</p>
         <div className="distribution-qr-actions parent-portal-qr-actions">
           <button className="primary-button slim" type="button" onClick={onPrint} disabled={!canAct} data-testid="parent-portal-qr-print-button">印刷</button>
-          <button className="secondary-button slim" type="button" onClick={onReissue} disabled={isLoading || busy} data-testid="parent-portal-qr-reissue-button">{busy ? '再発行中…' : '再発行'}</button>
-          <button className="secondary-button slim" type="button" onClick={onClose} disabled={busy || isLoading} data-testid="parent-portal-qr-close-button">閉じる</button>
+          {onPrintAll ? (
+            <button className="secondary-button slim" type="button" onClick={onPrintAll} disabled={isLoading || busy || bulkRunning || bulkPrintDisabled} aria-busy={bulkRunning || undefined} data-testid="parent-portal-qr-print-all-button">
+              {bulkProgress ? buildParentPortalQrBulkProgressLabel(bulkProgress.done, bulkProgress.total) : PARENT_PORTAL_QR_TEXT.bulkPrintLabel}
+            </button>
+          ) : null}
+          <button className="secondary-button slim" type="button" onClick={onReissue} disabled={isLoading || busy || bulkRunning} data-testid="parent-portal-qr-reissue-button">{busy ? '再発行中…' : '再発行'}</button>
+          <button className="secondary-button slim" type="button" onClick={onClose} disabled={!canClose} data-testid="parent-portal-qr-close-button">閉じる</button>
         </div>
+        {onPrintAll && bulkPrintNote && !bulkRunning ? <p className="parent-portal-qr-bulk-note" data-testid="parent-portal-qr-print-all-note">{bulkPrintNote}</p> : null}
+        {bulkMessage ? <p className="parent-portal-qr-bulk-message" role="status" data-testid="parent-portal-qr-print-all-message">{bulkMessage}</p> : null}
       </div>
     </div>
   )

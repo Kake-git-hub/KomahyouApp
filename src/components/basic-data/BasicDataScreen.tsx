@@ -34,7 +34,7 @@ import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
 import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
-import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, openParentPortalQrPrint, readParentPortalCardBranding, resolveParentPortalQrRowState } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrBulkConfirmMessage, buildParentPortalQrBulkPrintHtml, buildParentPortalQrBulkResultMessage, buildParentPortalQrPrintHtml, issueParentPortalTokensForBulkPrint, openBlankParentPortalQrPrintWindow, openParentPortalQrPrint, readParentPortalCardBranding, resolveBulkParentPortalQrPlan, resolveParentPortalQrRowState, writeParentPortalQrPrintWindow } from './parentPortalQr'
 import { resolveCompanyReportHooks } from '@company/profile'
 import { ParentPortalQrModal } from './ParentPortalQrModal'
 
@@ -933,6 +933,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
   // 権威はサーバー(getOrIssue で冪等)。発行後は手動保存で写しが永続化される(保存アーキテクチャ)。
   const [parentQrModal, setParentQrModal] = useState<{ studentId: string; url: string; svg: string; isLoading: boolean; error: string | null; busy: boolean } | null>(null)
+  // 全員分印刷(spec-parent-portal §K-6・オーナー指示 2026-11-14)の進み具合と結果。モーダルを閉じると消す。
+  const [parentQrBulk, setParentQrBulk] = useState<{ progress: { done: number; total: number } | null; message: string | null }>({ progress: null, message: null })
   // 削除確認モーダル（生徒/講師共通）。window.confirm を廃し、不可逆警告・退塾日での非表示案内・
   // 未消化ストック警告・ログインパスワード再認証を1画面にまとめる（オーナー指示 2026-07-08）。
   const [deleteModalState, setDeleteModalState] = useState<{ scope: DeleteScope; id: string; name: string; stock?: StudentDeletionStock } | null>(null)
@@ -1152,6 +1154,65 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
       issuedDateKey: getReferenceDateKey(new Date()),
     })
     if (!openParentPortalQrPrint(html)) setStatusMessage(PARENT_PORTAL_QR_TEXT.printBlocked)
+  }
+
+  // 全員分印刷(spec-parent-portal §K-6「全員分印刷（オーナー指示 2026-11-14）」)。対象は今日在籍中の生徒全員(名簿順)。
+  // 1 人分と同じく、発行済みの生徒も getOrIssue(reissue:false・冪等)で権威トークンを確かめてから描く(写しは失効済みのことがある)。
+  const printAllParentPortalQr = async () => {
+    if (!parentQrModal || parentQrModal.busy || parentQrModal.isLoading || parentQrBulk.progress) return
+    if (!onIssueParentPortalToken || !classroomId) {
+      setParentQrBulk({ progress: null, message: PARENT_PORTAL_QR_TEXT.urlUnavailable })
+      return
+    }
+    const plan = resolveBulkParentPortalQrPlan({ students, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: true, classroomId, savedStudentIds })
+    if (!plan.canPrint) return
+    if (!window.confirm(buildParentPortalQrBulkConfirmMessage({ total: plan.targets.length, issueCount: plan.issueCount }))) return
+    // ★ポップアップブロック回避: 通信(await)の前、押した直後にウィンドウを開いておく。
+    const printWindow = openBlankParentPortalQrPrintWindow()
+    if (!printWindow) {
+      setParentQrBulk({ progress: null, message: PARENT_PORTAL_QR_TEXT.printBlocked })
+      setStatusMessage(PARENT_PORTAL_QR_TEXT.printBlocked)
+      return
+    }
+    const total = plan.targets.length
+    setParentQrBulk({ progress: { done: 0, total }, message: null })
+    const { succeeded, failed } = await issueParentPortalTokensForBulkPrint({
+      targets: plan.targets,
+      issue: onIssueParentPortalToken,
+      concurrency: 4,
+      onProgress: (done) => setParentQrBulk((current) => ({ ...current, progress: { done, total } })),
+    })
+    let tokensChanged = false
+    const cards: Array<{ studentName: string; svg: string }> = []
+    const failedNames = failed.map(({ student }) => getStudentDisplayName(student))
+    for (const { student, token } of succeeded) {
+      // 写しが違えば 1 人分(openParentPortalQr)と同じく写しへ反映する。保存は手動(保存アーキテクチャ)。
+      if (token !== student.parentPortalToken || student.parentPortalTokenClassroomId !== classroomId) {
+        updateStudent(student.id, { parentPortalToken: token, parentPortalTokenClassroomId: classroomId })
+        tokensChanged = true
+      }
+      const view = buildParentQrView(token)
+      if (view) cards.push({ studentName: getStudentDisplayName(student), svg: view.svg })
+      else failedNames.push(getStudentDisplayName(student))
+    }
+    const allFailed = cards.length === 0
+    if (allFailed) {
+      printWindow.close()
+    } else {
+      let storage: Storage | null = null
+      try { storage = window.localStorage } catch { storage = null }
+      const branding = readParentPortalCardBranding({ storage, classroomId, defaultLogoUrl: resolveCompanyReportHooks().logoDefaultUrl })
+      writeParentPortalQrPrintWindow(printWindow, buildParentPortalQrBulkPrintHtml({
+        classroomName,
+        cards,
+        logoSrc: branding.logoSrc,
+        contactText: branding.contactText,
+        issuedDateKey: getReferenceDateKey(new Date()),
+      }))
+    }
+    const message = buildParentPortalQrBulkResultMessage({ failedNames, tokensChanged, allFailed })
+    setParentQrBulk({ progress: null, message: message || null })
+    if (message) setStatusMessage(message)
   }
 
   const teacherEditorModalConfig = (() => {
@@ -1812,6 +1873,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
 
       {parentQrModal ? (() => {
         const student = students.find((row) => row.id === parentQrModal.studentId)
+        const bulkPlan = resolveBulkParentPortalQrPlan({ students, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: Boolean(onIssueParentPortalToken), classroomId, savedStudentIds })
+        const bulkPrintNote = bulkPlan.pendingSaveStudents.length > 0
+          ? PARENT_PORTAL_QR_TEXT.bulkPendingSave
+          : bulkPlan.targets.length === 0 ? PARENT_PORTAL_QR_TEXT.bulkNoTargets : null
         return (
           <ParentPortalQrModal
             classroomName={classroomName}
@@ -1823,7 +1888,12 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
             busy={parentQrModal.busy}
             onReissue={() => { void reissueParentPortalQr() }}
             onPrint={printParentPortalQr}
-            onClose={() => setParentQrModal(null)}
+            onClose={() => { setParentQrModal(null); setParentQrBulk({ progress: null, message: null }) }}
+            onPrintAll={() => { void printAllParentPortalQr() }}
+            bulkPrintDisabled={!bulkPlan.canPrint}
+            bulkPrintNote={bulkPrintNote}
+            bulkProgress={parentQrBulk.progress}
+            bulkMessage={parentQrBulk.message}
           />
         )
       })() : null}

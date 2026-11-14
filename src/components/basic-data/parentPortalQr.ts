@@ -31,6 +31,10 @@ export const PARENT_PORTAL_QR_TEXT = {
   pendingSave: 'データの保存が終わるとQRを発行できます。',
   /** 保存待ちのあいだボタンに出す文言(確認リスト k-12 2026-09-14「スピナーだけでは見えにくい」)。 */
   pendingLabel: 'QR準備中',
+  /** 全員分印刷(spec-parent-portal §K-6・オーナー指示 2026-11-14)。 */
+  bulkPrintLabel: '全員分印刷',
+  bulkPendingSave: '保存が終わると全員分を印刷できます',
+  bulkNoTargets: '在籍中の生徒がいません',
 } as const
 
 // 行操作に「QR」ボタンを出すか。
@@ -56,6 +60,92 @@ export function resolveParentPortalQrRowState(params: {
   if (!needsIssue) return 'show'
   if (savedStudentIds && !savedStudentIds.has(student.id)) return 'pending-save'
   return 'issue'
+}
+
+// 全員分印刷の対象と押せるか(spec-parent-portal §K-6「全員分印刷（オーナー指示 2026-11-14）」)。
+// 対象 = 行の QR ボタンが出る生徒(resolveParentPortalQrRowState が hidden 以外)。判定を分散させないため必ずこれを通す。
+// 並びは名簿(students)の順。保存待ち(pending-save)の生徒が 1 人でもいれば押せない(オーナー回答 2026-11-14)。
+export function resolveBulkParentPortalQrPlan(params: {
+  students: readonly StudentRow[]
+  referenceDate: string
+  enabled: boolean
+  remoteEnabled: boolean
+  classroomId?: string | null
+  savedStudentIds?: ReadonlySet<string> | null
+}): { targets: StudentRow[]; issueCount: number; pendingSaveStudents: StudentRow[]; canPrint: boolean } {
+  const { students, ...rest } = params
+  const targets: StudentRow[] = []
+  const pendingSaveStudents: StudentRow[] = []
+  let issueCount = 0
+  for (const student of students) {
+    const state = resolveParentPortalQrRowState({ ...rest, student })
+    if (state === 'hidden') continue
+    targets.push(student)
+    if (state === 'issue') issueCount += 1
+    if (state === 'pending-save') pendingSaveStudents.push(student)
+  }
+  return { targets, issueCount, pendingSaveStudents, canPrint: targets.length > 0 && pendingSaveStudents.length === 0 }
+}
+
+export function buildParentPortalQrBulkConfirmMessage(params: { total: number; issueCount: number }): string {
+  const base = `在籍${params.total}人分を印刷します`
+  return params.issueCount > 0 ? `${base}（未発行の${params.issueCount}人は新しく発行します）` : base
+}
+
+export function buildParentPortalQrBulkProgressLabel(done: number, total: number): string {
+  return `作成中 ${done}/${total}`
+}
+
+// 全員分の権威トークンを getOrIssue(reissue:false・冪等)で確かめる。再発行はしない(1 人分と同じ理由で写しは信用しない)。
+// 同時に投げる数は小さく抑える(既定 4)。1 人の失敗で止めず、成功・失敗を名簿の順に分けて返す。
+export async function issueParentPortalTokensForBulkPrint(params: {
+  targets: readonly StudentRow[]
+  issue: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
+  concurrency?: number
+  onProgress?: (done: number, total: number) => void
+}): Promise<{ succeeded: Array<{ student: StudentRow; token: string }>; failed: Array<{ student: StudentRow; error: unknown }> }> {
+  const { targets, issue, onProgress } = params
+  const concurrency = Math.max(1, Math.floor(params.concurrency ?? 4))
+  const outcomes: Array<{ token: string } | { error: unknown }> = new Array(targets.length)
+  let nextIndex = 0
+  let done = 0
+  const worker = async () => {
+    while (nextIndex < targets.length) {
+      const index = nextIndex
+      nextIndex += 1
+      try {
+        const { token } = await issue(targets[index].id, { reissue: false })
+        outcomes[index] = token ? { token } : { error: new Error('empty token') }
+      } catch (error) {
+        outcomes[index] = { error }
+      }
+      done += 1
+      onProgress?.(done, targets.length)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()))
+  const succeeded: Array<{ student: StudentRow; token: string }> = []
+  const failed: Array<{ student: StudentRow; error: unknown }> = []
+  targets.forEach((student, index) => {
+    const outcome = outcomes[index]
+    if ('token' in outcome) succeeded.push({ student, token: outcome.token })
+    else failed.push({ student, error: outcome.error })
+  })
+  return { succeeded, failed }
+}
+
+// 全員分印刷のあとに出す文言。失敗した生徒の名前を出し、全員失敗なら印刷していないと伝える。
+// 写しトークンが新しく入った/変わったら 1 人分と同じ「忘れずに保存してください」を添える。
+export function buildParentPortalQrBulkResultMessage(params: { failedNames: readonly string[]; tokensChanged: boolean; allFailed: boolean }): string {
+  const parts: string[] = []
+  const names = params.failedNames.join('、')
+  if (params.allFailed) {
+    parts.push(`保護者用QRを作成できなかったため、印刷していません。通信状態を確認してからやり直してください。${names ? `（${names}）` : ''}`)
+  } else if (names) {
+    parts.push(`次の生徒の保護者用QRを作成できなかったため、印刷に含めていません: ${names}`)
+  }
+  if (params.tokensChanged) parts.push(PARENT_PORTAL_QR_TEXT.issued)
+  return parts.join(' ')
 }
 
 // 保存済みデータに含まれる生徒 id。未保存の変更が無い(データ署名 = 保存済み署名)ときだけ現在の名簿から作り直し、
@@ -127,20 +217,16 @@ export function formatParentPortalCardIssuedDate(dateKey: string): string {
 
 export const PARENT_PORTAL_CARD_SIZE_MM = { width: 91, height: 55 } as const
 
-// 印刷 HTML(groupAttendanceHtml と同じ「印刷ボタン＋@media print で非表示」方式)。
-// ★ 2026-11-03 フリーメモ 20261103-152520476-06446053: A4 の中に名刺サイズ(91×55mm・点線で切り取る)で 1 生徒 1 枚。
-//   QR は右、左にロゴ・連絡先・生徒名・発行日・注意書き(案内文＋注意文)。
-// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。名前・連絡先はエスケープする。
-// url は呼び出し側の互換のため受け取るが、紙には印字しない(QR だけで足りる・2026-10-10 文言整理)。
-export function buildParentPortalQrPrintHtml(params: {
+type ParentPortalCardBrandingParams = {
   classroomName: string
-  studentName: string
-  url: string
-  svg: string
   logoSrc?: string
   contactText?: string
   issuedDateKey?: string
-}): string {
+}
+
+// 名刺 1 枚分(<div class="card">…</div>)。1 人分の印刷と全員分印刷で同じものを使う(2026-11-14 全員分印刷)。
+// ★ 1 人分の出力 HTML を変えないよう、元の buildParentPortalQrPrintHtml の文字列をそのまま切り出している。
+function buildParentPortalCardHtml(params: ParentPortalCardBrandingParams & { studentName: string; svg: string }): string {
   const classroomName = escapeHtml(params.classroomName.trim() || '教室')
   const studentName = escapeHtml(params.studentName.trim() || '生徒')
   const contactLines = (params.contactText ?? '').split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)
@@ -149,14 +235,28 @@ export function buildParentPortalQrPrintHtml(params: {
   const logoHtml = logoSrc ? `<div class="logo"><img src="${escapeHtml(logoSrc)}" alt=""></div>` : ''
   const issuedDate = formatParentPortalCardIssuedDate(params.issuedDateKey ?? '')
   const issuedHtml = issuedDate ? `<div class="issued">発行日 ${escapeHtml(issuedDate)}</div>` : ''
+  return `<div class="card">
+  <div class="info">
+    ${logoHtml}
+    <div class="contact">${contactHtml}</div>
+    <div class="student">${studentName} さん</div>
+    ${issuedHtml}
+    <div class="notes">
+      <p class="guidance">${escapeHtml(PARENT_PORTAL_QR_TEXT.guidance)}</p>
+      <p class="caution">${escapeHtml(PARENT_PORTAL_QR_TEXT.caution)}</p>
+    </div>
+  </div>
+  <div class="qr-side">
+    <div class="qr">${params.svg}</div>
+    <div class="qr-label">${PARENT_PORTAL_QR_TEXT.title}</div>
+  </div>
+</div>`
+}
+
+// 名刺の CSS(1 人分と全員分で共有)。@media print の行は呼び出し側で足す(全員分はページの余白も消すため)。
+function buildParentPortalCardCss(): string {
   const { width, height } = PARENT_PORTAL_CARD_SIZE_MM
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<title>${PARENT_PORTAL_QR_TEXT.title} ${studentName}</title>
-<style>
-  @page { size: A4 portrait; margin: 15mm; }
+  return `  @page { size: A4 portrait; margin: 15mm; }
   * { box-sizing: border-box; }
   body { font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; margin: 0; padding: 16px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .card { width: ${width}mm; height: ${height}mm; border: 0.3mm dashed #888; padding: 3.5mm; display: flex; gap: 3mm; overflow: hidden; background: #fff; }
@@ -173,39 +273,94 @@ export function buildParentPortalQrPrintHtml(params: {
   .qr-label { font-size: 6pt; font-weight: 700; color: #1f5d96; }
   .print-button { display: block; margin: 0 0 8px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
   .print-hint { margin: 0 0 12px; font-size: 13px; color: #555; }
-  @media print { .print-button, .print-hint { display: none; } body { padding: 0; } }
+`
+}
+
+function buildParentPortalPrintControlsHtml(): string {
+  const { width, height } = PARENT_PORTAL_CARD_SIZE_MM
+  return `<button class="print-button" onclick="window.print()">印刷</button>
+<p class="print-hint">A4 用紙の左上に名刺サイズ(${width}×${height}mm)で印刷します。点線で切り取ってください。印刷の設定は「倍率 100%(実際のサイズ)」にしてください。</p>`
+}
+
+// 印刷 HTML(groupAttendanceHtml と同じ「印刷ボタン＋@media print で非表示」方式)。
+// ★ 2026-11-03 フリーメモ 20261103-152520476-06446053: A4 の中に名刺サイズ(91×55mm・点線で切り取る)で 1 生徒 1 枚。
+//   QR は右、左にロゴ・連絡先・生徒名・発行日・注意書き(案内文＋注意文)。
+// svg は generateQrSvg が生成した信頼できる文字列なのでそのまま埋め込む。名前・連絡先はエスケープする。
+// url は呼び出し側の互換のため受け取るが、紙には印字しない(QR だけで足りる・2026-10-10 文言整理)。
+export function buildParentPortalQrPrintHtml(params: {
+  classroomName: string
+  studentName: string
+  url: string
+  svg: string
+  logoSrc?: string
+  contactText?: string
+  issuedDateKey?: string
+}): string {
+  const studentName = escapeHtml(params.studentName.trim() || '生徒')
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>${PARENT_PORTAL_QR_TEXT.title} ${studentName}</title>
+<style>
+${buildParentPortalCardCss()}  @media print { .print-button, .print-hint { display: none; } body { padding: 0; } }
 </style>
 </head>
 <body>
-<button class="print-button" onclick="window.print()">印刷</button>
-<p class="print-hint">A4 用紙の左上に名刺サイズ(${width}×${height}mm)で印刷します。点線で切り取ってください。印刷の設定は「倍率 100%(実際のサイズ)」にしてください。</p>
-<div class="card">
-  <div class="info">
-    ${logoHtml}
-    <div class="contact">${contactHtml}</div>
-    <div class="student">${studentName} さん</div>
-    ${issuedHtml}
-    <div class="notes">
-      <p class="guidance">${escapeHtml(PARENT_PORTAL_QR_TEXT.guidance)}</p>
-      <p class="caution">${escapeHtml(PARENT_PORTAL_QR_TEXT.caution)}</p>
-    </div>
-  </div>
-  <div class="qr-side">
-    <div class="qr">${params.svg}</div>
-    <div class="qr-label">${PARENT_PORTAL_QR_TEXT.title}</div>
-  </div>
-</div>
+${buildParentPortalPrintControlsHtml()}
+${buildParentPortalCardHtml(params)}
+</body>
+</html>`
+}
+
+// 全員分印刷(spec-parent-portal §K-6「全員分印刷（オーナー指示 2026-11-14）」)。1 生徒 A4 1 枚。
+// 各ページの名刺は 1 人分の印刷と同じ(CSS・ロゴ・連絡先・発行日を共有)。最後のページ以外だけ改ページする
+// (最後に改ページすると白紙が 1 枚出る)。
+export function buildParentPortalQrBulkPrintHtml(params: ParentPortalCardBrandingParams & {
+  cards: ReadonlyArray<{ studentName: string; svg: string }>
+}): string {
+  const { cards, ...branding } = params
+  const pages = cards.map((card, index) => {
+    const className = index < cards.length - 1 ? 'page page-break' : 'page'
+    return `<section class="${className}">
+${buildParentPortalCardHtml({ ...branding, studentName: card.studentName, svg: card.svg })}
+</section>`
+  }).join('\n')
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>${PARENT_PORTAL_QR_TEXT.title} 全員分（${cards.length}人）</title>
+<style>
+${buildParentPortalCardCss()}  .page + .page { margin-top: 16px; }
+  .page-break { break-after: page; page-break-after: always; }
+  @media print { .print-button, .print-hint { display: none; } body { padding: 0; } .page + .page { margin-top: 0; } }
+</style>
+</head>
+<body>
+${buildParentPortalPrintControlsHtml()}
+${pages}
 </body>
 </html>`
 }
 
 // 別ウィンドウで印刷用 HTML を開く(副作用・テスト対象外。openGroupAttendancePrint と同型)。
 export function openParentPortalQrPrint(html: string): boolean {
-  if (typeof window === 'undefined') return false
-  const printWindow = window.open('', '_blank')
+  const printWindow = openBlankParentPortalQrPrintWindow()
   if (!printWindow) return false
+  writeParentPortalQrPrintWindow(printWindow, html)
+  return true
+}
+
+// 全員分印刷は通信(発行)を待つあいだにユーザー操作の扱いが切れてポップアップが止められるので、
+// 押した直後に空のウィンドウを開いておき、準備ができてから中身を書く(副作用・テスト対象外)。
+export function openBlankParentPortalQrPrintWindow(): Window | null {
+  if (typeof window === 'undefined') return null
+  return window.open('', '_blank')
+}
+
+export function writeParentPortalQrPrintWindow(printWindow: { document: { open: () => unknown; write: (html: string) => unknown; close: () => unknown } }, html: string): void {
   printWindow.document.open()
   printWindow.document.write(html)
   printWindow.document.close()
-  return true
 }
