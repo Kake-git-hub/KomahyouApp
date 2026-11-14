@@ -28,9 +28,15 @@ export type ParentPortalQrModalProps = {
   bulkProgress?: { done: number; total: number } | null
   // 全員分印刷の結果(失敗した生徒の名前・保存の案内)。
   bulkMessage?: string | null
+  // 「全員分印刷」を押したあとの確認(window.confirm は使わない・2026-11-14 レビュー)。あるあいだ確認文と「印刷する」「やめる」を出す。
+  // ★「印刷する」のクリックの中で同期的に印刷ウィンドウを開く(ユーザー操作の扱いが切れるとポップアップが止められる)。
+  bulkConfirmMessage?: string | null
+  onConfirmPrintAll?: () => void
+  onCancelPrintAll?: () => void
 }
 
-export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLoading, error, busy, onReissue, onPrint, onClose, onPrintAll, bulkPrintDisabled = false, bulkPrintNote = null, bulkProgress = null, bulkMessage = null }: ParentPortalQrModalProps) {
+export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLoading, error, busy, onReissue, onPrint, onClose, onPrintAll, bulkPrintDisabled = false, bulkPrintNote = null, bulkProgress = null, bulkMessage = null, bulkConfirmMessage = null, onConfirmPrintAll, onCancelPrintAll }: ParentPortalQrModalProps) {
+  const bulkConfirming = Boolean(bulkConfirmMessage)
   const bulkRunning = Boolean(bulkProgress)
   const canAct = !isLoading && !busy && !bulkRunning && !error && Boolean(svg)
   const canClose = !busy && !isLoading && !bulkRunning
@@ -61,13 +67,22 @@ export function ParentPortalQrModal({ classroomName, studentName, url, svg, isLo
         <div className="distribution-qr-actions parent-portal-qr-actions">
           <button className="primary-button slim" type="button" onClick={onPrint} disabled={!canAct} data-testid="parent-portal-qr-print-button">印刷</button>
           {onPrintAll ? (
-            <button className="secondary-button slim" type="button" onClick={onPrintAll} disabled={isLoading || busy || bulkRunning || bulkPrintDisabled} aria-busy={bulkRunning || undefined} data-testid="parent-portal-qr-print-all-button">
+            <button className="secondary-button slim" type="button" onClick={onPrintAll} disabled={isLoading || busy || bulkRunning || bulkConfirming || bulkPrintDisabled} aria-busy={bulkRunning || undefined} data-testid="parent-portal-qr-print-all-button">
               {bulkProgress ? buildParentPortalQrBulkProgressLabel(bulkProgress.done, bulkProgress.total) : PARENT_PORTAL_QR_TEXT.bulkPrintLabel}
             </button>
           ) : null}
           <button className="secondary-button slim" type="button" onClick={onReissue} disabled={isLoading || busy || bulkRunning} data-testid="parent-portal-qr-reissue-button">{busy ? '再発行中…' : '再発行'}</button>
           <button className="secondary-button slim" type="button" onClick={onClose} disabled={!canClose} data-testid="parent-portal-qr-close-button">閉じる</button>
         </div>
+        {onPrintAll && bulkConfirmMessage && !bulkRunning ? (
+          <div className="parent-portal-qr-bulk-confirm" role="group" aria-label={PARENT_PORTAL_QR_TEXT.bulkPrintLabel} data-testid="parent-portal-qr-print-all-confirm">
+            <p className="parent-portal-qr-bulk-confirm-text">{bulkConfirmMessage}</p>
+            <div className="parent-portal-qr-bulk-confirm-actions">
+              <button className="primary-button slim" type="button" onClick={onConfirmPrintAll} disabled={isLoading || busy || bulkPrintDisabled} data-testid="parent-portal-qr-print-all-confirm-button">{PARENT_PORTAL_QR_TEXT.bulkConfirmButton}</button>
+              <button className="secondary-button slim" type="button" onClick={onCancelPrintAll} data-testid="parent-portal-qr-print-all-cancel-button">{PARENT_PORTAL_QR_TEXT.bulkCancelButton}</button>
+            </div>
+          </div>
+        ) : null}
         {onPrintAll && bulkPrintNote && !bulkRunning ? <p className="parent-portal-qr-bulk-note" data-testid="parent-portal-qr-print-all-note">{bulkPrintNote}</p> : null}
         {bulkMessage ? <p className="parent-portal-qr-bulk-message" role="status" data-testid="parent-portal-qr-print-all-message">{bulkMessage}</p> : null}
       </div>

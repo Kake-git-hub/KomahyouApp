@@ -6909,6 +6909,30 @@ button.verification-checklist-attach:disabled {
   font-weight: 700;
 }
 
+.parent-portal-qr-bulk-confirm {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #b9cde4;
+  border-radius: 10px;
+  background: #f3f8fd;
+}
+
+.parent-portal-qr-bulk-confirm-text {
+  margin: 0;
+  color: #16314f;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.parent-portal-qr-bulk-confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .link-button {
   margin: 0;
   padding: 0;

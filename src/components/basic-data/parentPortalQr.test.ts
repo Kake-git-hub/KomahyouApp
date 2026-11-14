@@ -9,7 +9,7 @@ import { assembleClassroomSnapshotPayload, splitClassroomSnapshotPayload } from 
 import type { AppSnapshot, ClassroomSettings } from '../../types/appState'
 import { createInitialBoardSnapshot } from '../schedule-board/ScheduleBoardScreen'
 import { mergeImportedBundle } from './BasicDataScreen'
-import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrBulkConfirmMessage, buildParentPortalQrBulkPrintHtml, buildParentPortalQrBulkProgressLabel, buildParentPortalQrBulkResultMessage, buildParentPortalQrPrintHtml, buildScheduleSharedGlobalStorageKey, formatParentPortalCardIssuedDate, issueParentPortalTokensForBulkPrint, readParentPortalCardBranding, resolveBulkParentPortalQrPlan, resolveParentPortalQrRowState, resolveSavedStudentIds, writeParentPortalQrPrintWindow } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrBulkConfirmMessage, buildParentPortalQrBulkPrintHtml, buildParentPortalQrBulkProgressLabel, buildParentPortalQrBulkResultMessage, buildParentPortalQrPrintHtml, buildScheduleSharedGlobalStorageKey, formatParentPortalCardIssuedDate, issueParentPortalTokensForBulkPrint, readParentPortalCardBranding, resolveBulkParentPortalQrPlan, resolveParentPortalQrRowState, resolveSavedStudentIds, runParentPortalQrBulkPrint, writeParentPortalQrPrintWindow } from './parentPortalQr'
 import { ParentPortalQrModal, type ParentPortalQrModalProps } from './ParentPortalQrModal'
 
 const DEV_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
@@ -294,6 +294,11 @@ describe('保護者用QRの全員分印刷: 対象と押せるかの判定', () 
     expect(plan.canPrint).toBe(true)
   })
 
+  it('削除済み(deletedAt)の生徒は在籍中でも対象にしない', () => {
+    const plan = resolveBulkParentPortalQrPlan({ ...enabledParams, students: [...roster, createStudent({ id: 's006', deletedAt: '2026-09-01T00:00:00Z' })], savedStudentIds: null })
+    expect(plan.targets.map((student) => student.id)).not.toContain('s006')
+  })
+
   it('保存が終わっていない生徒が 1 人でもいれば押せない', () => {
     const plan = resolveBulkParentPortalQrPlan({ ...enabledParams, students: roster, savedStudentIds: new Set(['s010', 's005']) })
     expect(plan.pendingSaveStudents.map((student) => student.id)).toEqual(['s002'])
@@ -306,7 +311,7 @@ describe('保護者用QRの全員分印刷: 対象と押せるかの判定', () 
     expect(resolveBulkParentPortalQrPlan({ ...enabledParams, students: [roster[2]], savedStudentIds: null })).toMatchObject({ targets: [], canPrint: false })
   })
 
-  it('対象の判定は 1 人分の行判定(resolveParentPortalQrRowState)と食い違わない', () => {
+  it('対象の判定は 1 人分の行判定(resolveParentPortalQrRowState)と食い違わない(削除済みでない生徒)', () => {
     const plan = resolveBulkParentPortalQrPlan({ ...enabledParams, students: roster, savedStudentIds: null })
     const rowTargets = roster.filter((student) => resolveParentPortalQrRowState({ ...enabledParams, student, savedStudentIds: null }) !== 'hidden')
     expect(plan.targets).toEqual(rowTargets)
@@ -470,6 +475,15 @@ describe('保護者用QRモーダルの「全員分印刷」ボタン', () => {
     expect(render({ bulkMessage: '次の生徒は印刷に含めていません: 青木' })).toContain('次の生徒は印刷に含めていません: 青木')
   })
 
+  it('押すとモーダル内に確認文と「印刷する」「やめる」を出す(window.confirm は使わない)', () => {
+    const html = render({ bulkConfirmMessage: '在籍3人分を印刷します', onConfirmPrintAll: () => {}, onCancelPrintAll: () => {} })
+    expect(html).toContain('在籍3人分を印刷します')
+    expect(buttonOf(html, 'parent-portal-qr-print-all-confirm-button')).toContain('印刷する')
+    expect(buttonOf(html, 'parent-portal-qr-print-all-cancel-button')).toContain('やめる')
+    // 確認中は「全員分印刷」をもう一度押せない。
+    expect(buttonOf(html, 'parent-portal-qr-print-all-button')).toContain('disabled')
+  })
+
   it('onPrintAll が無ければボタンを出さない', () => {
     expect(render({ onPrintAll: undefined })).not.toContain('parent-portal-qr-print-all-button')
   })
@@ -477,22 +491,193 @@ describe('保護者用QRモーダルの「全員分印刷」ボタン', () => {
 
 describe('全員分印刷の画面側の配線(BasicDataScreen)', () => {
   const screen = readFileSync(fileURLToPath(new URL('./BasicDataScreen.tsx', import.meta.url)), 'utf8')
-  const body = screen.slice(screen.indexOf('const printAllParentPortalQr = async'), screen.indexOf('const teacherEditorModalConfig'))
+  const confirmBody = screen.slice(screen.indexOf('const confirmPrintAllParentPortalQr = ('), screen.indexOf('const teacherEditorModalConfig'))
 
-  it('確認のあと、通信の前に印刷ウィンドウを開き、開けなければ中止する', () => {
-    expect(body).toContain('window.confirm(buildParentPortalQrBulkConfirmMessage(')
-    const openIndex = body.indexOf('openBlankParentPortalQrPrintWindow()')
-    expect(openIndex).toBeGreaterThan(body.indexOf('window.confirm('))
-    expect(openIndex).toBeLessThan(body.indexOf('await issueParentPortalTokensForBulkPrint('))
-    expect(body.slice(openIndex, body.indexOf('await issueParentPortalTokensForBulkPrint('))).toContain('PARENT_PORTAL_QR_TEXT.printBlocked')
+  it('window.confirm は使わず、モーダル内の「印刷する」のクリックで同期的にウィンドウを開き、開けなければ中止する', () => {
+    expect(screen).not.toContain('window.confirm(buildParentPortalQrBulkConfirmMessage(')
+    expect(confirmBody.length).toBeGreaterThan(0)
+    const openIndex = confirmBody.indexOf('openBlankParentPortalQrPrintWindow()')
+    expect(openIndex).toBeGreaterThan(-1)
+    // 開くまでに await を挟まない(ユーザー操作の扱いが切れるとポップアップが止められる)。
+    expect(confirmBody.slice(0, openIndex)).not.toContain('await ')
+    expect(confirmBody.slice(openIndex, confirmBody.indexOf('runParentPortalQrBulkPrint('))).toContain('PARENT_PORTAL_QR_TEXT.printBlocked')
   })
 
-  it('再発行はしない・全員失敗ならウィンドウを閉じる・写しが変わったら updateStudent で反映する', () => {
-    // reissue:false は issueParentPortalTokensForBulkPrint の中で固定している(上の「発行の順番処理」で検査)。
-    expect(body).toContain('await issueParentPortalTokensForBulkPrint(')
-    expect(body).not.toContain('reissue: true')
-    expect(body).toContain('.close()')
-    expect(body).toContain('updateStudent(')
-    expect(body).toContain('parentPortalTokenClassroomId: classroomId')
+  it('対象は行の QR ボタンと同じ在籍一覧(activeStudentRows)から作る', () => {
+    expect(screen).toContain('resolveBulkParentPortalQrPlan({ students: activeStudentRows,')
+    expect(screen).not.toContain('resolveBulkParentPortalQrPlan({ students,')
+  })
+
+  it('実行中の番号と押した時点の教室を握り、閉じた・画面を離れた・教室が変わったら続けない(INV-08)', () => {
+    expect(screen).toContain('bulkRunIdRef')
+    expect(confirmBody).toContain('shouldContinue: () => bulkRunIdRef.current === runId && classroomIdRef.current === runClassroomId')
+  })
+
+  it('例外でも finally で進み具合を必ず消す(モーダルが閉じられなくならない)', () => {
+    // React Compiler が try/finally を扱えない(画面全体の最適化と lint が止まる)ので、Promise の .finally で書く。
+    expect(confirmBody).not.toContain('finally {')
+    const finallyIndex = confirmBody.indexOf('.finally(')
+    expect(finallyIndex).toBeGreaterThan(-1)
+    expect(confirmBody.slice(finallyIndex, finallyIndex + 200)).toContain('progress: null')
+    // 本体の失敗(拒否)も文言にして終わらせる。
+    expect(confirmBody).toContain('.then((result) => result.message, (error: unknown) =>')
+  })
+
+  it('再発行はしない・写しの反映は updateStudent で行う', () => {
+    expect(confirmBody).not.toContain('reissue: true')
+    expect(confirmBody).toContain('updateStudent(')
+    expect(confirmBody).toContain('parentPortalTokenClassroomId: runClassroomId')
   })
 })
+
+describe('全員分印刷の本体(runParentPortalQrBulkPrint)', () => {
+  const targets = ['s001', 's002', 's003', 's004'].map((id) => createStudent({ id, name: `生徒 ${id}`, displayName: `表示${id}` }))
+  const createFakeWindow = () => {
+    const writes: string[] = []
+    const fake = {
+      closed: false,
+      closeCount: 0,
+      close() { fake.closed = true; fake.closeCount += 1 },
+      document: { open: () => undefined, write: (html: string) => { writes.push(html) }, close: () => undefined },
+    }
+    return { fake, writes }
+  }
+  const baseParams = (overrides: Partial<Parameters<typeof runParentPortalQrBulkPrint>[0]> = {}) => {
+    const { fake } = createFakeWindow()
+    return {
+      targets,
+      classroomId: DEV_CLASSROOM_ID,
+      printWindow: fake,
+      issue: async (id: string) => ({ token: `tok-${id}` }),
+      shouldContinue: () => true,
+      getStudentName: (student: StudentRow) => student.displayName,
+      buildQrSvg: (token: string) => `<svg>${token}</svg>`,
+      buildHtml: (cards: Array<{ studentName: string; svg: string }>) => `BULK:${cards.map((card) => card.studentName).join(',')}`,
+      applyToken: () => {},
+      ...overrides,
+    }
+  }
+
+  it('開いた直後のウィンドウに「作成中…」だけを書き、そのあと全員分の HTML を書く', async () => {
+    const { fake, writes } = createFakeWindow()
+    let placeholderBeforeIssue = false
+    const result = await runParentPortalQrBulkPrint(baseParams({
+      printWindow: fake,
+      issue: async (id) => { placeholderBeforeIssue = writes.length === 1; return { token: `tok-${id}` } },
+    }))
+    expect(placeholderBeforeIssue).toBe(true)
+    expect(writes[0]).toContain('作成中…')
+    expect(writes[1]).toBe('BULK:表示s001,表示s002,表示s003,表示s004')
+    expect(result.outcome).toBe('printed')
+    expect(fake.closeCount).toBe(0)
+  })
+
+  it('写しと違うトークンだけ反映し、反映したら保存を促す', async () => {
+    const applied: Array<[string, string]> = []
+    const withCopies = [
+      createStudent({ id: 's001', parentPortalToken: 'tok-s001', parentPortalTokenClassroomId: DEV_CLASSROOM_ID }),
+      createStudent({ id: 's002', parentPortalToken: 'old', parentPortalTokenClassroomId: DEV_CLASSROOM_ID }),
+      createStudent({ id: 's003', parentPortalToken: 'tok-s003', parentPortalTokenClassroomId: 'other' }),
+    ]
+    const result = await runParentPortalQrBulkPrint(baseParams({ targets: withCopies, applyToken: (id, token) => applied.push([id, token]) }))
+    expect(applied).toEqual([['s002', 'tok-s002'], ['s003', 'tok-s003']])
+    expect(result.message).toContain(PARENT_PORTAL_QR_TEXT.issued)
+    const unchanged = await runParentPortalQrBulkPrint(baseParams({ targets: [withCopies[0]] }))
+    expect(unchanged.message).toBe('')
+  })
+
+  it('失敗した生徒の名前は終わった順でなく名簿の順に並べ、成功した分だけ印刷する', async () => {
+    const result = await runParentPortalQrBulkPrint(baseParams({
+      concurrency: 4,
+      issue: async (id) => {
+        if (id === 's001') { await new Promise((resolve) => setTimeout(resolve, 10)); throw new Error('slow fail') }
+        if (id === 's003') throw new Error('fast fail')
+        return { token: `tok-${id}` }
+      },
+      // QR の URL が作れない生徒も失敗に数える。
+      buildQrSvg: (token) => (token === 'tok-s004' ? null : `<svg>${token}</svg>`),
+    }))
+    expect(result.outcome).toBe('printed')
+    expect(result.message).toContain('表示s001、表示s003、表示s004')
+  })
+
+  it('全員失敗ならウィンドウを閉じて印刷しない', async () => {
+    const { fake, writes } = createFakeWindow()
+    const result = await runParentPortalQrBulkPrint(baseParams({ printWindow: fake, issue: async () => { throw new Error('down') } }))
+    expect(result.outcome).toBe('all-failed')
+    expect(fake.closeCount).toBe(1)
+    expect(writes).toHaveLength(1)
+    expect(result.message).toContain('印刷していません')
+  })
+
+  it('印刷ウィンドウが途中で閉じられていたら書かずに案内を出す(写しの反映はする)', async () => {
+    const { fake, writes } = createFakeWindow()
+    const applied: string[] = []
+    const result = await runParentPortalQrBulkPrint(baseParams({
+      printWindow: fake,
+      issue: async (id) => { fake.closed = true; return { token: `tok-${id}` } },
+      applyToken: (id) => applied.push(id),
+    }))
+    expect(result.outcome).toBe('window-closed')
+    expect(writes).toHaveLength(1)
+    expect(result.message).toContain(PARENT_PORTAL_QR_TEXT.bulkWindowClosed)
+    expect(applied).toHaveLength(targets.length)
+  })
+
+  it('続けてはいけなくなったら(閉じた・画面を離れた・教室が変わった)残りを投げず、写しも反映せず、ウィンドウを閉じる(INV-08)', async () => {
+    const { fake } = createFakeWindow()
+    const issued: string[] = []
+    const applied: string[] = []
+    let allowed = true
+    const result = await runParentPortalQrBulkPrint(baseParams({
+      printWindow: fake,
+      concurrency: 1,
+      shouldContinue: () => allowed,
+      issue: async (id) => { issued.push(id); if (id === 's002') allowed = false; return { token: `tok-${id}` } },
+      applyToken: (id) => applied.push(id),
+    }))
+    expect(result.outcome).toBe('cancelled')
+    expect(issued).toEqual(['s001', 's002'])
+    expect(applied).toEqual([])
+    expect(fake.closeCount).toBe(1)
+    expect(result.message).toBe('')
+  })
+
+  it('途中で例外が出ても投げ返さず、ウィンドウを閉じてエラーを返す', async () => {
+    const { fake } = createFakeWindow()
+    const result = await runParentPortalQrBulkPrint(baseParams({ printWindow: fake, buildHtml: () => { throw new Error('boom') } }))
+    expect(result.outcome).toBe('error')
+    expect(result.message).toContain('boom')
+    expect(fake.closeCount).toBe(1)
+  })
+})
+
+describe('全員分印刷: 続けてよいか(shouldContinue)', () => {
+  it('false になったら次の生徒を投げず、cancelled を返す', async () => {
+    const targets = ['s001', 's002', 's003'].map((id) => createStudent({ id }))
+    const issued: string[] = []
+    let allowed = true
+    const result = await issueParentPortalTokensForBulkPrint({
+      targets,
+      concurrency: 1,
+      shouldContinue: () => allowed,
+      issue: async (id) => { issued.push(id); allowed = false; return { token: `tok-${id}` } },
+    })
+    expect(issued).toEqual(['s001'])
+    expect(result.cancelled).toBe(true)
+  })
+
+  it('最後まで続けられたら cancelled は false', async () => {
+    const result = await issueParentPortalTokensForBulkPrint({ targets: [createStudent()], shouldContinue: () => true, issue: async () => ({ token: 't' }) })
+    expect(result.cancelled).toBe(false)
+  })
+})
+
+describe('1 人分の印刷 HTML は全員分印刷の追加で変わらない(完全一致・2026-11-14)', () => {
+  it('既知の入力に対する出力が一字一句同じ', () => {
+    const html = buildParentPortalQrPrintHtml({ classroomName: '開発用教室', studentName: '青木 <太郎>', url: 'https://example.test/p/x', svg: '<svg data-test="qr"></svg>', logoSrc: '/logo.png', contactText: '開発用校\nTEL 03-0000-0000', issuedDateKey: '2026-11-14' })
+    expect(html).toBe(PINNED_SINGLE_PRINT_HTML)
+  })
+})
+
+const PINNED_SINGLE_PRINT_HTML = "<!DOCTYPE html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<title>保護者用QR 青木 &lt;太郎&gt;</title>\n<style>\n  @page { size: A4 portrait; margin: 15mm; }\n  * { box-sizing: border-box; }\n  body { font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; margin: 0; padding: 16px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }\n  .card { width: 91mm; height: 55mm; border: 0.3mm dashed #888; padding: 3.5mm; display: flex; gap: 3mm; overflow: hidden; background: #fff; }\n  .info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1mm; }\n  .logo img { display: block; max-width: 40mm; max-height: 9mm; object-fit: contain; }\n  .contact { font-size: 6.5pt; line-height: 1.35; color: #333; }\n  .student { font-size: 11pt; font-weight: 700; margin-top: 0.5mm; }\n  .issued { font-size: 6pt; color: #555; }\n  .notes { margin-top: auto; font-size: 5.5pt; line-height: 1.4; color: #333; }\n  .notes p { margin: 0; }\n  .notes .caution { color: #7a2e2e; }\n  .qr-side { flex: 0 0 31mm; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1mm; }\n  .qr svg { display: block; width: 31mm; height: 31mm; }\n  .qr-label { font-size: 6pt; font-weight: 700; color: #1f5d96; }\n  .print-button { display: block; margin: 0 0 8px; padding: 8px 16px; font-size: 14px; cursor: pointer; }\n  .print-hint { margin: 0 0 12px; font-size: 13px; color: #555; }\n  @media print { .print-button, .print-hint { display: none; } body { padding: 0; } }\n</style>\n</head>\n<body>\n<button class=\"print-button\" onclick=\"window.print()\">印刷</button>\n<p class=\"print-hint\">A4 用紙の左上に名刺サイズ(91×55mm)で印刷します。点線で切り取ってください。印刷の設定は「倍率 100%(実際のサイズ)」にしてください。</p>\n<div class=\"card\">\n  <div class=\"info\">\n    <div class=\"logo\"><img src=\"/logo.png\" alt=\"\"></div>\n    <div class=\"contact\">開発用校<br>TEL 03-0000-0000</div>\n    <div class=\"student\">青木 &lt;太郎&gt; さん</div>\n    <div class=\"issued\">発行日 2026年11月14日</div>\n    <div class=\"notes\">\n      <p class=\"guidance\">このQRから、お子さまの授業予定の確認とお休みの連絡ができます。</p>\n      <p class=\"caution\">ほかの方に見せないでください。紛失したときは教室へご連絡ください（再発行します）。</p>\n    </div>\n  </div>\n  <div class=\"qr-side\">\n    <div class=\"qr\"><svg data-test=\"qr\"></svg></div>\n    <div class=\"qr-label\">保護者用QR</div>\n  </div>\n</div>\n</body>\n</html>"

@@ -1510,6 +1510,9 @@ describe('第140版(2026-11-14・v1.5.735 で入る・版は v1.5.711 据え置�
     expect(item!.introducedIn).toBe('v1.5.735')
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('pc-2')
     expect(item!.steps.join('\n')).toContain('全員分印刷')
+    // 確認はモーダル内の「印刷する」(window.confirm の「OK」ではない・2026-11-14 レビュー L1)。
+    expect(item!.steps.join('\n')).toContain('「印刷する」')
+    expect(item!.steps.join('\n')).not.toContain('「OK」')
     expect(item!.steps.length).toBeLessThanOrEqual(3)
     const check = item!.check!.join('\n')
     expect(check).toContain('1ページ')

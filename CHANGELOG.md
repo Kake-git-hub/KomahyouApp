@@ -14,6 +14,7 @@
 
 ## 未リリース
 
+- fix: 全員分印刷のレビュー指摘を反映(同じ版の feat の手直し)。確認は window.confirm をやめモーダル内の「印刷する」「やめる」へ(クリックの中で印刷ウィンドウを開く)、開いた直後に「作成中…」を書き、書く前に閉じられていないかを確かめる、本体を runParentPortalQrBulkPrint へ切り出して例外でも投げ返さず画面側も finally で進み具合を必ず消す(モーダルが閉じられなくならない)、走らせるたびの番号と押した時点の教室を握り、閉じた・画面を離れた・教室が変わったら残りを投げず写しも反映せず印刷の画面を閉じる(INV-08)、対象は行の QR ボタンと同じ在籍一覧(削除済みを除き学年→名前順・spec K-6 を書き換え)、失敗した生徒名は一覧の順。1 人分の印刷 HTML の完全一致テストを足した(parentPortalQr.ts・ParentPortalQrModal.tsx・BasicDataScreen.tsx・App.css・確認リスト pc-2 の操作文)
 - feat: 保護者用QRのモーダルに「全員分印刷」を足した(オーナー指示 2026-11-14・spec-parent-portal §K-6)。今日在籍中の生徒全員(行の QR 判定 resolveParentPortalQrRowState が hidden 以外・名簿順)を 1 人 A4 1 枚で印刷し、各ページは 1 人分と同じ名刺(CSS・ロゴ・連絡先・発行日を共有し、1 人分の出力は 1 文字も変えていない)。保存待ちの生徒がいれば押せない・確認で人数と未発行の人数を出す・未発行はその場で発行し全員 getOrIssue(reissue:false・4 並列)で権威トークンを確かめる・押した直後に印刷ウィンドウを開く(ポップアップ回避)・「作成中 n/N」・一部失敗は成功分だけ印刷して名前を出す・全員失敗は印刷しない。確認リスト pc-2(parentPortalQr.ts・ParentPortalQrModal.tsx・BasicDataScreen.tsx・App.css)
 
 ## v1.5.734 (2026-11-13)

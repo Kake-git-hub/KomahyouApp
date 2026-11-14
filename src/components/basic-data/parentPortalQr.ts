@@ -8,7 +8,7 @@
 //   (2026-11-03 フリーメモ 20261103-152520476-06446053)。盤面/日程表の印刷レイアウトには触れない。
 //   URL 文字列は紙に印字しない(QR だけで足りる・2026-10-10 文言整理)。画面のモーダルには引き続き URL を出す。
 
-import { isActiveOnDate, type StudentRow } from './basicDataModel'
+import { isActiveOnDate, isStudentDeletedFromApp, type StudentRow } from './basicDataModel'
 import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
 
 export type ParentPortalQrRowState = 'hidden' | 'issue' | 'show' | 'pending-save'
@@ -35,6 +35,11 @@ export const PARENT_PORTAL_QR_TEXT = {
   bulkPrintLabel: '全員分印刷',
   bulkPendingSave: '保存が終わると全員分を印刷できます',
   bulkNoTargets: '在籍中の生徒がいません',
+  bulkConfirmButton: '印刷する',
+  bulkCancelButton: 'やめる',
+  bulkPlaceholder: '作成中…',
+  bulkWindowClosed: '印刷の画面が閉じられたため、印刷していません。もう一度「全員分印刷」を押してください。',
+  bulkFailed: '保護者用QRの全員分印刷に失敗しました。',
 } as const
 
 // 行操作に「QR」ボタンを出すか。
@@ -64,7 +69,9 @@ export function resolveParentPortalQrRowState(params: {
 
 // 全員分印刷の対象と押せるか(spec-parent-portal §K-6「全員分印刷（オーナー指示 2026-11-14）」)。
 // 対象 = 行の QR ボタンが出る生徒(resolveParentPortalQrRowState が hidden 以外)。判定を分散させないため必ずこれを通す。
-// 並びは名簿(students)の順。保存待ち(pending-save)の生徒が 1 人でもいれば押せない(オーナー回答 2026-11-14)。
+// 並びは渡された students の順(画面からは行の QR ボタンと同じ在籍一覧 activeStudentRows＝学年→名前順を渡す)。
+// 削除済み(deletedAt)の生徒は一覧に出ないので、ここでも外す(守りを厚く)。
+// 保存待ち(pending-save)の生徒が 1 人でもいれば押せない(オーナー回答 2026-11-14)。
 export function resolveBulkParentPortalQrPlan(params: {
   students: readonly StudentRow[]
   referenceDate: string
@@ -78,6 +85,7 @@ export function resolveBulkParentPortalQrPlan(params: {
   const pendingSaveStudents: StudentRow[] = []
   let issueCount = 0
   for (const student of students) {
+    if (isStudentDeletedFromApp(student)) continue
     const state = resolveParentPortalQrRowState({ ...rest, student })
     if (state === 'hidden') continue
     targets.push(student)
@@ -98,19 +106,24 @@ export function buildParentPortalQrBulkProgressLabel(done: number, total: number
 
 // 全員分の権威トークンを getOrIssue(reissue:false・冪等)で確かめる。再発行はしない(1 人分と同じ理由で写しは信用しない)。
 // 同時に投げる数は小さく抑える(既定 4)。1 人の失敗で止めず、成功・失敗を名簿の順に分けて返す。
+// shouldContinue が false になったら(モーダルを閉じた・画面を離れた・教室が変わった・INV-08)次の生徒を投げず cancelled を返す。
 export async function issueParentPortalTokensForBulkPrint(params: {
   targets: readonly StudentRow[]
   issue: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
   concurrency?: number
   onProgress?: (done: number, total: number) => void
-}): Promise<{ succeeded: Array<{ student: StudentRow; token: string }>; failed: Array<{ student: StudentRow; error: unknown }> }> {
+  shouldContinue?: () => boolean
+}): Promise<{ succeeded: Array<{ student: StudentRow; token: string }>; failed: Array<{ student: StudentRow; error: unknown }>; cancelled: boolean }> {
   const { targets, issue, onProgress } = params
+  const shouldContinue = params.shouldContinue ?? (() => true)
   const concurrency = Math.max(1, Math.floor(params.concurrency ?? 4))
-  const outcomes: Array<{ token: string } | { error: unknown }> = new Array(targets.length)
+  const outcomes: Array<{ token: string } | { error: unknown } | undefined> = new Array(targets.length)
   let nextIndex = 0
   let done = 0
+  let cancelled = false
   const worker = async () => {
     while (nextIndex < targets.length) {
+      if (cancelled || !shouldContinue()) { cancelled = true; return }
       const index = nextIndex
       nextIndex += 1
       try {
@@ -119,6 +132,7 @@ export async function issueParentPortalTokensForBulkPrint(params: {
       } catch (error) {
         outcomes[index] = { error }
       }
+      if (cancelled || !shouldContinue()) { cancelled = true; return }
       done += 1
       onProgress?.(done, targets.length)
     }
@@ -128,10 +142,104 @@ export async function issueParentPortalTokensForBulkPrint(params: {
   const failed: Array<{ student: StudentRow; error: unknown }> = []
   targets.forEach((student, index) => {
     const outcome = outcomes[index]
+    if (!outcome) return
     if ('token' in outcome) succeeded.push({ student, token: outcome.token })
     else failed.push({ student, error: outcome.error })
   })
-  return { succeeded, failed }
+  return { succeeded, failed, cancelled }
+}
+
+export type ParentPortalQrBulkPrintWindow = {
+  closed: boolean
+  close: () => void
+  document: { open: () => unknown; write: (html: string) => unknown; close: () => unknown }
+}
+
+export type ParentPortalQrBulkRunOutcome = 'printed' | 'all-failed' | 'window-closed' | 'cancelled' | 'error'
+
+// 開いた直後の印刷ウィンドウに出す仮の中身(通信のあいだ白紙にしない)。
+export function buildParentPortalQrBulkPlaceholderHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>${PARENT_PORTAL_QR_TEXT.title} 全員分</title>
+</head>
+<body>
+<p>${PARENT_PORTAL_QR_TEXT.bulkPlaceholder}</p>
+</body>
+</html>`
+}
+
+// 全員分印刷の本体(画面の状態から切り離した純粋な非同期関数・依存は引数で受ける)。
+// 順番: 仮の中身を書く → 全員を getOrIssue → (続けてよければ)写しを反映 → 印刷の HTML を書く。
+// ★ 例外は投げ返さず outcome:'error' で返す(呼び出し側の finally と二重に守り、モーダルが閉じられなくならないように)。
+// ★ 続けてはいけなくなったら(INV-08)写しも反映せずウィンドウを閉じる。開き直した別の教室の名簿へ書き込まない。
+// ★ 書く直前にウィンドウが閉じられていないかを確かめる(閉じられていたら書かずに案内)。
+// 失敗した生徒の名前は終わった順ではなく targets(名簿)の順に並べる。
+export async function runParentPortalQrBulkPrint(params: {
+  targets: readonly StudentRow[]
+  classroomId: string
+  printWindow: ParentPortalQrBulkPrintWindow
+  issue: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
+  shouldContinue: () => boolean
+  getStudentName: (student: StudentRow) => string
+  buildQrSvg: (token: string) => string | null
+  buildHtml: (cards: Array<{ studentName: string; svg: string }>) => string
+  applyToken: (studentId: string, token: string) => void
+  onProgress?: (done: number, total: number) => void
+  concurrency?: number
+}): Promise<{ outcome: ParentPortalQrBulkRunOutcome; message: string }> {
+  const { targets, classroomId, printWindow } = params
+  const closeWindow = () => {
+    try { if (!printWindow.closed) printWindow.close() } catch { /* 閉じられなくても続ける */ }
+  }
+  try {
+    writeParentPortalQrPrintWindow(printWindow, buildParentPortalQrBulkPlaceholderHtml())
+    const { succeeded, failed, cancelled } = await issueParentPortalTokensForBulkPrint({
+      targets,
+      issue: params.issue,
+      concurrency: params.concurrency,
+      onProgress: params.onProgress,
+      shouldContinue: params.shouldContinue,
+    })
+    if (cancelled || !params.shouldContinue()) {
+      closeWindow()
+      return { outcome: 'cancelled', message: '' }
+    }
+    const failedIds = new Set(failed.map(({ student }) => student.id))
+    const cardsById = new Map<string, { studentName: string; svg: string }>()
+    let tokensChanged = false
+    for (const { student, token } of succeeded) {
+      // 写しが違えば 1 人分(openParentPortalQr)と同じく写しへ反映する。保存は手動(保存アーキテクチャ)。
+      if (token !== student.parentPortalToken || student.parentPortalTokenClassroomId !== classroomId) {
+        params.applyToken(student.id, token)
+        tokensChanged = true
+      }
+      const svg = params.buildQrSvg(token)
+      if (svg) cardsById.set(student.id, { studentName: params.getStudentName(student), svg })
+      else failedIds.add(student.id)
+    }
+    const failedNames = targets.filter((student) => failedIds.has(student.id)).map(params.getStudentName)
+    const cards = targets.flatMap((student) => {
+      const card = cardsById.get(student.id)
+      return card ? [card] : []
+    })
+    if (cards.length === 0) {
+      closeWindow()
+      return { outcome: 'all-failed', message: buildParentPortalQrBulkResultMessage({ failedNames, tokensChanged, allFailed: true }) }
+    }
+    if (printWindow.closed) {
+      const message = [PARENT_PORTAL_QR_TEXT.bulkWindowClosed, tokensChanged ? PARENT_PORTAL_QR_TEXT.issued : ''].filter(Boolean).join(' ')
+      return { outcome: 'window-closed', message }
+    }
+    writeParentPortalQrPrintWindow(printWindow, params.buildHtml(cards))
+    return { outcome: 'printed', message: buildParentPortalQrBulkResultMessage({ failedNames, tokensChanged, allFailed: false }) }
+  } catch (error) {
+    closeWindow()
+    const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+    return { outcome: 'error', message: `${PARENT_PORTAL_QR_TEXT.bulkFailed}${detail}` }
+  }
 }
 
 // 全員分印刷のあとに出す文言。失敗した生徒の名前を出し、全員失敗なら印刷していないと伝える。
