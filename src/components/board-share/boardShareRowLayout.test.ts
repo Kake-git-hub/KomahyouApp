@@ -48,6 +48,10 @@ describe('講師日程共有の机の並び: 画面', () => {
     expect(SCREEN).toContain('resolveBoardShareSeatLines(')
   })
 
+  it('記録の印は名前の span の直後の別の span(名前だけが「…」で縮み、印は残る)', () => {
+    expect(SCREEN).toMatch(/<span className="board-share-student-name">\{lines\.name\}<\/span>\s*\{lines\.statusLabel \? <span className="board-share-student-status-label">/)
+  })
+
   it('机の中は 席番 → 講師 → 生徒 の順', () => {
     const deskStart = SCREEN.indexOf('<section className="board-share-desk"')
     expect(deskStart).toBeGreaterThan(-1)
@@ -75,6 +79,23 @@ describe('講師日程共有の机の並び: CSS', () => {
     expect(readCssBlock('.board-share-desk-body')).toBeNull()
     expect(readCssBlock('.board-share-students')).toBeNull()
     expect(readCssBlock('.board-share-lesson-type')).toBeNull()
+  })
+
+  it('記録の印は縮めない(flex: none)', () => {
+    expect(readCssBlock('.board-share-student-status-label')).toContain('flex: none')
+  })
+
+  it('コンテナクエリ非対応の大きさは画面の高さと机の数から決める(固定 px にしない)', () => {
+    const outside = CSS.slice(0, CSS.indexOf('@supports (container-type: size)'))
+    expect(outside).toContain('calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.38)')
+    expect(outside).toContain('calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.28)')
+  })
+
+  it('行が低いときは講師名を 1 行にする(@container の max-height で line-clamp: 1)', () => {
+    const supportsStart = CSS.indexOf('@supports (container-type: size)')
+    expect(supportsStart).toBeGreaterThan(-1)
+    const supportsBlock = CSS.slice(supportsStart)
+    expect(supportsBlock).toMatch(/@container \(max-height: \d+px\) \{[\s\S]*?\.board-share-teacher \{[\s\S]*?-webkit-line-clamp: 1;/)
   })
 
   it('全部の机がスクロールなしで 1 画面に収まる行の割り方は残す', () => {

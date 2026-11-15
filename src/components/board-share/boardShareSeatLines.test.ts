@@ -1,5 +1,5 @@
 // 講師日程共有(BoardShareScreen)の生徒の欄に出す 2 段の文字(docs/spec-schedule-pdf.md §N・2026-11-15 オーナー確定)。
-// 上段 = 名前(記録だけの席は「名前(休」)、下段 = 授業の印・学年・科目＋授業時間・講師の種別(通常講師は空)。
+// 上段 = 名前＋記録の印(記録だけの席は「(休」・名前とは別の欄で「…」に巻き込まない)、下段 = 授業の印・学年・科目＋授業時間・講師の種別(通常講師は空)。
 // 見た目だけの変更なので、印・授業時間・講師の種別・記録の印は既存の規則(getLessonShortLabel ほか)と同じ結果になることを固定する。
 import { describe, expect, it } from 'vitest'
 import type { BoardShareStatusEntry, BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
@@ -43,7 +43,7 @@ function createAbsentStatus(overrides: Partial<BoardShareStatusEntry> = {}): Boa
 describe('resolveBoardShareSeatLines: 生徒の欄の 2 段', () => {
   it('通常の生徒: 上段は名前だけ、下段は 通・学年・科目、通常講師は種別を出さない', () => {
     expect(resolveBoardShareSeatLines(createStudent({ name: '山田 太郎', grade: '中2', subject: '数', lessonType: 'regular' }), null))
-      .toEqual({ name: '山田 太郎', marker: '通', markerLabel: '通常', grade: '中2', subject: '数', teacherTypeLabel: '' })
+      .toEqual({ name: '山田 太郎', statusLabel: '', marker: '通', markerLabel: '通常', grade: '中2', subject: '数', teacherTypeLabel: '' })
   })
 
   it('授業時間は科目に続ける(数60)', () => {
@@ -75,21 +75,22 @@ describe('resolveBoardShareSeatLines: 生徒の欄の 2 段', () => {
     expect(resolveBoardShareSeatLines(createStudent({ teacherType: 'outside' }), null)?.teacherTypeLabel).toBe('担当科目外講師')
   })
 
-  it('記録だけの席: 名前に記録の印が続く(休)', () => {
+  it('記録だけの席: 名前は名前だけ、記録の印は statusLabel に分ける(名前の「…」に印を巻き込まない)', () => {
     const absent = createAbsentStatus({ name: '欠席 太郎', status: 'absent' })
-    expect(resolveBoardShareSeatLines(absent, absent)?.name).toBe('欠席 太郎(休')
+    expect(resolveBoardShareSeatLines(absent, absent)).toMatchObject({ name: '欠席 太郎', statusLabel: '(休' })
   })
 
   it('記録の印: 振無休 / 出 / 移(フラグ ON で休) / 休日は休', () => {
     const noMakeup = createAbsentStatus({ status: 'absent-no-makeup' })
-    expect(resolveBoardShareSeatLines(noMakeup, noMakeup)?.name).toBe('欠席 太郎(振無休')
+    expect(resolveBoardShareSeatLines(noMakeup, noMakeup)?.statusLabel).toBe('(振無休')
     const attended = createAbsentStatus({ status: 'attended' })
-    expect(resolveBoardShareSeatLines(attended, attended)?.name).toBe('欠席 太郎(出')
+    expect(resolveBoardShareSeatLines(attended, attended)?.statusLabel).toBe('(出')
     const moved = createAbsentStatus({ status: 'moved' })
-    expect(resolveBoardShareSeatLines(moved, moved)?.name).toBe('欠席 太郎(移')
-    expect(resolveBoardShareSeatLines(moved, moved, { transferSourceRestDisplayEnabled: true })?.name).toBe('欠席 太郎(休')
+    expect(resolveBoardShareSeatLines(moved, moved)?.statusLabel).toBe('(移')
+    expect(resolveBoardShareSeatLines(moved, moved, { transferSourceRestDisplayEnabled: true })?.statusLabel).toBe('(休')
     const holiday = createAbsentStatus({ status: 'holiday' })
-    expect(resolveBoardShareSeatLines(holiday, holiday)?.name).toBe('欠席 太郎(休')
+    expect(resolveBoardShareSeatLines(holiday, holiday)?.statusLabel).toBe('(休')
+    for (const status of [noMakeup, attended, moved, holiday]) expect(resolveBoardShareSeatLines(status, status)?.name, status.status).toBe('欠席 太郎')
   })
 
   it('空の席は null', () => {
@@ -101,6 +102,7 @@ describe('resolveBoardShareSeatLines: 生徒の欄の 2 段', () => {
     const view = resolveBoardShareSeatView(createStudent({ name: '体験 花子', lessonType: 'trial' }), createAbsentStatus())
     const lines = resolveBoardShareSeatLines(view.visibleStudent, view.visibleStatus)
     expect(lines?.name).toBe('体験 花子')
+    expect(lines?.statusLabel).toBe('')
     expect(lines?.marker).toBe('体')
     expect(lines?.grade).toBe('小5')
   })

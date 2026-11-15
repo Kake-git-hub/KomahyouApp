@@ -94,12 +94,15 @@ export function formatStudentLabel(
 }
 
 // 生徒の欄に出す 2 段の文字(docs/spec-schedule-pdf.md §N・2026-11-15 オーナー確定・見た目だけ)。
-// 上段 = 名前(記録だけの席は「名前(休」)、下段 = 授業の印・学年・科目＋授業時間・講師の種別(通常講師は空)。
+// 上段 = 名前＋記録の印(記録だけの席は「(休」など)、下段 = 授業の印・学年・科目＋授業時間・講師の種別(通常講師は空)。
 // ★引数は resolveBoardShareSeatView の戻り値(visibleStudent / visibleStatus)をそのまま渡す。生徒がいる席では
 //   visibleStatus が null なので記録の印は付かない(INV-04)。印・授業時間・講師の種別・記録の印は formatStudentLabel と
 //   同じ既存の関数で決める(規則を書き直さない)。右端にあった「通常／振替…」は marker と同じ内容なので markerLabel を title にだけ使う。
+// ★記録の印(statusLabel)は名前(name)と分けて持つ。名前に続けると長い名前の「…」に印が巻き込まれて消える(名前より印が大事)。
+//   画面は名前の直後に縮まない別の span で出し、見た目の連なり「名前(休」は変えない。
 export type BoardShareSeatLines = {
   name: string
+  statusLabel: string
   marker: string
   markerLabel: string
   grade: string
@@ -116,7 +119,8 @@ export function resolveBoardShareSeatLines(
   const isExternalStudent = Boolean(options.isExternalStudent)
   const statusSuffix = visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status, Boolean(options.transferSourceRestDisplayEnabled))}` : ''
   return {
-    name: `${visibleStudent.name}${statusSuffix}`,
+    name: visibleStudent.name,
+    statusLabel: statusSuffix,
     marker: getLessonShortLabel(visibleStudent.lessonType, isExternalStudent),
     markerLabel: getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent),
     grade: visibleStudent.grade,
@@ -379,6 +383,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                           <>
                             <span className="board-share-student-name-row">
                               <span className="board-share-student-name">{lines.name}</span>
+                              {lines.statusLabel ? <span className="board-share-student-status-label">{lines.statusLabel}</span> : null}
                               {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
                             </span>
                             <span className="board-share-student-detail">

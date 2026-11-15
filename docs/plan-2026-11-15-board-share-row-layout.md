@@ -46,7 +46,8 @@
 
 ```ts
 export type BoardShareSeatLines = {
-  name: string            // 上段。記録だけの席は「名前(休」
+  name: string            // 上段。名前だけ(2026-11-15 手直し: 記録の印は statusLabel に分けた。名前の「…」に印を巻き込まないため)
+  statusLabel: string     // 記録だけの席は '(休' など。生徒が居る席は ''。画面は名前の直後に縮まない span で出す
   marker: string          // 通 / 振 / 講 / 増 / 体 / 外
   markerLabel: string     // 通常 / 振替 / 講習 / 増コマ / 体験 / 外部生 (title・aria-label 用。getLessonTypeLabel と同じ)
   grade: string

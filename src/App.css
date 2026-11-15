@@ -452,6 +452,11 @@
   border-radius: 5px;
   background: #ffffff;
   container-type: size;
+  /* コンテナクエリが使えないブラウザの大きさ。行の高さ ≒ (画面の高さ - 集団授業の帯と下の操作バーの分) ÷ 机の数 から決める
+     (固定 14px/11px だと 20 机・小さいスマホで下段が切れた)。--board-share-desk-count は .board-share-desk-list の inline style から継承。
+     使えるブラウザは下の @supports で cqh/cqw に置き換わる。 */
+  --board-share-name-size: clamp(11px, calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.38), 14px);
+  --board-share-detail-size: clamp(9px, calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.28), 11px);
 }
 
 .board-share-seat {
@@ -461,7 +466,7 @@
   border-radius: 4px;
   background: #1f3552;
   color: #ffffff;
-  font-size: 14px;
+  font-size: var(--board-share-name-size);
   font-weight: 800;
   line-height: 1;
 }
@@ -488,7 +493,7 @@
   line-clamp: 2;
   min-width: 0;
   color: #244564;
-  font-size: 14px;
+  font-size: var(--board-share-name-size);
   font-weight: 800;
   /* 1.1 だと 3 行目の字の頭が 2 行の箱の下に覗く。 */
   line-height: 1.2;
@@ -512,13 +517,13 @@
   overflow: hidden;
 }
 
-/* 上段: 名前は 1 行で「…」。日付の札は縮めない。 */
+/* 上段: 名前は 1 行で「…」。記録の印(「(休」など)と日付の札は縮めない。名前と印の間は空けない(見た目は「名前(休」)。 */
 .board-share-student-name-row {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 0;
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--board-share-name-size);
 }
 
 .board-share-student-name {
@@ -528,8 +533,14 @@
   text-overflow: ellipsis;
 }
 
+.board-share-student-status-label {
+  flex: none;
+  white-space: nowrap;
+}
+
 .board-share-origin-date {
   flex: none;
+  margin-left: 3px;
   padding: 0 0.2em;
   border-radius: 3px;
   background: #fff3bf;
@@ -546,7 +557,7 @@
   gap: 0.3em;
   min-width: 0;
   color: #4b6078;
-  font-size: 11px;
+  font-size: var(--board-share-detail-size);
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
@@ -573,7 +584,8 @@
   color: #8a5a00;
 }
 
-/* コンテナクエリが使えるブラウザだけ、行の高さ・幅に合わせて大きくする。使えないブラウザは上の固定の大きさ(名前 14px・下段 11px)。 */
+/* コンテナクエリが使えるブラウザだけ、行の高さ・幅に合わせて大きくする。使えないブラウザは上の --board-share-name-size / -detail-size
+   (画面の高さ ÷ 机の数・名前 11〜14px・下段 9〜11px)。 */
 @supports (container-type: size) {
   .board-share-seat,
   .board-share-teacher,
@@ -583,6 +595,15 @@
 
   .board-share-student-detail {
     font-size: clamp(9px, min(29cqh, 3.4cqw), 16px);
+  }
+
+  /* 行が低い(机が多い)と、下限 11px の講師名 2 行(約 26px)が欄に入らず下が切れる。そのときは 1 行で「…」にする。
+     しきい値は机の中身の高さ。20 机・375×667 で約 23px、14 机・375×667 で約 36px(画像で確認 2026-11-15)。 */
+  @container (max-height: 30px) {
+    .board-share-teacher {
+      -webkit-line-clamp: 1;
+      line-clamp: 1;
+    }
   }
 }
 
