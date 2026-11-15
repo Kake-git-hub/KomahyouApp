@@ -48,6 +48,11 @@ describe('講師日程共有の机の並び: 画面', () => {
     expect(SCREEN).toContain('resolveBoardShareSeatLines(')
   })
 
+  it('2 段の文字は resolveBoardShareSeatView の戻り値(visibleStudent / visibleStatus)から作る。生の status を渡さない(INV-04)', () => {
+    expect(SCREEN).toContain('resolveBoardShareSeatLines(visibleStudent, visibleStatus,')
+    expect(SCREEN).not.toMatch(/resolveBoardShareSeatLines\((student|visibleStudent), status\b/)
+  })
+
   it('記録の印は名前の span の直後の別の span(名前だけが「…」で縮み、印は残る)', () => {
     expect(SCREEN).toMatch(/<span className="board-share-student-name">\{lines\.name\}<\/span>\s*\{lines\.statusLabel \? <span className="board-share-student-status-label">/)
   })

@@ -375,8 +375,9 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                     const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
                     const visibleDateLabel = getVisibleDateLabel(visibleStudent, visibleStatus, currentCell, resolveBoardShareLinkedDestinationDateKey(visibleStatus, linkedLessonDestinationByStatusId))
                     const lines = resolveBoardShareSeatLines(visibleStudent, visibleStatus, { isExternalStudent, transferSourceRestDisplayEnabled })
-                    // 欄全体の title は旧形の 1 行の文字(切れた名前・科目を長押しで読めるように)。
-                    const seatTitle = lines ? `${formatStudentLabel(visibleStudent, isExternalStudent)}${visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status, transferSourceRestDisplayEnabled)}` : ''}` : undefined
+                    // 欄全体の title は旧形の 1 行の文字。PC でマウスを乗せると切れた名前・科目が読める(スマホでは出ない)。
+                    // 記録の印は lines.statusLabel をそのまま使う(作り直さない)。
+                    const seatTitle = lines ? `${formatStudentLabel(visibleStudent, isExternalStudent)}${lines.statusLabel}` : undefined
                     return (
                       <div className={`board-share-student${visibleStatus ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`} title={seatTitle}>
                         {lines ? (

@@ -112,7 +112,7 @@ Expected: 新しい 2 ファイルが FAIL（`resolveBoardShareSeatLines` が無
 
 - `resolveBoardShareSeatLines` を `formatStudentLabel` の近くに足す。
 - 机の JSX: `<section className="board-share-desk">` の直下に `board-share-seat`・`board-share-teacher`・`board-share-student` ×2 を置く（`board-share-desk-body`・`board-share-students` の入れ物をやめる）。生徒の欄は上段 `board-share-student-name-row`（`board-share-student-name` ＋ `board-share-origin-date`）と下段 `board-share-student-detail`（`board-share-student-marker` に `title`・`aria-label` = `markerLabel`、学年、科目、`board-share-student-teacher-type`）。欄の `title` に `formatStudentLabel(...)` ＋記録の印（今の 1 行の文字）を入れる。記録だけの席の `board-share-status` クラスは残す。
-- CSS: `.board-share-desk` を 4 列の grid（席番は狭い固定幅、講師は全体の 2 割前後、生徒 2 つは残りを等分）＋ `container-type: size`。大きさは Global Constraints の値。講師名は 2 行まで折り返して「…」。名前は 1 行で「…」、日付の札と学年・科目は縮めない（`flex: none`）、講師の種別は入らなければ「…」。コンテナクエリ非対応は `@supports` の外に固定の大きさを先に書く。
+- CSS: `.board-share-desk` を 4 列の grid（席番は狭い固定幅、講師は全体の 2 割前後、生徒 2 つは残りを等分）＋ `container-type: size`。大きさは Global Constraints の値。講師名は 2 行まで折り返して「…」。名前は 1 行で「…」、日付の札と学年・科目は縮めない（`flex: none`）、講師の種別は入らなければ「…」。コンテナクエリ非対応の大きさは `@supports` の外に先に書き、画面の高さ ÷ 机の数から決める（`clamp(11px, calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.38), 14px)`・下段は `* 0.28` で 9〜11px。2026-11-15 手直しで固定 14px/11px から変更）。
 
 - [ ] **Step 6: テストが通るのを見る**
 
