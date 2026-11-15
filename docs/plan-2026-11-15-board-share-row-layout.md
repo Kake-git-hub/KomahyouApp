@@ -17,6 +17,7 @@
 - 利用者に見える文字に「配布用盤面」を出さない（`boardShareWording.test.ts`）。
 - 生徒の欄は 2 段。上段 = 名前（記録だけの席は `名前(休`）＋日付の札、下段 = 授業の印・学年・科目＋授業時間・講師の種別（通常講師は空）。右端の「通常／振替…」の文字は出さない。
 - 文字の大きさ: 名前・講師名 `clamp(11px, min(40cqh, 4.6cqw), 22px)`、下段 `clamp(9px, min(29cqh, 3.4cqw), 16px)`、席番は名前と同じ。コンテナクエリが使えないブラウザは名前 14px・下段 11px。数値は画面で確かめて、1 画面に収まらない・切れるときだけ動かす（動かしたら spec §N の数字も合わせる）。
+  - 実装時の結果(2026-11-15): 画面で見て名前・講師名は `4.3cqw` に下げた(390 幅で「名前(休」＋日付の札が早く切れたため)。列は `32px minmax(0, 0.8fr) minmax(0, 2fr) minmax(0, 2fr)`(席番 28px だと 768 幅の 2 桁が詰まる・講師は約 17%)。講師名は 2 行で切った字の頭が覗かないよう `.board-share-teacher-cell` で包んで縦の真ん中に置く(`safe center`)。spec §N の 11〜22px・9〜16px・14〜17px は実測と合うので変更なし。
 - 全部の机がスクロールなしで 1 画面に収まる（`grid-template-rows: repeat(机の数, minmax(0, 1fr))` は残す）。
 - 公開リポジトリ。テスト・スクリーンショット用のデータに実在の名前を使わない。本番 Firestore へは読み書きしない。
 - `package.json` の version は触らない。worktree は作らない。ブランチは `ccr-2640a407-bp4lz7` のまま。
@@ -38,7 +39,7 @@
 - Modify: `src/App.css`（`.board-share-desk`〜`.board-share-status` の区画。`.board-share-desk-body`・`.board-share-students`・`.board-share-lesson-type` は消す）
 - Create: `src/components/board-share/boardShareSeatLines.test.ts`
 - Create: `src/components/board-share/boardShareRowLayout.test.ts`
-- Modify: `src/utils/verificationChecklist.ts`・`src/utils/verificationChecklist.test.ts`（項目 `bs-1`・第141版・版は `v1.5.711` 据え置き）
+- Modify: `src/utils/verificationChecklist.ts`・`src/utils/verificationChecklist.test.ts`（項目 `bs-2`〔`bs-1` は過去に OK で外した ID でテストが再利用を禁じているため〕・第141版・版は `v1.5.711` 据え置き）
 - Modify: `CHANGELOG.md`（`## 未リリース` に 1 行）
 
 **Interfaces:**
@@ -127,7 +128,7 @@ Step 4 と同じ 8 通りを `after/` に撮り、Review Focus の 5 点を 1 �
 
 ```ts
 {
-  id: 'bs-1',
+  id: 'bs-2',
   area: 'コマ表',
   title: '講師日程共有のページが1行1机で字が大きい',
   steps: ['コマ表の「講師日程共有」を押し、出てきたリンクをスマホで開く', '生徒が2人いる机と、休みの記録がある机を見る', '「後コマ」「翌日」を押して別のコマも見る'],

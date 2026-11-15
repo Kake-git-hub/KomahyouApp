@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- style: 講師日程共有のページ(講師がスマホで開く BoardShareScreen)を 1 行 1 机(席番｜講師｜生徒｜生徒・コマ表と同じ並び)にし、生徒の欄をコマ表と同じ 2 段(上=名前と日付の札、下=授業の印・学年・科目・講師の種別)・字を大きくした(オーナー指示 2026-11-15・spec-schedule-pdf §N・見た目だけ)。旧形は講師の帯 10px・生徒 9px 固定で小さかった。字は机の行をコンテナにして行の高さと幅から CSS だけで決める(名前 11〜22px・下段 9〜16px・コンテナクエリ非対応は 14px/11px)。2 段の文字は純関数 resolveBoardShareSeatLines に切り出し、生徒の居る席に記録の印を付けない INV-04 の規則(resolveBoardShareSeatView)はそのまま通す。共有データ・日付ラベル・フッター・layoutNonce は不変。確認リスト bs-2(BoardShareScreen.tsx・App.css・boardShareSeatLines/boardShareRowLayout.test.ts)
+
 ## v1.5.735 (2026-11-14)
 
 - fix: 全員分印刷のレビュー指摘を反映(同じ版の feat の手直し)。確認は window.confirm をやめモーダル内の「印刷する」「やめる」へ(クリックの中で印刷ウィンドウを開く)、開いた直後に「作成中…」を書き、書く前に閉じられていないかを確かめる、本体を runParentPortalQrBulkPrint へ切り出して例外でも投げ返さず画面側も finally で進み具合を必ず消す(モーダルが閉じられなくならない)、走らせるたびの番号と押した時点の教室を握り、閉じた・画面を離れた・教室が変わったら残りを投げず写しも反映せず印刷の画面を閉じる(INV-08)、対象は行の QR ボタンと同じ在籍一覧(削除済みを除き学年→名前順・spec K-6 を書き換え)、失敗した生徒名は一覧の順。1 人分の印刷 HTML の完全一致テストを足した(parentPortalQr.ts・ParentPortalQrModal.tsx・BasicDataScreen.tsx・App.css・確認リスト pc-2 の操作文)
