@@ -93,6 +93,42 @@ export function formatStudentLabel(
   ].filter(Boolean).join(' / ')
 }
 
+// 生徒の欄に出す 2 段の文字(docs/spec-schedule-pdf.md §N・2026-11-15 オーナー確定・見た目だけ)。
+// 上段 = 名前＋記録の印(記録だけの席は「(休」など)、下段 = 授業の印・学年・科目＋授業時間・講師の種別(通常講師は空)。
+// ★引数は resolveBoardShareSeatView の戻り値(visibleStudent / visibleStatus)をそのまま渡す。生徒がいる席では
+//   visibleStatus が null なので記録の印は付かない(INV-04)。印・授業時間・講師の種別・記録の印は formatStudentLabel と
+//   同じ既存の関数で決める(規則を書き直さない)。右端にあった「通常／振替…」は marker と同じ内容なので markerLabel を title にだけ使う。
+// ★記録の印(statusLabel)は名前(name)と分けて持つ。名前に続けると長い名前の「…」に印が巻き込まれて消える(名前より印が大事)。
+//   画面は名前の直後に縮まない別の span で出し、見た目の連なり「名前(休」は変えない。
+export type BoardShareSeatLines = {
+  name: string
+  statusLabel: string
+  marker: string
+  markerLabel: string
+  grade: string
+  subject: string
+  teacherTypeLabel: string
+}
+
+export function resolveBoardShareSeatLines(
+  visibleStudent: BoardShareStudentEntry | BoardShareStatusEntry | null | undefined,
+  visibleStatus: Pick<BoardShareStatusEntry, 'status'> | null | undefined,
+  options: { isExternalStudent?: boolean; transferSourceRestDisplayEnabled?: boolean } = {},
+): BoardShareSeatLines | null {
+  if (!visibleStudent) return null
+  const isExternalStudent = Boolean(options.isExternalStudent)
+  const statusSuffix = visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status, Boolean(options.transferSourceRestDisplayEnabled))}` : ''
+  return {
+    name: visibleStudent.name,
+    statusLabel: statusSuffix,
+    marker: getLessonShortLabel(visibleStudent.lessonType, isExternalStudent),
+    markerLabel: getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent),
+    grade: visibleStudent.grade,
+    subject: `${visibleStudent.subject}${normalizeRegularLessonNote(visibleStudent.noteSuffix)}`,
+    teacherTypeLabel: getTeacherTypeLabel(visibleStudent.teacherType),
+  }
+}
+
 // 配布用盤面の「日付」ラベル。moved(移動元)は盤面(lessonLinks.ts resolveVisibleSlotDateLabel)と同じ規則
 // resolveMovedSourceDestinationLabel(リンク先 → 自分の移動先。移動先を持たない古い記録は空)で解決する。
 // 2026-09-22: 振替をさらに別日へ動かしたとき(A→B→C)、A の記録が持つ B ではなく今置かれている C を出す(盤面と同じ修正)。
@@ -325,29 +361,43 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                 { student: firstStudent, status: firstStatus },
                 { student: secondStudent, status: secondStatus },
               ]
+              // 1 行 = 1 机。左から 席番｜講師名｜生徒 1｜生徒 2(コマ表と同じ並び・spec-schedule-pdf §N・2026-11-15)。
               return (
                 <section className="board-share-desk" key={desk.id}>
                   <div className="board-share-seat">{deskIndex + 1}</div>
-                  <div className="board-share-desk-body">
+                  {/* 講師名は 2 行まで。欄(-cell)が背景と縦の真ん中寄せを持ち、中の div が 2 行で「…」に切る(切った行が下に覗かないように分ける)。 */}
+                  <div className="board-share-teacher-cell">
                     <div className="board-share-teacher">{formatDeskTeacherLabel(desk.teacher)}</div>
-                    <div className="board-share-students">
-                      {studentSlots.map(({ student, status }, studentIndex) => {
-                        // 生徒がいる席では同じ index の出欠記録を使わない(盤面と同じ・resolveBoardShareSeatView 参照)。
-                        const { visibleStudent, visibleStatus } = resolveBoardShareSeatView(student, status)
-                        const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
-                        const visibleDateLabel = getVisibleDateLabel(visibleStudent, visibleStatus, currentCell, resolveBoardShareLinkedDestinationDateKey(visibleStatus, linkedLessonDestinationByStatusId))
-                        return (
-                        <div className={`board-share-student${visibleStatus ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
-                          <span className="board-share-student-label">
-                            {formatStudentLabel(visibleStudent, isExternalStudent)}{visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status, transferSourceRestDisplayEnabled)}` : ''}
-                          </span>
-                          {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
-                          {visibleStudent ? <span className="board-share-lesson-type">{getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent)}</span> : null}
-                        </div>
-                        )
-                      })}
-                    </div>
                   </div>
+                  {studentSlots.map(({ student, status }, studentIndex) => {
+                    // 生徒がいる席では同じ index の出欠記録を使わない(盤面と同じ・resolveBoardShareSeatView 参照)。
+                    const { visibleStudent, visibleStatus } = resolveBoardShareSeatView(student, status)
+                    const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
+                    const visibleDateLabel = getVisibleDateLabel(visibleStudent, visibleStatus, currentCell, resolveBoardShareLinkedDestinationDateKey(visibleStatus, linkedLessonDestinationByStatusId))
+                    const lines = resolveBoardShareSeatLines(visibleStudent, visibleStatus, { isExternalStudent, transferSourceRestDisplayEnabled })
+                    // 欄全体の title は旧形の 1 行の文字。PC でマウスを乗せると切れた名前・科目が読める(スマホでは出ない)。
+                    // 記録の印は lines.statusLabel をそのまま使う(作り直さない)。
+                    const seatTitle = lines ? `${formatStudentLabel(visibleStudent, isExternalStudent)}${lines.statusLabel}` : undefined
+                    return (
+                      <div className={`board-share-student${visibleStatus ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`} title={seatTitle}>
+                        {lines ? (
+                          <>
+                            <span className="board-share-student-name-row">
+                              <span className="board-share-student-name">{lines.name}</span>
+                              {lines.statusLabel ? <span className="board-share-student-status-label">{lines.statusLabel}</span> : null}
+                              {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
+                            </span>
+                            <span className="board-share-student-detail">
+                              <span className="board-share-student-marker" title={lines.markerLabel} aria-label={lines.markerLabel}>{lines.marker}</span>
+                              <span className="board-share-student-grade">{lines.grade}</span>
+                              <span className="board-share-student-subject">{lines.subject}</span>
+                              {lines.teacherTypeLabel ? <span className="board-share-student-teacher-type">{lines.teacherTypeLabel}</span> : null}
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
+                    )
+                  })}
                 </section>
               )
             })}

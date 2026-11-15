@@ -438,102 +438,183 @@
   min-height: 0;
 }
 
+/* 講師日程共有の机(spec-schedule-pdf §N・2026-11-15 オーナー確定・見た目だけ)。
+   1 行 = 1 机で、左から 席番｜講師名｜生徒 1｜生徒 2(コマ表と同じ並び)。生徒の欄は 2 段(上=名前、下=印・学年・科目)。
+   文字の大きさは机の行をコンテナにして、行の高さ(= 画面の高さ ÷ 机の数)と幅から CSS だけで決める(JS で測らない)。
+   ★コンテナの単位(cqh/cqw)は机そのものには効かず、机の子にだけ効く。大きさは子の区画に書く。 */
 .board-share-desk {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 4px;
+  grid-template-columns: 32px minmax(0, 0.8fr) minmax(0, 2fr) minmax(0, 2fr);
+  gap: 2px;
   min-height: 0;
-  padding: 2px;
+  padding: 1px;
   border: 1px solid #cbd8e7;
   border-radius: 5px;
   background: #ffffff;
+  container-type: size;
+  /* コンテナクエリが使えないブラウザの大きさ。行の高さ ≒ (画面の高さ - 集団授業の帯と下の操作バーの分) ÷ 机の数 から決める
+     (固定 14px/11px だと 20 机・小さいスマホで下段が切れた)。--board-share-desk-count は .board-share-desk-list の inline style から継承。
+     使えるブラウザは下の @supports で cqh/cqw に置き換わる。 */
+  --board-share-name-size: clamp(11px, calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.38), 14px);
+  --board-share-detail-size: clamp(9px, calc((100vh - 110px) / var(--board-share-desk-count, 14) * 0.28), 11px);
 }
 
 .board-share-seat {
   display: grid;
   place-items: center;
+  min-height: 0;
   border-radius: 4px;
   background: #1f3552;
   color: #ffffff;
-  font-size: 15px;
+  font-size: var(--board-share-name-size);
   font-weight: 800;
   line-height: 1;
 }
 
-.board-share-desk-body {
-  display: grid;
-  grid-template-rows: 14px minmax(0, 1fr);
-  gap: 1px;
+/* 講師名は 2 行まで折り返し、入らなければ「…」。欄(-cell)が背景と縦の真ん中寄せを持つ。
+   ★-webkit-line-clamp は「…」を付けるだけで 3 行目以降も描くので、高さを伸ばした箱に直接付けると下に覗く。中の div は文字の高さのままにする。 */
+.board-share-teacher-cell {
+  display: flex;
+  align-items: center;
+  /* 机が多く行が低いと 2 行が欄より高くなる。そのときは上の行を切らずに下へはみ出させる(safe)。 */
+  align-items: safe center;
   min-width: 0;
   min-height: 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #eaf1f8;
+  overflow: hidden;
 }
 
 .board-share-teacher {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  padding: 0 3px;
-  border-radius: 3px;
-  background: #eaf1f8;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  min-width: 0;
   color: #244564;
-  font-size: 10px;
+  font-size: var(--board-share-name-size);
   font-weight: 800;
-  line-height: 1.05;
+  /* 1.1 だと 3 行目の字の頭が 2 行の箱の下に覗く。 */
+  line-height: 1.2;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.board-share-students {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  min-height: 0;
+  overflow-wrap: anywhere;
 }
 
 .board-share-student {
   display: flex;
-  justify-content: space-between;
-  gap: 1px;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  min-width: 0;
   min-height: 0;
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: 3px;
   background: #f8fbff;
   color: #172f48;
-  font-size: 9px;
   font-weight: 800;
-  line-height: 1.05;
+  line-height: 1.12;
+  overflow: hidden;
+}
+
+/* 上段: 名前は 1 行で「…」。記録の印(「(休」など)と日付の札は縮めない。名前と印の間は空けない(見た目は「名前(休」)。 */
+.board-share-student-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  font-size: var(--board-share-name-size);
+}
+
+.board-share-student-name {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.board-share-student-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.board-share-student-status-label {
+  flex: none;
+  white-space: nowrap;
 }
 
 .board-share-origin-date {
-  flex: 0 0 auto;
-  padding: 0 2px;
+  flex: none;
+  margin-left: 3px;
+  padding: 0 0.2em;
   border-radius: 3px;
   background: #fff3bf;
   color: #7b4f00;
-  font-size: 8px;
+  font-size: 0.72em;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* 下段: 授業の印・学年・科目は縮めない。講師の種別は入らなければ「…」。 */
+.board-share-student-detail {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  min-width: 0;
+  color: #4b6078;
+  font-size: var(--board-share-detail-size);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.board-share-student-marker {
+  flex: none;
+  padding: 0 0.2em;
+  border-radius: 3px;
+  background: #dfe9f5;
+  color: #1f3552;
   font-weight: 900;
 }
 
-.board-share-lesson-type {
-  flex: 0 0 auto;
-  color: #5f7288;
-  font-size: 8px;
+.board-share-student-grade,
+.board-share-student-subject {
+  flex: none;
+}
+
+.board-share-student-teacher-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #8a5a00;
+}
+
+/* コンテナクエリが使えるブラウザだけ、行の高さ・幅に合わせて大きくする。使えないブラウザは上の --board-share-name-size / -detail-size
+   (画面の高さ ÷ 机の数・名前 11〜14px・下段 9〜11px)。 */
+@supports (container-type: size) {
+  .board-share-seat,
+  .board-share-teacher,
+  .board-share-student-name-row {
+    font-size: clamp(11px, min(40cqh, 4.3cqw), 22px);
+  }
+
+  .board-share-student-detail {
+    font-size: clamp(9px, min(29cqh, 3.4cqw), 16px);
+  }
+
+  /* 行が低い(机が多い)と、下限 11px の講師名 2 行(約 26px)が欄に入らず下が切れる。そのときは 1 行で「…」にする。
+     しきい値は机の中身の高さ。20 机・375×667 で約 23px、14 机・375×667 で約 36px(画像で確認 2026-11-15)。 */
+  @container (max-height: 30px) {
+    .board-share-teacher {
+      -webkit-line-clamp: 1;
+      line-clamp: 1;
+    }
+  }
 }
 
 .board-share-status {
   background: #f0f0f0;
   color: #596878;
+}
+
+.board-share-status .board-share-student-detail,
+.board-share-status .board-share-student-marker {
+  color: #6b7785;
 }
 
 .board-share-footer {

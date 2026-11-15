@@ -43,7 +43,8 @@ function createAbsentStatus(overrides: Partial<BoardShareStatusEntry> = {}): Boa
   }
 }
 
-// 画面(BoardShareScreen の studentSlots.map)と同じ組み立てで、席 1 つ分の見え方をまとめて出す。
+// 席 1 つ分の見え方をまとめて出す。label は画面(BoardShareScreen の studentSlots.map)の欄の title の文字(旧形の 1 行の文字)と同じ組み立て。
+// 画面に出す 2 段の文字は resolveBoardShareSeatLines(boardShareSeatLines.test.ts)が固定する。
 function renderSeat(student: BoardShareStudentEntry | null, status: BoardShareStatusEntry | null, cell = { dateKey: '2026-09-28' }) {
   const { visibleStudent, visibleStatus } = resolveBoardShareSeatView(student, status)
   const label = `${formatStudentLabel(visibleStudent)}${visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status)}` : ''}`
