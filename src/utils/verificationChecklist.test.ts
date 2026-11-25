@@ -217,7 +217,7 @@ describe('確認リストの項目定義', () => {
     // 第138版(2026-11-12・v1.5.732 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 丸ごと振替で同じ講師が 2 机にならない確認 wd-1(Issue #87)も開発用教室だけ。
     // 第140版(2026-11-14・v1.5.735 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 保護者用QRの全員分印刷の確認 pc-2 も開発用教室だけ。
     // 第141版(2026-11-15・v1.5.736 で入る・版は v1.5.711 据え置き＝項目を足しただけ): 講師日程共有の 1 行 1 机の確認 bs-2 も開発用教室だけ。
-    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2']
+    const developmentOnly: string[] = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2', 'sq-1']
     for (const id of ids.filter((id) => !developmentOnly.includes(id) && !id.startsWith('lp-') && !id.startsWith('qs-'))) expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS, id).toContain(id)
     // 外しただけなので版は据え置き(上げるとテスト教室の書きかけの下書きが消える・第14版の決まり)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
@@ -285,7 +285,7 @@ describe('確認リストの項目定義', () => {
     // 第138版(2026-11-12・v1.5.732 で入る・版は v1.5.711 据え置き): 丸ごと振替で同じ講師が 2 机にならない確認 wd-1(開発用教室だけ)。
     // 第140版(2026-11-14・v1.5.735 で入る・版は v1.5.711 据え置き): 保護者用QRの全員分印刷の確認 pc-2(開発用教室だけ)。
     // 第141版(2026-11-15・v1.5.736 で入る・版は v1.5.711 据え置き): 講師日程共有の 1 行 1 机の確認 bs-2(開発用教室だけ)。
-    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2'])
+    expect(ids).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2', 'sq-1'])
     expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).toEqual([])
     expect(ids).not.toContain('mg-1')
     expect(ids).not.toContain('mg-2')
@@ -1277,7 +1277,7 @@ describe('第126〜128版(2026-11-08): テスト教室・開発用教室の 11/8
     // 第134版(2026-11-11): tf-4 を足した(版は据え置き)。第135版(2026-11-11): rs-1 を足した(版は据え置き)。
     // 第136版(2026-11-11): hd-1 を足した(版は据え置き)。第137版(2026-11-11): te-1 を足した(版は据え置き)。
     // 第138版(2026-11-12): wd-1 を足した(版は据え置き)。第140版(2026-11-14): pc-2 を足した(版は据え置き)。第141版(2026-11-15): bs-2 を足した(版は据え置き)。
-    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2'])
+    expect(VERIFICATION_CHECKLIST.items.map((item) => item.id)).toEqual(['pr-1', 'pr-2', 'pr-3', 'pr-4', 'tr-1', 'tf-1', 'tf-2', 'tf-3', 'tf-4', 'rs-1', 'hd-1', 'te-1', 'wd-1', 'ti-1', 'pc-2', 'bs-2', 'sq-1'])
   })
 
   it('第129版: pr-4(作成済みの講習がすべて非公開)は v1.5.712 で追加・開発用教室だけ・本番の教室では公開を押さない。pr-2 も「非公開」へ', () => {
@@ -1538,6 +1538,22 @@ describe('第141版(2026-11-15・v1.5.736 で入る・版は v1.5.711 据え置�
     expect(check).toContain('席番・講師名・生徒・生徒')
     expect(check).toContain('字が大きい')
     expect(check).toContain('スクロールなしで1画面')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
+  })
+})
+
+describe('第142版(2026-11-25・v1.5.737 で入る・版は v1.5.711 据え置き): 講師QRで生徒1が休み・生徒2だけの机', () => {
+  const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'sq-1')
+
+  it('sq-1 は開発用教室だけ・コマ表・v1.5.737 で追加・操作 3 つ以内 → 確認(振替が出る・生徒1がいる机は従来どおり)', () => {
+    expect(item).toBeDefined()
+    expect(item!.area).toBe('コマ表')
+    expect(item!.introducedIn).toBe('v1.5.737')
+    expect(VERIFICATION_CHECKLIST_SANDBOX_ITEM_IDS).not.toContain('sq-1')
+    expect(item!.steps.length).toBeLessThanOrEqual(3)
+    const check = item!.check!.join('\n')
+    expect(check).toContain('振替')
+    expect(check).toContain('生徒1がいる机')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
   })
 })
