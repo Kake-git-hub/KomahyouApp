@@ -681,7 +681,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
       introducedIn: 'v1.5.736',
     },
     // 第142版(2026-11-25・v1.5.737 で入る・版は v1.5.711 据え置き＝確認中の版へ項目を足しただけ): 講師の提出用QRで、机の生徒1が休みで生徒2が授業を受けるコマが空きに見えた不具合
-    // (submissionOccupiedSlots.ts・INV-03)の確認。直したのは全教室・確認は開発用教室だけ。
+    // (submissionOccupiedSlots.ts・INV-04)の確認。直したのは全教室・確認は開発用教室だけ。
     {
       id: 'sq-1',
       area: 'コマ表',

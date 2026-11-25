@@ -86,6 +86,20 @@ describe('buildSubmissionOccupiedSlotMaps', () => {
       })
       expect(toObject(teacherOccupiedMap)).toEqual({})
     })
+    it('机にメモだけある(授業なし)机は載せない(本番の形: memoSlots は机に付き lesson は無い)', () => {
+      const memoDesk = { teacher: '講師A', memoSlots: [null, '手打ちの生徒'] } as unknown as SubmissionOccupiedSlotCell['desks'][number]
+      const { teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+        cells: [{ dateKey: '2026-12-26', slotNumber: 1, desks: [memoDesk] }], resolveTeacherId, includeLectureLessons: true,
+      })
+      expect(toObject(teacherOccupiedMap)).toEqual({})
+    })
+    it('生徒1=null・生徒2=講習 → 公開は「講習」、非公開は載せない', () => {
+      const lesson = { studentSlots: [null, student('s002', 'special', '数')] }
+      expect(toObject(buildSubmissionOccupiedSlotMaps({ cells: deskCells(lesson), resolveTeacherId, includeLectureLessons: true }).teacherOccupiedMap))
+        .toEqual({ t001: { '2026-12-26_1': '講習' } })
+      expect(toObject(buildSubmissionOccupiedSlotMaps({ cells: deskCells(lesson), resolveTeacherId, includeLectureLessons: false }).teacherOccupiedMap))
+        .toEqual({})
+    })
   })
 
   it('同じコマに 2 つあれば先勝ち(切り出し前と同じ)', () => {
