@@ -52,6 +52,42 @@ describe('buildSubmissionOccupiedSlotMaps', () => {
     expect(JSON.stringify(toObject(studentOccupiedMap))).not.toContain('講')
   })
 
+  describe('生徒1が休みで生徒2が授業を受ける机(講師ラベルは席順で最初にいる生徒)', () => {
+    const deskCells = (slots: SubmissionOccupiedSlotCell['desks'][number]['lesson']): SubmissionOccupiedSlotCell[] => [
+      { dateKey: '2026-12-26', slotNumber: 1, desks: [{ teacher: '講師A', lesson: slots }] },
+    ]
+    it.each([
+      ['makeup', '振替'],
+      ['regular', '通常'],
+    ])('生徒1=null・生徒2=%s → 講師ラベル %s(公開・非公開とも)', (lessonType, label) => {
+      for (const includeLectureLessons of [true, false]) {
+        const { teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+          cells: deskCells({ studentSlots: [null, student('s002', lessonType, '英')] }), resolveTeacherId, includeLectureLessons,
+        })
+        expect(toObject(teacherOccupiedMap)).toEqual({ t001: { '2026-12-26_1': label } })
+      }
+    })
+    it('生徒1がいる机は従来どおり生徒1の種別', () => {
+      const { teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+        cells: deskCells({ studentSlots: [student('s001', 'regular', '英'), student('s002', 'makeup', '数')] }), resolveTeacherId, includeLectureLessons: true,
+      })
+      expect(toObject(teacherOccupiedMap)).toEqual({ t001: { '2026-12-26_1': '通常' } })
+    })
+    it('両席 null の机は載せない', () => {
+      const { teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+        cells: deskCells({ studentSlots: [null, null] }), resolveTeacherId, includeLectureLessons: true,
+      })
+      expect(toObject(teacherOccupiedMap)).toEqual({})
+    })
+    it('メモだけの机(生徒なし)は載せない(オーナー確定・今の仕様)', () => {
+      const memoOnly = { studentSlots: [null, null], memoSlots: [{ text: 'メモ' }] } as unknown as NonNullable<SubmissionOccupiedSlotCell['desks'][number]['lesson']>
+      const { teacherOccupiedMap } = buildSubmissionOccupiedSlotMaps({
+        cells: deskCells(memoOnly), resolveTeacherId, includeLectureLessons: true,
+      })
+      expect(toObject(teacherOccupiedMap)).toEqual({})
+    })
+  })
+
   it('同じコマに 2 つあれば先勝ち(切り出し前と同じ)', () => {
     const doubled: SubmissionOccupiedSlotCell[] = [{ dateKey: '2026-12-25', slotNumber: 3, desks: [
       { teacher: '講師A', lesson: { studentSlots: [student('s001', 'regular', '英'), null] } },

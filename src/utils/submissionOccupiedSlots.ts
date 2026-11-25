@@ -4,7 +4,8 @@
 //
 // ★includeLectureLessons=true のときは**切り出し前と同じ結果**にする(既存の挙動を変えない):
 //   - 生徒: その生徒の授業ごとに buildOccupiedSlotLabel(種別1文字+科目)。同じコマに 2 つあれば先勝ち。
-//   - 講師: 机の講師名を教室の講師へ照合し、机の 1 人目の生徒枠(studentSlots[0])の種別で全長ラベル。
+//   - 講師: 机の講師名を教室の講師へ照合し、机の席順(生徒1→生徒2)で最初にいる生徒の種別で全長ラベル。
+//     生徒1が休みで生徒2だけの机も生徒2の種別。生徒が 1 人もいない机(メモだけ含む)は載せない。
 // ★includeLectureLessons=false(講習が非公開)のとき:
 //   - 生徒: 講習(special)の授業を載せない。通常・振替・増コマは今どおり載せる
 //     (提出前の画面の「組まれているコマに×を付けると確認が出る」には通常授業の位置が要る)。
@@ -51,7 +52,10 @@ export function buildSubmissionOccupiedSlotMaps(params: {
       const studentSlots = desk.lesson.studentSlots
       const teacherId = params.resolveTeacherId(desk.teacher)
       if (teacherId) {
-        let teacherLessonType: string | null = studentSlots[0]?.lessonType ?? ''
+        // 机の席順(生徒1→生徒2)で最初にいる生徒の種別。生徒1が休みで生徒2だけが授業を受ける机も載せる。
+        // 生徒が 1 人もいない机(メモだけ含む)は載せない。
+        const firstStudent = studentSlots.find((slot) => slot)
+        let teacherLessonType: string | null = firstStudent ? firstStudent.lessonType ?? '' : null
         if (!params.includeLectureLessons && studentSlots.some((slot) => slot?.lessonType === 'special')) {
           const visible = studentSlots.find((slot) => slot && slot.lessonType !== 'special')
           teacherLessonType = visible ? visible.lessonType ?? '' : null
