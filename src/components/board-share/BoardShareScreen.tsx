@@ -159,7 +159,7 @@ export function resolveBoardShareSeatView<
 
 // 共有画面で使う「記録が指す授業の今の置き場所」。公開時に盤面の全週から解決した値(linkedDestinationDateKey)を優先し、
 // 無いとき(旧ドキュメント・公開時にもリンクが無い)だけ共有セルから解決する。
-// ★共有セルは今週以降だけなので、共有セルだけで解決すると前の週へ動かした振替を見失い、古い移動先日付が出る
+// ★共有セルは先月の同じ日の週以降だけ(Issue #91 より前は今週以降)なので、共有セルだけで解決すると前の週へ動かした振替を見失い、古い移動先日付が出る
 //   (緑が丘 室長指摘 2026-09-26)。優先順を逆にしないこと。
 export function resolveBoardShareLinkedDestinationDateKey(
   status: Pick<BoardShareStatusEntry, 'id' | 'linkedDestinationDateKey'> | null | undefined,

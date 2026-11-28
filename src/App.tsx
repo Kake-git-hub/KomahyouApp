@@ -37,7 +37,7 @@ import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, resolveSubmissionTokenTargetSessions, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
-import { compactBoardSharePayload, publishBoardShare, selectBoardShareLinkResolutionCells } from './integrations/firebase/boardShare'
+import { compactBoardSharePayload, publishBoardShare, selectBoardShareCells, selectBoardShareLinkResolutionCells } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
@@ -1369,26 +1369,6 @@ function getBoardShareOrigin() {
 
 function buildBoardShareUrl(token: string) {
   return `${getBoardShareOrigin()}/share.html?token=${encodeURIComponent(token)}`
-}
-
-// 配布用盤面には「現在週（今日を含む週）以降」のセルだけを含める。過去週を除外することで
-// 配布ペイロードを縮小しつつ、配布先では現在〜先の予定を表示できる（手動編集済みの先の週も含まれる）。
-function selectBoardShareCells(weeks: SlotCell[][]): SlotCell[] {
-  const now = new Date()
-  const todayKey = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, '0')}-${`${now.getDate()}`.padStart(2, '0')}`
-  const cells: SlotCell[] = []
-  for (const week of weeks) {
-    if (!Array.isArray(week) || week.length === 0) continue
-    let maxDateKey = ''
-    for (const cell of week) {
-      if (cell.dateKey > maxDateKey) maxDateKey = cell.dateKey
-    }
-    if (maxDateKey >= todayKey) {
-      for (const cell of week) cells.push(cell)
-    }
-  }
-  // 現在週以降が1件も無い（過去週しか保持していない）場合は、空配信を避けて全週にフォールバック。
-  return cells.length > 0 ? cells : weeks.flat()
 }
 
 // メモリ削減のため盤面の週を「表示範囲＋手動編集週」に絞る。週配列が変わると weekIndex が
@@ -3123,7 +3103,7 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: selectBoardShareCells(boardState.weeks),
-      // 振替先日付は盤面の全週から解決する(共有セルは今週以降だけ・緑が丘 室長指摘 2026-09-26)。
+      // 振替先日付は盤面の全週から解決する(共有セルは先月の同じ日の週以降だけ・緑が丘 室長指摘 2026-09-26)。
       linkResolutionCells: selectBoardShareLinkResolutionCells(boardState.weeks),
       groupClassEntries: boardState.groupClassEntries ?? {},
       externalStudentIds: boardShareExternalStudentIds,

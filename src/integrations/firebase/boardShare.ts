@@ -16,7 +16,7 @@ export type BoardShareStatusEntry = Pick<
   'id' | 'name' | 'managedStudentId' | 'grade' | 'noteSuffix' | 'makeupSourceDate' | 'makeupSourceLabel' | 'subject' | 'lessonType' | 'teacherType' | 'moveDestinationDateKey' | 'status'
 > & {
   // 公開時に**盤面の全週**から解決した「この記録が指す授業の今の置き場所(日付)」。共有画面の休)/移) の日付に使う。
-  // 共有するセルは今週以降だけ(App selectBoardShareCells)なので、振替先が今週より前の週にあると
+  // 共有するセルは先月の同じ日を含む週以降だけ(selectBoardShareCells・当時は今週以降)なので、振替先がそれより前の週にあると
   // 共有画面側のリンク解決では見つからず、移動元記録が持つ古い移動先日付が出ていた(緑が丘 室長指摘 2026-09-26)。
   // 旧ドキュメント・リンクが無い記録には無い(optional)。無いときは共有画面が従来どおり共有セルから解決する。
   linkedDestinationDateKey?: string
@@ -183,6 +183,40 @@ function compactStatusEntry(status: StudentStatusEntry | null, linkedDestination
 //   (署名用が共有セルだけだと、前の週の振替を動かしても署名が変わらず公開がスキップされる)。boardShareLinkedDestination.test.ts で固定。
 export function selectBoardShareLinkResolutionCells(weeks: readonly SlotCell[][]): SlotCell[] {
   return weeks.filter((week) => Array.isArray(week)).flat()
+}
+
+// 配布用盤面に載せる週の下限 = 「先月の同じ日」(ローカル日付の YYYY-MM-DD)。
+// 先月に同じ日が無いとき(3/31 → 2 月)は先月の末日に丸める。1 月は前年 12 月。
+// Issue #91・オーナー確定 2026-11-28(spec-schedule-pdf N-1): 講師が過去の週の予定を確かめられるよう、今週以降から広げた。
+export function resolveBoardSharePastLimitDateKey(referenceDate: Date = new Date()): string {
+  const year = referenceDate.getFullYear()
+  const month = referenceDate.getMonth()
+  // new Date(y, m, 0) は m 月の前月末日。先月 = month - 1 なので、その末日は new Date(year, month, 0)。
+  const lastDayOfPrevMonth = new Date(year, month, 0)
+  const day = Math.min(referenceDate.getDate(), lastDayOfPrevMonth.getDate())
+  const limit = new Date(lastDayOfPrevMonth.getFullYear(), lastDayOfPrevMonth.getMonth(), day)
+  return `${limit.getFullYear()}-${`${limit.getMonth() + 1}`.padStart(2, '0')}-${`${limit.getDate()}`.padStart(2, '0')}`
+}
+
+// 配布用盤面には「先月の同じ日を含む週以降」のセルだけを含める(週の中のいちばん遅い dateKey >= 下限)。
+// 古い週を除外して配布ペイロード(1MiB 上限)を抑えつつ、配布先では 1 か月前〜先の予定を表示できる(手動編集済みの先の週も含まれる)。
+// 盤面は過去 6 週を手元に持つ(boardWeekTrim)ので、1 か月前の週は必ず残っている。
+// 振替先日付の解決は別(selectBoardShareLinkResolutionCells=全週)。
+export function selectBoardShareCells(weeks: readonly SlotCell[][], referenceDate: Date = new Date()): SlotCell[] {
+  const limitKey = resolveBoardSharePastLimitDateKey(referenceDate)
+  const cells: SlotCell[] = []
+  for (const week of weeks) {
+    if (!Array.isArray(week) || week.length === 0) continue
+    let maxDateKey = ''
+    for (const cell of week) {
+      if (cell.dateKey > maxDateKey) maxDateKey = cell.dateKey
+    }
+    if (maxDateKey >= limitKey) {
+      for (const cell of week) cells.push(cell)
+    }
+  }
+  // 該当が1件も無い（古い週しか保持していない）場合は、空配信を避けて全週にフォールバック。
+  return cells.length > 0 ? cells : weeks.filter((week) => Array.isArray(week)).flat()
 }
 
 export function compactBoardSharePayload(payload: BoardSharePayloadInput): BoardSharePayload {
