@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { isExternalBoardShareStudent, loadBoardShare, subscribeBoardShare, type BoardShareCell, type BoardSharePayload, type BoardShareStatusEntry, type BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
-import { lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
+import { getWeekStart, lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, type GroupClassEntry } from '../schedule-board/groupClass'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel, resolveMovedSourceDestinationLabel } from '../schedule-board/lessonLinks'
 import { getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
@@ -202,17 +202,32 @@ function sortCells(cells: BoardShareCell[]) {
   })
 }
 
-function pickInitialDate(cells: BoardShareCell[]) {
-  const todayKey = new Date().toLocaleDateString('sv-SE')
+function pickInitialDate(cells: readonly Pick<BoardShareCell, 'dateKey'>[], today: Date = new Date()) {
+  const todayKey = today.toLocaleDateString('sv-SE')
   const dateKeys = Array.from(new Set(cells.map((cell) => cell.dateKey))).sort()
   return dateKeys.find((dateKey) => dateKey >= todayKey) ?? dateKeys[0] ?? ''
+}
+
+// 共有画面を開いたときの最初の日付(spec-schedule-pdf §N-1・Issue #91)。
+// 前に見ていた日(端末に保存)が今週以降ならその日、今週より前(先週以前)なら今日(pickInitialDate)。保存なし・共有セルに無い日も今日。
+// ★先月の週まで配るようになったので、過去へ戻って閉じた講師が次に開くと過去の日から始まらないようにする(オーナーへ「開いたら今日」)。
+//   今週の中の日(きのう等)と未来の日の復元は変更前と同じ。週の始まりは盤面と同じ月曜(getWeekStart)。
+export function resolveBoardShareInitialDateKey({ storedDateKey, cells, today = new Date() }: {
+  storedDateKey: string | null | undefined
+  cells: readonly Pick<BoardShareCell, 'dateKey'>[]
+  today?: Date
+}): string {
+  const currentWeekStartKey = getWeekStart(today).toLocaleDateString('sv-SE')
+  if (storedDateKey && storedDateKey >= currentWeekStartKey && cells.some((cell) => cell.dateKey === storedDateKey)) return storedDateKey
+  return pickInitialDate(cells, today)
 }
 
 export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const initialSelection = useMemo(() => readStoredSelection(token), [token])
   const [payload, setPayload] = useState<BoardSharePayload | null>(null)
   const [message, setMessage] = useState('コマ表を読み込んでいます。')
-  const [selectedDateKey, setSelectedDateKey] = useState(initialSelection?.dateKey ?? '')
+  // 最初の日付は読み込み後に resolveBoardShareInitialDateKey で決める(保存済みの過去の日をそのまま使わない・§N-1)。
+  const [selectedDateKey, setSelectedDateKey] = useState('')
   const [selectedSlotNumber, setSelectedSlotNumber] = useState(initialSelection?.slotNumber ?? 1)
   // iOS Safari は 100dvh → flex → grid(repeat,minmax(0,1fr)) のネストで初回レイアウトを誤り、
   // 一部のデスクが見切れる(初回だけ一部が見えない)ことがある。日付/コマ変更で直るのと同じく、
@@ -223,9 +238,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
     setPayload(nextPayload)
     setSelectedDateKey((currentDateKey) => {
       if (nextPayload.cells.some((cell) => cell.dateKey === currentDateKey)) return currentDateKey
-      const storedSelection = readStoredSelection(token)
-      if (storedSelection && nextPayload.cells.some((cell) => cell.dateKey === storedSelection.dateKey)) return storedSelection.dateKey
-      return pickInitialDate(nextPayload.cells)
+      return resolveBoardShareInitialDateKey({ storedDateKey: readStoredSelection(token)?.dateKey, cells: nextPayload.cells })
     })
     setSelectedSlotNumber((currentSlotNumber) => {
       if (nextPayload.cells.some((cell) => cell.slotNumber === currentSlotNumber)) return currentSlotNumber

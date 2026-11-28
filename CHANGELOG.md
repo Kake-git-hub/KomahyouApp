@@ -16,7 +16,7 @@
 
 ## v1.5.738 (2026-11-28)
 
-- feat: 講師日程共有(配布用盤面 boardShares)で送る週を「今日を含む週以降」から「先月の同じ日を含む週以降」へ広げた。講師が過去の週の予定を確かめたいという室長の質問に応えるため(Issue #91・オーナー確定 2026-11-28・全教室・フラグなし)。先月に同じ日が無いときは先月末日に丸める・該当なしは全週を送る(従来どおり)・開く日は今日のまま・振替先日付の解決(全週)と署名・圧縮は不変。App の非公開関数を `boardShare.ts` の `selectBoardShareCells` / `resolveBoardSharePastLimitDateKey` へ移してテスト(`boardShareCells.test.ts`)。仕様 spec-schedule-pdf §N-1・確認リスト bs-3。大きさは本番実測で緑が丘 約 12%・日大前 約 23%(1MiB 比)。
+- feat: 講師日程共有(配布用盤面 boardShares)で送る週を「今日を含む週以降」から「先月の同じ日を含む週以降」へ広げた。講師が過去の週の予定を確かめたいという室長の質問に応えるため(Issue #91・オーナー確定 2026-11-28・全教室・フラグなし)。先月に同じ日が無いときは先月末日に丸める・該当なしは全週を送る(従来どおり)・開く日は今日のまま・振替先日付の解決(全週)と署名・圧縮は不変。App の非公開関数を `boardShare.ts` の `selectBoardShareCells` / `resolveBoardSharePastLimitDateKey` へ移してテスト(`boardShareCells.test.ts`)。仕様 spec-schedule-pdf §N-1・確認リスト bs-3。大きさは本番実測で緑が丘 約 12%・日大前 約 23%(1MiB 比)。あわせて共有画面の最初の日付を `resolveBoardShareInitialDateKey` に切り出し、端末に保存した前回の日が今週(月曜はじまり)より前なら今日から開くようにした(過去へ戻って閉じても次は今日から・今週の中の日と未来の日の復元は従来どおり・`boardShareInitialDate.test.ts`)。過去 1 か月の週を直したときも共有が更新される。
 
 ## v1.5.737 (2026-11-25)
 

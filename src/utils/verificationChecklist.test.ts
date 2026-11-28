@@ -1573,6 +1573,7 @@ describe('第143版(2026-11-28・v1.5.738 で入る・版は v1.5.711 据え置�
     expect(check).toContain('今日')
     expect(check).toContain('先月')
     expect(check).toContain('今週から先')
+    expect(check).toContain('開き直すと今日に戻り')
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.711')
   })
 })
